@@ -1,0 +1,13 @@
+[build]
+  publish = "public"
+  command = "# no build needed"
+
+[build.environment]
+  NODE_VERSION = "18"
+
+# Next.js 플러그인 비활성화
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+  [plugins.inputs]
+    enable = false
