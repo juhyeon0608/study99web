@@ -432,8 +432,8 @@
       errEl.classList.remove('hidden');
       return;
     }
-    if (!SERVER_URL || SERVER_URL === '여기에_입력') {
-      errEl.textContent = '⚠️ SERVER_URL을 설정해주세요';
+    if (!SERVER_URL) {
+      errEl.textContent = '⚠️ 서버가 오프라인입니다. PC에서 서버를 실행해주세요.';
       errEl.classList.remove('hidden');
       return;
     }
@@ -484,8 +484,8 @@
       errEl.classList.remove('hidden');
       return;
     }
-    if (!SERVER_URL || SERVER_URL === '여기에_입력') {
-      errEl.textContent = '⚠️ SERVER_URL을 설정해주세요';
+    if (!SERVER_URL) {
+      errEl.textContent = '⚠️ 서버가 오프라인입니다. PC에서 서버를 실행해주세요.';
       errEl.classList.remove('hidden');
       return;
     }
@@ -962,8 +962,8 @@
 
   async function doUpload() {
     if (!selectedFile) return;
-    if (!SERVER_URL || SERVER_URL === '여기에_입력') {
-      showUploadResult('error', '⚠️ SERVER_URL을 설정해주세요 (index.html 상단)');
+    if (!SERVER_URL) {
+      showUploadResult('error', '⚠️ 서버가 오프라인입니다. PC에서 서버를 실행해주세요.');
       return;
     }
     if (!authToken) {
