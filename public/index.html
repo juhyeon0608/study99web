@@ -588,8 +588,24 @@
     }
   }
 
-  // ---- 자동 로그인 (세션 유지) ----
+  // ---- 페이지 로드 시 Firebase 초기화 + 서버 URL 로딩 ----
   window.addEventListener('DOMContentLoaded', () => {
+    // 로그인 전에도 서버 URL을 읽을 수 있도록 Firebase 먼저 초기화
+    try {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+      }
+      firebase.firestore().collection('config').doc('server').onSnapshot(snap => {
+        if (snap.exists && snap.data().url) {
+          SERVER_URL = snap.data().url;
+          console.log('서버 URL 갱신:', SERVER_URL);
+        }
+      });
+    } catch(e) {
+      console.error('Firebase 초기화 실패:', e);
+    }
+
+    // 자동 로그인 (세션 유지)
     if (authToken && authUser) {
       enterApp();
     }
