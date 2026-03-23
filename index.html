@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="ko" class="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF 요약 서비스</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    onload="renderMathInDocument()"></script>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      safelist: [
+        'bg-green-100','text-green-700','bg-green-900','text-green-300',
+        'bg-blue-100','text-blue-700','bg-blue-900','text-blue-300',
+        'bg-orange-100','text-orange-700','bg-orange-900','text-orange-300',
+        'bg-red-100','text-red-700','bg-red-900','text-red-300',
+        'bg-purple-100','text-purple-700','bg-purple-900','text-purple-300',
+        'bg-yellow-100','text-yellow-700','bg-yellow-900','text-yellow-300',
+      ]
+    }
+  </script>
+  <!-- Tailwind safelist hidden div -->
+  <div class="hidden
+    bg-green-100 text-green-700 bg-green-900 text-green-300
+    bg-blue-100 text-blue-700 bg-blue-900 text-blue-300
+    bg-orange-100 text-orange-700 bg-orange-900 text-orange-300
+    bg-red-100 text-red-700 bg-red-900 text-red-300
+    bg-purple-100 text-purple-700 bg-purple-900 text-purple-300
+    bg-yellow-100 text-yellow-700 bg-yellow-900 text-yellow-300
+  "></div>
+
+  <style>
+    html.dark body { background-color: #0f172a; color: #e2e8f0; }
+    html.dark .card { background-color: #1e293b; border-color: #334155; }
+    html.dark .modal-bg { background-color: #1e293b; }
+    html.dark input, html.dark textarea { background-color: #0f172a; border-color: #334155; color: #e2e8f0; }
+    html.dark .auth-card { background-color: #1e293b; }
+
+    .card { transition: transform 0.15s, box-shadow 0.15s; cursor: pointer; }
+    .card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.12); }
+
+    #drop-zone.drag-over { border-color: #6366f1; background-color: #eef2ff; }
+    html.dark #drop-zone.drag-over { background-color: #1e1b4b; }
+
+    .tab-btn.active { border-bottom: 2px solid #6366f1; color: #6366f1; font-weight: 600; }
+
+    /* 상태 뱃지 */
+    .badge-pending_approval { background:#fef9c3; color:#854d0e; }
+    .badge-pending    { background:#fef9c3; color:#854d0e; }
+    .badge-processing { background:#dbeafe; color:#1e40af; }
+    .badge-done       { background:#dcfce7; color:#166534; }
+    .badge-completed  { background:#dcfce7; color:#166534; }
+    .badge-rejected   { background:#fee2e2; color:#991b1b; }
+    .badge-error      { background:#fee2e2; color:#991b1b; }
+    html.dark .badge-pending_approval { background:#422006; color:#fef08a; }
+    html.dark .badge-pending    { background:#422006; color:#fef08a; }
+    html.dark .badge-processing { background:#1e3a5f; color:#93c5fd; }
+    html.dark .badge-done       { background:#14532d; color:#86efac; }
+    html.dark .badge-completed  { background:#14532d; color:#86efac; }
+    html.dark .badge-rejected   { background:#450a0a; color:#fca5a5; }
+    html.dark .badge-error      { background:#450a0a; color:#fca5a5; }
+
+    /* 수식 영역 */
+    .formula-block {
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin: 12px 0;
+      overflow-x: auto;
+    }
+    html.dark .formula-block { background: #0f172a; border-color: #334155; }
+    .formula-display { font-size: 1.15em; margin: 8px 0; text-align: center; }
+    .formula-step {
+      background: #f1f5f9;
+      border-left: 3px solid #6366f1;
+      border-radius: 0 8px 8px 0;
+      padding: 8px 12px;
+      margin: 6px 0;
+      font-size: 0.85em;
+    }
+    html.dark .formula-step { background: #1e293b; border-color: #818cf8; }
+
+    /* 스크롤바 */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+
+    /* 인증 화면 */
+    .auth-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+    html.dark .auth-screen { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); }
+    .auth-card { background: white; border-radius: 20px; padding: 40px; width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
+    .auth-input { width: 100%; border: 1.5px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; font-size: 14px; outline: none; transition: border-color 0.2s; }
+    .auth-input:focus { border-color: #6366f1; }
+    html.dark .auth-input { background: #0f172a; border-color: #334155; color: #e2e8f0; }
+    html.dark .auth-input:focus { border-color: #818cf8; }
+    .auth-btn { width: 100%; background: #6366f1; color: white; border: none; border-radius: 10px; padding: 13px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
+    .auth-btn:hover { background: #4f46e5; }
+    .auth-btn:disabled { background: #a5b4fc; cursor: not-allowed; }
+  </style>
+</head>
+<body class="bg-gray-50 dark:bg-slate-900 text-gray-900 dark:text-slate-100 min-h-screen">
+
+<!-- ===== 설정 ===== -->
+<script>
+  // Firebase 설정값
+  const firebaseConfig = {
+    apiKey:            "AIzaSyCVEgutLIAYbZueRg_oNCaTqo6_C5LqGWw",
+    authDomain:        "new-study-website.firebaseapp.com",
+    projectId:         "new-study-website",
+    storageBucket:     "new-study-website.firebasestorage.app",
+    messagingSenderId: "672427681414",
+    appId:             "1:672427681414:web:a3f86e6b1e12691f60d307"
+  };
+
+  // 서버 URL — Firebase config/server 에서 자동으로 읽음
+  let SERVER_URL = "";
+
+  const COLLECTION = "summaries";
+</script>
+
+<!-- ===== 인증 화면 (로그인/회원가입) ===== -->
+<div id="auth-screen" class="auth-screen">
+  <div class="auth-card">
+    <!-- 로고 -->
+    <div class="text-center mb-8">
+      <div class="text-5xl mb-3">📚</div>
+      <h1 class="text-2xl font-bold text-indigo-600">PDF 요약 서비스</h1>
+      <p class="text-sm text-gray-400 mt-1">학습 자료를 4단계 수준으로 요약해드립니다</p>
+    </div>
+
+    <!-- 탭 -->
+    <div class="flex bg-gray-100 dark:bg-slate-700 rounded-xl p-1 mb-6">
+      <button id="tab-login" onclick="switchAuthTab('login')"
+        class="flex-1 py-2 rounded-lg text-sm font-medium transition bg-white dark:bg-slate-600 shadow text-indigo-600">
+        로그인
+      </button>
+      <button id="tab-register" onclick="switchAuthTab('register')"
+        class="flex-1 py-2 rounded-lg text-sm font-medium transition text-gray-500 dark:text-slate-400">
+        회원가입
+      </button>
+    </div>
+
+    <!-- 로그인 폼 -->
+    <div id="form-login">
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">학번</label>
+          <input id="login-studentId" type="text" placeholder="학번을 입력하세요" class="auth-input"
+            onkeydown="if(event.key==='Enter') document.getElementById('login-password').focus()" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">비밀번호</label>
+          <input id="login-password" type="password" placeholder="비밀번호를 입력하세요" class="auth-input"
+            onkeydown="if(event.key==='Enter') doLogin()" />
+        </div>
+      </div>
+      <div id="login-error" class="hidden mt-3 text-sm text-red-500 text-center"></div>
+      <button onclick="doLogin()" id="login-btn" class="auth-btn mt-5">로그인</button>
+    </div>
+
+    <!-- 회원가입 폼 -->
+    <div id="form-register" class="hidden">
+      <div class="space-y-3">
+        <div>
+          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">이름</label>
+          <input id="reg-name" type="text" placeholder="이름을 입력하세요" class="auth-input" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">학번</label>
+          <input id="reg-studentId" type="text" placeholder="학번을 입력하세요" class="auth-input" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">이메일</label>
+          <input id="reg-email" type="email" placeholder="이메일을 입력하세요" class="auth-input" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">비밀번호</label>
+          <input id="reg-password" type="password" placeholder="비밀번호 (6자 이상)" class="auth-input" />
+        </div>
+      </div>
+      <div id="register-error" class="hidden mt-3 text-sm text-red-500 text-center"></div>
+      <button onclick="doRegister()" id="register-btn" class="auth-btn mt-5">회원가입</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 메인 앱 (로그인 후 표시) ===== -->
+<div id="main-app" class="hidden">
+
+<!-- 헤더 -->
+<header class="bg-white dark:bg-slate-800 shadow-sm sticky top-0 z-40">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="text-2xl">📚</span>
+      <h1 class="text-xl font-bold text-indigo-600 dark:text-indigo-400">PDF 요약 서비스</h1>
+    </div>
+    <div class="flex items-center gap-3">
+      <!-- 사용자 정보 -->
+      <span id="user-name-badge" class="hidden sm:flex items-center gap-1.5 text-sm text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-700 px-3 py-1.5 rounded-full">
+        👤 <span id="user-display-name"></span>
+      </span>
+      <button onclick="openUploadModal()"
+        class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition">
+        <span>📤</span> PDF 업로드
+      </button>
+      <button onclick="doLogout()" class="text-gray-500 dark:text-slate-400 hover:text-red-500 p-2 rounded-lg" title="로그아웃">
+        🚪
+      </button>
+      <button onclick="toggleDark()" class="text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white p-2 rounded-lg" title="다크모드 전환">
+        <span id="dark-icon">🌙</span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- 메인 -->
+<main class="max-w-6xl mx-auto px-4 py-6">
+
+  <!-- 검색 -->
+  <div class="mb-5 flex gap-3">
+    <input id="search-input" type="text" placeholder="제목, 키워드로 검색..."
+      oninput="renderCards()"
+      class="flex-1 border border-gray-200 dark:border-slate-600 rounded-lg px-4 py-2.5 text-sm bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
+  </div>
+
+  <!-- 필터 탭 -->
+  <div class="flex gap-1 border-b border-gray-200 dark:border-slate-700 mb-6 overflow-x-auto">
+    <button class="tab-btn active px-4 py-2.5 text-sm whitespace-nowrap" data-filter="all" onclick="setFilter(this, 'all')">전체</button>
+    <button class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-gray-500 dark:text-slate-400" data-filter="elementary" onclick="setFilter(this, 'elementary')">🟢 초등</button>
+    <button class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-gray-500 dark:text-slate-400" data-filter="middle" onclick="setFilter(this, 'middle')">🔵 중등</button>
+    <button class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-gray-500 dark:text-slate-400" data-filter="high" onclick="setFilter(this, 'high')">🟠 고등</button>
+    <button class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-gray-500 dark:text-slate-400" data-filter="graduate" onclick="setFilter(this, 'graduate')">🔴 대학원</button>
+  </div>
+
+  <!-- 카드 그리드 -->
+  <div id="card-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+
+  <!-- 빈 상태 -->
+  <div id="empty-state" class="hidden text-center py-20 text-gray-400 dark:text-slate-500">
+    <div class="text-6xl mb-4">📄</div>
+    <p class="text-lg font-medium">아직 요약본이 없어요</p>
+    <p class="text-sm mt-1">PDF를 업로드하면 자동으로 요약됩니다</p>
+  </div>
+
+  <!-- 로딩 -->
+  <div id="loading-state" class="flex justify-center py-20">
+    <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500"></div>
+  </div>
+
+</main>
+
+</div><!-- /main-app -->
+
+<!-- ===== 업로드 모달 ===== -->
+<div id="upload-modal" class="fixed inset-0 z-50 hidden">
+  <div class="absolute inset-0 bg-black/50" onclick="closeUploadModal()"></div>
+  <div class="absolute inset-0 flex items-center justify-center p-4">
+    <div class="modal-bg bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
+      <div class="flex items-center justify-between mb-5">
+        <h2 class="text-lg font-bold">PDF 업로드</h2>
+        <button onclick="closeUploadModal()" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+      </div>
+
+      <!-- 안내 -->
+      <div class="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg text-xs text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
+        📋 업로드 후 관리자 승인이 필요합니다. 승인 시 요약이 자동 시작됩니다.
+      </div>
+
+      <!-- 드롭존 -->
+      <div id="drop-zone"
+        class="border-2 border-dashed border-gray-300 dark:border-slate-600 rounded-xl p-10 text-center cursor-pointer hover:border-indigo-400 transition"
+        onclick="document.getElementById('file-input').click()"
+        ondragover="event.preventDefault(); this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleDrop(event)">
+        <div class="text-4xl mb-3">📂</div>
+        <p class="font-medium text-gray-600 dark:text-slate-300">파일을 끌어다 놓거나 클릭하세요</p>
+        <p class="text-xs text-gray-400 mt-1">PDF 파일만 가능 · 최대 50MB</p>
+      </div>
+      <input id="file-input" type="file" accept=".pdf" class="hidden" onchange="handleFileSelect(event)" />
+
+      <!-- 선택된 파일 -->
+      <div id="selected-file" class="hidden mt-4 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg p-3 flex items-center gap-3">
+        <span class="text-2xl">📄</span>
+        <div class="flex-1 min-w-0">
+          <p id="selected-filename" class="text-sm font-medium truncate"></p>
+          <p id="selected-filesize" class="text-xs text-gray-400"></p>
+        </div>
+        <button onclick="clearFile()" class="text-gray-400 hover:text-red-400 text-lg">✕</button>
+      </div>
+
+      <!-- 업로드 진행 -->
+      <div id="upload-progress" class="hidden mt-4">
+        <div class="flex justify-between text-sm mb-1">
+          <span class="text-gray-500">업로드 중...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="bg-gray-200 dark:bg-slate-700 rounded-full h-2">
+          <div id="progress-bar" class="bg-indigo-500 h-2 rounded-full transition-all" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- 업로드 결과 -->
+      <div id="upload-result" class="hidden mt-4 p-3 rounded-lg text-sm font-medium"></div>
+
+      <!-- 버튼 -->
+      <button id="upload-btn" onclick="doUpload()"
+        class="mt-5 w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 rounded-xl font-medium transition"
+        disabled>
+        업로드 시작
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 상세 보기 모달 ===== -->
+<div id="detail-modal" class="fixed inset-0 z-50 hidden">
+  <div class="absolute inset-0 bg-black/50" onclick="closeDetailModal()"></div>
+  <div class="absolute inset-0 flex items-center justify-center p-4">
+    <div class="modal-bg bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+
+      <!-- 모달 헤더 -->
+      <div class="flex items-start justify-between p-6 border-b border-gray-100 dark:border-slate-700">
+        <div class="flex-1 min-w-0 pr-4">
+          <h2 id="detail-title" class="text-xl font-bold truncate"></h2>
+          <p id="detail-filename" class="text-sm text-gray-400 mt-0.5 truncate"></p>
+        </div>
+        <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 text-xl flex-shrink-0">✕</button>
+      </div>
+
+      <!-- 탭 -->
+      <div class="flex gap-0 border-b border-gray-100 dark:border-slate-700 overflow-x-auto px-6">
+        <button class="detail-tab active px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 border-indigo-500 text-indigo-600"
+          data-tab="elementary" onclick="switchTab(this,'elementary')">🟢 초등</button>
+        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
+          data-tab="middle" onclick="switchTab(this,'middle')">🔵 중등</button>
+        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
+          data-tab="high" onclick="switchTab(this,'high')">🟠 고등</button>
+        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
+          data-tab="graduate" onclick="switchTab(this,'graduate')">🔴 대학원</button>
+        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
+          data-tab="sections" onclick="switchTab(this,'sections')">📑 섹션별</button>
+        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
+          data-tab="formulas" onclick="switchTab(this,'formulas')">🧮 수식&유도</button>
+      </div>
+
+      <!-- 탭 내용 -->
+      <div id="detail-content" class="flex-1 overflow-y-auto p-6 text-sm leading-relaxed"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== JavaScript ===== -->
+<script>
+  // ---- 전역 상태 ----
+  let allSummaries = [];
+  let currentFilter = 'all';
+  let currentDetail = null;
+  let currentTab = 'elementary';
+  let selectedFile = null;
+  let unsubscribe = null;
+
+  // ---- 인증 상태 ----
+  let authToken = sessionStorage.getItem('authToken');
+  let authUser = null;
+  try {
+    const stored = sessionStorage.getItem('authUser');
+    if (stored) authUser = JSON.parse(stored);
+  } catch(e) {}
+
+  // ---- 다크모드 ----
+  function toggleDark() {
+    const html = document.documentElement;
+    html.classList.toggle('dark');
+    document.getElementById('dark-icon').textContent = html.classList.contains('dark') ? '☀️' : '🌙';
+    localStorage.setItem('theme', html.classList.contains('dark') ? 'dark' : 'light');
+  }
+  if (localStorage.getItem('theme') === 'dark') {
+    document.documentElement.classList.add('dark');
+    setTimeout(() => {
+      const icon = document.getElementById('dark-icon');
+      if (icon) icon.textContent = '☀️';
+    }, 0);
+  }
+
+  // ---- 인증 탭 전환 ----
+  function switchAuthTab(tab) {
+    const loginTab = document.getElementById('tab-login');
+    const registerTab = document.getElementById('tab-register');
+    const loginForm = document.getElementById('form-login');
+    const registerForm = document.getElementById('form-register');
+
+    if (tab === 'login') {
+      loginTab.classList.add('bg-white', 'dark:bg-slate-600', 'shadow', 'text-indigo-600');
+      loginTab.classList.remove('text-gray-500', 'dark:text-slate-400');
+      registerTab.classList.remove('bg-white', 'dark:bg-slate-600', 'shadow', 'text-indigo-600');
+      registerTab.classList.add('text-gray-500', 'dark:text-slate-400');
+      loginForm.classList.remove('hidden');
+      registerForm.classList.add('hidden');
+    } else {
+      registerTab.classList.add('bg-white', 'dark:bg-slate-600', 'shadow', 'text-indigo-600');
+      registerTab.classList.remove('text-gray-500', 'dark:text-slate-400');
+      loginTab.classList.remove('bg-white', 'dark:bg-slate-600', 'shadow', 'text-indigo-600');
+      loginTab.classList.add('text-gray-500', 'dark:text-slate-400');
+      registerForm.classList.remove('hidden');
+      loginForm.classList.add('hidden');
+    }
+  }
+
+  // ---- 로그인 ----
+  async function doLogin() {
+    const studentId = document.getElementById('login-studentId').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errEl = document.getElementById('login-error');
+    const btn = document.getElementById('login-btn');
+
+    if (!studentId || !password) {
+      errEl.textContent = '학번과 비밀번호를 입력해주세요';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    if (!SERVER_URL || SERVER_URL === '여기에_입력') {
+      errEl.textContent = '⚠️ SERVER_URL을 설정해주세요';
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '로그인 중...';
+    errEl.classList.add('hidden');
+
+    try {
+      const res = await fetch(SERVER_URL + '/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId, password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '로그인 실패');
+
+      authToken = data.token;
+      authUser = data.user;
+      sessionStorage.setItem('authToken', authToken);
+      sessionStorage.setItem('authUser', JSON.stringify(authUser));
+      enterApp();
+    } catch(err) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('hidden');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '로그인';
+    }
+  }
+
+  // ---- 회원가입 ----
+  async function doRegister() {
+    const name = document.getElementById('reg-name').value.trim();
+    const studentId = document.getElementById('reg-studentId').value.trim();
+    const email = document.getElementById('reg-email').value.trim();
+    const password = document.getElementById('reg-password').value;
+    const errEl = document.getElementById('register-error');
+    const btn = document.getElementById('register-btn');
+
+    if (!name || !studentId || !email || !password) {
+      errEl.textContent = '모든 항목을 입력해주세요';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    if (password.length < 6) {
+      errEl.textContent = '비밀번호는 6자 이상이어야 합니다';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    if (!SERVER_URL || SERVER_URL === '여기에_입력') {
+      errEl.textContent = '⚠️ SERVER_URL을 설정해주세요';
+      errEl.classList.remove('hidden');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '가입 신청 중...';
+    errEl.classList.add('hidden');
+
+    try {
+      const res = await fetch(SERVER_URL + '/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, studentId, email, password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '회원가입 실패');
+
+      // 가입 신청 완료 → 승인 대기 메시지 표시 (로그인 X)
+      showRegisterPending(name);
+    } catch(err) {
+      errEl.textContent = err.message;
+      errEl.classList.remove('hidden');
+      btn.disabled = false;
+      btn.textContent = '회원가입';
+    }
+  }
+
+  // ---- 가입 승인 대기 화면 ----
+  function showRegisterPending(name) {
+    const formEl = document.getElementById('form-register');
+    formEl.innerHTML = `
+      <div class="text-center py-4">
+        <div class="text-5xl mb-4">⏳</div>
+        <h3 class="text-lg font-bold text-gray-800 dark:text-slate-100 mb-2">가입 신청 완료!</h3>
+        <p class="text-sm text-gray-500 dark:text-slate-400 leading-relaxed mb-4">
+          <b>${escHtml(name)}</b>님의 가입 신청이 접수됐어요.<br/>
+          관리자 승인 후 로그인이 가능합니다.
+        </p>
+        <div class="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg text-xs text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 mb-5">
+          📱 관리자가 텔레그램으로 승인하면<br/>곧 알림이 올 거예요.
+        </div>
+        <button onclick="switchAuthTab('login')" class="auth-btn">
+          로그인 화면으로
+        </button>
+      </div>`;
+  }
+
+  // ---- 앱 진입 ----
+  function enterApp() {
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('main-app').classList.remove('hidden');
+    document.getElementById('user-display-name').textContent = authUser?.name || '';
+    document.getElementById('user-name-badge').classList.remove('hidden');
+    initFirebaseAndListen();
+  }
+
+  // ---- 로그아웃 ----
+  function doLogout() {
+    sessionStorage.removeItem('authToken');
+    sessionStorage.removeItem('authUser');
+    authToken = null;
+    authUser = null;
+    if (unsubscribe) unsubscribe();
+    document.getElementById('main-app').classList.add('hidden');
+    document.getElementById('auth-screen').style.display = '';
+  }
+
+  // ---- Firebase 초기화 ----
+  function initFirebaseAndListen() {
+    try {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+      }
+      const db = firebase.firestore();
+
+      // 서버 URL을 Firebase에서 실시간으로 읽기
+      db.collection('config').doc('server').onSnapshot(snap => {
+        if (snap.exists && snap.data().url) {
+          SERVER_URL = snap.data().url;
+          console.log('서버 URL 갱신:', SERVER_URL);
+        }
+      });
+
+      if (unsubscribe) unsubscribe();
+      unsubscribe = db.collection(COLLECTION)
+        .orderBy('createdAt', 'desc')
+        .onSnapshot(snapshot => {
+          allSummaries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          document.getElementById('loading-state').classList.add('hidden');
+          renderCards();
+        }, err => {
+          console.error('Firestore 오류:', err);
+          document.getElementById('loading-state').classList.add('hidden');
+          showEmptyState();
+        });
+    } catch(e) {
+      console.error('Firebase 초기화 실패:', e);
+      document.getElementById('loading-state').classList.add('hidden');
+      showEmptyState('Firebase 설정값을 확인해주세요');
+    }
+  }
+
+  // ---- 자동 로그인 (세션 유지) ----
+  window.addEventListener('DOMContentLoaded', () => {
+    if (authToken && authUser) {
+      enterApp();
+    }
+  });
+
+  // ---- 카드 렌더링 ----
+  function renderCards() {
+    const query = document.getElementById('search-input').value.trim().toLowerCase();
+    let filtered = allSummaries;
+
+    if (currentFilter !== 'all') {
+      filtered = filtered.filter(s =>
+        (s.status === 'done' || s.status === 'completed') &&
+        s.summaries && s.summaries[currentFilter]
+      );
+    }
+
+    if (query) {
+      filtered = filtered.filter(s =>
+        (s.title || '').toLowerCase().includes(query) ||
+        (s.filename || '').toLowerCase().includes(query) ||
+        (s.keywords || []).some(k => k.toLowerCase().includes(query))
+      );
+    }
+
+    const grid = document.getElementById('card-grid');
+    const empty = document.getElementById('empty-state');
+
+    if (filtered.length === 0) {
+      grid.innerHTML = '';
+      empty.classList.remove('hidden');
+      empty.innerHTML = `<div class="text-6xl mb-4">📄</div>
+        <p class="text-lg font-medium">${query ? '검색 결과가 없어요' : '아직 요약본이 없어요'}</p>
+        <p class="text-sm mt-1">${query ? '다른 키워드로 검색해보세요' : 'PDF를 업로드하면 자동으로 요약됩니다'}</p>`;
+      return;
+    }
+
+    empty.classList.add('hidden');
+    grid.innerHTML = filtered.map(s => buildCard(s)).join('');
+  }
+
+  function buildCard(s) {
+    const statusMap = {
+      pending_approval: { label:'승인 대기',  cls:'badge-pending_approval' },
+      pending:          { label:'대기중',     cls:'badge-pending' },
+      processing:       { label:'처리중',     cls:'badge-processing' },
+      done:             { label:'완료',       cls:'badge-done' },
+      completed:        { label:'완료',       cls:'badge-completed' },
+      rejected:         { label:'거절됨',     cls:'badge-rejected' },
+      error:            { label:'오류',       cls:'badge-error' },
+    };
+    const st = statusMap[s.status] || statusMap.pending;
+    const levelMap = {
+      elementary: { label:'초등',  color:'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
+      middle:     { label:'중등',  color:'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' },
+      high:       { label:'고등',  color:'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300' },
+      graduate:   { label:'대학원',color:'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
+    };
+
+    const levels = s.summaries ? Object.keys(s.summaries).filter(k => s.summaries[k]) : [];
+    const levelBadges = levels.map(l =>
+      levelMap[l] ? `<span class="text-xs px-2 py-0.5 rounded-full ${levelMap[l].color}">${levelMap[l].label}</span>` : ''
+    ).join('');
+
+    const formulaCount = (s.formulas || []).length || s.formulaCount || 0;
+    const formulaBadge = formulaCount > 0
+      ? `<span class="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">🧮 수식 ${formulaCount}</span>`
+      : '';
+
+    const date = s.createdAt
+      ? (s.createdAt.toDate ? s.createdAt.toDate() : new Date(s.createdAt)).toLocaleDateString('ko-KR')
+      : '';
+
+    const preview = s.summaries?.elementary || s.summaries?.middle || '';
+    const uploader = s.uploadedBy ? `<span class="text-xs text-gray-400">👤 ${escHtml(s.uploadedBy.name)}</span>` : '';
+
+    return `
+      <div class="card bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-2xl p-5 shadow-sm"
+           onclick="openDetail('${s.id}')">
+        <div class="flex items-start justify-between mb-3">
+          <span class="text-2xl">📄</span>
+          <span class="text-xs px-2 py-1 rounded-full font-medium ${st.cls}">${st.label}</span>
+        </div>
+        <h3 class="font-semibold text-base mb-1 line-clamp-2">${escHtml(s.title || s.filename || '제목 없음')}</h3>
+        <p class="text-xs text-gray-400 dark:text-slate-500 mb-3 truncate">${escHtml(s.filename || '')}</p>
+        ${preview ? `<p class="text-xs text-gray-500 dark:text-slate-400 line-clamp-3 mb-3">${escHtml(preview.substring(0,120))}...</p>` : ''}
+        <div class="flex flex-wrap gap-1 mb-3">${levelBadges}${formulaBadge}</div>
+        <div class="flex items-center justify-between text-xs text-gray-400 dark:text-slate-500">
+          <span>${date}</span>
+          ${uploader}
+        </div>
+      </div>`;
+  }
+
+  function showEmptyState(msg) {
+    const el = document.getElementById('empty-state');
+    el.classList.remove('hidden');
+    if (msg) {
+      el.innerHTML = `<div class="text-5xl mb-4">⚠️</div><p class="text-lg font-medium text-red-500">${msg}</p>`;
+    }
+  }
+
+  function escHtml(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
+
+  // ---- 필터 ----
+  function setFilter(btn, filter) {
+    currentFilter = filter;
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.classList.remove('active');
+      b.style.color = '';
+      b.style.fontWeight = '';
+      b.style.borderBottom = '';
+    });
+    btn.classList.add('active');
+    renderCards();
+  }
+
+  // ---- 상세 모달 ----
+  function openDetail(id) {
+    const s = allSummaries.find(x => x.id === id);
+    if (!s) return;
+    currentDetail = s;
+
+    // 사용 가능한 첫 번째 탭 선택 (sections 있으면 우선)
+    currentTab = (s.sections && s.sections.length) ? 'sections' :
+                 s.summaries?.elementary ? 'elementary' :
+                 s.summaries?.middle     ? 'middle' :
+                 s.summaries?.high       ? 'high' :
+                 s.summaries?.graduate   ? 'graduate' :
+                 (s.formulas && s.formulas.length) ? 'formulas' : 'elementary';
+
+    document.getElementById('detail-title').textContent = s.title || s.filename || '제목 없음';
+    document.getElementById('detail-filename').textContent = s.filename || '';
+    switchTab(null, currentTab);
+    document.getElementById('detail-modal').classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeDetailModal() {
+    document.getElementById('detail-modal').classList.add('hidden');
+    document.body.style.overflow = '';
+  }
+
+  function switchTab(btn, tab) {
+    currentTab = tab;
+    if (!btn) {
+      btn = document.querySelector(`.detail-tab[data-tab="${tab}"]`);
+    }
+    document.querySelectorAll('.detail-tab').forEach(b => {
+      b.classList.remove('active', 'border-indigo-500', 'text-indigo-600');
+      b.classList.add('text-gray-500', 'border-transparent');
+    });
+    if (btn) {
+      btn.classList.add('active', 'border-indigo-500', 'text-indigo-600');
+      btn.classList.remove('text-gray-500', 'border-transparent');
+    }
+
+    const el = document.getElementById('detail-content');
+    if (!currentDetail) return;
+
+    if (tab === 'formulas') {
+      renderFormulasTab(el, currentDetail);
+    } else if (tab === 'sections') {
+      renderSectionsTab(el, currentDetail);
+    } else {
+      const summaries = currentDetail.summaries || {};
+      const content = summaries[tab];
+      if (!content) {
+        el.innerHTML = '<p class="text-gray-400 dark:text-slate-500 text-center py-10">해당 수준의 요약이 없습니다</p>';
+      } else {
+        el.innerHTML = `
+          <div class="prose dark:prose-invert max-w-none">
+            <p class="whitespace-pre-wrap text-sm leading-7">${escHtml(content)}</p>
+          </div>`;
+      }
+    }
+  }
+
+  // ---- 섹션별 요약 탭 ----
+  function renderSectionsTab(el, s) {
+    const sections = s.sections || [];
+    if (!sections.length) {
+      el.innerHTML = '<p class="text-gray-400 dark:text-slate-500 text-center py-10">섹션별 요약 정보가 없습니다.<br/><span class="text-xs">새로 업로드한 문서부터 표시됩니다.</span></p>';
+      return;
+    }
+
+    const html = sections.map((sec, i) => {
+      const heading  = escHtml(sec.heading  || `섹션 ${i+1}`);
+      const summary  = escHtml(sec.summary  || '');
+      const keyPoints = (sec.keyPoints || []);
+      const kpHtml = keyPoints.length
+        ? `<ul class="mt-2 space-y-1">
+             ${keyPoints.map(kp =>
+               `<li class="flex gap-2 text-xs text-gray-600 dark:text-slate-300">
+                  <span class="text-indigo-400 flex-shrink-0">▸</span>
+                  <span>${escHtml(kp)}</span>
+                </li>`
+             ).join('')}
+           </ul>`
+        : '';
+
+      return `
+        <div class="border border-gray-100 dark:border-slate-700 rounded-xl overflow-hidden mb-3">
+          <button
+            class="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-slate-700/50 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors text-left"
+            onclick="toggleAccordion(this)">
+            <span class="flex items-center gap-2">
+              <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-400 text-xs font-bold flex-shrink-0">${i+1}</span>
+              <span class="text-sm font-semibold text-gray-800 dark:text-slate-100">${heading}</span>
+            </span>
+            <span class="accordion-arrow text-gray-400 text-xs transition-transform">▼</span>
+          </button>
+          <div class="accordion-body hidden px-4 py-3 border-t border-gray-100 dark:border-slate-700 bg-white dark:bg-slate-800">
+            ${summary ? `<p class="text-sm text-gray-700 dark:text-slate-300 leading-7 whitespace-pre-wrap">${summary}</p>` : ''}
+            ${kpHtml}
+          </div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `<div>${html}</div>`;
+  }
+
+  function toggleAccordion(btn) {
+    const body  = btn.nextElementSibling;
+    const arrow = btn.querySelector('.accordion-arrow');
+    const isOpen = !body.classList.contains('hidden');
+    body.classList.toggle('hidden', isOpen);
+    if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+  }
+
+  // ---- 수식 & 유도 탭 렌더링 ----
+  function renderFormulasTab(el, s) {
+    const formulas = s.formulas || [];
+    if (!formulas.length) {
+      el.innerHTML = '<p class="text-gray-400 dark:text-slate-500 text-center py-10">이 문서에서 수식을 찾지 못했습니다</p>';
+      return;
+    }
+
+    const html = formulas.map((f, i) => {
+      // 수식은 문자열 또는 {latex, plain, name, description, derivation, steps} 객체
+      const latex       = typeof f === 'string' ? f : (f.latex || '');
+      const plain       = typeof f === 'object' ? (f.plain || '') : '';
+      const name        = typeof f === 'string' ? `수식 ${i+1}` : (f.name || `수식 ${i+1}`);
+      const description = typeof f === 'string' ? '' : (f.description || '');
+      const derivation  = typeof f === 'object' ? (f.derivation || '') : '';
+      const rawSteps    = typeof f === 'object' ? (f.steps || []) : [];
+
+      // steps: {desc, latex} 객체 배열 또는 구버전 문자열 배열 모두 처리
+      const steps = rawSteps.map(step =>
+        typeof step === 'string'
+          ? { desc: step, latex: '' }
+          : step
+      );
+
+      const plainHtml = plain
+        ? `<div class="mt-1 mb-2">
+             <code class="text-sm font-mono px-2 py-1 rounded bg-gray-100 dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 select-all">${escHtml(plain)}</code>
+           </div>`
+        : '';
+
+      const derivationHtml = derivation
+        ? `<div class="mt-3">
+             <p class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 mb-1">📐 유도 과정</p>
+             <p class="text-xs text-gray-600 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">${escHtml(derivation)}</p>
+           </div>`
+        : '';
+
+      const stepsHtml = steps.length
+        ? `<div class="mt-3">
+             <p class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 mb-2">🔢 단계별 풀이</p>
+             ${steps.map((step, si) => {
+               const stepLatexId = `step-${i}-${si}`;
+               const stepLatex = step.latex || '';
+               const stepDesc  = escHtml(step.desc || '');
+               return `<div class="formula-step">
+                  <div class="flex items-start gap-2">
+                    <span class="font-bold text-indigo-500 dark:text-indigo-400 flex-shrink-0 text-xs mt-0.5">Step ${si+1}</span>
+                    <div class="flex-1">
+                      ${stepDesc ? `<p class="text-xs text-gray-600 dark:text-slate-300 mb-1">${stepDesc}</p>` : ''}
+                      ${stepLatex
+                        ? `<div class="formula-display text-sm" id="${stepLatexId}" data-latex="${escHtml(stepLatex)}" data-plain="">\\(${escHtml(stepLatex)}\\)</div>`
+                        : ''}
+                    </div>
+                  </div>
+                </div>`;
+             }).join('')}
+           </div>`
+        : '';
+
+      return `
+        <div class="formula-block">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-xs font-bold text-indigo-600 dark:text-indigo-400">${i+1}.</span>
+            <span class="text-sm font-semibold text-gray-800 dark:text-slate-100">${escHtml(name)}</span>
+          </div>
+          ${plainHtml}
+          <div class="formula-display" id="katex-${i}" data-latex="${escHtml(latex)}" data-plain="${escHtml(plain)}">\\(${escHtml(latex)}\\)</div>
+          ${description ? `<p class="text-xs text-gray-500 dark:text-slate-400 mt-2 leading-relaxed">${escHtml(description)}</p>` : ''}
+          ${derivationHtml}
+          ${stepsHtml}
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `<div class="space-y-1">${html}</div>`;
+
+    // KaTeX 렌더링
+    setTimeout(() => {
+      el.querySelectorAll('[data-latex]').forEach(div => {
+        const ltx   = div.dataset.latex || '';
+        const plain = div.dataset.plain || '';
+        if (!ltx) return;
+        try {
+          if (typeof katex !== 'undefined') {
+            // step 수식은 inline, 메인 수식은 display 모드
+            const isStep = div.id.startsWith('step-');
+            katex.render(ltx, div, { throwOnError: true, displayMode: !isStep });
+          } else if (plain) {
+            // KaTeX 없으면 plain fallback
+            div.textContent = plain;
+          }
+        } catch(e) {
+          // 렌더링 실패 시 plain 표현 또는 원래 LaTeX 텍스트로 fallback
+          div.textContent = plain || ltx;
+        }
+      });
+    }, 50);
+  }
+
+  // ---- 업로드 모달 ----
+  function openUploadModal() {
+    document.getElementById('upload-modal').classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+  function closeUploadModal() {
+    document.getElementById('upload-modal').classList.add('hidden');
+    document.body.style.overflow = '';
+    clearFile();
+    document.getElementById('upload-result').classList.add('hidden');
+    document.getElementById('upload-progress').classList.add('hidden');
+    document.getElementById('upload-btn').disabled = true;
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    document.getElementById('drop-zone').classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file && file.type === 'application/pdf') setSelectedFile(file);
+    else alert('PDF 파일만 업로드 가능합니다.');
+  }
+  function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (file) setSelectedFile(file);
+  }
+  function setSelectedFile(file) {
+    selectedFile = file;
+    document.getElementById('selected-filename').textContent = file.name;
+    document.getElementById('selected-filesize').textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
+    document.getElementById('selected-file').classList.remove('hidden');
+    document.getElementById('upload-btn').disabled = false;
+    document.getElementById('upload-result').classList.add('hidden');
+  }
+  function clearFile() {
+    selectedFile = null;
+    document.getElementById('selected-file').classList.add('hidden');
+    document.getElementById('upload-btn').disabled = true;
+    document.getElementById('file-input').value = '';
+  }
+
+  async function doUpload() {
+    if (!selectedFile) return;
+    if (!SERVER_URL || SERVER_URL === '여기에_입력') {
+      showUploadResult('error', '⚠️ SERVER_URL을 설정해주세요 (index.html 상단)');
+      return;
+    }
+    if (!authToken) {
+      showUploadResult('error', '로그인이 필요합니다');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('pdf', selectedFile);
+
+    const progressDiv = document.getElementById('upload-progress');
+    const progressBar = document.getElementById('progress-bar');
+    const progressPct = document.getElementById('progress-pct');
+    const btn = document.getElementById('upload-btn');
+
+    progressDiv.classList.remove('hidden');
+    btn.disabled = true;
+    btn.textContent = '업로드 중...';
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) {
+          const pct = Math.round(e.loaded / e.total * 100);
+          progressBar.style.width = pct + '%';
+          progressPct.textContent = pct + '%';
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          showUploadResult('success', '✅ 업로드 완료! 관리자 승인 후 요약이 시작됩니다.');
+          clearFile();
+          resolve();
+        } else if (xhr.status === 401) {
+          showUploadResult('error', '❌ 로그인이 만료되었습니다. 다시 로그인해주세요.');
+          doLogout();
+          reject();
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            showUploadResult('error', `❌ ${err.error || '업로드 실패'}`);
+          } catch(e) {
+            showUploadResult('error', `❌ 업로드 실패 (${xhr.status})`);
+          }
+          reject();
+        }
+      };
+      xhr.onerror = () => {
+        showUploadResult('error', '❌ 서버에 연결할 수 없습니다. Cloudflare Tunnel이 실행 중인지 확인하세요.');
+        reject();
+      };
+      xhr.open('POST', SERVER_URL + '/upload');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + authToken);
+      xhr.send(formData);
+    }).catch(() => {});
+
+    btn.disabled = false;
+    btn.textContent = '업로드 시작';
+  }
+
+  function showUploadResult(type, msg) {
+    const el = document.getElementById('upload-result');
+    el.className = type === 'success'
+      ? 'mt-4 p-3 rounded-lg text-sm font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
+      : 'mt-4 p-3 rounded-lg text-sm font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300';
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+
+  function renderMathInDocument() {
+    if (typeof renderMathInElement !== 'undefined') {
+      renderMathInElement(document.body, {
+        delimiters: [
+          {left: '\\(', right: '\\)', display: false},
+          {left: '\\[', right: '\\]', display: true}
+        ],
+        throwOnError: false
+      });
+    }
+  }
+</script>
+</body>
+</html>
