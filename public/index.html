@@ -725,12 +725,12 @@
     const el = document.getElementById('empty-state');
     el.classList.remove('hidden');
     if (msg) {
-      el.innerHTML = `<div class="text-5xl mb-4">⚠️</div><p class="text-lg font-medium text-red-500">${msg}</p>`;
+      el.innerHTML = `<div class="text-5xl mb-4">⚠️</div><p class="text-lg font-medium text-red-500">${escHtml(msg)}</p>`;
     }
   }
 
   function escHtml(str) {
-    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
   // ---- 필터 ----
@@ -776,7 +776,7 @@
   async function deleteSummary(id) {
     if (!confirm('정말 삭제하시겠습니까?')) return;
     try {
-      const token = localStorage.getItem('token');
+      const token = authToken || sessionStorage.getItem('authToken');
       const res = await fetch(`${SERVER_URL}/summary/${id}`, {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
