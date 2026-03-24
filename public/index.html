@@ -377,13 +377,22 @@
   let selectedFile = null;
   let unsubscribe = null;
 
-  // ---- 인증 상태 ----
-  let authToken = sessionStorage.getItem('authToken');
+  // ---- 인증 상태 (localStorage로 자동 로그인 유지) ----
+  let authToken = localStorage.getItem('authToken');
   let authUser = null;
   try {
-    const stored = sessionStorage.getItem('authUser');
+    const stored = localStorage.getItem('authUser');
     if (stored) authUser = JSON.parse(stored);
   } catch(e) {}
+
+  // JWT 만료 체크
+  function isTokenExpired(token) {
+    if (!token) return true;
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      return payload.exp * 1000 < Date.now();
+    } catch { return true; }
+  }
 
   // ---- 다크모드 ----
   function toggleDark() {
@@ -457,8 +466,8 @@
 
       authToken = data.token;
       authUser = data.user;
-      sessionStorage.setItem('authToken', authToken);
-      sessionStorage.setItem('authUser', JSON.stringify(authUser));
+      localStorage.setItem('authToken', authToken);
+      localStorage.setItem('authUser', JSON.stringify(authUser));
       enterApp();
     } catch(err) {
       errEl.textContent = err.message;
@@ -548,8 +557,8 @@
 
   // ---- 로그아웃 ----
   function doLogout() {
-    sessionStorage.removeItem('authToken');
-    sessionStorage.removeItem('authUser');
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('authUser');
     authToken = null;
     authUser = null;
     if (unsubscribe) unsubscribe();
@@ -609,9 +618,15 @@
       console.error('Firebase 초기화 실패:', e);
     }
 
-    // 자동 로그인 (세션 유지)
-    if (authToken && authUser) {
+    // 자동 로그인 (JWT 만료 체크 포함)
+    if (authToken && authUser && !isTokenExpired(authToken)) {
       enterApp();
+    } else if (authToken && isTokenExpired(authToken)) {
+      // 만료된 토큰 정리
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('authUser');
+      authToken = null;
+      authUser = null;
     }
   });
 
