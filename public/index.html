@@ -167,6 +167,10 @@
             onkeydown="if(event.key==='Enter') doLogin()" />
         </div>
       </div>
+      <div class="flex items-center mt-4">
+        <input id="auto-login" type="checkbox" class="w-4 h-4 text-indigo-500 border-gray-300 rounded focus:ring-indigo-400 cursor-pointer" />
+        <label for="auto-login" class="ml-2 text-sm text-gray-500 dark:text-slate-400 cursor-pointer select-none">자동 로그인</label>
+      </div>
       <div id="login-error" class="hidden mt-3 text-sm text-red-500 text-center"></div>
       <button onclick="doLogin()" id="login-btn" class="auth-btn mt-5">로그인</button>
     </div>
@@ -377,11 +381,11 @@
   let selectedFile = null;
   let unsubscribe = null;
 
-  // ---- 인증 상태 (localStorage로 자동 로그인 유지) ----
-  let authToken = localStorage.getItem('authToken');
+  // ---- 인증 상태 (자동 로그인 체크 시 localStorage, 아니면 sessionStorage) ----
+  let authToken = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
   let authUser = null;
   try {
-    const stored = localStorage.getItem('authUser');
+    const stored = localStorage.getItem('authUser') || sessionStorage.getItem('authUser');
     if (stored) authUser = JSON.parse(stored);
   } catch(e) {}
 
@@ -466,8 +470,11 @@
 
       authToken = data.token;
       authUser = data.user;
-      localStorage.setItem('authToken', authToken);
-      localStorage.setItem('authUser', JSON.stringify(authUser));
+      const autoLogin = document.getElementById('auto-login').checked;
+      const storage = autoLogin ? localStorage : sessionStorage;
+      storage.setItem('authToken', authToken);
+      storage.setItem('authUser', JSON.stringify(authUser));
+      if (autoLogin) localStorage.setItem('autoLogin', 'true');
       enterApp();
     } catch(err) {
       errEl.textContent = err.message;
@@ -559,6 +566,9 @@
   function doLogout() {
     localStorage.removeItem('authToken');
     localStorage.removeItem('authUser');
+    localStorage.removeItem('autoLogin');
+    sessionStorage.removeItem('authToken');
+    sessionStorage.removeItem('authUser');
     authToken = null;
     authUser = null;
     if (unsubscribe) unsubscribe();
