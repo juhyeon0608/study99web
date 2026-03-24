@@ -338,7 +338,11 @@
           <h2 id="detail-title" class="text-xl font-bold truncate"></h2>
           <p id="detail-filename" class="text-sm text-gray-400 mt-0.5 truncate"></p>
         </div>
-        <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 text-xl flex-shrink-0">✕</button>
+        <div class="flex items-center gap-2 flex-shrink-0">
+          <button id="detail-delete-btn" onclick="if(currentDetail) deleteSummary(currentDetail.id)"
+                  class="text-gray-400 hover:text-red-500 text-sm px-2 py-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition" title="삭제">🗑</button>
+          <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        </div>
       </div>
 
       <!-- 탭 -->
@@ -682,12 +686,28 @@
     const preview = s.summaries?.elementary || s.summaries?.middle || '';
     const uploader = s.uploadedBy ? `<span class="text-xs text-gray-400">👤 ${escHtml(s.uploadedBy.name)}</span>` : '';
 
+    const errorActions = s.status === 'error'
+      ? `<div class="flex gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-slate-700">
+           <button onclick="event.stopPropagation(); deleteSummary('${s.id}')"
+                   class="flex-1 text-xs py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50 transition">🗑 삭제</button>
+         </div>`
+      : '';
+
+    const deleteBtn = (s.status === 'done' || s.status === 'completed')
+      ? `<button onclick="event.stopPropagation(); deleteSummary('${s.id}')"
+                 class="absolute top-3 right-12 w-7 h-7 rounded-full bg-gray-100 hover:bg-red-100 dark:bg-slate-700 dark:hover:bg-red-900/50 flex items-center justify-center text-xs text-gray-400 hover:text-red-500 transition opacity-0 group-hover:opacity-100"
+                 title="삭제">🗑</button>`
+      : '';
+
     return `
-      <div class="card bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-2xl p-5 shadow-sm"
+      <div class="card group relative bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-2xl p-5 shadow-sm"
            onclick="openDetail('${s.id}')">
         <div class="flex items-start justify-between mb-3">
           <span class="text-2xl">📄</span>
-          <span class="text-xs px-2 py-1 rounded-full font-medium ${st.cls}">${st.label}</span>
+          <div class="flex items-center gap-1">
+            ${deleteBtn}
+            <span class="text-xs px-2 py-1 rounded-full font-medium ${st.cls}">${st.label}</span>
+          </div>
         </div>
         <h3 class="font-semibold text-base mb-1 line-clamp-2">${escHtml(s.title || s.filename || '제목 없음')}</h3>
         <p class="text-xs text-gray-400 dark:text-slate-500 mb-3 truncate">${escHtml(s.filename || '')}</p>
@@ -697,6 +717,7 @@
           <span>${date}</span>
           ${uploader}
         </div>
+        ${errorActions}
       </div>`;
   }
 
@@ -749,6 +770,34 @@
   function closeDetailModal() {
     document.getElementById('detail-modal').classList.add('hidden');
     document.body.style.overflow = '';
+  }
+
+  // ---- 삭제 기능 ----
+  async function deleteSummary(id) {
+    if (!confirm('정말 삭제하시겠습니까?')) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`${SERVER_URL}/summary/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      allSummaries = allSummaries.filter(s => s.id !== id);
+      renderCards();
+      closeDetailModal();
+      showToast('삭제되었습니다');
+    } catch (e) {
+      alert('삭제 실패: ' + e.message);
+    }
+  }
+
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg text-sm z-[9999] transition-opacity';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2500);
   }
 
   function switchTab(btn, tab) {
