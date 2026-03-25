@@ -235,6 +235,31 @@
     [data-theme="dark"] .card-error-btn { background: #450a0a55; color: #f87171; }
     [data-theme="dark"] .card-error-btn:hover { background: #450a0a88; }
 
+    /* ===== Progress Bar ===== */
+    .card-progress {
+      margin-top: 10px; padding-top: 10px;
+      border-top: 1px solid var(--bd);
+    }
+    .card-progress-text {
+      font-size: 11px; color: var(--accent); font-weight: 600; margin-bottom: 6px;
+    }
+    .card-progress-bar {
+      width: 100%; height: 6px; background: var(--bd);
+      border-radius: 3px; overflow: hidden;
+    }
+    .card-progress-fill {
+      height: 100%; background: var(--accent); border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+    .card-progress-indeterminate {
+      width: 40% !important;
+      animation: indeterminate 1.5s infinite ease-in-out;
+    }
+    @keyframes indeterminate {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+
     /* ===== Status Badges ===== */
     .status-badge {
       font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600;
@@ -1303,6 +1328,23 @@
     const preview = s.summaries?.elementary || s.summaries?.middle || '';
     const uploader = s.uploadedBy ? `<span class="card-footer-uploader"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> ${escHtml(s.uploadedBy.name)}</span>` : '';
 
+    // 진행도 표시 (processing 상태일 때)
+    const progressBar = (s.status === 'processing' && s.progress)
+      ? `<div class="card-progress">
+           <div class="card-progress-text">${escHtml(s.progress.detail || '처리 중...')}</div>
+           <div class="card-progress-bar">
+             <div class="card-progress-fill" style="width:${Math.min(s.progress.percent || 0, 100)}%"></div>
+           </div>
+         </div>`
+      : (s.status === 'processing')
+      ? `<div class="card-progress">
+           <div class="card-progress-text">처리 대기 중...</div>
+           <div class="card-progress-bar">
+             <div class="card-progress-fill card-progress-indeterminate"></div>
+           </div>
+         </div>`
+      : '';
+
     const errorActions = s.status === 'error'
       ? `<div class="card-error-actions">
            <button onclick="event.stopPropagation(); deleteSummary('${s.id}')" class="card-error-btn">&#x1F5D1; 삭제</button>
@@ -1327,6 +1369,7 @@
         <div class="card-title">${escHtml(s.title || s.filename || '제목 없음')}</div>
         <div class="card-filename">${escHtml(s.filename || '')}</div>
         ${preview ? `<div class="card-preview">${escHtml(preview.substring(0,120))}...</div>` : ''}
+        ${progressBar}
         <div class="card-badges">${levelBadges}${formulaBadge}</div>
         <div class="card-footer">
           <span>${date}</span>
