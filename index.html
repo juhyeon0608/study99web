@@ -417,6 +417,25 @@
       font-size: 12px; color: #92400e;
     }
     [data-theme="dark"] .upload-notice { background: #422006; border-color: #78350f; color: #fcd34d; }
+
+    .level-select { margin-top: 16px; }
+    .level-select-label { display: block; font-size: 13px; font-weight: 600; color: var(--tx2); margin-bottom: 8px; }
+    .level-select-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .level-check {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; border-radius: 10px; cursor: pointer;
+      border: 1.5px solid var(--bd); background: var(--bg);
+      font-size: 13px; font-weight: 500; color: var(--tx2);
+      transition: all 0.2s; user-select: none;
+    }
+    .level-check:has(input:checked) {
+      border-color: var(--accent); background: var(--accent-bg);
+      color: var(--accent-dark);
+    }
+    .level-check input { display: none; }
+    .level-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .level-check:has(input:not(:checked)) .level-dot { opacity: 0.3; }
+
     .drop-zone {
       border: 2px dashed var(--bd2); border-radius: 12px;
       padding: 40px 20px; text-align: center; cursor: pointer;
@@ -839,6 +858,17 @@
           <p id="selected-filesize" class="size"></p>
         </div>
         <button onclick="clearFile()" class="remove">&times;</button>
+      </div>
+
+      <!-- Level Selection -->
+      <div class="level-select">
+        <label class="level-select-label">설명 단계 선택</label>
+        <div class="level-select-grid">
+          <label class="level-check"><input type="checkbox" value="elementary" checked><span class="level-dot" style="background:#22c55e"></span> 초등</label>
+          <label class="level-check"><input type="checkbox" value="middle" checked><span class="level-dot" style="background:#3b82f6"></span> 중등</label>
+          <label class="level-check"><input type="checkbox" value="high" checked><span class="level-dot" style="background:#f97316"></span> 고등</label>
+          <label class="level-check"><input type="checkbox" value="graduate" checked><span class="level-dot" style="background:#ef4444"></span> 대학원</label>
+        </div>
       </div>
 
       <!-- Upload Progress -->
@@ -1785,6 +1815,14 @@
 
     const formData = new FormData();
     formData.append('pdf', selectedFile);
+
+    // 선택된 설명 단계 전달
+    const selectedLevels = Array.from(document.querySelectorAll('.level-check input:checked')).map(cb => cb.value);
+    if (selectedLevels.length === 0) {
+      showUploadResult('error', '최소 1개 이상의 설명 단계를 선택해주세요');
+      return;
+    }
+    formData.append('levels', JSON.stringify(selectedLevels));
 
     const progressDiv = document.getElementById('upload-progress');
     const progressBar = document.getElementById('progress-bar');
