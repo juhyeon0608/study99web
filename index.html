@@ -1,0 +1,1858 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PDF 요약 서비스</title>
+
+  <!-- Pretendard Font -->
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+
+  <!-- KaTeX -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <!-- Mermaid.js for diagrams -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+    onload="renderMathInDocument()"></script>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+
+  <style>
+    /* ===== CSS Variables Theming ===== */
+    :root, [data-theme="light"] {
+      --bg: #f8faf9; --bg2: #ffffff; --bg3: #f1f5f3;
+      --tx: #1a2e1f; --tx2: #3d5a44; --tx3: #6b8f74; --tx4: #9bb5a3;
+      --bd: #dce8df; --bd2: #c5d6c9;
+      --p1: var(--accent); --p2: var(--accent-hover); --p3: var(--accent-light); --p4: var(--accent-bg);
+      --pd: var(--accent-dark);
+      --rc: #ef4444; --gc: #22c55e; --bc: #3b82f6;
+      /* Default accent: Indigo */
+      --accent: #6366f1; --accent-hover: #4f46e5; --accent-light: #a5b4fc; --accent-bg: #eef2ff; --accent-dark: #3730a3;
+    }
+    [data-theme="dark"] {
+      --bg: #0f1a13; --bg2: #1a2e1f; --bg3: #243828;
+      --tx: #e8f0eb; --tx2: #b8ccbe; --tx3: #7d9b85; --tx4: #4f7058;
+      --bd: #2d4433; --bd2: #3d5a44;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--tx);
+      min-height: 100vh;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+
+    /* ===== Wrapper ===== */
+    .W { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+
+    /* ===== Topbar ===== */
+    .topbar {
+      position: sticky; top: 0; z-index: 40;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--bd);
+      padding: 12px 0;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .topbar .W { display: flex; align-items: center; justify-content: space-between; }
+    .topbar-left { display: flex; align-items: center; gap: 10px; }
+    .topbar-brand-icon {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    .topbar-brand h1 { font-size: 17px; font-weight: 700; color: var(--tx); line-height: 1.2; }
+    .topbar-brand p { font-size: 11px; color: var(--tx3); margin-top: 1px; }
+    .topbar-right { display: flex; align-items: center; gap: 8px; }
+    .topbar-btn {
+      width: 36px; height: 36px; border-radius: 10px;
+      border: 1px solid var(--bd); background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.2s; font-size: 16px; color: var(--tx2);
+    }
+    .topbar-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+    .topbar-upload-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 10px; border: none;
+      background: var(--accent); color: #fff;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s; font-family: inherit;
+    }
+    .topbar-upload-btn:hover { background: var(--accent-hover); }
+    .topbar-upload-btn svg { width: 16px; height: 16px; }
+    .topbar-user {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 12px 5px 6px; border-radius: 20px;
+      background: var(--bg3); font-size: 13px; color: var(--tx2);
+    }
+    .topbar-user-avatar {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700;
+    }
+    .topbar-logout {
+      width: 36px; height: 36px; border-radius: 10px;
+      border: 1px solid var(--bd); background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.2s; font-size: 14px; color: var(--tx3);
+    }
+    .topbar-logout:hover { border-color: var(--rc); color: var(--rc); background: #fef2f2; }
+    [data-theme="dark"] .topbar-logout:hover { background: #450a0a33; }
+
+    /* ===== Stats Bar ===== */
+    .stats {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+      margin: 20px 0;
+    }
+    .stat-card {
+      background: var(--bg2); border: 1px solid var(--bd);
+      border-radius: 12px; padding: 16px;
+      display: flex; align-items: center; gap: 12px;
+      transition: all 0.2s;
+    }
+    .stat-card:hover { border-color: var(--accent); }
+    .stat-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    .stat-icon.total { background: var(--accent-bg); color: var(--accent); }
+    .stat-icon.processing { background: #dbeafe; color: #2563eb; }
+    .stat-icon.done { background: #dcfce7; color: #16a34a; }
+    .stat-icon.error { background: #fee2e2; color: #dc2626; }
+    [data-theme="dark"] .stat-icon.total { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+    [data-theme="dark"] .stat-icon.processing { background: #1e3a5f; color: #60a5fa; }
+    [data-theme="dark"] .stat-icon.done { background: #14532d; color: #4ade80; }
+    [data-theme="dark"] .stat-icon.error { background: #450a0a; color: #f87171; }
+    .stat-info { min-width: 0; }
+    .stat-count { font-size: 22px; font-weight: 800; color: var(--tx); line-height: 1; }
+    .stat-label { font-size: 12px; color: var(--tx3); margin-top: 3px; }
+
+    /* ===== Search ===== */
+    .search-wrap { margin-bottom: 16px; }
+    .search-input {
+      width: 100%; padding: 11px 16px 11px 40px;
+      border: 1px solid var(--bd); border-radius: 10px;
+      background: var(--bg2); color: var(--tx);
+      font-size: 14px; font-family: inherit;
+      outline: none; transition: border-color 0.2s;
+    }
+    .search-input:focus { border-color: var(--accent); }
+    .search-wrap { position: relative; }
+    .search-wrap svg {
+      position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+      width: 16px; height: 16px; color: var(--tx4);
+    }
+
+    /* ===== Filter Tabs ===== */
+    .tabs {
+      display: flex; gap: 4px; border-bottom: 1px solid var(--bd);
+      margin-bottom: 20px; overflow-x: auto;
+      -ms-overflow-style: none; scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 16px; font-size: 13px; font-weight: 500;
+      color: var(--tx3); border: none; background: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer; white-space: nowrap;
+      transition: all 0.2s; font-family: inherit;
+    }
+    .tab-btn:hover { color: var(--tx); }
+    .tab-btn.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .tab-btn svg { width: 14px; height: 14px; }
+
+    /* ===== Card Grid ===== */
+    .cards {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px; margin-bottom: 40px;
+    }
+
+    /* ===== Card Design ===== */
+    .card {
+      position: relative; background: var(--bg2);
+      border: 1px solid var(--bd); border-radius: 14px;
+      padding: 20px; cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(0,0,0,0.08);
+      border-color: var(--bd2);
+    }
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+    .card-doc-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: var(--accent-bg); color: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    [data-theme="dark"] .card-doc-icon { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+    .card-status-area { display: flex; align-items: center; gap: 6px; }
+    .card-delete-btn {
+      width: 28px; height: 28px; border-radius: 8px;
+      border: none; background: var(--bg3);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-size: 12px; color: var(--tx4);
+      opacity: 0; transition: all 0.2s;
+    }
+    .card:hover .card-delete-btn { opacity: 1; }
+    .card-delete-btn:hover { background: #fee2e2; color: var(--rc); }
+    [data-theme="dark"] .card-delete-btn:hover { background: #450a0a55; }
+    .card-title {
+      font-size: 15px; font-weight: 600; color: var(--tx);
+      margin-bottom: 4px; line-height: 1.4;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .card-filename { font-size: 12px; color: var(--tx4); margin-bottom: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card-preview {
+      font-size: 12px; color: var(--tx3); line-height: 1.6; margin-bottom: 12px;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .card-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+    .card-footer { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--tx4); }
+    .card-footer-uploader { display: flex; align-items: center; gap: 4px; }
+    .card-error-actions {
+      display: flex; gap: 8px; margin-top: 12px; padding-top: 12px;
+      border-top: 1px solid var(--bd);
+    }
+    .card-error-btn {
+      flex: 1; padding: 6px; border-radius: 8px; border: none;
+      font-size: 12px; cursor: pointer; font-family: inherit;
+      background: #fee2e2; color: #dc2626; transition: background 0.2s;
+    }
+    .card-error-btn:hover { background: #fecaca; }
+    [data-theme="dark"] .card-error-btn { background: #450a0a55; color: #f87171; }
+    [data-theme="dark"] .card-error-btn:hover { background: #450a0a88; }
+
+    /* ===== Progress Bar ===== */
+    .card-progress {
+      margin-top: 10px; padding-top: 10px;
+      border-top: 1px solid var(--bd);
+    }
+    .card-progress-text {
+      font-size: 11px; color: var(--accent); font-weight: 600; margin-bottom: 6px;
+    }
+    .card-progress-bar {
+      width: 100%; height: 6px; background: var(--bd);
+      border-radius: 3px; overflow: hidden;
+    }
+    .card-progress-fill {
+      height: 100%; background: var(--accent); border-radius: 3px;
+      transition: width 0.5s ease;
+    }
+    .card-progress-indeterminate {
+      width: 40% !important;
+      animation: indeterminate 1.5s infinite ease-in-out;
+    }
+    @keyframes indeterminate {
+      0% { transform: translateX(-100%); }
+      100% { transform: translateX(350%); }
+    }
+
+    /* ===== Status Badges ===== */
+    .status-badge {
+      font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600;
+    }
+    .badge-pending_approval { background: #fef9c3; color: #854d0e; }
+    .badge-pending    { background: #fef9c3; color: #854d0e; }
+    .badge-processing { background: #dbeafe; color: #1e40af; }
+    .badge-done       { background: #dcfce7; color: #166534; }
+    .badge-completed  { background: #dcfce7; color: #166534; }
+    .badge-rejected   { background: #fee2e2; color: #991b1b; }
+    .badge-error      { background: #fee2e2; color: #991b1b; }
+    [data-theme="dark"] .badge-pending_approval { background: #422006; color: #fef08a; }
+    [data-theme="dark"] .badge-pending    { background: #422006; color: #fef08a; }
+    [data-theme="dark"] .badge-processing { background: #1e3a5f; color: #93c5fd; }
+    [data-theme="dark"] .badge-done       { background: #14532d; color: #86efac; }
+    [data-theme="dark"] .badge-completed  { background: #14532d; color: #86efac; }
+    [data-theme="dark"] .badge-rejected   { background: #450a0a; color: #fca5a5; }
+    [data-theme="dark"] .badge-error      { background: #450a0a; color: #fca5a5; }
+
+    /* ===== Level Badges ===== */
+    .level-badge {
+      font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500;
+    }
+    .level-elementary { background: #dcfce7; color: #166534; }
+    .level-middle { background: #dbeafe; color: #1e40af; }
+    .level-high { background: #ffedd5; color: #9a3412; }
+    .level-graduate { background: #fee2e2; color: #991b1b; }
+    .level-formula { background: #f3e8ff; color: #6b21a8; }
+    [data-theme="dark"] .level-elementary { background: #14532d; color: #86efac; }
+    [data-theme="dark"] .level-middle { background: #1e3a5f; color: #93c5fd; }
+    [data-theme="dark"] .level-high { background: #431407; color: #fdba74; }
+    [data-theme="dark"] .level-graduate { background: #450a0a; color: #fca5a5; }
+    [data-theme="dark"] .level-formula { background: #3b0764; color: #d8b4fe; }
+
+    /* ===== Empty / Loading States ===== */
+    .empty-state {
+      text-align: center; padding: 60px 20px; color: var(--tx4);
+    }
+    .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+    .empty-state .title { font-size: 16px; font-weight: 600; color: var(--tx3); }
+    .empty-state .desc { font-size: 13px; margin-top: 6px; }
+    .loading-state { display: flex; justify-content: center; padding: 60px 20px; }
+    .spinner {
+      width: 36px; height: 36px; border-radius: 50%;
+      border: 3px solid var(--bd); border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ===== Auth Screen ===== */
+    .auth-screen {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: var(--bg);
+    }
+    .auth-card {
+      background: var(--bg2); border: 1px solid var(--bd);
+      border-radius: 20px; padding: 40px; width: 100%; max-width: 420px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .auth-logo {
+      width: 60px; height: 60px; border-radius: 16px;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; margin: 0 auto 16px;
+    }
+    .auth-title { font-size: 20px; font-weight: 700; text-align: center; color: var(--tx); }
+    .auth-subtitle { font-size: 13px; color: var(--tx3); text-align: center; margin-top: 4px; margin-bottom: 24px; }
+    .auth-tabs {
+      display: flex; background: var(--bg3); border-radius: 12px; padding: 4px; margin-bottom: 24px;
+    }
+    .auth-tab-btn {
+      flex: 1; padding: 9px; border-radius: 9px; border: none;
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      background: transparent; color: var(--tx3);
+      transition: all 0.2s; font-family: inherit;
+    }
+    .auth-tab-btn.active {
+      background: var(--bg2); color: var(--accent);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08); font-weight: 600;
+    }
+    .auth-field { margin-bottom: 16px; }
+    .auth-label { display: block; font-size: 13px; font-weight: 500; color: var(--tx2); margin-bottom: 6px; }
+    .auth-input {
+      width: 100%; border: 1px solid var(--bd); border-radius: 10px;
+      padding: 11px 14px; font-size: 14px; font-family: inherit;
+      background: var(--bg); color: var(--tx);
+      outline: none; transition: border-color 0.2s;
+    }
+    .auth-input:focus { border-color: var(--accent); }
+    .auth-input::placeholder { color: var(--tx4); }
+    .auth-checkbox-wrap {
+      display: flex; align-items: center; gap: 8px; margin-top: 4px; margin-bottom: 4px;
+    }
+    .auth-checkbox {
+      width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;
+    }
+    .auth-checkbox-label { font-size: 13px; color: var(--tx3); cursor: pointer; user-select: none; }
+    .auth-error {
+      display: none; margin-top: 12px; font-size: 13px; color: var(--rc);
+      text-align: center; padding: 8px; border-radius: 8px;
+      background: #fee2e2;
+    }
+    [data-theme="dark"] .auth-error { background: #450a0a55; }
+    .auth-error.show { display: block; }
+    .auth-btn {
+      width: 100%; padding: 12px; border-radius: 10px; border: none;
+      background: var(--accent); color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s; margin-top: 16px; font-family: inherit;
+    }
+    .auth-btn:hover { background: var(--accent-hover); }
+    .auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ===== Modals ===== */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 50;
+      display: none; /* toggled by JS */
+    }
+    .modal-overlay.show { display: block; }
+    .modal-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
+    }
+    .modal-center {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    .modal-box {
+      background: var(--bg2); border: 1px solid var(--bd);
+      border-radius: 16px; box-shadow: 0 16px 48px rgba(0,0,0,0.12);
+      width: 100%; position: relative;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .modal-box.upload { max-width: 440px; padding: 24px; }
+    .modal-box.detail { max-width: 800px; max-height: 90vh; display: flex; flex-direction: column; }
+    .modal-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 0 0 16px; border-bottom: 0;
+    }
+    .modal-header h2 { font-size: 17px; font-weight: 700; color: var(--tx); }
+    .modal-close {
+      width: 32px; height: 32px; border-radius: 8px;
+      border: 1px solid var(--bd); background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; color: var(--tx3); font-size: 14px;
+      transition: all 0.2s;
+    }
+    .modal-close:hover { border-color: var(--rc); color: var(--rc); }
+
+    /* Upload modal specifics */
+    .upload-notice {
+      padding: 10px 14px; border-radius: 10px; margin-bottom: 16px;
+      background: #fffbeb; border: 1px solid #fde68a;
+      font-size: 12px; color: #92400e;
+    }
+    [data-theme="dark"] .upload-notice { background: #422006; border-color: #78350f; color: #fcd34d; }
+    .drop-zone {
+      border: 2px dashed var(--bd2); border-radius: 12px;
+      padding: 40px 20px; text-align: center; cursor: pointer;
+      transition: all 0.2s;
+    }
+    .drop-zone:hover { border-color: var(--accent); }
+    .drop-zone.drag-over { border-color: var(--accent); background: var(--accent-bg); }
+    [data-theme="dark"] .drop-zone.drag-over { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .drop-zone .icon { font-size: 36px; margin-bottom: 10px; }
+    .drop-zone .text { font-size: 14px; font-weight: 500; color: var(--tx2); }
+    .drop-zone .hint { font-size: 12px; color: var(--tx4); margin-top: 4px; }
+    .selected-file {
+      display: none; margin-top: 14px; padding: 12px;
+      background: var(--accent-bg); border-radius: 10px;
+      align-items: center; gap: 10px;
+    }
+    [data-theme="dark"] .selected-file { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+    .selected-file.show { display: flex; }
+    .selected-file .icon { font-size: 24px; flex-shrink: 0; }
+    .selected-file .info { flex: 1; min-width: 0; }
+    .selected-file .name { font-size: 13px; font-weight: 500; color: var(--tx); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .selected-file .size { font-size: 11px; color: var(--tx4); margin-top: 2px; }
+    .selected-file .remove {
+      width: 24px; height: 24px; border-radius: 6px; border: none;
+      background: transparent; cursor: pointer; color: var(--tx4);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; transition: color 0.2s;
+    }
+    .selected-file .remove:hover { color: var(--rc); }
+    .upload-progress { display: none; margin-top: 14px; }
+    .upload-progress.show { display: block; }
+    .upload-progress .row { display: flex; justify-content: space-between; font-size: 12px; color: var(--tx3); margin-bottom: 6px; }
+    .progress-track { height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s; width: 0%; }
+    .upload-result {
+      display: none; margin-top: 14px; padding: 10px 14px;
+      border-radius: 10px; font-size: 13px; font-weight: 500;
+    }
+    .upload-result.show { display: block; }
+    .upload-result.success { background: #dcfce7; color: #166534; }
+    .upload-result.error { background: #fee2e2; color: #991b1b; }
+    [data-theme="dark"] .upload-result.success { background: #14532d; color: #86efac; }
+    [data-theme="dark"] .upload-result.error { background: #450a0a; color: #fca5a5; }
+    .upload-submit {
+      width: 100%; margin-top: 16px; padding: 12px;
+      border-radius: 10px; border: none;
+      background: var(--accent); color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s; font-family: inherit;
+    }
+    .upload-submit:hover { background: var(--accent-hover); }
+    .upload-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Detail modal specifics */
+    .detail-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 20px 24px; border-bottom: 1px solid var(--bd);
+      flex-shrink: 0;
+    }
+    .detail-header-left { flex: 1; min-width: 0; padding-right: 12px; }
+    .detail-header-left h2 { font-size: 18px; font-weight: 700; color: var(--tx); word-break: break-word; }
+    .detail-header-left p { font-size: 12px; color: var(--tx4); margin-top: 2px; word-break: break-word; }
+    .detail-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .detail-delete-btn {
+      padding: 5px 10px; border-radius: 8px; border: 1px solid var(--bd);
+      background: var(--bg); color: var(--tx4); font-size: 13px;
+      cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 4px;
+    }
+    .detail-delete-btn:hover { border-color: var(--rc); color: var(--rc); background: #fef2f2; }
+    [data-theme="dark"] .detail-delete-btn:hover { background: #450a0a33; }
+    .detail-tabs {
+      display: flex; gap: 0; overflow-x: auto; padding: 0 24px;
+      border-bottom: 1px solid var(--bd);
+      flex-shrink: 0;
+      -ms-overflow-style: none; scrollbar-width: none;
+    }
+    .detail-tabs::-webkit-scrollbar { display: none; }
+    .detail-tab {
+      padding: 12px 16px; font-size: 13px; font-weight: 500;
+      color: var(--tx3); border: none; background: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer; white-space: nowrap;
+      transition: all 0.2s; font-family: inherit;
+    }
+    .detail-tab:hover { color: var(--tx); }
+    .detail-tab.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .detail-content {
+      flex: 1; overflow-y: auto; padding: 24px;
+      font-size: 16px; line-height: 1.9;
+      min-height: 0;
+    }
+    .detail-content p, .detail-content span, .detail-content li,
+    .detail-content code, .detail-content pre {
+      font-size: 16px; line-height: 1.9;
+    }
+    /* Mermaid 다이어그램 내부 텍스트 크기 통일 */
+    .detail-content svg text,
+    .detail-content .nodeLabel,
+    .detail-content .edgeLabel,
+    .detail-content .cluster-label {
+      font-size: 16px !important;
+    }
+
+    /* ===== Formula blocks ===== */
+    .formula-block {
+      background: var(--bg3); border: 1px solid var(--bd);
+      border-radius: 12px; padding: 16px 20px;
+      margin: 12px 0; overflow-x: auto;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .formula-display { font-size: 1.15em; margin: 8px 0; text-align: center; }
+    .formula-step {
+      background: var(--bg);
+      border-left: 3px solid var(--accent);
+      border-radius: 0 8px 8px 0;
+      padding: 8px 12px; margin: 6px 0; font-size: 0.85em;
+      transition: background 0.3s, border-color 0.3s;
+    }
+
+    /* ===== Color Picker Modal ===== */
+    .color-picker-overlay {
+      position: fixed; inset: 0; z-index: 60; display: none;
+    }
+    .color-picker-overlay.show { display: block; }
+    .color-picker-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.3); backdrop-filter: blur(2px);
+    }
+    .color-picker-panel {
+      position: absolute; top: 60px; right: 20px;
+      background: var(--bg2); border: 1px solid var(--bd);
+      border-radius: 14px; padding: 20px; width: 240px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+    }
+    .color-picker-title { font-size: 14px; font-weight: 600; color: var(--tx); margin-bottom: 14px; }
+    .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .color-swatch {
+      width: 100%; aspect-ratio: 1; border-radius: 12px;
+      border: 2px solid transparent; cursor: pointer;
+      transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+    }
+    .color-swatch:hover { transform: scale(1.1); }
+    .color-swatch.active { border-color: var(--tx); box-shadow: 0 0 0 2px var(--bg2), 0 0 0 4px var(--tx); }
+    .color-swatch .check { display: none; color: #fff; font-size: 14px; font-weight: 700; }
+    .color-swatch.active .check { display: block; }
+
+    /* ===== Scrollbar ===== */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--tx4); border-radius: 3px; }
+
+    /* ===== Footer ===== */
+    footer {
+      text-align: center; padding: 24px 20px 32px;
+      font-size: 12px; color: var(--tx4);
+      border-top: 1px solid var(--bd);
+    }
+
+    /* ===== Hidden ===== */
+    .hidden { display: none !important; }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 640px) {
+      .stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+      .stat-card { padding: 12px; }
+      .stat-count { font-size: 18px; }
+      .cards { grid-template-columns: 1fr; }
+      .topbar-user { display: none; }
+      .topbar-upload-btn span.btn-text { display: none; }
+      .auth-card { padding: 28px 20px; margin: 0 12px; }
+      .modal-box.detail { max-height: 95vh; max-width: 100%; margin: 8px; border-radius: 16px; }
+      .detail-content { padding: 16px; }
+      .detail-header { padding: 16px; }
+      .detail-tabs { padding: 0 16px; }
+      .detail-tab { padding: 10px 12px; font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Safelist div (moved from head to body) -->
+<div class="hidden">safelist-placeholder</div>
+
+<!-- ===== Settings ===== -->
+<script>
+  // Firebase config
+  const firebaseConfig = {
+    apiKey:            "AIzaSyCVEgutLIAYbZueRg_oNCaTqo6_C5LqGWw",
+    authDomain:        "new-study-website.firebaseapp.com",
+    projectId:         "new-study-website",
+    storageBucket:     "new-study-website.firebasestorage.app",
+    messagingSenderId: "672427681414",
+    appId:             "1:672427681414:web:a3f86e6b1e12691f60d307"
+  };
+
+  // Server URL -- read from Firebase config/server
+  let SERVER_URL = "";
+
+  const COLLECTION = "summaries";
+</script>
+
+<!-- ===== Auth Screen ===== -->
+<div id="auth-screen" class="auth-screen">
+  <div class="auth-card">
+    <!-- Logo -->
+    <div class="auth-logo">&#x1F4DA;</div>
+    <div class="auth-title">PDF 요약 서비스</div>
+    <div class="auth-subtitle">학습 자료를 4단계 수준으로 요약해드립니다</div>
+
+    <!-- Tabs -->
+    <div class="auth-tabs">
+      <button id="tab-login" onclick="switchAuthTab('login')" class="auth-tab-btn active">로그인</button>
+      <button id="tab-register" onclick="switchAuthTab('register')" class="auth-tab-btn">회원가입</button>
+    </div>
+
+    <!-- Login Form -->
+    <div id="form-login">
+      <div class="auth-field">
+        <label class="auth-label">학번</label>
+        <input id="login-studentId" type="text" placeholder="학번을 입력하세요" class="auth-input"
+          onkeydown="if(event.key==='Enter') document.getElementById('login-password').focus()" />
+      </div>
+      <div class="auth-field">
+        <label class="auth-label">비밀번호</label>
+        <input id="login-password" type="password" placeholder="비밀번호를 입력하세요" class="auth-input"
+          onkeydown="if(event.key==='Enter') doLogin()" />
+      </div>
+      <div class="auth-checkbox-wrap">
+        <input id="auto-login" type="checkbox" class="auth-checkbox" />
+        <label for="auto-login" class="auth-checkbox-label">로그인 상태 유지</label>
+      </div>
+      <div id="login-error" class="auth-error"></div>
+      <button onclick="doLogin()" id="login-btn" class="auth-btn">로그인</button>
+    </div>
+
+    <!-- Register Form -->
+    <div id="form-register" class="hidden">
+      <div class="auth-field">
+        <label class="auth-label">이름</label>
+        <input id="reg-name" type="text" placeholder="이름을 입력하세요" class="auth-input" />
+      </div>
+      <div class="auth-field">
+        <label class="auth-label">학번</label>
+        <input id="reg-studentId" type="text" placeholder="학번을 입력하세요" class="auth-input" />
+      </div>
+      <div class="auth-field">
+        <label class="auth-label">이메일</label>
+        <input id="reg-email" type="email" placeholder="이메일을 입력하세요" class="auth-input" />
+      </div>
+      <div class="auth-field">
+        <label class="auth-label">비밀번호</label>
+        <input id="reg-password" type="password" placeholder="비밀번호 (6자 이상)" class="auth-input" />
+      </div>
+      <div id="register-error" class="auth-error"></div>
+      <button onclick="doRegister()" id="register-btn" class="auth-btn">회원가입</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Main App (shown after login) ===== -->
+<div id="main-app" class="hidden">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="W">
+      <div class="topbar-left">
+        <div class="topbar-brand-icon">&#x1F4DA;</div>
+        <div class="topbar-brand">
+          <h1>PDF 요약 서비스</h1>
+          <p>학습 자료 4단계 요약</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <button class="topbar-btn" onclick="openColorPicker()" title="색상 테마">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a7 7 0 0 0 0 14h.5a3.5 3.5 0 0 0 0-7H12a7 7 0 0 1 0-7z"/></svg>
+        </button>
+        <button class="topbar-btn" onclick="toggleDark()" title="다크모드 전환" id="theme-toggle-btn">
+          <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <span id="user-name-badge" class="topbar-user" style="display:none;">
+          <span class="topbar-user-avatar" id="user-avatar-initial"></span>
+          <span id="user-display-name"></span>
+        </span>
+        <button onclick="openUploadModal()" class="topbar-upload-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span class="btn-text">PDF 업로드</span>
+        </button>
+        <button onclick="doLogout()" class="topbar-logout" title="로그아웃">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="W">
+    <!-- Stats Bar -->
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-icon total">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-count" id="stat-total">0</div>
+          <div class="stat-label">전체</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon processing">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-count" id="stat-processing">0</div>
+          <div class="stat-label">처리중</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon done">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-count" id="stat-done">0</div>
+          <div class="stat-label">완료</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon error">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-count" id="stat-error">0</div>
+          <div class="stat-label">오류</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Search -->
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="search-input" type="text" placeholder="제목, 키워드로 검색..." oninput="renderCards()" class="search-input" />
+    </div>
+
+    <!-- Filter Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" data-filter="all" onclick="setFilter(this, 'all')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        전체
+      </button>
+      <button class="tab-btn" data-filter="elementary" onclick="setFilter(this, 'elementary')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke="#22c55e"/></svg>
+        초등
+      </button>
+      <button class="tab-btn" data-filter="middle" onclick="setFilter(this, 'middle')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke="#3b82f6"/></svg>
+        중등
+      </button>
+      <button class="tab-btn" data-filter="high" onclick="setFilter(this, 'high')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke="#f97316"/></svg>
+        고등
+      </button>
+      <button class="tab-btn" data-filter="graduate" onclick="setFilter(this, 'graduate')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke="#ef4444"/></svg>
+        대학원
+      </button>
+    </div>
+
+    <!-- Card Grid -->
+    <div id="card-grid" class="cards"></div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="empty-state hidden">
+      <div class="icon">&#x1F4C4;</div>
+      <p class="title">아직 요약본이 없어요</p>
+      <p class="desc">PDF를 업로드하면 자동으로 요약됩니다</p>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading-state" class="loading-state">
+      <div class="spinner"></div>
+    </div>
+
+    <!-- Footer -->
+    <footer>PDF 요약 서비스 &copy; 2024</footer>
+  </div>
+
+</div><!-- /main-app -->
+
+<!-- ===== Upload Modal ===== -->
+<div id="upload-modal" class="modal-overlay">
+  <div class="modal-backdrop" onclick="closeUploadModal()"></div>
+  <div class="modal-center">
+    <div class="modal-box upload">
+      <div class="modal-header">
+        <h2>PDF 업로드</h2>
+        <button onclick="closeUploadModal()" class="modal-close">&times;</button>
+      </div>
+
+      <!-- Notice -->
+      <div class="upload-notice">
+        &#x1F4CB; 업로드 후 관리자 승인이 필요합니다. 승인 시 요약이 자동 시작됩니다.
+      </div>
+
+      <!-- Drop Zone -->
+      <div id="drop-zone" class="drop-zone"
+        onclick="document.getElementById('file-input').click()"
+        ondragover="event.preventDefault(); this.classList.add('drag-over')"
+        ondragleave="this.classList.remove('drag-over')"
+        ondrop="handleDrop(event)">
+        <div class="icon">&#x1F4C2;</div>
+        <p class="text">파일을 끌어다 놓거나 클릭하세요</p>
+        <p class="hint">PDF 파일만 가능 &middot; 최대 50MB</p>
+      </div>
+      <input id="file-input" type="file" accept=".pdf" class="hidden" onchange="handleFileSelect(event)" />
+
+      <!-- Selected File -->
+      <div id="selected-file" class="selected-file">
+        <span class="icon">&#x1F4C4;</span>
+        <div class="info">
+          <p id="selected-filename" class="name"></p>
+          <p id="selected-filesize" class="size"></p>
+        </div>
+        <button onclick="clearFile()" class="remove">&times;</button>
+      </div>
+
+      <!-- Upload Progress -->
+      <div id="upload-progress" class="upload-progress">
+        <div class="row">
+          <span>업로드 중...</span>
+          <span id="progress-pct">0%</span>
+        </div>
+        <div class="progress-track">
+          <div id="progress-bar" class="progress-fill" style="width:0%"></div>
+        </div>
+      </div>
+
+      <!-- Upload Result -->
+      <div id="upload-result" class="upload-result"></div>
+
+      <!-- Submit -->
+      <button id="upload-btn" onclick="doUpload()" class="upload-submit" disabled>
+        업로드 시작
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Detail Modal ===== -->
+<div id="detail-modal" class="modal-overlay">
+  <div class="modal-backdrop" onclick="closeDetailModal()"></div>
+  <div class="modal-center">
+    <div class="modal-box detail">
+
+      <!-- Detail Header -->
+      <div class="detail-header">
+        <div class="detail-header-left">
+          <h2 id="detail-title"></h2>
+          <p id="detail-filename"></p>
+        </div>
+        <div class="detail-header-actions">
+          <button id="detail-delete-btn" onclick="if(currentDetail) deleteSummary(currentDetail.id)" class="detail-delete-btn" title="삭제">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            삭제
+          </button>
+          <button onclick="closeDetailModal()" class="modal-close">&times;</button>
+        </div>
+      </div>
+
+      <!-- Detail Tabs -->
+      <div class="detail-tabs">
+        <button class="detail-tab active" data-tab="elementary" onclick="switchTab(this,'elementary')">&#x1F7E2; 초등</button>
+        <button class="detail-tab" data-tab="middle" onclick="switchTab(this,'middle')">&#x1F535; 중등</button>
+        <button class="detail-tab" data-tab="high" onclick="switchTab(this,'high')">&#x1F7E0; 고등</button>
+        <button class="detail-tab" data-tab="graduate" onclick="switchTab(this,'graduate')">&#x1F534; 대학원</button>
+        <button class="detail-tab" data-tab="sections" onclick="switchTab(this,'sections')">&#x1F4D1; 섹션별</button>
+        <button class="detail-tab" data-tab="formulas" onclick="switchTab(this,'formulas')">&#x1F9EE; 수식&유도</button>
+        <button class="detail-tab" data-tab="diagrams" onclick="switchTab(this,'diagrams')">&#x1F4CA; 다이어그램</button>
+      </div>
+
+      <!-- Detail Content -->
+      <div id="detail-content" class="detail-content"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Color Picker Modal ===== -->
+<div id="color-picker" class="color-picker-overlay">
+  <div class="color-picker-backdrop" onclick="closeColorPicker()"></div>
+  <div class="color-picker-panel">
+    <div class="color-picker-title">색상 테마</div>
+    <div class="color-grid" id="color-grid"></div>
+  </div>
+</div>
+
+<!-- ===== JavaScript ===== -->
+<script>
+  // ---- Global state ----
+  let allSummaries = [];
+  let currentFilter = 'all';
+  let currentDetail = null;
+  let currentTab = 'elementary';
+  let selectedFile = null;
+  let unsubscribe = null;
+
+  // ---- Auth state (auto-login uses localStorage, otherwise sessionStorage) ----
+  let authToken = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
+  let authUser = null;
+  try {
+    const stored = localStorage.getItem('authUser') || sessionStorage.getItem('authUser');
+    if (stored) authUser = JSON.parse(stored);
+  } catch(e) {}
+
+  // JWT expiry check
+  function isTokenExpired(token) {
+    if (!token) return true;
+    try {
+      const payload = JSON.parse(atob(token.split('.')[1]));
+      return payload.exp * 1000 < Date.now();
+    } catch { return true; }
+  }
+
+  // ---- Color Picker ----
+  const colorThemes = [
+    { name: 'Indigo',  color: '#6366f1', hover: '#4f46e5', light: '#a5b4fc', bg: '#eef2ff', dark: '#3730a3' },
+    { name: 'Emerald', color: '#10b981', hover: '#059669', light: '#6ee7b7', bg: '#d1fae5', dark: '#065f46' },
+    { name: 'Rose',    color: '#f43f5e', hover: '#e11d48', light: '#fda4af', bg: '#fff1f2', dark: '#9f1239' },
+    { name: 'Amber',   color: '#f59e0b', hover: '#d97706', light: '#fcd34d', bg: '#fffbeb', dark: '#92400e' },
+    { name: 'Cyan',    color: '#06b6d4', hover: '#0891b2', light: '#67e8f9', bg: '#ecfeff', dark: '#155e75' },
+    { name: 'Violet',  color: '#8b5cf6', hover: '#7c3aed', light: '#c4b5fd', bg: '#f5f3ff', dark: '#5b21b6' },
+    { name: 'Slate',   color: '#64748b', hover: '#475569', light: '#94a3b8', bg: '#f1f5f9', dark: '#1e293b' },
+    { name: 'Orange',  color: '#f97316', hover: '#ea580c', light: '#fdba74', bg: '#fff7ed', dark: '#9a3412' },
+  ];
+
+  let currentColor = localStorage.getItem('accentColor') || 'Indigo';
+
+  function applyColor(name) {
+    const theme = colorThemes.find(t => t.name === name);
+    if (!theme) return;
+    currentColor = name;
+    localStorage.setItem('accentColor', name);
+    const root = document.documentElement;
+    root.style.setProperty('--accent', theme.color);
+    root.style.setProperty('--accent-hover', theme.hover);
+    root.style.setProperty('--accent-light', theme.light);
+    root.style.setProperty('--accent-bg', theme.bg);
+    root.style.setProperty('--accent-dark', theme.dark);
+    renderColorGrid();
+  }
+
+  function renderColorGrid() {
+    const grid = document.getElementById('color-grid');
+    if (!grid) return;
+    grid.innerHTML = colorThemes.map(t =>
+      `<div class="color-swatch ${t.name === currentColor ? 'active' : ''}"
+            style="background:${t.color}"
+            onclick="applyColor('${t.name}')" title="${t.name}">
+        <span class="check">&#x2713;</span>
+      </div>`
+    ).join('');
+  }
+
+  function openColorPicker() {
+    renderColorGrid();
+    document.getElementById('color-picker').classList.add('show');
+  }
+  function closeColorPicker() {
+    document.getElementById('color-picker').classList.remove('show');
+  }
+
+  // ---- Theme (dark/light) ----
+  function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+    const lightIcon = document.getElementById('theme-icon-light');
+    const darkIcon = document.getElementById('theme-icon-dark');
+    if (lightIcon && darkIcon) {
+      lightIcon.style.display = theme === 'dark' ? 'none' : '';
+      darkIcon.style.display = theme === 'dark' ? '' : 'none';
+    }
+  }
+
+  function toggleDark() {
+    const current = document.documentElement.getAttribute('data-theme');
+    setTheme(current === 'dark' ? 'light' : 'dark');
+  }
+
+  // Initialize theme on load
+  (function() {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark') {
+      setTheme('dark');
+    }
+    // Apply saved color
+    applyColor(localStorage.getItem('accentColor') || 'Indigo');
+  })();
+
+  // ---- Stats ----
+  function updateStats() {
+    const total = allSummaries.length;
+    const processing = allSummaries.filter(s =>
+      s.status === 'processing' || s.status === 'pending' || s.status === 'pending_approval'
+    ).length;
+    const done = allSummaries.filter(s =>
+      s.status === 'done' || s.status === 'completed'
+    ).length;
+    const error = allSummaries.filter(s =>
+      s.status === 'error' || s.status === 'rejected'
+    ).length;
+
+    const totalEl = document.getElementById('stat-total');
+    const processingEl = document.getElementById('stat-processing');
+    const doneEl = document.getElementById('stat-done');
+    const errorEl = document.getElementById('stat-error');
+    if (totalEl) totalEl.textContent = total;
+    if (processingEl) processingEl.textContent = processing;
+    if (doneEl) doneEl.textContent = done;
+    if (errorEl) errorEl.textContent = error;
+  }
+
+  // ---- Auth tab switch ----
+  function switchAuthTab(tab) {
+    const loginTab = document.getElementById('tab-login');
+    const registerTab = document.getElementById('tab-register');
+    const loginForm = document.getElementById('form-login');
+    const registerForm = document.getElementById('form-register');
+
+    if (tab === 'login') {
+      loginTab.classList.add('active');
+      registerTab.classList.remove('active');
+      loginForm.classList.remove('hidden');
+      registerForm.classList.add('hidden');
+    } else {
+      registerTab.classList.add('active');
+      loginTab.classList.remove('active');
+      registerForm.classList.remove('hidden');
+      loginForm.classList.add('hidden');
+    }
+  }
+
+  // ---- Login ----
+  async function doLogin() {
+    const studentId = document.getElementById('login-studentId').value.trim();
+    const password = document.getElementById('login-password').value;
+    const errEl = document.getElementById('login-error');
+    const btn = document.getElementById('login-btn');
+
+    if (!studentId || !password) {
+      errEl.textContent = '학번과 비밀번호를 입력해주세요';
+      errEl.classList.add('show');
+      return;
+    }
+    if (!SERVER_URL) {
+      errEl.textContent = '서버가 오프라인입니다. PC에서 서버를 실행해주세요.';
+      errEl.classList.add('show');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '로그인 중...';
+    errEl.classList.remove('show');
+
+    try {
+      const res = await fetch(SERVER_URL + '/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId, password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '로그인 실패');
+
+      authToken = data.token;
+      authUser = data.user;
+      const autoLogin = document.getElementById('auto-login').checked;
+      const storage = autoLogin ? localStorage : sessionStorage;
+      storage.setItem('authToken', authToken);
+      storage.setItem('authUser', JSON.stringify(authUser));
+      if (autoLogin) localStorage.setItem('autoLogin', 'true');
+      enterApp();
+    } catch(err) {
+      errEl.textContent = err.message;
+      errEl.classList.add('show');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '로그인';
+    }
+  }
+
+  // ---- Register ----
+  async function doRegister() {
+    const name = document.getElementById('reg-name').value.trim();
+    const studentId = document.getElementById('reg-studentId').value.trim();
+    const email = document.getElementById('reg-email').value.trim();
+    const password = document.getElementById('reg-password').value;
+    const errEl = document.getElementById('register-error');
+    const btn = document.getElementById('register-btn');
+
+    if (!name || !studentId || !email || !password) {
+      errEl.textContent = '모든 항목을 입력해주세요';
+      errEl.classList.add('show');
+      return;
+    }
+    if (password.length < 6) {
+      errEl.textContent = '비밀번호는 6자 이상이어야 합니다';
+      errEl.classList.add('show');
+      return;
+    }
+    if (!SERVER_URL) {
+      errEl.textContent = '서버가 오프라인입니다. PC에서 서버를 실행해주세요.';
+      errEl.classList.add('show');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '가입 신청 중...';
+    errEl.classList.remove('show');
+
+    try {
+      const res = await fetch(SERVER_URL + '/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, studentId, email, password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '회원가입 실패');
+
+      // Registration submitted -> show pending message (no login)
+      showRegisterPending(name);
+    } catch(err) {
+      errEl.textContent = err.message;
+      errEl.classList.add('show');
+      btn.disabled = false;
+      btn.textContent = '회원가입';
+    }
+  }
+
+  // ---- Registration pending screen ----
+  function showRegisterPending(name) {
+    const formEl = document.getElementById('form-register');
+    formEl.innerHTML = `
+      <div style="text-align:center;padding:16px 0">
+        <div style="font-size:48px;margin-bottom:16px">&#x23F3;</div>
+        <h3 style="font-size:17px;font-weight:700;color:var(--tx);margin-bottom:8px">가입 신청 완료!</h3>
+        <p style="font-size:13px;color:var(--tx3);line-height:1.7;margin-bottom:16px">
+          <b>${escHtml(name)}</b>님의 가입 신청이 접수됐어요.<br/>
+          관리자 승인 후 로그인이 가능합니다.
+        </p>
+        <div class="upload-notice" style="margin-bottom:20px">
+          &#x1F4F1; 관리자가 텔레그램으로 승인하면<br/>곧 알림이 올 거예요.
+        </div>
+        <button onclick="switchAuthTab('login')" class="auth-btn" style="margin-top:0">
+          로그인 화면으로
+        </button>
+      </div>`;
+  }
+
+  // ---- Enter app ----
+  function enterApp() {
+    document.getElementById('auth-screen').style.display = 'none';
+    document.getElementById('main-app').classList.remove('hidden');
+    const displayName = authUser?.name || '';
+    document.getElementById('user-display-name').textContent = displayName;
+    const avatarEl = document.getElementById('user-avatar-initial');
+    if (avatarEl) avatarEl.textContent = displayName.charAt(0) || '?';
+    document.getElementById('user-name-badge').style.display = '';
+    initFirebaseAndListen();
+  }
+
+  // ---- Logout ----
+  function doLogout() {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('authUser');
+    localStorage.removeItem('autoLogin');
+    sessionStorage.removeItem('authToken');
+    sessionStorage.removeItem('authUser');
+    authToken = null;
+    authUser = null;
+    if (unsubscribe) unsubscribe();
+    document.getElementById('main-app').classList.add('hidden');
+    document.getElementById('auth-screen').style.display = '';
+  }
+
+  // ---- Firebase init ----
+  function initFirebaseAndListen() {
+    try {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+      }
+      const db = firebase.firestore();
+
+      // Read server URL from Firebase in real-time
+      db.collection('config').doc('server').onSnapshot(snap => {
+        if (snap.exists && snap.data().url) {
+          SERVER_URL = snap.data().url;
+          console.log('서버 URL 갱신:', SERVER_URL);
+        }
+      });
+
+      if (unsubscribe) unsubscribe();
+      unsubscribe = db.collection(COLLECTION)
+        .orderBy('createdAt', 'desc')
+        .onSnapshot(snapshot => {
+          allSummaries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          document.getElementById('loading-state').classList.add('hidden');
+          renderCards();
+        }, err => {
+          console.error('Firestore 오류:', err);
+          document.getElementById('loading-state').classList.add('hidden');
+          showEmptyState();
+        });
+    } catch(e) {
+      console.error('Firebase 초기화 실패:', e);
+      document.getElementById('loading-state').classList.add('hidden');
+      showEmptyState('Firebase 설정값을 확인해주세요');
+    }
+  }
+
+  // ---- Mermaid 초기화 ----
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', suppressErrors: true, logLevel: 'fatal' });
+  }
+
+  // ---- DOMContentLoaded: Firebase init + server URL loading ----
+  window.addEventListener('DOMContentLoaded', () => {
+    // Initialize Firebase before login so server URL can be read
+    try {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+      }
+      firebase.firestore().collection('config').doc('server').onSnapshot(snap => {
+        if (snap.exists && snap.data().url) {
+          SERVER_URL = snap.data().url;
+          console.log('서버 URL 갱신:', SERVER_URL);
+        }
+      });
+    } catch(e) {
+      console.error('Firebase 초기화 실패:', e);
+    }
+
+    // Auto-login (with JWT expiry check)
+    if (authToken && authUser && !isTokenExpired(authToken)) {
+      enterApp();
+    } else if (authToken && isTokenExpired(authToken)) {
+      // Clean up expired token
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('authUser');
+      authToken = null;
+      authUser = null;
+    }
+  });
+
+  // ---- Card rendering ----
+  function renderCards() {
+    const query = document.getElementById('search-input').value.trim().toLowerCase();
+    let filtered = allSummaries;
+
+    if (currentFilter !== 'all') {
+      filtered = filtered.filter(s =>
+        (s.status === 'done' || s.status === 'completed') &&
+        s.summaries && s.summaries[currentFilter]
+      );
+    }
+
+    if (query) {
+      filtered = filtered.filter(s =>
+        (s.title || '').toLowerCase().includes(query) ||
+        (s.filename || '').toLowerCase().includes(query) ||
+        (s.keywords || []).some(k => k.toLowerCase().includes(query))
+      );
+    }
+
+    const grid = document.getElementById('card-grid');
+    const empty = document.getElementById('empty-state');
+
+    if (filtered.length === 0) {
+      grid.innerHTML = '';
+      empty.classList.remove('hidden');
+      empty.innerHTML = `<div class="icon">&#x1F4C4;</div>
+        <p class="title">${query ? '검색 결과가 없어요' : '아직 요약본이 없어요'}</p>
+        <p class="desc">${query ? '다른 키워드로 검색해보세요' : 'PDF를 업로드하면 자동으로 요약됩니다'}</p>`;
+      updateStats();
+      return;
+    }
+
+    empty.classList.add('hidden');
+    grid.innerHTML = filtered.map(s => buildCard(s)).join('');
+    updateStats();
+  }
+
+  function buildCard(s) {
+    const statusMap = {
+      pending_approval: { label:'승인 대기',  cls:'badge-pending_approval' },
+      pending:          { label:'대기중',     cls:'badge-pending' },
+      processing:       { label:'처리중',     cls:'badge-processing' },
+      done:             { label:'완료',       cls:'badge-done' },
+      completed:        { label:'완료',       cls:'badge-completed' },
+      rejected:         { label:'거절됨',     cls:'badge-rejected' },
+      error:            { label:'오류',       cls:'badge-error' },
+    };
+    const st = statusMap[s.status] || statusMap.pending;
+    const levelMap = {
+      elementary: { label:'초등',  cls:'level-elementary' },
+      middle:     { label:'중등',  cls:'level-middle' },
+      high:       { label:'고등',  cls:'level-high' },
+      graduate:   { label:'대학원',cls:'level-graduate' },
+    };
+
+    const levels = s.summaries ? Object.keys(s.summaries).filter(k => s.summaries[k]) : [];
+    const levelBadges = levels.map(l =>
+      levelMap[l] ? `<span class="level-badge ${levelMap[l].cls}">${levelMap[l].label}</span>` : ''
+    ).join('');
+
+    const formulaCount = (s.formulas || []).length || s.formulaCount || 0;
+    const formulaBadge = formulaCount > 0
+      ? `<span class="level-badge level-formula">&#x1F9EE; 수식 ${formulaCount}</span>`
+      : '';
+
+    const date = s.createdAt
+      ? (s.createdAt.toDate ? s.createdAt.toDate() : new Date(s.createdAt)).toLocaleDateString('ko-KR')
+      : '';
+
+    const preview = s.summaries?.elementary || s.summaries?.middle || '';
+    const uploader = s.uploadedBy ? `<span class="card-footer-uploader"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> ${escHtml(s.uploadedBy.name)}</span>` : '';
+
+    // 진행도 표시 (processing 상태일 때)
+    const progressBar = (s.status === 'processing' && s.progress)
+      ? `<div class="card-progress">
+           <div class="card-progress-text">${escHtml(s.progress.detail || '처리 중...')}</div>
+           <div class="card-progress-bar">
+             <div class="card-progress-fill" style="width:${Math.min(s.progress.percent || 0, 100)}%"></div>
+           </div>
+         </div>`
+      : (s.status === 'processing')
+      ? `<div class="card-progress">
+           <div class="card-progress-text">처리 대기 중...</div>
+           <div class="card-progress-bar">
+             <div class="card-progress-fill card-progress-indeterminate"></div>
+           </div>
+         </div>`
+      : '';
+
+    const errorActions = s.status === 'error'
+      ? `<div class="card-error-actions">
+           <button onclick="event.stopPropagation(); deleteSummary('${s.id}')" class="card-error-btn">&#x1F5D1; 삭제</button>
+         </div>`
+      : '';
+
+    const deleteBtn = (s.status === 'done' || s.status === 'completed')
+      ? `<button onclick="event.stopPropagation(); deleteSummary('${s.id}')" class="card-delete-btn" title="삭제">&#x1F5D1;</button>`
+      : '';
+
+    return `
+      <div class="card" onclick="openDetail('${s.id}')">
+        <div class="card-header">
+          <div class="card-doc-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
+          <div class="card-status-area">
+            ${deleteBtn}
+            <span class="status-badge ${st.cls}">${st.label}</span>
+          </div>
+        </div>
+        <div class="card-title">${escHtml(s.title || s.filename || '제목 없음')}</div>
+        <div class="card-filename">${escHtml(s.filename || '')}</div>
+        ${preview ? `<div class="card-preview">${escHtml(preview.substring(0,120))}...</div>` : ''}
+        ${progressBar}
+        <div class="card-badges">${levelBadges}${formulaBadge}</div>
+        <div class="card-footer">
+          <span>${date}</span>
+          ${uploader}
+        </div>
+        ${errorActions}
+      </div>`;
+  }
+
+  function showEmptyState(msg) {
+    const el = document.getElementById('empty-state');
+    el.classList.remove('hidden');
+    if (msg) {
+      el.innerHTML = `<div class="icon" style="font-size:48px">&#x26A0;</div><p class="title" style="color:var(--rc)">${escHtml(msg)}</p>`;
+    }
+  }
+
+  function escHtml(str) {
+    return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  }
+
+  // ---- Filter ----
+  function setFilter(btn, filter) {
+    currentFilter = filter;
+    document.querySelectorAll('.tab-btn').forEach(b => {
+      b.classList.remove('active');
+      b.style.color = '';
+      b.style.fontWeight = '';
+      b.style.borderBottom = '';
+    });
+    btn.classList.add('active');
+    renderCards();
+  }
+
+  // ---- Detail modal ----
+  function openDetail(id) {
+    const s = allSummaries.find(x => x.id === id);
+    if (!s) return;
+    currentDetail = s;
+
+    // Select the first available tab (prefer sections)
+    currentTab = (s.sections && s.sections.length) ? 'sections' :
+                 s.summaries?.elementary ? 'elementary' :
+                 s.summaries?.middle     ? 'middle' :
+                 s.summaries?.high       ? 'high' :
+                 s.summaries?.graduate   ? 'graduate' :
+                 (s.formulas && s.formulas.length) ? 'formulas' :
+                 (s.diagrams && s.diagrams.length) ? 'diagrams' : 'elementary';
+
+    document.getElementById('detail-title').textContent = s.title || s.filename || '제목 없음';
+    document.getElementById('detail-filename').textContent = s.filename || '';
+    switchTab(null, currentTab);
+    document.getElementById('detail-modal').classList.add('show');
+    document.body.style.overflow = 'hidden';
+  }
+
+  function closeDetailModal() {
+    document.getElementById('detail-modal').classList.remove('show');
+    document.body.style.overflow = '';
+  }
+
+  // ---- Delete ----
+  async function deleteSummary(id) {
+    if (!confirm('정말 삭제하시겠습니까?')) return;
+    try {
+      const token = authToken || sessionStorage.getItem('authToken');
+      const res = await fetch(`${SERVER_URL}/summary/${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      allSummaries = allSummaries.filter(s => s.id !== id);
+      renderCards();
+      closeDetailModal();
+      showToast('삭제되었습니다');
+    } catch (e) {
+      alert('삭제 실패: ' + e.message);
+    }
+  }
+
+  function showToast(msg) {
+    const t = document.createElement('div');
+    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:10px 24px;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.15);font-size:13px;z-index:9999;transition:opacity 0.3s;font-family:inherit';
+    t.textContent = msg;
+    document.body.appendChild(t);
+    setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2500);
+  }
+
+  function switchTab(btn, tab) {
+    currentTab = tab;
+    if (!btn) {
+      btn = document.querySelector(`.detail-tab[data-tab="${tab}"]`);
+    }
+    document.querySelectorAll('.detail-tab').forEach(b => {
+      b.classList.remove('active');
+    });
+    if (btn) {
+      btn.classList.add('active');
+    }
+
+    const el = document.getElementById('detail-content');
+    if (!currentDetail) return;
+
+    if (tab === 'formulas') {
+      renderFormulasTab(el, currentDetail);
+    } else if (tab === 'diagrams') {
+      renderDiagramsTab(el, currentDetail);
+    } else if (tab === 'sections') {
+      renderSectionsTab(el, currentDetail);
+    } else {
+      const summaries = currentDetail.summaries || {};
+      const content = summaries[tab];
+      if (!content) {
+        el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">해당 수준의 요약이 없습니다</p>';
+      } else {
+        el.innerHTML = `
+          <div style="max-width:none">
+            <p style="white-space:pre-wrap;font-size:16px;line-height:1.9">${escHtml(content)}</p>
+          </div>`;
+      }
+    }
+  }
+
+  // ---- Sections tab ----
+  function renderSectionsTab(el, s) {
+    const sections = s.sections || [];
+    if (!sections.length) {
+      el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">섹션별 요약 정보가 없습니다.<br/><span style="font-size:12px">새로 업로드한 문서부터 표시됩니다.</span></p>';
+      return;
+    }
+
+    const html = sections.map((sec, i) => {
+      const heading  = escHtml(sec.heading  || `섹션 ${i+1}`);
+      const summary  = escHtml(sec.summary  || '');
+      const keyPoints = (sec.keyPoints || []);
+      const kpHtml = keyPoints.length
+        ? `<ul style="margin-top:8px;list-style:none;padding:0">
+             ${keyPoints.map(kp =>
+               `<li style="display:flex;gap:8px;font-size:12px;color:var(--tx2);margin-bottom:4px">
+                  <span style="color:var(--accent);flex-shrink:0">&#x25B8;</span>
+                  <span>${escHtml(kp)}</span>
+                </li>`
+             ).join('')}
+           </ul>`
+        : '';
+
+      return `
+        <div style="border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:10px">
+          <button
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--bg3);border:none;cursor:pointer;text-align:left;font-family:inherit;transition:background 0.2s"
+            onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background='var(--bg3)'"
+            onclick="toggleAccordion(this)">
+            <span style="display:flex;align-items:center;gap:8px">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent-bg);color:var(--accent);font-size:12px;font-weight:700;flex-shrink:0">${i+1}</span>
+              <span style="font-size:16px;font-weight:600;color:var(--tx)">${heading}</span>
+            </span>
+            <span class="accordion-arrow" style="color:var(--tx4);font-size:11px;transition:transform 0.2s">&#x25BC;</span>
+          </button>
+          <div class="accordion-body hidden" style="padding:12px 16px;border-top:1px solid var(--bd);background:var(--bg2)">
+            ${summary ? `<p style="font-size:16px;color:var(--tx2);line-height:1.9;white-space:pre-wrap">${summary}</p>` : ''}
+            ${kpHtml}
+          </div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `<div>${html}</div>`;
+  }
+
+  function toggleAccordion(btn) {
+    const body  = btn.nextElementSibling;
+    const arrow = btn.querySelector('.accordion-arrow');
+    const isOpen = !body.classList.contains('hidden');
+    body.classList.toggle('hidden', isOpen);
+    if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+  }
+
+  // ---- Formulas & derivation tab ----
+  function renderFormulasTab(el, s) {
+    const formulas = s.formulas || [];
+    if (!formulas.length) {
+      el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">이 문서에서 수식을 찾지 못했습니다</p>';
+      return;
+    }
+
+    const html = formulas.map((f, i) => {
+      // Formula can be a string or {latex, plain, name, description, derivation, steps} object
+      const latex       = typeof f === 'string' ? f : (f.latex || '');
+      const plain       = typeof f === 'object' ? (f.plain || '') : '';
+      const name        = typeof f === 'string' ? `수식 ${i+1}` : (f.name || `수식 ${i+1}`);
+      const description = typeof f === 'string' ? '' : (f.description || '');
+      const derivation  = typeof f === 'object' ? (f.derivation || '') : '';
+      const rawSteps    = typeof f === 'object' ? (f.steps || []) : [];
+
+      // steps: {desc, latex} object array or legacy string array
+      const steps = rawSteps.map(step =>
+        typeof step === 'string'
+          ? { desc: step, latex: '' }
+          : step
+      );
+
+      const plainHtml = plain
+        ? `<div style="margin-top:4px;margin-bottom:8px">
+             <code style="font-size:13px;font-family:monospace;padding:2px 8px;border-radius:6px;background:var(--bg3);color:var(--accent);user-select:all">${escHtml(plain)}</code>
+           </div>`
+        : '';
+
+      const derivationHtml = derivation
+        ? `<div style="margin-top:12px">
+             <p style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px">&#x1F4D0; 유도 과정</p>
+             <p style="font-size:12px;color:var(--tx2);line-height:1.7;white-space:pre-wrap">${escHtml(derivation)}</p>
+           </div>`
+        : '';
+
+      const stepsHtml = steps.length
+        ? `<div style="margin-top:12px">
+             <p style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:8px">&#x1F522; 단계별 풀이</p>
+             ${steps.map((step, si) => {
+               const stepLatexId = `step-${i}-${si}`;
+               const stepLatex = step.latex || '';
+               const stepDesc  = escHtml(step.desc || '');
+               return `<div class="formula-step">
+                  <div style="display:flex;align-items:flex-start;gap:8px">
+                    <span style="font-weight:700;color:var(--accent);flex-shrink:0;font-size:12px;margin-top:2px">Step ${si+1}</span>
+                    <div style="flex:1">
+                      ${stepDesc ? `<p style="font-size:12px;color:var(--tx2);margin-bottom:4px">${stepDesc}</p>` : ''}
+                      ${stepLatex
+                        ? `<div class="formula-display" style="font-size:14px" id="${stepLatexId}" data-latex="${escHtml(stepLatex)}" data-plain="">\\(${escHtml(stepLatex)}\\)</div>`
+                        : ''}
+                    </div>
+                  </div>
+                </div>`;
+             }).join('')}
+           </div>`
+        : '';
+
+      return `
+        <div class="formula-block">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="font-size:12px;font-weight:700;color:var(--accent)">${i+1}.</span>
+            <span style="font-size:14px;font-weight:600;color:var(--tx)">${escHtml(name)}</span>
+          </div>
+          ${plainHtml}
+          <div class="formula-display" id="katex-${i}" data-latex="${escHtml(latex)}" data-plain="${escHtml(plain)}">\\(${escHtml(latex)}\\)</div>
+          ${description ? `<p style="font-size:12px;color:var(--tx3);margin-top:8px;line-height:1.6">${escHtml(description)}</p>` : ''}
+          ${derivationHtml}
+          ${stepsHtml}
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `<div style="display:flex;flex-direction:column;gap:4px">${html}</div>`;
+
+    // KaTeX rendering
+    setTimeout(() => {
+      el.querySelectorAll('[data-latex]').forEach(div => {
+        const ltx   = div.dataset.latex || '';
+        const plain = div.dataset.plain || '';
+        if (!ltx) return;
+        try {
+          if (typeof katex !== 'undefined') {
+            // step formulas are inline, main formulas are display mode
+            const isStep = div.id.startsWith('step-');
+            katex.render(ltx, div, { throwOnError: true, displayMode: !isStep });
+          } else if (plain) {
+            // KaTeX not available, use plain fallback
+            div.textContent = plain;
+          }
+        } catch(e) {
+          // Render failed, fallback to plain or raw LaTeX
+          div.textContent = plain || ltx;
+        }
+      });
+    }, 50);
+  }
+
+  // ---- Diagrams tab ----
+  function renderDiagramsTab(el, s) {
+    const diagrams = s.diagrams || [];
+    if (!diagrams.length) {
+      el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">이 문서에 다이어그램이 없습니다</p>';
+      return;
+    }
+
+    const html = diagrams.map((d, i) => {
+      const title = escHtml(d.title || `다이어그램 ${i + 1}`);
+      const mermaidCode = (d.mermaid || '').replace(/\\n/g, '\n');
+      const containerId = `mermaid-${Date.now()}-${i}`;
+
+      return `
+        <div style="border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:16px;background:var(--bg2)">
+          <div style="padding:12px 16px;background:var(--bg3);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px">
+            <span style="font-size:16px">📊</span>
+            <span style="font-size:14px;font-weight:600;color:var(--tx)">${title}</span>
+          </div>
+          <div style="padding:20px;display:flex;justify-content:center;overflow-x:auto;background:white;min-height:120px" id="${containerId}">
+            <pre class="mermaid-src" style="display:none">${escHtml(mermaidCode)}</pre>
+            <div style="color:var(--tx4);font-size:13px">다이어그램 로딩 중...</div>
+          </div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `<div>${html}</div>`;
+
+    // Mermaid 렌더링
+    setTimeout(async () => {
+      if (typeof mermaid === 'undefined') return;
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
+      mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'loose', suppressErrors: true });
+
+      const containers = el.querySelectorAll('[id^="mermaid-"]');
+      for (const container of containers) {
+        const src = container.querySelector('.mermaid-src');
+        if (!src) continue;
+        let code = src.textContent.trim();
+        if (!code) continue;
+
+        // Mermaid 한국어 호환성 전처리
+        code = code.replace(/\u200B/g, ''); // zero-width space 제거
+        // 따옴표 없는 한국어 노드 레이블을 따옴표로 감싸기: A[한국어] → A["한국어"]
+        code = code.replace(/\[([^\]"]*[\u3131-\uD79D가-힣][^\]"]*)\]/g, '["$1"]');
+        // subgraph 한국어 이름 따옴표 감싸기
+        code = code.replace(/subgraph\s+([^\n"]*[\u3131-\uD79D가-힣][^\n"]*)/g, 'subgraph "$1"');
+        // 화살표 레이블 한국어 따옴표 감싸기: -->|한국어| → -->|"한국어"|
+        code = code.replace(/\|([^|"]*[\u3131-\uD79D가-힣][^|"]*)\|/g, '|"$1"|');
+
+        try {
+          const id = 'mm-' + Math.random().toString(36).substring(2, 8);
+          const { svg } = await mermaid.render(id, code);
+          container.innerHTML = svg;
+          const svgEl = container.querySelector('svg');
+          if (svgEl) {
+            svgEl.style.maxWidth = '100%';
+            svgEl.style.height = 'auto';
+          }
+        } catch (e) {
+          // 에러 시 코드 블록으로 대체 표시 (Mermaid가 DOM에 남긴 에러 요소 제거)
+          document.querySelectorAll('[id^="dmm-"]').forEach(el => el.remove());
+          document.querySelectorAll('.mermaid-error, [data-mermaid-error]').forEach(el => el.remove());
+          container.innerHTML = `<div style="padding:12px;background:var(--bg3);border-radius:8px;font-size:11px;color:var(--tx3)">
+            <div style="font-weight:600;margin-bottom:4px">다이어그램을 표시할 수 없습니다</div>
+            <pre style="white-space:pre-wrap;word-break:break-all;margin:0;font-family:monospace;font-size:10px;max-height:120px;overflow-y:auto">${escHtml(code)}</pre>
+          </div>`;
+        }
+      }
+      // Mermaid 전역 에러 요소 최종 정리
+      document.querySelectorAll('body > [id^="dmm-"], body > svg[id^="dmm-"]').forEach(el => el.remove());
+      document.querySelectorAll('body > .mermaid-error').forEach(el => el.remove());
+    }, 100);
+  }
+
+  // ---- Upload modal ----
+  function openUploadModal() {
+    document.getElementById('upload-modal').classList.add('show');
+    document.body.style.overflow = 'hidden';
+  }
+  function closeUploadModal() {
+    document.getElementById('upload-modal').classList.remove('show');
+    document.body.style.overflow = '';
+    clearFile();
+    document.getElementById('upload-result').classList.remove('show');
+    document.getElementById('upload-result').className = 'upload-result';
+    document.getElementById('upload-progress').classList.remove('show');
+    document.getElementById('upload-btn').disabled = true;
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    document.getElementById('drop-zone').classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file && file.type === 'application/pdf') setSelectedFile(file);
+    else alert('PDF 파일만 업로드 가능합니다.');
+  }
+  function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (file) setSelectedFile(file);
+  }
+  function setSelectedFile(file) {
+    selectedFile = file;
+    document.getElementById('selected-filename').textContent = file.name;
+    document.getElementById('selected-filesize').textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
+    document.getElementById('selected-file').classList.add('show');
+    document.getElementById('upload-btn').disabled = false;
+    document.getElementById('upload-result').classList.remove('show');
+  }
+  function clearFile() {
+    selectedFile = null;
+    document.getElementById('selected-file').classList.remove('show');
+    document.getElementById('upload-btn').disabled = true;
+    document.getElementById('file-input').value = '';
+  }
+
+  async function doUpload() {
+    if (!selectedFile) return;
+    if (!SERVER_URL) {
+      showUploadResult('error', '서버가 오프라인입니다. PC에서 서버를 실행해주세요.');
+      return;
+    }
+    if (!authToken) {
+      showUploadResult('error', '로그인이 필요합니다');
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append('pdf', selectedFile);
+
+    const progressDiv = document.getElementById('upload-progress');
+    const progressBar = document.getElementById('progress-bar');
+    const progressPct = document.getElementById('progress-pct');
+    const btn = document.getElementById('upload-btn');
+
+    progressDiv.classList.add('show');
+    btn.disabled = true;
+    btn.textContent = '업로드 중...';
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.upload.onprogress = e => {
+        if (e.lengthComputable) {
+          const pct = Math.round(e.loaded / e.total * 100);
+          progressBar.style.width = pct + '%';
+          progressPct.textContent = pct + '%';
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status === 200) {
+          showUploadResult('success', 'Upload complete! Summary will start after admin approval.');
+          clearFile();
+          resolve();
+        } else if (xhr.status === 401) {
+          showUploadResult('error', 'Login expired. Please log in again.');
+          doLogout();
+          reject();
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            showUploadResult('error', `${err.error || '업로드 실패'}`);
+          } catch(e) {
+            showUploadResult('error', `업로드 실패 (${xhr.status})`);
+          }
+          reject();
+        }
+      };
+      xhr.onerror = () => {
+        showUploadResult('error', '서버에 연결할 수 없습니다. Cloudflare Tunnel이 실행 중인지 확인하세요.');
+        reject();
+      };
+      xhr.open('POST', SERVER_URL + '/upload');
+      xhr.setRequestHeader('Authorization', 'Bearer ' + authToken);
+      xhr.send(formData);
+    }).catch(() => {});
+
+    btn.disabled = false;
+    btn.textContent = '업로드 시작';
+  }
+
+  function showUploadResult(type, msg) {
+    const el = document.getElementById('upload-result');
+    el.className = 'upload-result show ' + type;
+    el.textContent = msg;
+  }
+
+  function renderMathInDocument() {
+    if (typeof renderMathInElement !== 'undefined') {
+      renderMathInElement(document.body, {
+        delimiters: [
+          {left: '\\(', right: '\\)', display: false},
+          {left: '\\[', right: '\\]', display: true}
+        ],
+        throwOnError: false
+      });
+    }
+  }
+</script>
+</body>
+</html>
