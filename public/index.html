@@ -368,7 +368,7 @@
       transition: background 0.3s, border-color 0.3s;
     }
     .modal-box.upload { max-width: 440px; padding: 24px; }
-    .modal-box.detail { max-width: 760px; max-height: 85vh; display: flex; flex-direction: column; }
+    .modal-box.detail { max-width: 800px; max-height: 90vh; display: flex; flex-direction: column; }
     .modal-header {
       display: flex; align-items: flex-start; justify-content: space-between;
       padding: 0 0 16px; border-bottom: 0;
@@ -449,8 +449,8 @@
       padding: 20px 24px; border-bottom: 1px solid var(--bd);
     }
     .detail-header-left { flex: 1; min-width: 0; padding-right: 12px; }
-    .detail-header-left h2 { font-size: 18px; font-weight: 700; color: var(--tx); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .detail-header-left p { font-size: 12px; color: var(--tx4); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .detail-header-left h2 { font-size: 18px; font-weight: 700; color: var(--tx); word-break: break-word; }
+    .detail-header-left p { font-size: 12px; color: var(--tx4); margin-top: 2px; word-break: break-word; }
     .detail-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .detail-delete-btn {
       padding: 5px 10px; border-radius: 8px; border: 1px solid var(--bd);
@@ -546,6 +546,11 @@
       .topbar-user { display: none; }
       .topbar-upload-btn span.btn-text { display: none; }
       .auth-card { padding: 28px 20px; margin: 0 12px; }
+      .modal-box.detail { max-height: 95vh; max-width: 100%; margin: 8px; border-radius: 16px; }
+      .detail-content { padding: 16px; }
+      .detail-header { padding: 16px; }
+      .detail-tabs { padding: 0 16px; }
+      .detail-tab { padding: 10px 12px; font-size: 12px; }
     }
   </style>
 </head>
