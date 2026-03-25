@@ -1223,7 +1223,7 @@
 
   // ---- Mermaid 초기화 ----
   if (typeof mermaid !== 'undefined') {
-    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
+    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', suppressErrors: true, logLevel: 'fatal' });
   }
 
   // ---- DOMContentLoaded: Firebase init + server URL loading ----
@@ -1677,29 +1677,40 @@
     setTimeout(async () => {
       if (typeof mermaid === 'undefined') return;
       const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
-      mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'loose' });
+      mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'loose', suppressErrors: true });
 
       const containers = el.querySelectorAll('[id^="mermaid-"]');
       for (const container of containers) {
         const src = container.querySelector('.mermaid-src');
         if (!src) continue;
-        const code = src.textContent.trim();
+        let code = src.textContent.trim();
         if (!code) continue;
 
+        // 한국어 특수문자로 인한 파싱 오류 방지: 괄호/화살표 정리
+        code = code.replace(/\u200B/g, ''); // zero-width space 제거
+
         try {
-          const id = 'mm-' + container.id;
+          const id = 'mm-' + Math.random().toString(36).substring(2, 8);
           const { svg } = await mermaid.render(id, code);
           container.innerHTML = svg;
-          // SVG 크기 조정
           const svgEl = container.querySelector('svg');
           if (svgEl) {
             svgEl.style.maxWidth = '100%';
             svgEl.style.height = 'auto';
           }
         } catch (e) {
-          container.innerHTML = `<div style="padding:16px;color:var(--rc);font-size:12px">다이어그램 렌더링 실패: ${escHtml(e.message)}</div>`;
+          // 에러 시 코드 블록으로 대체 표시 (Mermaid가 DOM에 남긴 에러 요소 제거)
+          document.querySelectorAll('[id^="dmm-"]').forEach(el => el.remove());
+          document.querySelectorAll('.mermaid-error, [data-mermaid-error]').forEach(el => el.remove());
+          container.innerHTML = `<div style="padding:12px;background:var(--bg3);border-radius:8px;font-size:11px;color:var(--tx3)">
+            <div style="font-weight:600;margin-bottom:4px">다이어그램을 표시할 수 없습니다</div>
+            <pre style="white-space:pre-wrap;word-break:break-all;margin:0;font-family:monospace;font-size:10px;max-height:120px;overflow-y:auto">${escHtml(code)}</pre>
+          </div>`;
         }
       }
+      // Mermaid 전역 에러 요소 최종 정리
+      document.querySelectorAll('body > [id^="dmm-"], body > svg[id^="dmm-"]').forEach(el => el.remove());
+      document.querySelectorAll('body > .mermaid-error').forEach(el => el.remove());
     }, 100);
   }
 
