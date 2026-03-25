@@ -860,17 +860,6 @@
         <button onclick="clearFile()" class="remove">&times;</button>
       </div>
 
-      <!-- Level Selection -->
-      <div class="level-select">
-        <label class="level-select-label">설명 단계 선택</label>
-        <div class="level-select-grid">
-          <label class="level-check"><input type="checkbox" value="elementary" checked><span class="level-dot" style="background:#22c55e"></span> 초등</label>
-          <label class="level-check"><input type="checkbox" value="middle" checked><span class="level-dot" style="background:#3b82f6"></span> 중등</label>
-          <label class="level-check"><input type="checkbox" value="high" checked><span class="level-dot" style="background:#f97316"></span> 고등</label>
-          <label class="level-check"><input type="checkbox" value="graduate" checked><span class="level-dot" style="background:#ef4444"></span> 대학원</label>
-        </div>
-      </div>
-
       <!-- Upload Progress -->
       <div id="upload-progress" class="upload-progress">
         <div class="row">
@@ -1824,14 +1813,6 @@
 
     const formData = new FormData();
     formData.append('pdf', selectedFile);
-
-    // 선택된 설명 단계 전달
-    const selectedLevels = Array.from(document.querySelectorAll('.level-check input:checked')).map(cb => cb.value);
-    if (selectedLevels.length === 0) {
-      showUploadResult('error', '최소 1개 이상의 설명 단계를 선택해주세요');
-      return;
-    }
-    formData.append('levels', JSON.stringify(selectedLevels));
 
     const progressDiv = document.getElementById('upload-progress');
     const progressBar = document.getElementById('progress-bar');
