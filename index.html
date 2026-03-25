@@ -1118,6 +1118,11 @@
 
       authToken = data.token;
       authUser = data.user;
+      // 이전 토큰 정리 후 저장
+      localStorage.removeItem('authToken');
+      localStorage.removeItem('authUser');
+      sessionStorage.removeItem('authToken');
+      sessionStorage.removeItem('authUser');
       const autoLogin = document.getElementById('auto-login').checked;
       const storage = autoLogin ? localStorage : sessionStorage;
       storage.setItem('authToken', authToken);
@@ -1235,19 +1240,18 @@
       }
       const db = firebase.firestore();
 
-      // Read server URL from Firebase in real-time
-      db.collection('config').doc('server').onSnapshot(snap => {
-        if (snap.exists && snap.data().url) {
-          SERVER_URL = snap.data().url;
-          console.log('서버 URL 갱신:', SERVER_URL);
-        }
-      });
+      // config/server 리스너는 DOMContentLoaded에서 이미 설정됨 (중복 방지)
 
       if (unsubscribe) unsubscribe();
       unsubscribe = db.collection(COLLECTION)
         .orderBy('createdAt', 'desc')
         .onSnapshot(snapshot => {
           allSummaries = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          // 열린 상세 모달이 있으면 최신 데이터로 갱신
+          if (currentDetail) {
+            const updated = allSummaries.find(s => s.id === currentDetail.id);
+            if (updated) currentDetail = updated;
+          }
           document.getElementById('loading-state').classList.add('hidden');
           renderCards();
         }, err => {
@@ -1264,7 +1268,7 @@
 
   // ---- Mermaid 초기화 ----
   if (typeof mermaid !== 'undefined') {
-    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose', suppressErrors: true, logLevel: 'fatal' });
+    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict', suppressErrors: true, logLevel: 'fatal' });
   }
 
   // ---- DOMContentLoaded: Firebase init + server URL loading ----
@@ -1288,9 +1292,11 @@
     if (authToken && authUser && !isTokenExpired(authToken)) {
       enterApp();
     } else if (authToken && isTokenExpired(authToken)) {
-      // Clean up expired token
+      // Clean up expired token (both storages)
       localStorage.removeItem('authToken');
       localStorage.removeItem('authUser');
+      sessionStorage.removeItem('authToken');
+      sessionStorage.removeItem('authUser');
       authToken = null;
       authUser = null;
     }
@@ -1481,8 +1487,9 @@
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      let data;
+      try { data = await res.json(); } catch { data = {}; }
+      if (!res.ok) throw new Error(data.error || `서버 오류 (${res.status})`);
       allSummaries = allSummaries.filter(s => s.id !== id);
       renderCards();
       closeDetailModal();
@@ -1718,7 +1725,7 @@
     setTimeout(async () => {
       if (typeof mermaid === 'undefined') return;
       const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
-      mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'loose', suppressErrors: true });
+      mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'strict', suppressErrors: true });
 
       const containers = el.querySelectorAll('[id^="mermaid-"]');
       for (const container of containers) {
@@ -1773,6 +1780,8 @@
     document.getElementById('upload-result').classList.remove('show');
     document.getElementById('upload-result').className = 'upload-result';
     document.getElementById('upload-progress').classList.remove('show');
+    const pb = document.getElementById('progress-bar');
+    if (pb) pb.style.width = '0%';
     document.getElementById('upload-btn').disabled = true;
   }
 
@@ -1844,11 +1853,11 @@
       };
       xhr.onload = () => {
         if (xhr.status === 200) {
-          showUploadResult('success', 'Upload complete! Summary will start after admin approval.');
+          showUploadResult('success', '✅ 업로드 완료! 관리자 승인 후 요약이 시작됩니다.');
           clearFile();
           resolve();
         } else if (xhr.status === 401) {
-          showUploadResult('error', 'Login expired. Please log in again.');
+          showUploadResult('error', '❌ 로그인이 만료되었습니다. 다시 로그인해주세요.');
           doLogout();
           reject();
         } else {
@@ -1878,6 +1887,11 @@
     const el = document.getElementById('upload-result');
     el.className = 'upload-result show ' + type;
     el.textContent = msg;
+    // 에러 시 프로그레스바 숨기기
+    if (type === 'error') {
+      const prog = document.getElementById('upload-progress');
+      if (prog) prog.classList.remove('show');
+    }
   }
 
   function renderMathInDocument() {
