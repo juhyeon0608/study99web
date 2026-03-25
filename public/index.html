@@ -11,6 +11,8 @@
   <!-- KaTeX -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+  <!-- Mermaid.js for diagrams -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
     onload="renderMathInDocument()"></script>
 
@@ -854,6 +856,7 @@
         <button class="detail-tab" data-tab="graduate" onclick="switchTab(this,'graduate')">&#x1F534; 대학원</button>
         <button class="detail-tab" data-tab="sections" onclick="switchTab(this,'sections')">&#x1F4D1; 섹션별</button>
         <button class="detail-tab" data-tab="formulas" onclick="switchTab(this,'formulas')">&#x1F9EE; 수식&유도</button>
+        <button class="detail-tab" data-tab="diagrams" onclick="switchTab(this,'diagrams')">&#x1F4CA; 다이어그램</button>
       </div>
 
       <!-- Detail Content -->
@@ -1193,6 +1196,11 @@
     }
   }
 
+  // ---- Mermaid 초기화 ----
+  if (typeof mermaid !== 'undefined') {
+    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'loose' });
+  }
+
   // ---- DOMContentLoaded: Firebase init + server URL loading ----
   window.addEventListener('DOMContentLoaded', () => {
     // Initialize Firebase before login so server URL can be read
@@ -1365,7 +1373,8 @@
                  s.summaries?.middle     ? 'middle' :
                  s.summaries?.high       ? 'high' :
                  s.summaries?.graduate   ? 'graduate' :
-                 (s.formulas && s.formulas.length) ? 'formulas' : 'elementary';
+                 (s.formulas && s.formulas.length) ? 'formulas' :
+                 (s.diagrams && s.diagrams.length) ? 'diagrams' : 'elementary';
 
     document.getElementById('detail-title').textContent = s.title || s.filename || '제목 없음';
     document.getElementById('detail-filename').textContent = s.filename || '';
@@ -1424,6 +1433,8 @@
 
     if (tab === 'formulas') {
       renderFormulasTab(el, currentDetail);
+    } else if (tab === 'diagrams') {
+      renderDiagramsTab(el, currentDetail);
     } else if (tab === 'sections') {
       renderSectionsTab(el, currentDetail);
     } else {
@@ -1589,6 +1600,64 @@
         }
       });
     }, 50);
+  }
+
+  // ---- Diagrams tab ----
+  function renderDiagramsTab(el, s) {
+    const diagrams = s.diagrams || [];
+    if (!diagrams.length) {
+      el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">이 문서에 다이어그램이 없습니다</p>';
+      return;
+    }
+
+    const html = diagrams.map((d, i) => {
+      const title = escHtml(d.title || `다이어그램 ${i + 1}`);
+      const mermaidCode = (d.mermaid || '').replace(/\\n/g, '\n');
+      const containerId = `mermaid-${Date.now()}-${i}`;
+
+      return `
+        <div style="border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:16px;background:var(--bg2)">
+          <div style="padding:12px 16px;background:var(--bg3);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px">
+            <span style="font-size:16px">📊</span>
+            <span style="font-size:14px;font-weight:600;color:var(--tx)">${title}</span>
+          </div>
+          <div style="padding:20px;display:flex;justify-content:center;overflow-x:auto;background:white;min-height:120px" id="${containerId}">
+            <pre class="mermaid-src" style="display:none">${escHtml(mermaidCode)}</pre>
+            <div style="color:var(--tx4);font-size:13px">다이어그램 로딩 중...</div>
+          </div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `<div>${html}</div>`;
+
+    // Mermaid 렌더링
+    setTimeout(async () => {
+      if (typeof mermaid === 'undefined') return;
+      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
+      mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'loose' });
+
+      const containers = el.querySelectorAll('[id^="mermaid-"]');
+      for (const container of containers) {
+        const src = container.querySelector('.mermaid-src');
+        if (!src) continue;
+        const code = src.textContent.trim();
+        if (!code) continue;
+
+        try {
+          const id = 'mm-' + container.id;
+          const { svg } = await mermaid.render(id, code);
+          container.innerHTML = svg;
+          // SVG 크기 조정
+          const svgEl = container.querySelector('svg');
+          if (svgEl) {
+            svgEl.style.maxWidth = '100%';
+            svgEl.style.height = 'auto';
+          }
+        } catch (e) {
+          container.innerHTML = `<div style="padding:16px;color:var(--rc);font-size:12px">다이어그램 렌더링 실패: ${escHtml(e.message)}</div>`;
+        }
+      }
+    }, 100);
   }
 
   // ---- Upload modal ----
