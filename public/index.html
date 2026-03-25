@@ -1,12 +1,12 @@
 <!DOCTYPE html>
-<html lang="ko" class="light">
+<html lang="ko" data-theme="light">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PDF 요약 서비스</title>
 
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Pretendard Font -->
+  <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
 
   <!-- KaTeX -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
@@ -18,104 +18,545 @@
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      safelist: [
-        'bg-green-100','text-green-700','bg-green-900','text-green-300',
-        'bg-blue-100','text-blue-700','bg-blue-900','text-blue-300',
-        'bg-orange-100','text-orange-700','bg-orange-900','text-orange-300',
-        'bg-red-100','text-red-700','bg-red-900','text-red-300',
-        'bg-purple-100','text-purple-700','bg-purple-900','text-purple-300',
-        'bg-yellow-100','text-yellow-700','bg-yellow-900','text-yellow-300',
-      ]
-    }
-  </script>
-  <!-- Tailwind safelist hidden div -->
-  <div class="hidden
-    bg-green-100 text-green-700 bg-green-900 text-green-300
-    bg-blue-100 text-blue-700 bg-blue-900 text-blue-300
-    bg-orange-100 text-orange-700 bg-orange-900 text-orange-300
-    bg-red-100 text-red-700 bg-red-900 text-red-300
-    bg-purple-100 text-purple-700 bg-purple-900 text-purple-300
-    bg-yellow-100 text-yellow-700 bg-yellow-900 text-yellow-300
-  "></div>
-
   <style>
-    html.dark body { background-color: #0f172a; color: #e2e8f0; }
-    html.dark .card { background-color: #1e293b; border-color: #334155; }
-    html.dark .modal-bg { background-color: #1e293b; }
-    html.dark input, html.dark textarea { background-color: #0f172a; border-color: #334155; color: #e2e8f0; }
-    html.dark .auth-card { background-color: #1e293b; }
-
-    .card { transition: transform 0.15s, box-shadow 0.15s; cursor: pointer; }
-    .card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.12); }
-
-    #drop-zone.drag-over { border-color: #6366f1; background-color: #eef2ff; }
-    html.dark #drop-zone.drag-over { background-color: #1e1b4b; }
-
-    .tab-btn.active { border-bottom: 2px solid #6366f1; color: #6366f1; font-weight: 600; }
-
-    /* 상태 뱃지 */
-    .badge-pending_approval { background:#fef9c3; color:#854d0e; }
-    .badge-pending    { background:#fef9c3; color:#854d0e; }
-    .badge-processing { background:#dbeafe; color:#1e40af; }
-    .badge-done       { background:#dcfce7; color:#166534; }
-    .badge-completed  { background:#dcfce7; color:#166534; }
-    .badge-rejected   { background:#fee2e2; color:#991b1b; }
-    .badge-error      { background:#fee2e2; color:#991b1b; }
-    html.dark .badge-pending_approval { background:#422006; color:#fef08a; }
-    html.dark .badge-pending    { background:#422006; color:#fef08a; }
-    html.dark .badge-processing { background:#1e3a5f; color:#93c5fd; }
-    html.dark .badge-done       { background:#14532d; color:#86efac; }
-    html.dark .badge-completed  { background:#14532d; color:#86efac; }
-    html.dark .badge-rejected   { background:#450a0a; color:#fca5a5; }
-    html.dark .badge-error      { background:#450a0a; color:#fca5a5; }
-
-    /* 수식 영역 */
-    .formula-block {
-      background: #f8fafc;
-      border: 1px solid #e2e8f0;
-      border-radius: 12px;
-      padding: 16px 20px;
-      margin: 12px 0;
-      overflow-x: auto;
+    /* ===== CSS Variables Theming ===== */
+    :root, [data-theme="light"] {
+      --bg: #f8faf9; --bg2: #ffffff; --bg3: #f1f5f3;
+      --tx: #1a2e1f; --tx2: #3d5a44; --tx3: #6b8f74; --tx4: #9bb5a3;
+      --bd: #dce8df; --bd2: #c5d6c9;
+      --p1: var(--accent); --p2: var(--accent-hover); --p3: var(--accent-light); --p4: var(--accent-bg);
+      --pd: var(--accent-dark);
+      --rc: #ef4444; --gc: #22c55e; --bc: #3b82f6;
+      /* Default accent: Indigo */
+      --accent: #6366f1; --accent-hover: #4f46e5; --accent-light: #a5b4fc; --accent-bg: #eef2ff; --accent-dark: #3730a3;
     }
-    html.dark .formula-block { background: #0f172a; border-color: #334155; }
+    [data-theme="dark"] {
+      --bg: #0f1a13; --bg2: #1a2e1f; --bg3: #243828;
+      --tx: #e8f0eb; --tx2: #b8ccbe; --tx3: #7d9b85; --tx4: #4f7058;
+      --bd: #2d4433; --bd2: #3d5a44;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--tx);
+      min-height: 100vh;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    a { color: var(--accent); text-decoration: none; }
+
+    /* ===== Wrapper ===== */
+    .W { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+
+    /* ===== Topbar ===== */
+    .topbar {
+      position: sticky; top: 0; z-index: 40;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--bd);
+      padding: 12px 0;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .topbar .W { display: flex; align-items: center; justify-content: space-between; }
+    .topbar-left { display: flex; align-items: center; gap: 10px; }
+    .topbar-brand-icon {
+      width: 36px; height: 36px; border-radius: 10px;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    .topbar-brand h1 { font-size: 17px; font-weight: 700; color: var(--tx); line-height: 1.2; }
+    .topbar-brand p { font-size: 11px; color: var(--tx3); margin-top: 1px; }
+    .topbar-right { display: flex; align-items: center; gap: 8px; }
+    .topbar-btn {
+      width: 36px; height: 36px; border-radius: 10px;
+      border: 1px solid var(--bd); background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.2s; font-size: 16px; color: var(--tx2);
+    }
+    .topbar-btn:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-bg); }
+    .topbar-upload-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 16px; border-radius: 10px; border: none;
+      background: var(--accent); color: #fff;
+      font-size: 13px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s; font-family: inherit;
+    }
+    .topbar-upload-btn:hover { background: var(--accent-hover); }
+    .topbar-upload-btn svg { width: 16px; height: 16px; }
+    .topbar-user {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 12px 5px 6px; border-radius: 20px;
+      background: var(--bg3); font-size: 13px; color: var(--tx2);
+    }
+    .topbar-user-avatar {
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 12px; font-weight: 700;
+    }
+    .topbar-logout {
+      width: 36px; height: 36px; border-radius: 10px;
+      border: 1px solid var(--bd); background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; transition: all 0.2s; font-size: 14px; color: var(--tx3);
+    }
+    .topbar-logout:hover { border-color: var(--rc); color: var(--rc); background: #fef2f2; }
+    [data-theme="dark"] .topbar-logout:hover { background: #450a0a33; }
+
+    /* ===== Stats Bar ===== */
+    .stats {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+      margin: 20px 0;
+    }
+    .stat-card {
+      background: var(--bg2); border: 1px solid var(--bd);
+      border-radius: 12px; padding: 16px;
+      display: flex; align-items: center; gap: 12px;
+      transition: all 0.2s;
+    }
+    .stat-card:hover { border-color: var(--accent); }
+    .stat-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    .stat-icon.total { background: var(--accent-bg); color: var(--accent); }
+    .stat-icon.processing { background: #dbeafe; color: #2563eb; }
+    .stat-icon.done { background: #dcfce7; color: #16a34a; }
+    .stat-icon.error { background: #fee2e2; color: #dc2626; }
+    [data-theme="dark"] .stat-icon.total { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+    [data-theme="dark"] .stat-icon.processing { background: #1e3a5f; color: #60a5fa; }
+    [data-theme="dark"] .stat-icon.done { background: #14532d; color: #4ade80; }
+    [data-theme="dark"] .stat-icon.error { background: #450a0a; color: #f87171; }
+    .stat-info { min-width: 0; }
+    .stat-count { font-size: 22px; font-weight: 800; color: var(--tx); line-height: 1; }
+    .stat-label { font-size: 12px; color: var(--tx3); margin-top: 3px; }
+
+    /* ===== Search ===== */
+    .search-wrap { margin-bottom: 16px; }
+    .search-input {
+      width: 100%; padding: 11px 16px 11px 40px;
+      border: 1px solid var(--bd); border-radius: 10px;
+      background: var(--bg2); color: var(--tx);
+      font-size: 14px; font-family: inherit;
+      outline: none; transition: border-color 0.2s;
+    }
+    .search-input:focus { border-color: var(--accent); }
+    .search-wrap { position: relative; }
+    .search-wrap svg {
+      position: absolute; left: 14px; top: 50%; transform: translateY(-50%);
+      width: 16px; height: 16px; color: var(--tx4);
+    }
+
+    /* ===== Filter Tabs ===== */
+    .tabs {
+      display: flex; gap: 4px; border-bottom: 1px solid var(--bd);
+      margin-bottom: 20px; overflow-x: auto;
+      -ms-overflow-style: none; scrollbar-width: none;
+    }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab-btn {
+      display: flex; align-items: center; gap: 6px;
+      padding: 10px 16px; font-size: 13px; font-weight: 500;
+      color: var(--tx3); border: none; background: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer; white-space: nowrap;
+      transition: all 0.2s; font-family: inherit;
+    }
+    .tab-btn:hover { color: var(--tx); }
+    .tab-btn.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .tab-btn svg { width: 14px; height: 14px; }
+
+    /* ===== Card Grid ===== */
+    .cards {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+      gap: 16px; margin-bottom: 40px;
+    }
+
+    /* ===== Card Design ===== */
+    .card {
+      position: relative; background: var(--bg2);
+      border: 1px solid var(--bd); border-radius: 14px;
+      padding: 20px; cursor: pointer;
+      transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s;
+    }
+    .card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 25px rgba(0,0,0,0.08);
+      border-color: var(--bd2);
+    }
+    .card-header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
+    .card-doc-icon {
+      width: 40px; height: 40px; border-radius: 10px;
+      background: var(--accent-bg); color: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; flex-shrink: 0;
+    }
+    [data-theme="dark"] .card-doc-icon { background: color-mix(in srgb, var(--accent) 20%, transparent); }
+    .card-status-area { display: flex; align-items: center; gap: 6px; }
+    .card-delete-btn {
+      width: 28px; height: 28px; border-radius: 8px;
+      border: none; background: var(--bg3);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; font-size: 12px; color: var(--tx4);
+      opacity: 0; transition: all 0.2s;
+    }
+    .card:hover .card-delete-btn { opacity: 1; }
+    .card-delete-btn:hover { background: #fee2e2; color: var(--rc); }
+    [data-theme="dark"] .card-delete-btn:hover { background: #450a0a55; }
+    .card-title {
+      font-size: 15px; font-weight: 600; color: var(--tx);
+      margin-bottom: 4px; line-height: 1.4;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .card-filename { font-size: 12px; color: var(--tx4); margin-bottom: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card-preview {
+      font-size: 12px; color: var(--tx3); line-height: 1.6; margin-bottom: 12px;
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+    }
+    .card-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 12px; }
+    .card-footer { display: flex; align-items: center; justify-content: space-between; font-size: 12px; color: var(--tx4); }
+    .card-footer-uploader { display: flex; align-items: center; gap: 4px; }
+    .card-error-actions {
+      display: flex; gap: 8px; margin-top: 12px; padding-top: 12px;
+      border-top: 1px solid var(--bd);
+    }
+    .card-error-btn {
+      flex: 1; padding: 6px; border-radius: 8px; border: none;
+      font-size: 12px; cursor: pointer; font-family: inherit;
+      background: #fee2e2; color: #dc2626; transition: background 0.2s;
+    }
+    .card-error-btn:hover { background: #fecaca; }
+    [data-theme="dark"] .card-error-btn { background: #450a0a55; color: #f87171; }
+    [data-theme="dark"] .card-error-btn:hover { background: #450a0a88; }
+
+    /* ===== Status Badges ===== */
+    .status-badge {
+      font-size: 11px; padding: 3px 10px; border-radius: 20px; font-weight: 600;
+    }
+    .badge-pending_approval { background: #fef9c3; color: #854d0e; }
+    .badge-pending    { background: #fef9c3; color: #854d0e; }
+    .badge-processing { background: #dbeafe; color: #1e40af; }
+    .badge-done       { background: #dcfce7; color: #166534; }
+    .badge-completed  { background: #dcfce7; color: #166534; }
+    .badge-rejected   { background: #fee2e2; color: #991b1b; }
+    .badge-error      { background: #fee2e2; color: #991b1b; }
+    [data-theme="dark"] .badge-pending_approval { background: #422006; color: #fef08a; }
+    [data-theme="dark"] .badge-pending    { background: #422006; color: #fef08a; }
+    [data-theme="dark"] .badge-processing { background: #1e3a5f; color: #93c5fd; }
+    [data-theme="dark"] .badge-done       { background: #14532d; color: #86efac; }
+    [data-theme="dark"] .badge-completed  { background: #14532d; color: #86efac; }
+    [data-theme="dark"] .badge-rejected   { background: #450a0a; color: #fca5a5; }
+    [data-theme="dark"] .badge-error      { background: #450a0a; color: #fca5a5; }
+
+    /* ===== Level Badges ===== */
+    .level-badge {
+      font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500;
+    }
+    .level-elementary { background: #dcfce7; color: #166534; }
+    .level-middle { background: #dbeafe; color: #1e40af; }
+    .level-high { background: #ffedd5; color: #9a3412; }
+    .level-graduate { background: #fee2e2; color: #991b1b; }
+    .level-formula { background: #f3e8ff; color: #6b21a8; }
+    [data-theme="dark"] .level-elementary { background: #14532d; color: #86efac; }
+    [data-theme="dark"] .level-middle { background: #1e3a5f; color: #93c5fd; }
+    [data-theme="dark"] .level-high { background: #431407; color: #fdba74; }
+    [data-theme="dark"] .level-graduate { background: #450a0a; color: #fca5a5; }
+    [data-theme="dark"] .level-formula { background: #3b0764; color: #d8b4fe; }
+
+    /* ===== Empty / Loading States ===== */
+    .empty-state {
+      text-align: center; padding: 60px 20px; color: var(--tx4);
+    }
+    .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+    .empty-state .title { font-size: 16px; font-weight: 600; color: var(--tx3); }
+    .empty-state .desc { font-size: 13px; margin-top: 6px; }
+    .loading-state { display: flex; justify-content: center; padding: 60px 20px; }
+    .spinner {
+      width: 36px; height: 36px; border-radius: 50%;
+      border: 3px solid var(--bd); border-top-color: var(--accent);
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ===== Auth Screen ===== */
+    .auth-screen {
+      min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: var(--bg);
+    }
+    .auth-card {
+      background: var(--bg2); border: 1px solid var(--bd);
+      border-radius: 20px; padding: 40px; width: 100%; max-width: 420px;
+      box-shadow: 0 4px 24px rgba(0,0,0,0.06);
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .auth-logo {
+      width: 60px; height: 60px; border-radius: 16px;
+      background: var(--accent); color: #fff;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 28px; margin: 0 auto 16px;
+    }
+    .auth-title { font-size: 20px; font-weight: 700; text-align: center; color: var(--tx); }
+    .auth-subtitle { font-size: 13px; color: var(--tx3); text-align: center; margin-top: 4px; margin-bottom: 24px; }
+    .auth-tabs {
+      display: flex; background: var(--bg3); border-radius: 12px; padding: 4px; margin-bottom: 24px;
+    }
+    .auth-tab-btn {
+      flex: 1; padding: 9px; border-radius: 9px; border: none;
+      font-size: 13px; font-weight: 500; cursor: pointer;
+      background: transparent; color: var(--tx3);
+      transition: all 0.2s; font-family: inherit;
+    }
+    .auth-tab-btn.active {
+      background: var(--bg2); color: var(--accent);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.08); font-weight: 600;
+    }
+    .auth-field { margin-bottom: 16px; }
+    .auth-label { display: block; font-size: 13px; font-weight: 500; color: var(--tx2); margin-bottom: 6px; }
+    .auth-input {
+      width: 100%; border: 1px solid var(--bd); border-radius: 10px;
+      padding: 11px 14px; font-size: 14px; font-family: inherit;
+      background: var(--bg); color: var(--tx);
+      outline: none; transition: border-color 0.2s;
+    }
+    .auth-input:focus { border-color: var(--accent); }
+    .auth-input::placeholder { color: var(--tx4); }
+    .auth-checkbox-wrap {
+      display: flex; align-items: center; gap: 8px; margin-top: 4px; margin-bottom: 4px;
+    }
+    .auth-checkbox {
+      width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer;
+    }
+    .auth-checkbox-label { font-size: 13px; color: var(--tx3); cursor: pointer; user-select: none; }
+    .auth-error {
+      display: none; margin-top: 12px; font-size: 13px; color: var(--rc);
+      text-align: center; padding: 8px; border-radius: 8px;
+      background: #fee2e2;
+    }
+    [data-theme="dark"] .auth-error { background: #450a0a55; }
+    .auth-error.show { display: block; }
+    .auth-btn {
+      width: 100%; padding: 12px; border-radius: 10px; border: none;
+      background: var(--accent); color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s; margin-top: 16px; font-family: inherit;
+    }
+    .auth-btn:hover { background: var(--accent-hover); }
+    .auth-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* ===== Modals ===== */
+    .modal-overlay {
+      position: fixed; inset: 0; z-index: 50;
+      display: none; /* toggled by JS */
+    }
+    .modal-overlay.show { display: block; }
+    .modal-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.4); backdrop-filter: blur(4px);
+    }
+    .modal-center {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center; padding: 16px;
+    }
+    .modal-box {
+      background: var(--bg2); border: 1px solid var(--bd);
+      border-radius: 16px; box-shadow: 0 16px 48px rgba(0,0,0,0.12);
+      width: 100%; position: relative;
+      transition: background 0.3s, border-color 0.3s;
+    }
+    .modal-box.upload { max-width: 440px; padding: 24px; }
+    .modal-box.detail { max-width: 760px; max-height: 85vh; display: flex; flex-direction: column; }
+    .modal-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 0 0 16px; border-bottom: 0;
+    }
+    .modal-header h2 { font-size: 17px; font-weight: 700; color: var(--tx); }
+    .modal-close {
+      width: 32px; height: 32px; border-radius: 8px;
+      border: 1px solid var(--bd); background: var(--bg);
+      display: flex; align-items: center; justify-content: center;
+      cursor: pointer; color: var(--tx3); font-size: 14px;
+      transition: all 0.2s;
+    }
+    .modal-close:hover { border-color: var(--rc); color: var(--rc); }
+
+    /* Upload modal specifics */
+    .upload-notice {
+      padding: 10px 14px; border-radius: 10px; margin-bottom: 16px;
+      background: #fffbeb; border: 1px solid #fde68a;
+      font-size: 12px; color: #92400e;
+    }
+    [data-theme="dark"] .upload-notice { background: #422006; border-color: #78350f; color: #fcd34d; }
+    .drop-zone {
+      border: 2px dashed var(--bd2); border-radius: 12px;
+      padding: 40px 20px; text-align: center; cursor: pointer;
+      transition: all 0.2s;
+    }
+    .drop-zone:hover { border-color: var(--accent); }
+    .drop-zone.drag-over { border-color: var(--accent); background: var(--accent-bg); }
+    [data-theme="dark"] .drop-zone.drag-over { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+    .drop-zone .icon { font-size: 36px; margin-bottom: 10px; }
+    .drop-zone .text { font-size: 14px; font-weight: 500; color: var(--tx2); }
+    .drop-zone .hint { font-size: 12px; color: var(--tx4); margin-top: 4px; }
+    .selected-file {
+      display: none; margin-top: 14px; padding: 12px;
+      background: var(--accent-bg); border-radius: 10px;
+      align-items: center; gap: 10px;
+    }
+    [data-theme="dark"] .selected-file { background: color-mix(in srgb, var(--accent) 15%, transparent); }
+    .selected-file.show { display: flex; }
+    .selected-file .icon { font-size: 24px; flex-shrink: 0; }
+    .selected-file .info { flex: 1; min-width: 0; }
+    .selected-file .name { font-size: 13px; font-weight: 500; color: var(--tx); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .selected-file .size { font-size: 11px; color: var(--tx4); margin-top: 2px; }
+    .selected-file .remove {
+      width: 24px; height: 24px; border-radius: 6px; border: none;
+      background: transparent; cursor: pointer; color: var(--tx4);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; transition: color 0.2s;
+    }
+    .selected-file .remove:hover { color: var(--rc); }
+    .upload-progress { display: none; margin-top: 14px; }
+    .upload-progress.show { display: block; }
+    .upload-progress .row { display: flex; justify-content: space-between; font-size: 12px; color: var(--tx3); margin-bottom: 6px; }
+    .progress-track { height: 6px; border-radius: 3px; background: var(--bg3); overflow: hidden; }
+    .progress-fill { height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.3s; width: 0%; }
+    .upload-result {
+      display: none; margin-top: 14px; padding: 10px 14px;
+      border-radius: 10px; font-size: 13px; font-weight: 500;
+    }
+    .upload-result.show { display: block; }
+    .upload-result.success { background: #dcfce7; color: #166534; }
+    .upload-result.error { background: #fee2e2; color: #991b1b; }
+    [data-theme="dark"] .upload-result.success { background: #14532d; color: #86efac; }
+    [data-theme="dark"] .upload-result.error { background: #450a0a; color: #fca5a5; }
+    .upload-submit {
+      width: 100%; margin-top: 16px; padding: 12px;
+      border-radius: 10px; border: none;
+      background: var(--accent); color: #fff;
+      font-size: 14px; font-weight: 600; cursor: pointer;
+      transition: background 0.2s; font-family: inherit;
+    }
+    .upload-submit:hover { background: var(--accent-hover); }
+    .upload-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Detail modal specifics */
+    .detail-header {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      padding: 20px 24px; border-bottom: 1px solid var(--bd);
+    }
+    .detail-header-left { flex: 1; min-width: 0; padding-right: 12px; }
+    .detail-header-left h2 { font-size: 18px; font-weight: 700; color: var(--tx); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .detail-header-left p { font-size: 12px; color: var(--tx4); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .detail-header-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+    .detail-delete-btn {
+      padding: 5px 10px; border-radius: 8px; border: 1px solid var(--bd);
+      background: var(--bg); color: var(--tx4); font-size: 13px;
+      cursor: pointer; transition: all 0.2s; display: flex; align-items: center; gap: 4px;
+    }
+    .detail-delete-btn:hover { border-color: var(--rc); color: var(--rc); background: #fef2f2; }
+    [data-theme="dark"] .detail-delete-btn:hover { background: #450a0a33; }
+    .detail-tabs {
+      display: flex; gap: 0; overflow-x: auto; padding: 0 24px;
+      border-bottom: 1px solid var(--bd);
+      -ms-overflow-style: none; scrollbar-width: none;
+    }
+    .detail-tabs::-webkit-scrollbar { display: none; }
+    .detail-tab {
+      padding: 12px 16px; font-size: 13px; font-weight: 500;
+      color: var(--tx3); border: none; background: none;
+      border-bottom: 2px solid transparent;
+      cursor: pointer; white-space: nowrap;
+      transition: all 0.2s; font-family: inherit;
+    }
+    .detail-tab:hover { color: var(--tx); }
+    .detail-tab.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
+    .detail-content {
+      flex: 1; overflow-y: auto; padding: 24px;
+      font-size: 14px; line-height: 1.8;
+    }
+
+    /* ===== Formula blocks ===== */
+    .formula-block {
+      background: var(--bg3); border: 1px solid var(--bd);
+      border-radius: 12px; padding: 16px 20px;
+      margin: 12px 0; overflow-x: auto;
+      transition: background 0.3s, border-color 0.3s;
+    }
     .formula-display { font-size: 1.15em; margin: 8px 0; text-align: center; }
     .formula-step {
-      background: #f1f5f9;
-      border-left: 3px solid #6366f1;
+      background: var(--bg);
+      border-left: 3px solid var(--accent);
       border-radius: 0 8px 8px 0;
-      padding: 8px 12px;
-      margin: 6px 0;
-      font-size: 0.85em;
+      padding: 8px 12px; margin: 6px 0; font-size: 0.85em;
+      transition: background 0.3s, border-color 0.3s;
     }
-    html.dark .formula-step { background: #1e293b; border-color: #818cf8; }
 
-    /* 스크롤바 */
+    /* ===== Color Picker Modal ===== */
+    .color-picker-overlay {
+      position: fixed; inset: 0; z-index: 60; display: none;
+    }
+    .color-picker-overlay.show { display: block; }
+    .color-picker-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.3); backdrop-filter: blur(2px);
+    }
+    .color-picker-panel {
+      position: absolute; top: 60px; right: 20px;
+      background: var(--bg2); border: 1px solid var(--bd);
+      border-radius: 14px; padding: 20px; width: 240px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.12);
+    }
+    .color-picker-title { font-size: 14px; font-weight: 600; color: var(--tx); margin-bottom: 14px; }
+    .color-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .color-swatch {
+      width: 100%; aspect-ratio: 1; border-radius: 12px;
+      border: 2px solid transparent; cursor: pointer;
+      transition: all 0.2s; display: flex; align-items: center; justify-content: center;
+    }
+    .color-swatch:hover { transform: scale(1.1); }
+    .color-swatch.active { border-color: var(--tx); box-shadow: 0 0 0 2px var(--bg2), 0 0 0 4px var(--tx); }
+    .color-swatch .check { display: none; color: #fff; font-size: 14px; font-weight: 700; }
+    .color-swatch.active .check { display: block; }
+
+    /* ===== Scrollbar ===== */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb { background: var(--tx4); border-radius: 3px; }
 
-    /* 인증 화면 */
-    .auth-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
-    html.dark .auth-screen { background: linear-gradient(135deg, #1e1b4b 0%, #312e81 100%); }
-    .auth-card { background: white; border-radius: 20px; padding: 40px; width: 100%; max-width: 420px; box-shadow: 0 20px 60px rgba(0,0,0,0.2); }
-    .auth-input { width: 100%; border: 1.5px solid #e2e8f0; border-radius: 10px; padding: 12px 16px; font-size: 14px; outline: none; transition: border-color 0.2s; }
-    .auth-input:focus { border-color: #6366f1; }
-    html.dark .auth-input { background: #0f172a; border-color: #334155; color: #e2e8f0; }
-    html.dark .auth-input:focus { border-color: #818cf8; }
-    .auth-btn { width: 100%; background: #6366f1; color: white; border: none; border-radius: 10px; padding: 13px; font-size: 15px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
-    .auth-btn:hover { background: #4f46e5; }
-    .auth-btn:disabled { background: #a5b4fc; cursor: not-allowed; }
+    /* ===== Footer ===== */
+    footer {
+      text-align: center; padding: 24px 20px 32px;
+      font-size: 12px; color: var(--tx4);
+      border-top: 1px solid var(--bd);
+    }
+
+    /* ===== Hidden ===== */
+    .hidden { display: none !important; }
+
+    /* ===== Responsive ===== */
+    @media (max-width: 640px) {
+      .stats { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+      .stat-card { padding: 12px; }
+      .stat-count { font-size: 18px; }
+      .cards { grid-template-columns: 1fr; }
+      .topbar-user { display: none; }
+      .topbar-upload-btn span.btn-text { display: none; }
+      .auth-card { padding: 28px 20px; margin: 0 12px; }
+    }
   </style>
 </head>
-<body class="bg-gray-50 dark:bg-slate-900 text-gray-900 dark:text-slate-100 min-h-screen">
+<body>
 
-<!-- ===== 설정 ===== -->
+<!-- Safelist div (moved from head to body) -->
+<div class="hidden">safelist-placeholder</div>
+
+<!-- ===== Settings ===== -->
 <script>
-  // Firebase 설정값
+  // Firebase config
   const firebaseConfig = {
     apiKey:            "AIzaSyCVEgutLIAYbZueRg_oNCaTqo6_C5LqGWw",
     authDomain:        "new-study-website.firebaseapp.com",
@@ -125,255 +566,306 @@
     appId:             "1:672427681414:web:a3f86e6b1e12691f60d307"
   };
 
-  // 서버 URL — Firebase config/server 에서 자동으로 읽음
+  // Server URL -- read from Firebase config/server
   let SERVER_URL = "";
 
   const COLLECTION = "summaries";
 </script>
 
-<!-- ===== 인증 화면 (로그인/회원가입) ===== -->
+<!-- ===== Auth Screen ===== -->
 <div id="auth-screen" class="auth-screen">
   <div class="auth-card">
-    <!-- 로고 -->
-    <div class="text-center mb-8">
-      <div class="text-5xl mb-3">📚</div>
-      <h1 class="text-2xl font-bold text-indigo-600">PDF 요약 서비스</h1>
-      <p class="text-sm text-gray-400 mt-1">학습 자료를 4단계 수준으로 요약해드립니다</p>
+    <!-- Logo -->
+    <div class="auth-logo">&#x1F4DA;</div>
+    <div class="auth-title">PDF 요약 서비스</div>
+    <div class="auth-subtitle">학습 자료를 4단계 수준으로 요약해드립니다</div>
+
+    <!-- Tabs -->
+    <div class="auth-tabs">
+      <button id="tab-login" onclick="switchAuthTab('login')" class="auth-tab-btn active">로그인</button>
+      <button id="tab-register" onclick="switchAuthTab('register')" class="auth-tab-btn">회원가입</button>
     </div>
 
-    <!-- 탭 -->
-    <div class="flex bg-gray-100 dark:bg-slate-700 rounded-xl p-1 mb-6">
-      <button id="tab-login" onclick="switchAuthTab('login')"
-        class="flex-1 py-2 rounded-lg text-sm font-medium transition bg-white dark:bg-slate-600 shadow text-indigo-600">
-        로그인
-      </button>
-      <button id="tab-register" onclick="switchAuthTab('register')"
-        class="flex-1 py-2 rounded-lg text-sm font-medium transition text-gray-500 dark:text-slate-400">
-        회원가입
-      </button>
-    </div>
-
-    <!-- 로그인 폼 -->
+    <!-- Login Form -->
     <div id="form-login">
-      <div class="space-y-4">
-        <div>
-          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">학번</label>
-          <input id="login-studentId" type="text" placeholder="학번을 입력하세요" class="auth-input"
-            onkeydown="if(event.key==='Enter') document.getElementById('login-password').focus()" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">비밀번호</label>
-          <input id="login-password" type="password" placeholder="비밀번호를 입력하세요" class="auth-input"
-            onkeydown="if(event.key==='Enter') doLogin()" />
-        </div>
+      <div class="auth-field">
+        <label class="auth-label">학번</label>
+        <input id="login-studentId" type="text" placeholder="학번을 입력하세요" class="auth-input"
+          onkeydown="if(event.key==='Enter') document.getElementById('login-password').focus()" />
       </div>
-      <div class="flex items-center mt-4">
-        <input id="auto-login" type="checkbox" class="w-4 h-4 text-indigo-500 border-gray-300 rounded focus:ring-indigo-400 cursor-pointer" />
-        <label for="auto-login" class="ml-2 text-sm text-gray-500 dark:text-slate-400 cursor-pointer select-none">자동 로그인</label>
+      <div class="auth-field">
+        <label class="auth-label">비밀번호</label>
+        <input id="login-password" type="password" placeholder="비밀번호를 입력하세요" class="auth-input"
+          onkeydown="if(event.key==='Enter') doLogin()" />
       </div>
-      <div id="login-error" class="hidden mt-3 text-sm text-red-500 text-center"></div>
-      <button onclick="doLogin()" id="login-btn" class="auth-btn mt-5">로그인</button>
+      <div class="auth-checkbox-wrap">
+        <input id="auto-login" type="checkbox" class="auth-checkbox" />
+        <label for="auto-login" class="auth-checkbox-label">로그인 상태 유지</label>
+      </div>
+      <div id="login-error" class="auth-error"></div>
+      <button onclick="doLogin()" id="login-btn" class="auth-btn">로그인</button>
     </div>
 
-    <!-- 회원가입 폼 -->
+    <!-- Register Form -->
     <div id="form-register" class="hidden">
-      <div class="space-y-3">
-        <div>
-          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">이름</label>
-          <input id="reg-name" type="text" placeholder="이름을 입력하세요" class="auth-input" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">학번</label>
-          <input id="reg-studentId" type="text" placeholder="학번을 입력하세요" class="auth-input" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">이메일</label>
-          <input id="reg-email" type="email" placeholder="이메일을 입력하세요" class="auth-input" />
-        </div>
-        <div>
-          <label class="block text-sm font-medium text-gray-600 dark:text-slate-300 mb-1.5">비밀번호</label>
-          <input id="reg-password" type="password" placeholder="비밀번호 (6자 이상)" class="auth-input" />
-        </div>
+      <div class="auth-field">
+        <label class="auth-label">이름</label>
+        <input id="reg-name" type="text" placeholder="이름을 입력하세요" class="auth-input" />
       </div>
-      <div id="register-error" class="hidden mt-3 text-sm text-red-500 text-center"></div>
-      <button onclick="doRegister()" id="register-btn" class="auth-btn mt-5">회원가입</button>
+      <div class="auth-field">
+        <label class="auth-label">학번</label>
+        <input id="reg-studentId" type="text" placeholder="학번을 입력하세요" class="auth-input" />
+      </div>
+      <div class="auth-field">
+        <label class="auth-label">이메일</label>
+        <input id="reg-email" type="email" placeholder="이메일을 입력하세요" class="auth-input" />
+      </div>
+      <div class="auth-field">
+        <label class="auth-label">비밀번호</label>
+        <input id="reg-password" type="password" placeholder="비밀번호 (6자 이상)" class="auth-input" />
+      </div>
+      <div id="register-error" class="auth-error"></div>
+      <button onclick="doRegister()" id="register-btn" class="auth-btn">회원가입</button>
     </div>
   </div>
 </div>
 
-<!-- ===== 메인 앱 (로그인 후 표시) ===== -->
+<!-- ===== Main App (shown after login) ===== -->
 <div id="main-app" class="hidden">
 
-<!-- 헤더 -->
-<header class="bg-white dark:bg-slate-800 shadow-sm sticky top-0 z-40">
-  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-3">
-      <span class="text-2xl">📚</span>
-      <h1 class="text-xl font-bold text-indigo-600 dark:text-indigo-400">PDF 요약 서비스</h1>
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="W">
+      <div class="topbar-left">
+        <div class="topbar-brand-icon">&#x1F4DA;</div>
+        <div class="topbar-brand">
+          <h1>PDF 요약 서비스</h1>
+          <p>학습 자료 4단계 요약</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <button class="topbar-btn" onclick="openColorPicker()" title="색상 테마">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a7 7 0 0 0 0 14h.5a3.5 3.5 0 0 0 0-7H12a7 7 0 0 1 0-7z"/></svg>
+        </button>
+        <button class="topbar-btn" onclick="toggleDark()" title="다크모드 전환" id="theme-toggle-btn">
+          <svg id="theme-icon-light" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+          <svg id="theme-icon-dark" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+        <span id="user-name-badge" class="topbar-user" style="display:none;">
+          <span class="topbar-user-avatar" id="user-avatar-initial"></span>
+          <span id="user-display-name"></span>
+        </span>
+        <button onclick="openUploadModal()" class="topbar-upload-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span class="btn-text">PDF 업로드</span>
+        </button>
+        <button onclick="doLogout()" class="topbar-logout" title="로그아웃">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+        </button>
+      </div>
     </div>
-    <div class="flex items-center gap-3">
-      <!-- 사용자 정보 -->
-      <span id="user-name-badge" class="hidden sm:flex items-center gap-1.5 text-sm text-gray-600 dark:text-slate-300 bg-gray-100 dark:bg-slate-700 px-3 py-1.5 rounded-full">
-        👤 <span id="user-display-name"></span>
-      </span>
-      <button onclick="openUploadModal()"
-        class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition">
-        <span>📤</span> PDF 업로드
+  </div>
+
+  <div class="W">
+    <!-- Stats Bar -->
+    <div class="stats">
+      <div class="stat-card">
+        <div class="stat-icon total">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-count" id="stat-total">0</div>
+          <div class="stat-label">전체</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon processing">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-count" id="stat-processing">0</div>
+          <div class="stat-label">처리중</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon done">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-count" id="stat-done">0</div>
+          <div class="stat-label">완료</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon error">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+        </div>
+        <div class="stat-info">
+          <div class="stat-count" id="stat-error">0</div>
+          <div class="stat-label">오류</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Search -->
+    <div class="search-wrap">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input id="search-input" type="text" placeholder="제목, 키워드로 검색..." oninput="renderCards()" class="search-input" />
+    </div>
+
+    <!-- Filter Tabs -->
+    <div class="tabs">
+      <button class="tab-btn active" data-filter="all" onclick="setFilter(this, 'all')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        전체
       </button>
-      <button onclick="doLogout()" class="text-gray-500 dark:text-slate-400 hover:text-red-500 p-2 rounded-lg" title="로그아웃">
-        🚪
+      <button class="tab-btn" data-filter="elementary" onclick="setFilter(this, 'elementary')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke="#22c55e"/></svg>
+        초등
       </button>
-      <button onclick="toggleDark()" class="text-gray-500 dark:text-slate-400 hover:text-gray-700 dark:hover:text-white p-2 rounded-lg" title="다크모드 전환">
-        <span id="dark-icon">🌙</span>
+      <button class="tab-btn" data-filter="middle" onclick="setFilter(this, 'middle')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke="#3b82f6"/></svg>
+        중등
+      </button>
+      <button class="tab-btn" data-filter="high" onclick="setFilter(this, 'high')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke="#f97316"/></svg>
+        고등
+      </button>
+      <button class="tab-btn" data-filter="graduate" onclick="setFilter(this, 'graduate')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke="#ef4444"/></svg>
+        대학원
       </button>
     </div>
+
+    <!-- Card Grid -->
+    <div id="card-grid" class="cards"></div>
+
+    <!-- Empty State -->
+    <div id="empty-state" class="empty-state hidden">
+      <div class="icon">&#x1F4C4;</div>
+      <p class="title">아직 요약본이 없어요</p>
+      <p class="desc">PDF를 업로드하면 자동으로 요약됩니다</p>
+    </div>
+
+    <!-- Loading State -->
+    <div id="loading-state" class="loading-state">
+      <div class="spinner"></div>
+    </div>
+
+    <!-- Footer -->
+    <footer>PDF 요약 서비스 &copy; 2024</footer>
   </div>
-</header>
-
-<!-- 메인 -->
-<main class="max-w-6xl mx-auto px-4 py-6">
-
-  <!-- 검색 -->
-  <div class="mb-5 flex gap-3">
-    <input id="search-input" type="text" placeholder="제목, 키워드로 검색..."
-      oninput="renderCards()"
-      class="flex-1 border border-gray-200 dark:border-slate-600 rounded-lg px-4 py-2.5 text-sm bg-white dark:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-400" />
-  </div>
-
-  <!-- 필터 탭 -->
-  <div class="flex gap-1 border-b border-gray-200 dark:border-slate-700 mb-6 overflow-x-auto">
-    <button class="tab-btn active px-4 py-2.5 text-sm whitespace-nowrap" data-filter="all" onclick="setFilter(this, 'all')">전체</button>
-    <button class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-gray-500 dark:text-slate-400" data-filter="elementary" onclick="setFilter(this, 'elementary')">🟢 초등</button>
-    <button class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-gray-500 dark:text-slate-400" data-filter="middle" onclick="setFilter(this, 'middle')">🔵 중등</button>
-    <button class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-gray-500 dark:text-slate-400" data-filter="high" onclick="setFilter(this, 'high')">🟠 고등</button>
-    <button class="tab-btn px-4 py-2.5 text-sm whitespace-nowrap text-gray-500 dark:text-slate-400" data-filter="graduate" onclick="setFilter(this, 'graduate')">🔴 대학원</button>
-  </div>
-
-  <!-- 카드 그리드 -->
-  <div id="card-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5"></div>
-
-  <!-- 빈 상태 -->
-  <div id="empty-state" class="hidden text-center py-20 text-gray-400 dark:text-slate-500">
-    <div class="text-6xl mb-4">📄</div>
-    <p class="text-lg font-medium">아직 요약본이 없어요</p>
-    <p class="text-sm mt-1">PDF를 업로드하면 자동으로 요약됩니다</p>
-  </div>
-
-  <!-- 로딩 -->
-  <div id="loading-state" class="flex justify-center py-20">
-    <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500"></div>
-  </div>
-
-</main>
 
 </div><!-- /main-app -->
 
-<!-- ===== 업로드 모달 ===== -->
-<div id="upload-modal" class="fixed inset-0 z-50 hidden">
-  <div class="absolute inset-0 bg-black/50" onclick="closeUploadModal()"></div>
-  <div class="absolute inset-0 flex items-center justify-center p-4">
-    <div class="modal-bg bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-md p-6">
-      <div class="flex items-center justify-between mb-5">
-        <h2 class="text-lg font-bold">PDF 업로드</h2>
-        <button onclick="closeUploadModal()" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+<!-- ===== Upload Modal ===== -->
+<div id="upload-modal" class="modal-overlay">
+  <div class="modal-backdrop" onclick="closeUploadModal()"></div>
+  <div class="modal-center">
+    <div class="modal-box upload">
+      <div class="modal-header">
+        <h2>PDF 업로드</h2>
+        <button onclick="closeUploadModal()" class="modal-close">&times;</button>
       </div>
 
-      <!-- 안내 -->
-      <div class="mb-4 p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg text-xs text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-        📋 업로드 후 관리자 승인이 필요합니다. 승인 시 요약이 자동 시작됩니다.
+      <!-- Notice -->
+      <div class="upload-notice">
+        &#x1F4CB; 업로드 후 관리자 승인이 필요합니다. 승인 시 요약이 자동 시작됩니다.
       </div>
 
-      <!-- 드롭존 -->
-      <div id="drop-zone"
-        class="border-2 border-dashed border-gray-300 dark:border-slate-600 rounded-xl p-10 text-center cursor-pointer hover:border-indigo-400 transition"
+      <!-- Drop Zone -->
+      <div id="drop-zone" class="drop-zone"
         onclick="document.getElementById('file-input').click()"
         ondragover="event.preventDefault(); this.classList.add('drag-over')"
         ondragleave="this.classList.remove('drag-over')"
         ondrop="handleDrop(event)">
-        <div class="text-4xl mb-3">📂</div>
-        <p class="font-medium text-gray-600 dark:text-slate-300">파일을 끌어다 놓거나 클릭하세요</p>
-        <p class="text-xs text-gray-400 mt-1">PDF 파일만 가능 · 최대 50MB</p>
+        <div class="icon">&#x1F4C2;</div>
+        <p class="text">파일을 끌어다 놓거나 클릭하세요</p>
+        <p class="hint">PDF 파일만 가능 &middot; 최대 50MB</p>
       </div>
       <input id="file-input" type="file" accept=".pdf" class="hidden" onchange="handleFileSelect(event)" />
 
-      <!-- 선택된 파일 -->
-      <div id="selected-file" class="hidden mt-4 bg-indigo-50 dark:bg-indigo-900/30 rounded-lg p-3 flex items-center gap-3">
-        <span class="text-2xl">📄</span>
-        <div class="flex-1 min-w-0">
-          <p id="selected-filename" class="text-sm font-medium truncate"></p>
-          <p id="selected-filesize" class="text-xs text-gray-400"></p>
+      <!-- Selected File -->
+      <div id="selected-file" class="selected-file">
+        <span class="icon">&#x1F4C4;</span>
+        <div class="info">
+          <p id="selected-filename" class="name"></p>
+          <p id="selected-filesize" class="size"></p>
         </div>
-        <button onclick="clearFile()" class="text-gray-400 hover:text-red-400 text-lg">✕</button>
+        <button onclick="clearFile()" class="remove">&times;</button>
       </div>
 
-      <!-- 업로드 진행 -->
-      <div id="upload-progress" class="hidden mt-4">
-        <div class="flex justify-between text-sm mb-1">
-          <span class="text-gray-500">업로드 중...</span>
+      <!-- Upload Progress -->
+      <div id="upload-progress" class="upload-progress">
+        <div class="row">
+          <span>업로드 중...</span>
           <span id="progress-pct">0%</span>
         </div>
-        <div class="bg-gray-200 dark:bg-slate-700 rounded-full h-2">
-          <div id="progress-bar" class="bg-indigo-500 h-2 rounded-full transition-all" style="width:0%"></div>
+        <div class="progress-track">
+          <div id="progress-bar" class="progress-fill" style="width:0%"></div>
         </div>
       </div>
 
-      <!-- 업로드 결과 -->
-      <div id="upload-result" class="hidden mt-4 p-3 rounded-lg text-sm font-medium"></div>
+      <!-- Upload Result -->
+      <div id="upload-result" class="upload-result"></div>
 
-      <!-- 버튼 -->
-      <button id="upload-btn" onclick="doUpload()"
-        class="mt-5 w-full bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-3 rounded-xl font-medium transition"
-        disabled>
+      <!-- Submit -->
+      <button id="upload-btn" onclick="doUpload()" class="upload-submit" disabled>
         업로드 시작
       </button>
     </div>
   </div>
 </div>
 
-<!-- ===== 상세 보기 모달 ===== -->
-<div id="detail-modal" class="fixed inset-0 z-50 hidden">
-  <div class="absolute inset-0 bg-black/50" onclick="closeDetailModal()"></div>
-  <div class="absolute inset-0 flex items-center justify-center p-4">
-    <div class="modal-bg bg-white dark:bg-slate-800 rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] flex flex-col">
+<!-- ===== Detail Modal ===== -->
+<div id="detail-modal" class="modal-overlay">
+  <div class="modal-backdrop" onclick="closeDetailModal()"></div>
+  <div class="modal-center">
+    <div class="modal-box detail">
 
-      <!-- 모달 헤더 -->
-      <div class="flex items-start justify-between p-6 border-b border-gray-100 dark:border-slate-700">
-        <div class="flex-1 min-w-0 pr-4">
-          <h2 id="detail-title" class="text-xl font-bold truncate"></h2>
-          <p id="detail-filename" class="text-sm text-gray-400 mt-0.5 truncate"></p>
+      <!-- Detail Header -->
+      <div class="detail-header">
+        <div class="detail-header-left">
+          <h2 id="detail-title"></h2>
+          <p id="detail-filename"></p>
         </div>
-        <div class="flex items-center gap-2 flex-shrink-0">
-          <button id="detail-delete-btn" onclick="if(currentDetail) deleteSummary(currentDetail.id)"
-                  class="text-gray-400 hover:text-red-500 text-sm px-2 py-1 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 transition" title="삭제">🗑</button>
-          <button onclick="closeDetailModal()" class="text-gray-400 hover:text-gray-600 text-xl">✕</button>
+        <div class="detail-header-actions">
+          <button id="detail-delete-btn" onclick="if(currentDetail) deleteSummary(currentDetail.id)" class="detail-delete-btn" title="삭제">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+            삭제
+          </button>
+          <button onclick="closeDetailModal()" class="modal-close">&times;</button>
         </div>
       </div>
 
-      <!-- 탭 -->
-      <div class="flex gap-0 border-b border-gray-100 dark:border-slate-700 overflow-x-auto px-6">
-        <button class="detail-tab active px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 border-indigo-500 text-indigo-600"
-          data-tab="elementary" onclick="switchTab(this,'elementary')">🟢 초등</button>
-        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
-          data-tab="middle" onclick="switchTab(this,'middle')">🔵 중등</button>
-        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
-          data-tab="high" onclick="switchTab(this,'high')">🟠 고등</button>
-        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
-          data-tab="graduate" onclick="switchTab(this,'graduate')">🔴 대학원</button>
-        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
-          data-tab="sections" onclick="switchTab(this,'sections')">📑 섹션별</button>
-        <button class="detail-tab px-4 py-3 text-sm font-medium whitespace-nowrap text-gray-500 border-b-2 border-transparent"
-          data-tab="formulas" onclick="switchTab(this,'formulas')">🧮 수식&유도</button>
+      <!-- Detail Tabs -->
+      <div class="detail-tabs">
+        <button class="detail-tab active" data-tab="elementary" onclick="switchTab(this,'elementary')">&#x1F7E2; 초등</button>
+        <button class="detail-tab" data-tab="middle" onclick="switchTab(this,'middle')">&#x1F535; 중등</button>
+        <button class="detail-tab" data-tab="high" onclick="switchTab(this,'high')">&#x1F7E0; 고등</button>
+        <button class="detail-tab" data-tab="graduate" onclick="switchTab(this,'graduate')">&#x1F534; 대학원</button>
+        <button class="detail-tab" data-tab="sections" onclick="switchTab(this,'sections')">&#x1F4D1; 섹션별</button>
+        <button class="detail-tab" data-tab="formulas" onclick="switchTab(this,'formulas')">&#x1F9EE; 수식&유도</button>
       </div>
 
-      <!-- 탭 내용 -->
-      <div id="detail-content" class="flex-1 overflow-y-auto p-6 text-sm leading-relaxed"></div>
+      <!-- Detail Content -->
+      <div id="detail-content" class="detail-content"></div>
     </div>
+  </div>
+</div>
+
+<!-- ===== Color Picker Modal ===== -->
+<div id="color-picker" class="color-picker-overlay">
+  <div class="color-picker-backdrop" onclick="closeColorPicker()"></div>
+  <div class="color-picker-panel">
+    <div class="color-picker-title">색상 테마</div>
+    <div class="color-grid" id="color-grid"></div>
   </div>
 </div>
 
 <!-- ===== JavaScript ===== -->
 <script>
-  // ---- 전역 상태 ----
+  // ---- Global state ----
   let allSummaries = [];
   let currentFilter = 'all';
   let currentDetail = null;
@@ -381,7 +873,7 @@
   let selectedFile = null;
   let unsubscribe = null;
 
-  // ---- 인증 상태 (자동 로그인 체크 시 localStorage, 아니면 sessionStorage) ----
+  // ---- Auth state (auto-login uses localStorage, otherwise sessionStorage) ----
   let authToken = localStorage.getItem('authToken') || sessionStorage.getItem('authToken');
   let authUser = null;
   try {
@@ -389,7 +881,7 @@
     if (stored) authUser = JSON.parse(stored);
   } catch(e) {}
 
-  // JWT 만료 체크
+  // JWT expiry check
   function isTokenExpired(token) {
     if (!token) return true;
     try {
@@ -398,22 +890,105 @@
     } catch { return true; }
   }
 
-  // ---- 다크모드 ----
-  function toggleDark() {
-    const html = document.documentElement;
-    html.classList.toggle('dark');
-    document.getElementById('dark-icon').textContent = html.classList.contains('dark') ? '☀️' : '🌙';
-    localStorage.setItem('theme', html.classList.contains('dark') ? 'dark' : 'light');
-  }
-  if (localStorage.getItem('theme') === 'dark') {
-    document.documentElement.classList.add('dark');
-    setTimeout(() => {
-      const icon = document.getElementById('dark-icon');
-      if (icon) icon.textContent = '☀️';
-    }, 0);
+  // ---- Color Picker ----
+  const colorThemes = [
+    { name: 'Indigo',  color: '#6366f1', hover: '#4f46e5', light: '#a5b4fc', bg: '#eef2ff', dark: '#3730a3' },
+    { name: 'Emerald', color: '#10b981', hover: '#059669', light: '#6ee7b7', bg: '#d1fae5', dark: '#065f46' },
+    { name: 'Rose',    color: '#f43f5e', hover: '#e11d48', light: '#fda4af', bg: '#fff1f2', dark: '#9f1239' },
+    { name: 'Amber',   color: '#f59e0b', hover: '#d97706', light: '#fcd34d', bg: '#fffbeb', dark: '#92400e' },
+    { name: 'Cyan',    color: '#06b6d4', hover: '#0891b2', light: '#67e8f9', bg: '#ecfeff', dark: '#155e75' },
+    { name: 'Violet',  color: '#8b5cf6', hover: '#7c3aed', light: '#c4b5fd', bg: '#f5f3ff', dark: '#5b21b6' },
+    { name: 'Slate',   color: '#64748b', hover: '#475569', light: '#94a3b8', bg: '#f1f5f9', dark: '#1e293b' },
+    { name: 'Orange',  color: '#f97316', hover: '#ea580c', light: '#fdba74', bg: '#fff7ed', dark: '#9a3412' },
+  ];
+
+  let currentColor = localStorage.getItem('accentColor') || 'Indigo';
+
+  function applyColor(name) {
+    const theme = colorThemes.find(t => t.name === name);
+    if (!theme) return;
+    currentColor = name;
+    localStorage.setItem('accentColor', name);
+    const root = document.documentElement;
+    root.style.setProperty('--accent', theme.color);
+    root.style.setProperty('--accent-hover', theme.hover);
+    root.style.setProperty('--accent-light', theme.light);
+    root.style.setProperty('--accent-bg', theme.bg);
+    root.style.setProperty('--accent-dark', theme.dark);
+    renderColorGrid();
   }
 
-  // ---- 인증 탭 전환 ----
+  function renderColorGrid() {
+    const grid = document.getElementById('color-grid');
+    if (!grid) return;
+    grid.innerHTML = colorThemes.map(t =>
+      `<div class="color-swatch ${t.name === currentColor ? 'active' : ''}"
+            style="background:${t.color}"
+            onclick="applyColor('${t.name}')" title="${t.name}">
+        <span class="check">&#x2713;</span>
+      </div>`
+    ).join('');
+  }
+
+  function openColorPicker() {
+    renderColorGrid();
+    document.getElementById('color-picker').classList.add('show');
+  }
+  function closeColorPicker() {
+    document.getElementById('color-picker').classList.remove('show');
+  }
+
+  // ---- Theme (dark/light) ----
+  function setTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+    const lightIcon = document.getElementById('theme-icon-light');
+    const darkIcon = document.getElementById('theme-icon-dark');
+    if (lightIcon && darkIcon) {
+      lightIcon.style.display = theme === 'dark' ? 'none' : '';
+      darkIcon.style.display = theme === 'dark' ? '' : 'none';
+    }
+  }
+
+  function toggleDark() {
+    const current = document.documentElement.getAttribute('data-theme');
+    setTheme(current === 'dark' ? 'light' : 'dark');
+  }
+
+  // Initialize theme on load
+  (function() {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'dark') {
+      setTheme('dark');
+    }
+    // Apply saved color
+    applyColor(localStorage.getItem('accentColor') || 'Indigo');
+  })();
+
+  // ---- Stats ----
+  function updateStats() {
+    const total = allSummaries.length;
+    const processing = allSummaries.filter(s =>
+      s.status === 'processing' || s.status === 'pending' || s.status === 'pending_approval'
+    ).length;
+    const done = allSummaries.filter(s =>
+      s.status === 'done' || s.status === 'completed'
+    ).length;
+    const error = allSummaries.filter(s =>
+      s.status === 'error' || s.status === 'rejected'
+    ).length;
+
+    const totalEl = document.getElementById('stat-total');
+    const processingEl = document.getElementById('stat-processing');
+    const doneEl = document.getElementById('stat-done');
+    const errorEl = document.getElementById('stat-error');
+    if (totalEl) totalEl.textContent = total;
+    if (processingEl) processingEl.textContent = processing;
+    if (doneEl) doneEl.textContent = done;
+    if (errorEl) errorEl.textContent = error;
+  }
+
+  // ---- Auth tab switch ----
   function switchAuthTab(tab) {
     const loginTab = document.getElementById('tab-login');
     const registerTab = document.getElementById('tab-register');
@@ -421,23 +996,19 @@
     const registerForm = document.getElementById('form-register');
 
     if (tab === 'login') {
-      loginTab.classList.add('bg-white', 'dark:bg-slate-600', 'shadow', 'text-indigo-600');
-      loginTab.classList.remove('text-gray-500', 'dark:text-slate-400');
-      registerTab.classList.remove('bg-white', 'dark:bg-slate-600', 'shadow', 'text-indigo-600');
-      registerTab.classList.add('text-gray-500', 'dark:text-slate-400');
+      loginTab.classList.add('active');
+      registerTab.classList.remove('active');
       loginForm.classList.remove('hidden');
       registerForm.classList.add('hidden');
     } else {
-      registerTab.classList.add('bg-white', 'dark:bg-slate-600', 'shadow', 'text-indigo-600');
-      registerTab.classList.remove('text-gray-500', 'dark:text-slate-400');
-      loginTab.classList.remove('bg-white', 'dark:bg-slate-600', 'shadow', 'text-indigo-600');
-      loginTab.classList.add('text-gray-500', 'dark:text-slate-400');
+      registerTab.classList.add('active');
+      loginTab.classList.remove('active');
       registerForm.classList.remove('hidden');
       loginForm.classList.add('hidden');
     }
   }
 
-  // ---- 로그인 ----
+  // ---- Login ----
   async function doLogin() {
     const studentId = document.getElementById('login-studentId').value.trim();
     const password = document.getElementById('login-password').value;
@@ -446,18 +1017,18 @@
 
     if (!studentId || !password) {
       errEl.textContent = '학번과 비밀번호를 입력해주세요';
-      errEl.classList.remove('hidden');
+      errEl.classList.add('show');
       return;
     }
     if (!SERVER_URL) {
-      errEl.textContent = '⚠️ 서버가 오프라인입니다. PC에서 서버를 실행해주세요.';
-      errEl.classList.remove('hidden');
+      errEl.textContent = '서버가 오프라인입니다. PC에서 서버를 실행해주세요.';
+      errEl.classList.add('show');
       return;
     }
 
     btn.disabled = true;
     btn.textContent = '로그인 중...';
-    errEl.classList.add('hidden');
+    errEl.classList.remove('show');
 
     try {
       const res = await fetch(SERVER_URL + '/api/login', {
@@ -478,14 +1049,14 @@
       enterApp();
     } catch(err) {
       errEl.textContent = err.message;
-      errEl.classList.remove('hidden');
+      errEl.classList.add('show');
     } finally {
       btn.disabled = false;
       btn.textContent = '로그인';
     }
   }
 
-  // ---- 회원가입 ----
+  // ---- Register ----
   async function doRegister() {
     const name = document.getElementById('reg-name').value.trim();
     const studentId = document.getElementById('reg-studentId').value.trim();
@@ -496,23 +1067,23 @@
 
     if (!name || !studentId || !email || !password) {
       errEl.textContent = '모든 항목을 입력해주세요';
-      errEl.classList.remove('hidden');
+      errEl.classList.add('show');
       return;
     }
     if (password.length < 6) {
       errEl.textContent = '비밀번호는 6자 이상이어야 합니다';
-      errEl.classList.remove('hidden');
+      errEl.classList.add('show');
       return;
     }
     if (!SERVER_URL) {
-      errEl.textContent = '⚠️ 서버가 오프라인입니다. PC에서 서버를 실행해주세요.';
-      errEl.classList.remove('hidden');
+      errEl.textContent = '서버가 오프라인입니다. PC에서 서버를 실행해주세요.';
+      errEl.classList.add('show');
       return;
     }
 
     btn.disabled = true;
     btn.textContent = '가입 신청 중...';
-    errEl.classList.add('hidden');
+    errEl.classList.remove('show');
 
     try {
       const res = await fetch(SERVER_URL + '/api/register', {
@@ -523,46 +1094,49 @@
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || '회원가입 실패');
 
-      // 가입 신청 완료 → 승인 대기 메시지 표시 (로그인 X)
+      // Registration submitted -> show pending message (no login)
       showRegisterPending(name);
     } catch(err) {
       errEl.textContent = err.message;
-      errEl.classList.remove('hidden');
+      errEl.classList.add('show');
       btn.disabled = false;
       btn.textContent = '회원가입';
     }
   }
 
-  // ---- 가입 승인 대기 화면 ----
+  // ---- Registration pending screen ----
   function showRegisterPending(name) {
     const formEl = document.getElementById('form-register');
     formEl.innerHTML = `
-      <div class="text-center py-4">
-        <div class="text-5xl mb-4">⏳</div>
-        <h3 class="text-lg font-bold text-gray-800 dark:text-slate-100 mb-2">가입 신청 완료!</h3>
-        <p class="text-sm text-gray-500 dark:text-slate-400 leading-relaxed mb-4">
+      <div style="text-align:center;padding:16px 0">
+        <div style="font-size:48px;margin-bottom:16px">&#x23F3;</div>
+        <h3 style="font-size:17px;font-weight:700;color:var(--tx);margin-bottom:8px">가입 신청 완료!</h3>
+        <p style="font-size:13px;color:var(--tx3);line-height:1.7;margin-bottom:16px">
           <b>${escHtml(name)}</b>님의 가입 신청이 접수됐어요.<br/>
           관리자 승인 후 로그인이 가능합니다.
         </p>
-        <div class="p-3 bg-amber-50 dark:bg-amber-900/20 rounded-lg text-xs text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 mb-5">
-          📱 관리자가 텔레그램으로 승인하면<br/>곧 알림이 올 거예요.
+        <div class="upload-notice" style="margin-bottom:20px">
+          &#x1F4F1; 관리자가 텔레그램으로 승인하면<br/>곧 알림이 올 거예요.
         </div>
-        <button onclick="switchAuthTab('login')" class="auth-btn">
+        <button onclick="switchAuthTab('login')" class="auth-btn" style="margin-top:0">
           로그인 화면으로
         </button>
       </div>`;
   }
 
-  // ---- 앱 진입 ----
+  // ---- Enter app ----
   function enterApp() {
     document.getElementById('auth-screen').style.display = 'none';
     document.getElementById('main-app').classList.remove('hidden');
-    document.getElementById('user-display-name').textContent = authUser?.name || '';
-    document.getElementById('user-name-badge').classList.remove('hidden');
+    const displayName = authUser?.name || '';
+    document.getElementById('user-display-name').textContent = displayName;
+    const avatarEl = document.getElementById('user-avatar-initial');
+    if (avatarEl) avatarEl.textContent = displayName.charAt(0) || '?';
+    document.getElementById('user-name-badge').style.display = '';
     initFirebaseAndListen();
   }
 
-  // ---- 로그아웃 ----
+  // ---- Logout ----
   function doLogout() {
     localStorage.removeItem('authToken');
     localStorage.removeItem('authUser');
@@ -576,7 +1150,7 @@
     document.getElementById('auth-screen').style.display = '';
   }
 
-  // ---- Firebase 초기화 ----
+  // ---- Firebase init ----
   function initFirebaseAndListen() {
     try {
       if (!firebase.apps.length) {
@@ -584,7 +1158,7 @@
       }
       const db = firebase.firestore();
 
-      // 서버 URL을 Firebase에서 실시간으로 읽기
+      // Read server URL from Firebase in real-time
       db.collection('config').doc('server').onSnapshot(snap => {
         if (snap.exists && snap.data().url) {
           SERVER_URL = snap.data().url;
@@ -611,9 +1185,9 @@
     }
   }
 
-  // ---- 페이지 로드 시 Firebase 초기화 + 서버 URL 로딩 ----
+  // ---- DOMContentLoaded: Firebase init + server URL loading ----
   window.addEventListener('DOMContentLoaded', () => {
-    // 로그인 전에도 서버 URL을 읽을 수 있도록 Firebase 먼저 초기화
+    // Initialize Firebase before login so server URL can be read
     try {
       if (!firebase.apps.length) {
         firebase.initializeApp(firebaseConfig);
@@ -628,11 +1202,11 @@
       console.error('Firebase 초기화 실패:', e);
     }
 
-    // 자동 로그인 (JWT 만료 체크 포함)
+    // Auto-login (with JWT expiry check)
     if (authToken && authUser && !isTokenExpired(authToken)) {
       enterApp();
     } else if (authToken && isTokenExpired(authToken)) {
-      // 만료된 토큰 정리
+      // Clean up expired token
       localStorage.removeItem('authToken');
       localStorage.removeItem('authUser');
       authToken = null;
@@ -640,7 +1214,7 @@
     }
   });
 
-  // ---- 카드 렌더링 ----
+  // ---- Card rendering ----
   function renderCards() {
     const query = document.getElementById('search-input').value.trim().toLowerCase();
     let filtered = allSummaries;
@@ -666,14 +1240,16 @@
     if (filtered.length === 0) {
       grid.innerHTML = '';
       empty.classList.remove('hidden');
-      empty.innerHTML = `<div class="text-6xl mb-4">📄</div>
-        <p class="text-lg font-medium">${query ? '검색 결과가 없어요' : '아직 요약본이 없어요'}</p>
-        <p class="text-sm mt-1">${query ? '다른 키워드로 검색해보세요' : 'PDF를 업로드하면 자동으로 요약됩니다'}</p>`;
+      empty.innerHTML = `<div class="icon">&#x1F4C4;</div>
+        <p class="title">${query ? '검색 결과가 없어요' : '아직 요약본이 없어요'}</p>
+        <p class="desc">${query ? '다른 키워드로 검색해보세요' : 'PDF를 업로드하면 자동으로 요약됩니다'}</p>`;
+      updateStats();
       return;
     }
 
     empty.classList.add('hidden');
     grid.innerHTML = filtered.map(s => buildCard(s)).join('');
+    updateStats();
   }
 
   function buildCard(s) {
@@ -688,20 +1264,20 @@
     };
     const st = statusMap[s.status] || statusMap.pending;
     const levelMap = {
-      elementary: { label:'초등',  color:'bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300' },
-      middle:     { label:'중등',  color:'bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300' },
-      high:       { label:'고등',  color:'bg-orange-100 text-orange-700 dark:bg-orange-900 dark:text-orange-300' },
-      graduate:   { label:'대학원',color:'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300' },
+      elementary: { label:'초등',  cls:'level-elementary' },
+      middle:     { label:'중등',  cls:'level-middle' },
+      high:       { label:'고등',  cls:'level-high' },
+      graduate:   { label:'대학원',cls:'level-graduate' },
     };
 
     const levels = s.summaries ? Object.keys(s.summaries).filter(k => s.summaries[k]) : [];
     const levelBadges = levels.map(l =>
-      levelMap[l] ? `<span class="text-xs px-2 py-0.5 rounded-full ${levelMap[l].color}">${levelMap[l].label}</span>` : ''
+      levelMap[l] ? `<span class="level-badge ${levelMap[l].cls}">${levelMap[l].label}</span>` : ''
     ).join('');
 
     const formulaCount = (s.formulas || []).length || s.formulaCount || 0;
     const formulaBadge = formulaCount > 0
-      ? `<span class="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">🧮 수식 ${formulaCount}</span>`
+      ? `<span class="level-badge level-formula">&#x1F9EE; 수식 ${formulaCount}</span>`
       : '';
 
     const date = s.createdAt
@@ -709,36 +1285,34 @@
       : '';
 
     const preview = s.summaries?.elementary || s.summaries?.middle || '';
-    const uploader = s.uploadedBy ? `<span class="text-xs text-gray-400">👤 ${escHtml(s.uploadedBy.name)}</span>` : '';
+    const uploader = s.uploadedBy ? `<span class="card-footer-uploader"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> ${escHtml(s.uploadedBy.name)}</span>` : '';
 
     const errorActions = s.status === 'error'
-      ? `<div class="flex gap-2 mt-3 pt-3 border-t border-gray-100 dark:border-slate-700">
-           <button onclick="event.stopPropagation(); deleteSummary('${s.id}')"
-                   class="flex-1 text-xs py-1.5 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 dark:bg-red-900/30 dark:text-red-400 dark:hover:bg-red-900/50 transition">🗑 삭제</button>
+      ? `<div class="card-error-actions">
+           <button onclick="event.stopPropagation(); deleteSummary('${s.id}')" class="card-error-btn">&#x1F5D1; 삭제</button>
          </div>`
       : '';
 
     const deleteBtn = (s.status === 'done' || s.status === 'completed')
-      ? `<button onclick="event.stopPropagation(); deleteSummary('${s.id}')"
-                 class="absolute top-3 right-12 w-7 h-7 rounded-full bg-gray-100 hover:bg-red-100 dark:bg-slate-700 dark:hover:bg-red-900/50 flex items-center justify-center text-xs text-gray-400 hover:text-red-500 transition opacity-0 group-hover:opacity-100"
-                 title="삭제">🗑</button>`
+      ? `<button onclick="event.stopPropagation(); deleteSummary('${s.id}')" class="card-delete-btn" title="삭제">&#x1F5D1;</button>`
       : '';
 
     return `
-      <div class="card group relative bg-white dark:bg-slate-800 border border-gray-100 dark:border-slate-700 rounded-2xl p-5 shadow-sm"
-           onclick="openDetail('${s.id}')">
-        <div class="flex items-start justify-between mb-3">
-          <span class="text-2xl">📄</span>
-          <div class="flex items-center gap-1">
+      <div class="card" onclick="openDetail('${s.id}')">
+        <div class="card-header">
+          <div class="card-doc-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
+          <div class="card-status-area">
             ${deleteBtn}
-            <span class="text-xs px-2 py-1 rounded-full font-medium ${st.cls}">${st.label}</span>
+            <span class="status-badge ${st.cls}">${st.label}</span>
           </div>
         </div>
-        <h3 class="font-semibold text-base mb-1 line-clamp-2">${escHtml(s.title || s.filename || '제목 없음')}</h3>
-        <p class="text-xs text-gray-400 dark:text-slate-500 mb-3 truncate">${escHtml(s.filename || '')}</p>
-        ${preview ? `<p class="text-xs text-gray-500 dark:text-slate-400 line-clamp-3 mb-3">${escHtml(preview.substring(0,120))}...</p>` : ''}
-        <div class="flex flex-wrap gap-1 mb-3">${levelBadges}${formulaBadge}</div>
-        <div class="flex items-center justify-between text-xs text-gray-400 dark:text-slate-500">
+        <div class="card-title">${escHtml(s.title || s.filename || '제목 없음')}</div>
+        <div class="card-filename">${escHtml(s.filename || '')}</div>
+        ${preview ? `<div class="card-preview">${escHtml(preview.substring(0,120))}...</div>` : ''}
+        <div class="card-badges">${levelBadges}${formulaBadge}</div>
+        <div class="card-footer">
           <span>${date}</span>
           ${uploader}
         </div>
@@ -750,7 +1324,7 @@
     const el = document.getElementById('empty-state');
     el.classList.remove('hidden');
     if (msg) {
-      el.innerHTML = `<div class="text-5xl mb-4">⚠️</div><p class="text-lg font-medium text-red-500">${escHtml(msg)}</p>`;
+      el.innerHTML = `<div class="icon" style="font-size:48px">&#x26A0;</div><p class="title" style="color:var(--rc)">${escHtml(msg)}</p>`;
     }
   }
 
@@ -758,7 +1332,7 @@
     return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   }
 
-  // ---- 필터 ----
+  // ---- Filter ----
   function setFilter(btn, filter) {
     currentFilter = filter;
     document.querySelectorAll('.tab-btn').forEach(b => {
@@ -771,13 +1345,13 @@
     renderCards();
   }
 
-  // ---- 상세 모달 ----
+  // ---- Detail modal ----
   function openDetail(id) {
     const s = allSummaries.find(x => x.id === id);
     if (!s) return;
     currentDetail = s;
 
-    // 사용 가능한 첫 번째 탭 선택 (sections 있으면 우선)
+    // Select the first available tab (prefer sections)
     currentTab = (s.sections && s.sections.length) ? 'sections' :
                  s.summaries?.elementary ? 'elementary' :
                  s.summaries?.middle     ? 'middle' :
@@ -788,16 +1362,16 @@
     document.getElementById('detail-title').textContent = s.title || s.filename || '제목 없음';
     document.getElementById('detail-filename').textContent = s.filename || '';
     switchTab(null, currentTab);
-    document.getElementById('detail-modal').classList.remove('hidden');
+    document.getElementById('detail-modal').classList.add('show');
     document.body.style.overflow = 'hidden';
   }
 
   function closeDetailModal() {
-    document.getElementById('detail-modal').classList.add('hidden');
+    document.getElementById('detail-modal').classList.remove('show');
     document.body.style.overflow = '';
   }
 
-  // ---- 삭제 기능 ----
+  // ---- Delete ----
   async function deleteSummary(id) {
     if (!confirm('정말 삭제하시겠습니까?')) return;
     try {
@@ -819,7 +1393,7 @@
 
   function showToast(msg) {
     const t = document.createElement('div');
-    t.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-xl shadow-lg text-sm z-[9999] transition-opacity';
+    t.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--tx);color:var(--bg);padding:10px 24px;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.15);font-size:13px;z-index:9999;transition:opacity 0.3s;font-family:inherit';
     t.textContent = msg;
     document.body.appendChild(t);
     setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, 2500);
@@ -831,12 +1405,10 @@
       btn = document.querySelector(`.detail-tab[data-tab="${tab}"]`);
     }
     document.querySelectorAll('.detail-tab').forEach(b => {
-      b.classList.remove('active', 'border-indigo-500', 'text-indigo-600');
-      b.classList.add('text-gray-500', 'border-transparent');
+      b.classList.remove('active');
     });
     if (btn) {
-      btn.classList.add('active', 'border-indigo-500', 'text-indigo-600');
-      btn.classList.remove('text-gray-500', 'border-transparent');
+      btn.classList.add('active');
     }
 
     const el = document.getElementById('detail-content');
@@ -850,21 +1422,21 @@
       const summaries = currentDetail.summaries || {};
       const content = summaries[tab];
       if (!content) {
-        el.innerHTML = '<p class="text-gray-400 dark:text-slate-500 text-center py-10">해당 수준의 요약이 없습니다</p>';
+        el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">해당 수준의 요약이 없습니다</p>';
       } else {
         el.innerHTML = `
-          <div class="prose dark:prose-invert max-w-none">
-            <p class="whitespace-pre-wrap text-sm leading-7">${escHtml(content)}</p>
+          <div style="max-width:none">
+            <p style="white-space:pre-wrap;font-size:14px;line-height:1.8">${escHtml(content)}</p>
           </div>`;
       }
     }
   }
 
-  // ---- 섹션별 요약 탭 ----
+  // ---- Sections tab ----
   function renderSectionsTab(el, s) {
     const sections = s.sections || [];
     if (!sections.length) {
-      el.innerHTML = '<p class="text-gray-400 dark:text-slate-500 text-center py-10">섹션별 요약 정보가 없습니다.<br/><span class="text-xs">새로 업로드한 문서부터 표시됩니다.</span></p>';
+      el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">섹션별 요약 정보가 없습니다.<br/><span style="font-size:12px">새로 업로드한 문서부터 표시됩니다.</span></p>';
       return;
     }
 
@@ -873,10 +1445,10 @@
       const summary  = escHtml(sec.summary  || '');
       const keyPoints = (sec.keyPoints || []);
       const kpHtml = keyPoints.length
-        ? `<ul class="mt-2 space-y-1">
+        ? `<ul style="margin-top:8px;list-style:none;padding:0">
              ${keyPoints.map(kp =>
-               `<li class="flex gap-2 text-xs text-gray-600 dark:text-slate-300">
-                  <span class="text-indigo-400 flex-shrink-0">▸</span>
+               `<li style="display:flex;gap:8px;font-size:12px;color:var(--tx2);margin-bottom:4px">
+                  <span style="color:var(--accent);flex-shrink:0">&#x25B8;</span>
                   <span>${escHtml(kp)}</span>
                 </li>`
              ).join('')}
@@ -884,18 +1456,19 @@
         : '';
 
       return `
-        <div class="border border-gray-100 dark:border-slate-700 rounded-xl overflow-hidden mb-3">
+        <div style="border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:10px">
           <button
-            class="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-slate-700/50 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors text-left"
+            style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:var(--bg3);border:none;cursor:pointer;text-align:left;font-family:inherit;transition:background 0.2s"
+            onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background='var(--bg3)'"
             onclick="toggleAccordion(this)">
-            <span class="flex items-center gap-2">
-              <span class="inline-flex items-center justify-center w-6 h-6 rounded-full bg-indigo-100 dark:bg-indigo-900 text-indigo-600 dark:text-indigo-400 text-xs font-bold flex-shrink-0">${i+1}</span>
-              <span class="text-sm font-semibold text-gray-800 dark:text-slate-100">${heading}</span>
+            <span style="display:flex;align-items:center;gap:8px">
+              <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent-bg);color:var(--accent);font-size:12px;font-weight:700;flex-shrink:0">${i+1}</span>
+              <span style="font-size:13px;font-weight:600;color:var(--tx)">${heading}</span>
             </span>
-            <span class="accordion-arrow text-gray-400 text-xs transition-transform">▼</span>
+            <span class="accordion-arrow" style="color:var(--tx4);font-size:11px;transition:transform 0.2s">&#x25BC;</span>
           </button>
-          <div class="accordion-body hidden px-4 py-3 border-t border-gray-100 dark:border-slate-700 bg-white dark:bg-slate-800">
-            ${summary ? `<p class="text-sm text-gray-700 dark:text-slate-300 leading-7 whitespace-pre-wrap">${summary}</p>` : ''}
+          <div class="accordion-body hidden" style="padding:12px 16px;border-top:1px solid var(--bd);background:var(--bg2)">
+            ${summary ? `<p style="font-size:13px;color:var(--tx2);line-height:1.8;white-space:pre-wrap">${summary}</p>` : ''}
             ${kpHtml}
           </div>
         </div>`;
@@ -912,16 +1485,16 @@
     if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
   }
 
-  // ---- 수식 & 유도 탭 렌더링 ----
+  // ---- Formulas & derivation tab ----
   function renderFormulasTab(el, s) {
     const formulas = s.formulas || [];
     if (!formulas.length) {
-      el.innerHTML = '<p class="text-gray-400 dark:text-slate-500 text-center py-10">이 문서에서 수식을 찾지 못했습니다</p>';
+      el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">이 문서에서 수식을 찾지 못했습니다</p>';
       return;
     }
 
     const html = formulas.map((f, i) => {
-      // 수식은 문자열 또는 {latex, plain, name, description, derivation, steps} 객체
+      // Formula can be a string or {latex, plain, name, description, derivation, steps} object
       const latex       = typeof f === 'string' ? f : (f.latex || '');
       const plain       = typeof f === 'object' ? (f.plain || '') : '';
       const name        = typeof f === 'string' ? `수식 ${i+1}` : (f.name || `수식 ${i+1}`);
@@ -929,7 +1502,7 @@
       const derivation  = typeof f === 'object' ? (f.derivation || '') : '';
       const rawSteps    = typeof f === 'object' ? (f.steps || []) : [];
 
-      // steps: {desc, latex} 객체 배열 또는 구버전 문자열 배열 모두 처리
+      // steps: {desc, latex} object array or legacy string array
       const steps = rawSteps.map(step =>
         typeof step === 'string'
           ? { desc: step, latex: '' }
@@ -937,32 +1510,32 @@
       );
 
       const plainHtml = plain
-        ? `<div class="mt-1 mb-2">
-             <code class="text-sm font-mono px-2 py-1 rounded bg-gray-100 dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 select-all">${escHtml(plain)}</code>
+        ? `<div style="margin-top:4px;margin-bottom:8px">
+             <code style="font-size:13px;font-family:monospace;padding:2px 8px;border-radius:6px;background:var(--bg3);color:var(--accent);user-select:all">${escHtml(plain)}</code>
            </div>`
         : '';
 
       const derivationHtml = derivation
-        ? `<div class="mt-3">
-             <p class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 mb-1">📐 유도 과정</p>
-             <p class="text-xs text-gray-600 dark:text-slate-300 leading-relaxed whitespace-pre-wrap">${escHtml(derivation)}</p>
+        ? `<div style="margin-top:12px">
+             <p style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:4px">&#x1F4D0; 유도 과정</p>
+             <p style="font-size:12px;color:var(--tx2);line-height:1.7;white-space:pre-wrap">${escHtml(derivation)}</p>
            </div>`
         : '';
 
       const stepsHtml = steps.length
-        ? `<div class="mt-3">
-             <p class="text-xs font-semibold text-indigo-600 dark:text-indigo-400 mb-2">🔢 단계별 풀이</p>
+        ? `<div style="margin-top:12px">
+             <p style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:8px">&#x1F522; 단계별 풀이</p>
              ${steps.map((step, si) => {
                const stepLatexId = `step-${i}-${si}`;
                const stepLatex = step.latex || '';
                const stepDesc  = escHtml(step.desc || '');
                return `<div class="formula-step">
-                  <div class="flex items-start gap-2">
-                    <span class="font-bold text-indigo-500 dark:text-indigo-400 flex-shrink-0 text-xs mt-0.5">Step ${si+1}</span>
-                    <div class="flex-1">
-                      ${stepDesc ? `<p class="text-xs text-gray-600 dark:text-slate-300 mb-1">${stepDesc}</p>` : ''}
+                  <div style="display:flex;align-items:flex-start;gap:8px">
+                    <span style="font-weight:700;color:var(--accent);flex-shrink:0;font-size:12px;margin-top:2px">Step ${si+1}</span>
+                    <div style="flex:1">
+                      ${stepDesc ? `<p style="font-size:12px;color:var(--tx2);margin-bottom:4px">${stepDesc}</p>` : ''}
                       ${stepLatex
-                        ? `<div class="formula-display text-sm" id="${stepLatexId}" data-latex="${escHtml(stepLatex)}" data-plain="">\\(${escHtml(stepLatex)}\\)</div>`
+                        ? `<div class="formula-display" style="font-size:14px" id="${stepLatexId}" data-latex="${escHtml(stepLatex)}" data-plain="">\\(${escHtml(stepLatex)}\\)</div>`
                         : ''}
                     </div>
                   </div>
@@ -973,21 +1546,21 @@
 
       return `
         <div class="formula-block">
-          <div class="flex items-center gap-2 mb-1">
-            <span class="text-xs font-bold text-indigo-600 dark:text-indigo-400">${i+1}.</span>
-            <span class="text-sm font-semibold text-gray-800 dark:text-slate-100">${escHtml(name)}</span>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="font-size:12px;font-weight:700;color:var(--accent)">${i+1}.</span>
+            <span style="font-size:14px;font-weight:600;color:var(--tx)">${escHtml(name)}</span>
           </div>
           ${plainHtml}
           <div class="formula-display" id="katex-${i}" data-latex="${escHtml(latex)}" data-plain="${escHtml(plain)}">\\(${escHtml(latex)}\\)</div>
-          ${description ? `<p class="text-xs text-gray-500 dark:text-slate-400 mt-2 leading-relaxed">${escHtml(description)}</p>` : ''}
+          ${description ? `<p style="font-size:12px;color:var(--tx3);margin-top:8px;line-height:1.6">${escHtml(description)}</p>` : ''}
           ${derivationHtml}
           ${stepsHtml}
         </div>`;
     }).join('');
 
-    el.innerHTML = `<div class="space-y-1">${html}</div>`;
+    el.innerHTML = `<div style="display:flex;flex-direction:column;gap:4px">${html}</div>`;
 
-    // KaTeX 렌더링
+    // KaTeX rendering
     setTimeout(() => {
       el.querySelectorAll('[data-latex]').forEach(div => {
         const ltx   = div.dataset.latex || '';
@@ -995,32 +1568,33 @@
         if (!ltx) return;
         try {
           if (typeof katex !== 'undefined') {
-            // step 수식은 inline, 메인 수식은 display 모드
+            // step formulas are inline, main formulas are display mode
             const isStep = div.id.startsWith('step-');
             katex.render(ltx, div, { throwOnError: true, displayMode: !isStep });
           } else if (plain) {
-            // KaTeX 없으면 plain fallback
+            // KaTeX not available, use plain fallback
             div.textContent = plain;
           }
         } catch(e) {
-          // 렌더링 실패 시 plain 표현 또는 원래 LaTeX 텍스트로 fallback
+          // Render failed, fallback to plain or raw LaTeX
           div.textContent = plain || ltx;
         }
       });
     }, 50);
   }
 
-  // ---- 업로드 모달 ----
+  // ---- Upload modal ----
   function openUploadModal() {
-    document.getElementById('upload-modal').classList.remove('hidden');
+    document.getElementById('upload-modal').classList.add('show');
     document.body.style.overflow = 'hidden';
   }
   function closeUploadModal() {
-    document.getElementById('upload-modal').classList.add('hidden');
+    document.getElementById('upload-modal').classList.remove('show');
     document.body.style.overflow = '';
     clearFile();
-    document.getElementById('upload-result').classList.add('hidden');
-    document.getElementById('upload-progress').classList.add('hidden');
+    document.getElementById('upload-result').classList.remove('show');
+    document.getElementById('upload-result').className = 'upload-result';
+    document.getElementById('upload-progress').classList.remove('show');
     document.getElementById('upload-btn').disabled = true;
   }
 
@@ -1039,13 +1613,13 @@
     selectedFile = file;
     document.getElementById('selected-filename').textContent = file.name;
     document.getElementById('selected-filesize').textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB';
-    document.getElementById('selected-file').classList.remove('hidden');
+    document.getElementById('selected-file').classList.add('show');
     document.getElementById('upload-btn').disabled = false;
-    document.getElementById('upload-result').classList.add('hidden');
+    document.getElementById('upload-result').classList.remove('show');
   }
   function clearFile() {
     selectedFile = null;
-    document.getElementById('selected-file').classList.add('hidden');
+    document.getElementById('selected-file').classList.remove('show');
     document.getElementById('upload-btn').disabled = true;
     document.getElementById('file-input').value = '';
   }
@@ -1053,7 +1627,7 @@
   async function doUpload() {
     if (!selectedFile) return;
     if (!SERVER_URL) {
-      showUploadResult('error', '⚠️ 서버가 오프라인입니다. PC에서 서버를 실행해주세요.');
+      showUploadResult('error', '서버가 오프라인입니다. PC에서 서버를 실행해주세요.');
       return;
     }
     if (!authToken) {
@@ -1069,7 +1643,7 @@
     const progressPct = document.getElementById('progress-pct');
     const btn = document.getElementById('upload-btn');
 
-    progressDiv.classList.remove('hidden');
+    progressDiv.classList.add('show');
     btn.disabled = true;
     btn.textContent = '업로드 중...';
 
@@ -1084,25 +1658,25 @@
       };
       xhr.onload = () => {
         if (xhr.status === 200) {
-          showUploadResult('success', '✅ 업로드 완료! 관리자 승인 후 요약이 시작됩니다.');
+          showUploadResult('success', 'Upload complete! Summary will start after admin approval.');
           clearFile();
           resolve();
         } else if (xhr.status === 401) {
-          showUploadResult('error', '❌ 로그인이 만료되었습니다. 다시 로그인해주세요.');
+          showUploadResult('error', 'Login expired. Please log in again.');
           doLogout();
           reject();
         } else {
           try {
             const err = JSON.parse(xhr.responseText);
-            showUploadResult('error', `❌ ${err.error || '업로드 실패'}`);
+            showUploadResult('error', `${err.error || '업로드 실패'}`);
           } catch(e) {
-            showUploadResult('error', `❌ 업로드 실패 (${xhr.status})`);
+            showUploadResult('error', `업로드 실패 (${xhr.status})`);
           }
           reject();
         }
       };
       xhr.onerror = () => {
-        showUploadResult('error', '❌ 서버에 연결할 수 없습니다. Cloudflare Tunnel이 실행 중인지 확인하세요.');
+        showUploadResult('error', '서버에 연결할 수 없습니다. Cloudflare Tunnel이 실행 중인지 확인하세요.');
         reject();
       };
       xhr.open('POST', SERVER_URL + '/upload');
@@ -1116,11 +1690,8 @@
 
   function showUploadResult(type, msg) {
     const el = document.getElementById('upload-result');
-    el.className = type === 'success'
-      ? 'mt-4 p-3 rounded-lg text-sm font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300'
-      : 'mt-4 p-3 rounded-lg text-sm font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300';
+    el.className = 'upload-result show ' + type;
     el.textContent = msg;
-    el.classList.remove('hidden');
   }
 
   function renderMathInDocument() {
