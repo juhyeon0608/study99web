@@ -1686,8 +1686,14 @@
         let code = src.textContent.trim();
         if (!code) continue;
 
-        // 한국어 특수문자로 인한 파싱 오류 방지: 괄호/화살표 정리
+        // Mermaid 한국어 호환성 전처리
         code = code.replace(/\u200B/g, ''); // zero-width space 제거
+        // 따옴표 없는 한국어 노드 레이블을 따옴표로 감싸기: A[한국어] → A["한국어"]
+        code = code.replace(/\[([^\]"]*[\u3131-\uD79D가-힣][^\]"]*)\]/g, '["$1"]');
+        // subgraph 한국어 이름 따옴표 감싸기
+        code = code.replace(/subgraph\s+([^\n"]*[\u3131-\uD79D가-힣][^\n"]*)/g, 'subgraph "$1"');
+        // 화살표 레이블 한국어 따옴표 감싸기: -->|한국어| → -->|"한국어"|
+        code = code.replace(/\|([^|"]*[\u3131-\uD79D가-힣][^|"]*)\|/g, '|"$1"|');
 
         try {
           const id = 'mm-' + Math.random().toString(36).substring(2, 8);
