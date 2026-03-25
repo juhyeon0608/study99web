@@ -505,8 +505,19 @@
     .detail-tab.active { border-bottom-color: var(--accent); color: var(--accent); font-weight: 600; }
     .detail-content {
       flex: 1; overflow-y: auto; padding: 24px;
-      font-size: 14px; line-height: 1.8;
+      font-size: 16px; line-height: 1.9;
       min-height: 0;
+    }
+    .detail-content p, .detail-content span, .detail-content li,
+    .detail-content code, .detail-content pre {
+      font-size: 16px; line-height: 1.9;
+    }
+    /* Mermaid 다이어그램 내부 텍스트 크기 통일 */
+    .detail-content svg text,
+    .detail-content .nodeLabel,
+    .detail-content .edgeLabel,
+    .detail-content .cluster-label {
+      font-size: 16px !important;
     }
 
     /* ===== Formula blocks ===== */
@@ -1488,7 +1499,7 @@
       } else {
         el.innerHTML = `
           <div style="max-width:none">
-            <p style="white-space:pre-wrap;font-size:14px;line-height:1.8">${escHtml(content)}</p>
+            <p style="white-space:pre-wrap;font-size:16px;line-height:1.9">${escHtml(content)}</p>
           </div>`;
       }
     }
@@ -1525,12 +1536,12 @@
             onclick="toggleAccordion(this)">
             <span style="display:flex;align-items:center;gap:8px">
               <span style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--accent-bg);color:var(--accent);font-size:12px;font-weight:700;flex-shrink:0">${i+1}</span>
-              <span style="font-size:13px;font-weight:600;color:var(--tx)">${heading}</span>
+              <span style="font-size:16px;font-weight:600;color:var(--tx)">${heading}</span>
             </span>
             <span class="accordion-arrow" style="color:var(--tx4);font-size:11px;transition:transform 0.2s">&#x25BC;</span>
           </button>
           <div class="accordion-body hidden" style="padding:12px 16px;border-top:1px solid var(--bd);background:var(--bg2)">
-            ${summary ? `<p style="font-size:13px;color:var(--tx2);line-height:1.8;white-space:pre-wrap">${summary}</p>` : ''}
+            ${summary ? `<p style="font-size:16px;color:var(--tx2);line-height:1.9;white-space:pre-wrap">${summary}</p>` : ''}
             ${kpHtml}
           </div>
         </div>`;
