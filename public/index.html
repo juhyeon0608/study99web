@@ -11,8 +11,6 @@
   <!-- KaTeX -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" />
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
-  <!-- Mermaid.js for diagrams -->
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
     onload="renderMathInDocument()"></script>
 
@@ -531,14 +529,6 @@
     .detail-content code, .detail-content pre {
       font-size: 16px; line-height: 1.9;
     }
-    /* Mermaid 다이어그램 내부 텍스트 크기 통일 */
-    .detail-content svg text,
-    .detail-content .nodeLabel,
-    .detail-content .edgeLabel,
-    .detail-content .cluster-label {
-      font-size: 16px !important;
-    }
-
     /* ===== Formula blocks ===== */
     .formula-block {
       background: var(--bg3); border: 1px solid var(--bd);
@@ -911,7 +901,6 @@
         <button class="detail-tab" data-tab="graduate" onclick="switchTab(this,'graduate')">&#x1F534; 대학원</button>
         <button class="detail-tab" data-tab="sections" onclick="switchTab(this,'sections')">&#x1F4D1; 섹션별</button>
         <button class="detail-tab" data-tab="formulas" onclick="switchTab(this,'formulas')">&#x1F9EE; 수식&유도</button>
-        <button class="detail-tab" data-tab="diagrams" onclick="switchTab(this,'diagrams')">&#x1F4CA; 다이어그램</button>
       </div>
 
       <!-- Detail Content -->
@@ -1255,11 +1244,6 @@
     }
   }
 
-  // ---- Mermaid 초기화 ----
-  if (typeof mermaid !== 'undefined') {
-    mermaid.initialize({ startOnLoad: false, theme: 'default', securityLevel: 'strict', suppressErrors: true, logLevel: 'fatal' });
-  }
-
   // ---- DOMContentLoaded: Firebase init + server URL loading ----
   window.addEventListener('DOMContentLoaded', () => {
     // Initialize Firebase before login so server URL can be read
@@ -1452,8 +1436,7 @@
                  s.summaries?.middle     ? 'middle' :
                  s.summaries?.high       ? 'high' :
                  s.summaries?.graduate   ? 'graduate' :
-                 (s.formulas && s.formulas.length) ? 'formulas' :
-                 (s.diagrams && s.diagrams.length) ? 'diagrams' : 'elementary';
+                 (s.formulas && s.formulas.length) ? 'formulas' : 'elementary';
 
     document.getElementById('detail-title').textContent = s.title || s.filename || '제목 없음';
     document.getElementById('detail-filename').textContent = s.filename || '';
@@ -1513,8 +1496,6 @@
 
     if (tab === 'formulas') {
       renderFormulasTab(el, currentDetail);
-    } else if (tab === 'diagrams') {
-      renderDiagramsTab(el, currentDetail);
     } else if (tab === 'sections') {
       renderSectionsTab(el, currentDetail);
     } else {
@@ -1724,81 +1705,6 @@
         }
       });
     }, 50);
-  }
-
-  // ---- Diagrams tab ----
-  function renderDiagramsTab(el, s) {
-    const diagrams = s.diagrams || [];
-    if (!diagrams.length) {
-      el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">이 문서에 다이어그램이 없습니다</p>';
-      return;
-    }
-
-    const html = diagrams.map((d, i) => {
-      const title = escHtml(d.title || `다이어그램 ${i + 1}`);
-      const mermaidCode = (d.mermaid || '').replace(/\\n/g, '\n');
-      const containerId = `mermaid-${Date.now()}-${i}`;
-
-      return `
-        <div style="border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:16px;background:var(--bg2)">
-          <div style="padding:12px 16px;background:var(--bg3);border-bottom:1px solid var(--bd);display:flex;align-items:center;gap:8px">
-            <span style="font-size:16px">📊</span>
-            <span style="font-size:14px;font-weight:600;color:var(--tx)">${title}</span>
-          </div>
-          <div style="padding:20px;display:flex;justify-content:center;overflow-x:auto;background:white;min-height:120px" id="${containerId}">
-            <pre class="mermaid-src" style="display:none">${escHtml(mermaidCode)}</pre>
-            <div style="color:var(--tx4);font-size:13px">다이어그램 로딩 중...</div>
-          </div>
-        </div>`;
-    }).join('');
-
-    el.innerHTML = `<div>${html}</div>`;
-
-    // Mermaid 렌더링
-    setTimeout(async () => {
-      if (typeof mermaid === 'undefined') return;
-      const theme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'default';
-      mermaid.initialize({ startOnLoad: false, theme, securityLevel: 'strict', suppressErrors: true });
-
-      const containers = el.querySelectorAll('[id^="mermaid-"]');
-      for (const container of containers) {
-        const src = container.querySelector('.mermaid-src');
-        if (!src) continue;
-        let code = src.textContent.trim();
-        if (!code) continue;
-
-        // Mermaid 한국어 호환성 전처리
-        code = code.replace(/\u200B/g, ''); // zero-width space 제거
-        // 따옴표 없는 한국어 노드 레이블을 따옴표로 감싸기: A[한국어] → A["한국어"]
-        code = code.replace(/\[([^\]"]*[\u3131-\uD79D가-힣][^\]"]*)\]/g, '["$1"]');
-        // subgraph 한국어 이름 따옴표 감싸기
-        code = code.replace(/subgraph\s+([^\n"]*[\u3131-\uD79D가-힣][^\n"]*)/g, 'subgraph "$1"');
-        // 화살표 레이블 한국어 따옴표 감싸기: -->|한국어| → -->|"한국어"|
-        code = code.replace(/\|([^|"]*[\u3131-\uD79D가-힣][^|"]*)\|/g, '|"$1"|');
-
-        try {
-          const id = 'mm-' + Math.random().toString(36).substring(2, 8);
-          const { svg } = await mermaid.render(id, code);
-          container.innerHTML = svg;
-          const svgEl = container.querySelector('svg');
-          if (svgEl) {
-            svgEl.style.maxWidth = '100%';
-            svgEl.style.height = 'auto';
-          }
-        } catch (e) {
-          // 에러 시 코드 블록으로 대체 표시 (Mermaid가 DOM에 남긴 에러 요소 제거)
-          document.querySelectorAll('[id^="dmm-"]').forEach(el => el.remove());
-          document.querySelectorAll('.mermaid-error, [data-mermaid-error]').forEach(el => el.remove());
-          container.innerHTML = `<div style="padding:12px;background:var(--bg3);border-radius:8px;font-size:11px;color:var(--tx3)">
-            <div style="font-weight:600;margin-bottom:4px">다이어그램을 표시할 수 없습니다</div>
-            <pre style="white-space:pre-wrap;word-break:break-all;margin:0;font-family:monospace;font-size:10px;max-height:120px;overflow-y:auto">${escHtml(code)}</pre>
-          </div>`;
-        }
-      }
-      // Mermaid 전역 에러 요소 최종 정리
-      document.querySelectorAll('body > [id^="dmm-"], body > svg[id^="dmm-"]').forEach(el => el.remove());
-      document.querySelectorAll('body > .mermaid-error').forEach(el => el.remove());
-    }, 100);
   }
 
   // ---- Upload modal ----
