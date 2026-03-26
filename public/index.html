@@ -1518,16 +1518,60 @@
     } else if (tab === 'sections') {
       renderSectionsTab(el, currentDetail);
     } else {
-      const summaries = currentDetail.summaries || {};
-      const content = summaries[tab];
-      if (!content) {
-        el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">해당 수준의 요약이 없습니다</p>';
-      } else {
-        el.innerHTML = `
-          <div style="max-width:none">
-            <p style="white-space:pre-wrap;font-size:16px;line-height:1.9">${escHtml(content)}</p>
+      // 단계별 탭: 섹션별로 해당 단계 설명을 아코디언으로 표시
+      renderLevelTab(el, currentDetail, tab);
+    }
+  }
+
+  // ---- Level tab (단계별 → 섹션별 아코디언) ----
+  function renderLevelTab(el, s, level) {
+    const sections = s.sections || [];
+    const levelNames = { elementary: '초등', middle: '중등', high: '고등', graduate: '대학원' };
+    const levelName = levelNames[level] || level;
+
+    // 새 구조: sections[].levels.{level} 사용
+    const hasNewFormat = sections.length > 0 && sections[0].levels;
+
+    if (hasNewFormat) {
+      const html = sections.map((sec, i) => {
+        const heading = escHtml(sec.heading || `섹션 ${i+1}`);
+        const content = sec.levels?.[level] || '';
+        if (!content) return '';
+        return `
+          <div style="border:1px solid var(--bd);border-radius:12px;overflow:hidden;margin-bottom:10px">
+            <button style="width:100%;display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:var(--bg3);border:none;cursor:pointer;text-align:left;font-family:inherit"
+              onclick="toggleAccordion(this)">
+              <span style="display:flex;align-items:center;gap:10px">
+                <span style="display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--accent-bg);color:var(--accent);font-size:13px;font-weight:700;flex-shrink:0">${i+1}</span>
+                <span style="font-size:15px;font-weight:600;color:var(--tx)">${heading}</span>
+              </span>
+              <span class="accordion-arrow" style="color:var(--tx4);font-size:12px;transition:transform .2s">&#x25BC;</span>
+            </button>
+            <div class="accordion-body hidden" style="padding:18px 20px;border-top:1px solid var(--bd);background:var(--bg2)">
+              <p style="white-space:pre-wrap;font-size:15px;line-height:1.9;color:var(--tx2)">${escHtml(content)}</p>
+            </div>
           </div>`;
+      }).filter(Boolean).join('');
+
+      if (html) {
+        el.innerHTML = `<div>${html}</div>`;
+        // 첫 번째 아코디언 자동 열기
+        const firstBody = el.querySelector('.accordion-body');
+        if (firstBody) firstBody.classList.remove('hidden');
+        return;
       }
+    }
+
+    // 구 구조 fallback: summaries.{level} 하나의 텍스트
+    const summaries = s.summaries || {};
+    const content = summaries[level];
+    if (!content) {
+      el.innerHTML = '<p style="text-align:center;padding:40px 0;color:var(--tx4)">해당 수준의 설명이 없습니다</p>';
+    } else {
+      el.innerHTML = `
+        <div style="max-width:none">
+          <p style="white-space:pre-wrap;font-size:15px;line-height:1.9">${escHtml(content)}</p>
+        </div>`;
     }
   }
 
