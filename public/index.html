@@ -1659,7 +1659,7 @@
                     <div style="flex:1">
                       ${stepDesc ? `<p style="font-size:12px;color:var(--tx2);margin-bottom:4px">${stepDesc}</p>` : ''}
                       ${stepLatex
-                        ? `<div class="formula-display" style="font-size:14px" id="${stepLatexId}" data-latex="${escHtml(stepLatex)}" data-plain="">\\(${escHtml(stepLatex)}\\)</div>`
+                        ? `<div class="formula-display" style="font-size:14px" id="${stepLatexId}" data-latex="${escHtml(stepLatex)}" data-plain="">${escHtml(stepLatex)}</div>`
                         : ''}
                     </div>
                   </div>
@@ -1675,7 +1675,7 @@
             <span style="font-size:14px;font-weight:600;color:var(--tx)">${escHtml(name)}</span>
           </div>
           ${plainHtml}
-          <div class="formula-display" id="katex-${i}" data-latex="${escHtml(latex)}" data-plain="${escHtml(plain)}">\\(${escHtml(latex)}\\)</div>
+          <div class="formula-display" id="katex-${i}" data-latex="${escHtml(latex)}" data-plain="${escHtml(plain)}">${escHtml(plain || latex)}</div>
           ${description ? `<p style="font-size:12px;color:var(--tx3);margin-top:8px;line-height:1.6">${escHtml(description)}</p>` : ''}
           ${derivationHtml}
           ${stepsHtml}
@@ -1687,20 +1687,19 @@
     // KaTeX rendering
     setTimeout(() => {
       el.querySelectorAll('[data-latex]').forEach(div => {
-        const ltx   = div.dataset.latex || '';
+        let ltx   = div.dataset.latex || '';
         const plain = div.dataset.plain || '';
         if (!ltx) return;
+        // $...$ 또는 $$...$$ 감싸기 제거
+        ltx = ltx.replace(/^\$\$?/, '').replace(/\$\$?$/, '').trim();
         try {
           if (typeof katex !== 'undefined') {
-            // step formulas are inline, main formulas are display mode
             const isStep = div.id.startsWith('step-');
-            katex.render(ltx, div, { throwOnError: true, displayMode: !isStep });
+            katex.render(ltx, div, { throwOnError: false, displayMode: !isStep });
           } else if (plain) {
-            // KaTeX not available, use plain fallback
             div.textContent = plain;
           }
         } catch(e) {
-          // Render failed, fallback to plain or raw LaTeX
           div.textContent = plain || ltx;
         }
       });
