@@ -1,4 +1,0 @@
-[build]
-  publish = "public"
-  command = "echo 'static site'"
-  ignore = "false"

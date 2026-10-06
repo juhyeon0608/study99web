@@ -131,7 +131,7 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 �
 ## 구조
 
 ```
-paperlab/
+study99web/
 ├─ PaperLab.bat · PaperLab.command · paperlab.sh   실행기
 ├─ pyproject.toml
 ├─ paperlab/
