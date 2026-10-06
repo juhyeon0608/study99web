@@ -3,7 +3,7 @@
 import { api, qs } from "./api.js";
 import { addPaper, citeDialog } from "./dialogs.js";
 import { state } from "./state.js";
-import { $, $$, authorsShort, el, esc, fmtNum } from "./ui.js";
+import { $, $$, authorsShort, el, esc, fmtNum, safeUrl } from "./ui.js";
 
 const SOURCES = [
   ["openalex", "OpenAlex", "2억+ 편, 피인용·인용 관계"],
@@ -16,6 +16,7 @@ const SORT_LABEL = { relevance: "관련도순", cited: "피인용순", date: "�
 const ds = {
   q: "", source: "openalex", yearFrom: "", yearTo: "", sort: "relevance", oa: false, page: 1,
   res: null, loading: false, error: "", graph: null, // graph: {paper, kind, page, res}
+  seq: 0, // 늦게 도착한 이전 요청의 결과를 버리기 위한 번호
 };
 
 export function renderDiscover(main) {
@@ -69,30 +70,36 @@ export function renderDiscover(main) {
 }
 
 async function search() {
+  const mine = ++ds.seq;
   ds.loading = true;
   ds.error = "";
   draw();
+  let res = null;
+  let error = "";
   try {
-    ds.res = await api.get("/api/search" + qs({
+    res = await api.get("/api/search" + qs({
       q: ds.q, source: ds.source, page: ds.page, year_from: ds.yearFrom, year_to: ds.yearTo, sort: ds.sort, oa: ds.oa,
     }));
   } catch (e) {
-    ds.res = null;
-    ds.error = e.message;
+    error = e.message;
   }
-  ds.loading = false;
+  if (mine !== ds.seq) return;
+  Object.assign(ds, { res, error, loading: false });
   draw();
 }
 
 async function loadGraph(paper, kind, page = 1) {
-  ds.graph = { paper, kind, page, res: null, loading: true, error: "" };
+  const mine = ++ds.seq;
+  const g = { paper, kind, page, res: null, loading: true, error: "" };
+  ds.graph = g;
   draw();
   try {
-    ds.graph.res = await api.post("/api/related", { paper, kind, page });
+    g.res = await api.post("/api/related", { paper, kind, page });
   } catch (e) {
-    ds.graph.error = e.message;
+    g.error = e.message;
   }
-  ds.graph.loading = false;
+  if (mine !== ds.seq || ds.graph !== g) return;
+  g.loading = false;
   draw();
 }
 
@@ -127,7 +134,7 @@ function drawGraph(box) {
   const label = { cited_by: "을(를) 인용한 논문", references: "의 참고문헌", related: "와(과) 관련된 논문" }[g.kind];
   const crumb = el(`<div class="crumb" style="max-width:900px"><button class="btn sm" data-back>← 검색 결과로</button>
     <span><b>${esc(g.paper.title.length > 70 ? g.paper.title.slice(0, 70) + "…" : g.paper.title)}</b>${label}</span></div>`);
-  $("[data-back]", crumb).onclick = () => { ds.graph = null; draw(); };
+  $("[data-back]", crumb).onclick = () => { ds.seq++; ds.graph = null; draw(); };
   box.appendChild(crumb);
   if (g.loading) return box.appendChild(el(`<div class="result-info"><span class="spinner"></span> 불러오는 중…</div>`));
   if (g.error) return box.appendChild(el(`<div class="status-line bad" style="max-width:900px">${esc(g.error)}</div>`));
@@ -137,7 +144,8 @@ function drawGraph(box) {
 }
 
 function pager(page, total, go) {
-  const pages = Math.ceil(total / 20);
+  // 데이터베이스가 깊은 쪽은 주지 않는다 (Semantic Scholar 1,000건, OpenAlex 10,000건)
+  const pages = Math.min(Math.ceil(total / 20), ds.source === "semanticscholar" && !ds.graph ? 50 : 500);
   const p = el(`<div class="pager"></div>`);
   if (pages <= 1) return p;
   const prev = el(`<button class="btn sm" ${page <= 1 ? "disabled" : ""}>← 이전</button>`);
@@ -152,7 +160,7 @@ function resultCard(it) {
   const venue = [it.venue, it.year].filter(Boolean).join(", ");
   const host = it.pdf_url ? (() => { try { return new URL(it.pdf_url).hostname.replace(/^www\./, ""); } catch { return "PDF"; } })() : "";
   const card = el(`<div class="result">
-    <div class="r-title">${it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.title)}</a>` : esc(it.title)}</div>
+    <div class="r-title">${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener">${esc(it.title)}</a>` : esc(it.title)}</div>
     <div class="r-meta">${esc(authorsShort(it.authors, 4))}${venue ? ` - ${esc(venue)}` : ""}${it.doi ? ` - doi:${esc(it.doi)}` : it.arxiv_id ? ` - arXiv:${esc(it.arxiv_id)}` : ""}</div>
     ${it.tldr ? `<div class="r-tldr"><b>TL;DR</b> ${esc(it.tldr)}</div>` : ""}
     ${it.abstract ? `<div class="r-abs clamp" title="눌러서 펼치기">${esc(it.abstract)}</div>` : ""}
@@ -162,7 +170,7 @@ function resultCard(it) {
       ${it.cited_by_count != null ? `<button class="link" data-g="cited_by">피인용 ${fmtNum(it.cited_by_count)}</button>` : ""}
       <button class="link" data-g="references">참고문헌</button>
       <button class="link" data-g="related">관련 논문</button>
-      ${it.pdf_url ? `<a href="${esc(it.pdf_url)}" target="_blank" rel="noopener">[PDF] ${esc(host)}</a>` : ""}
+      ${safeUrl(it.pdf_url) ? `<a href="${esc(safeUrl(it.pdf_url))}" target="_blank" rel="noopener">[PDF] ${esc(host)}</a>` : ""}
     </div></div>`);
   const abs = $(".r-abs", card);
   if (abs) abs.onclick = () => abs.classList.toggle("clamp");

@@ -28,8 +28,10 @@ EFFORT_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claud
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
-MAX_PDF_BYTES = 30 * 1024 * 1024
+# 요청 한도는 32MB이고 base64로 바꾸면 약 4/3배가 되므로 원본은 22MB까지만 PDF로 보낸다
+MAX_PDF_BYTES = 22 * 1024 * 1024
 MAX_PDF_PAGES = 600
+SMALL_CONTEXT_MODELS = {"claude-haiku-4-5"}  # 200K 문맥 모델은 PDF 100쪽까지
 
 LEVELS = ("elementary", "middle", "high", "graduate")
 _LEVEL_SCHEMA = {
@@ -132,9 +134,10 @@ class PaperContext:
     page_texts: list[str]
     abstract: str = ""
 
-    def usable_pdf(self) -> bool:
+    def usable_pdf(self, model: str = "") -> bool:
+        limit = 100 if model in SMALL_CONTEXT_MODELS else MAX_PDF_PAGES
         return bool(self.pdf_bytes) and len(self.pdf_bytes) <= MAX_PDF_BYTES and \
-            0 < len(self.page_texts) <= MAX_PDF_PAGES
+            0 < len(self.page_texts) <= limit
 
     def text_pages(self) -> list[str]:
         pages = [t.strip() for t in self.page_texts]
@@ -246,7 +249,7 @@ class AIService:
         return kw
 
     def _document_block(self, ctx: PaperContext, citations: bool) -> dict:
-        if ctx.usable_pdf():
+        if ctx.usable_pdf(self.model):
             block = {"type": "document",
                      "source": {"type": "base64", "media_type": "application/pdf",
                                 "data": base64.standard_b64encode(ctx.pdf_bytes).decode("ascii")}}
@@ -257,7 +260,7 @@ class AIService:
             # 쪽마다 블록을 나눠 두면 인용 위치(블록 번호)가 곧 쪽 번호가 된다
             block = {"type": "document",
                      "source": {"type": "content",
-                                "content": [{"type": "text", "text": t or " "} for t in pages]}}
+                                "content": [{"type": "text", "text": t or "(빈 쪽)"} for t in pages]}}
         block["title"] = (ctx.title or "논문")[:500]
         if citations:
             block["citations"] = {"enabled": True}
@@ -357,7 +360,7 @@ class AIService:
             raise self._call_errors(e) from e
         if final.stop_reason == "refusal":
             raise AIError("모델이 이 질문에 답하지 않았어요 (안전 정책).")
-        text, cites = api_citations(final.content, page_based=ctx.usable_pdf())
+        text, cites = api_citations(final.content, page_based=ctx.usable_pdf(self.model))
         yield {"type": "done", "text": text, "citations": cites}
 
     # ------------------------------------------------------------ CLI engine

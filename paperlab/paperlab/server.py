@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import re
+import sqlite3
 import threading
 import uuid
 from pathlib import Path
@@ -14,7 +16,7 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, Up
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, citations, pdf
+from . import __version__, citations, csl_style, pdf
 from .ai import MODELS, AIError, AIService, PaperContext
 from .config import Settings, default_data_dir
 from .db import Database
@@ -50,6 +52,10 @@ class Jobs:
                     return dict(job)
             job = {"id": uuid.uuid4().hex[:12], "key": key, "status": "running", "progress": None,
                    "message": "시작하는 중", "error": ""}
+            # 끝난 작업은 최근 50개만 남긴다
+            done = [k for k, j in self._jobs.items() if j["status"] != "running"]
+            for k in done[:-50]:
+                del self._jobs[k]
             self._jobs[job["id"]] = job
 
         def progress(message: str, frac: float | None):
@@ -69,13 +75,15 @@ class Jobs:
         return dict(job)
 
     def get(self, job_id: str) -> dict | None:
-        job = self._jobs.get(job_id)
-        return dict(job) if job else None
+        with self._lock:
+            job = self._jobs.get(job_id)
+            return dict(job) if job else None
 
     def running_for(self, key: str) -> dict | None:
-        for job in self._jobs.values():
-            if job["key"] == key and job["status"] == "running":
-                return dict(job)
+        with self._lock:
+            for job in self._jobs.values():
+                if job["key"] == key and job["status"] == "running":
+                    return dict(job)
         return None
 
 
@@ -104,10 +112,13 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         if host not in LOCAL_HOSTS:
             return JSONResponse({"detail": "허용되지 않은 호스트"}, status_code=403)
         origin = request.headers.get("origin")
-        if origin and origin != "null":
+        if origin:
             ohost = urlparse(origin).hostname or ""
-            if ohost not in LOCAL_HOSTS and f"[{ohost}]" not in LOCAL_HOSTS:
+            if origin == "null" or (ohost not in LOCAL_HOSTS and f"[{ohost}]" not in LOCAL_HOSTS):
                 return JSONResponse({"detail": "허용되지 않은 출처"}, status_code=403)
+        # 쓰기 요청은 화면(api.js)이 붙이는 헤더가 있어야 한다. 다른 사이트의 폼 전송(CSRF)은 이 헤더를 못 붙인다
+        if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("x-paperlab") != "1":
+            return JSONResponse({"detail": "허용되지 않은 요청"}, status_code=403)
         response = await call_next(request)
         if request.url.path.startswith("/api/"):
             response.headers["Cache-Control"] = "no-store"
@@ -130,13 +141,15 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
     def store_pdf(pid: int, data: bytes, title: str) -> pdf.PdfInfo:
         info = pdf.extract(data)
         old = db.get_paper(pid, detail=False)
-        if old and old.get("pdf_path"):
+        rel = f"pdfs/{pid}-{_slug(title)}.pdf"
+        tmp = data_dir / (rel + ".part")
+        tmp.write_bytes(data)
+        os.replace(tmp, data_dir / rel)
+        db.set_pdf(pid, rel, info.page_texts)
+        if old and old.get("pdf_path") and old["pdf_path"] != rel:
             old_path = data_dir / old["pdf_path"]
             if old_path.exists():
                 old_path.unlink()
-        rel = f"pdfs/{pid}-{_slug(title)}.pdf"
-        (data_dir / rel).write_bytes(data)
-        db.set_pdf(pid, rel, info.page_texts)
         return info
 
     def mark_library(items: list[dict]) -> list[dict]:
@@ -175,7 +188,7 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
 
     @app.get("/api/meta")
     def meta():
-        return {"version": __version__, "styles": citations.STYLES, "models": MODELS, "item_types": ITEM_TYPES,
+        return {"version": __version__, "models": MODELS, "item_types": ITEM_TYPES,
                 "statuses": STATUSES, "data_dir": str(data_dir)}
 
     @app.get("/api/stats")
@@ -274,7 +287,9 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
 
     @app.get("/api/papers/{pid}")
     def get_paper(pid: int):
-        return need_paper(pid)
+        p = need_paper(pid)
+        p["cite_issues"] = citations.citation_issues(p)
+        return p
 
     @app.patch("/api/papers/{pid}")
     def patch_paper(pid: int, data: dict = Body(...)):
@@ -304,8 +319,12 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
                 if rel and (data_dir / rel).exists():
                     (data_dir / rel).unlink()
         elif action in ("add_collection", "remove_collection"):
+            if not str(value or "").isdigit():
+                raise HTTPException(400, "컬렉션을 골라 주세요")
             db.set_paper_collections(ids, int(value), action == "add_collection")
         elif action == "add_tag":
+            if not str(value or "").strip():
+                raise HTTPException(400, "태그 이름이 필요해요")
             db.add_tag_to_papers(ids, str(value))
         elif action == "status":
             for pid in ids:
@@ -339,7 +358,10 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         data = file.file.read()
         if not data.startswith(b"%PDF"):
             raise HTTPException(400, "PDF 파일이 아니에요")
-        info = store_pdf(pid, data, p["title"])
+        try:
+            info = store_pdf(pid, data, p["title"])
+        except Exception as e:  # noqa: BLE001 - 손상된 PDF
+            raise HTTPException(400, f"PDF를 열 수 없어요: {e}") from e
         return {"paper": db.get_paper(pid), "warnings": info.warnings}
 
     @app.post("/api/papers/{pid}/fetch-pdf")
@@ -387,7 +409,9 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
                 update["cited_by_count"] = fresh["cited_by_count"]
         update.pop("source", None)
         db.update_paper(pid, update)
-        return db.get_paper(pid)
+        out = db.get_paper(pid)
+        out["cite_issues"] = citations.citation_issues(out)
+        return out
 
     @app.get("/api/papers/{pid}/related")
     def related(pid: int, kind: str = "cited_by", page: int = 1):
@@ -418,11 +442,9 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
 
     @app.post("/api/cite-preview")
     def cite_preview(data: dict = Body(...)):
-        """서재에 없는 논문의 인용 문구"""
+        """서재에 없는 논문(검색 결과)의 인용 데이터"""
         p = data.get("paper") or {}
-        return {"styles": {k: {**citations.format_citation(p, k), "in_text": citations.in_text(p, k)}
-                           for k in citations.STYLES},
-                "bibtex": citations.to_bibtex([p]), "ris": citations.to_ris([p])}
+        return cite_payload(p)
 
     # ------------------------------------------------------ notes/annotations
     @app.put("/api/papers/{pid}/note")
@@ -457,7 +479,11 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
     @app.get("/api/annotations/export/{pid}")
     def export_annotations(pid: int):
         p = need_paper(pid)
-        lines = [f"# {p['title']}", "", citations.format_citation(p, settings.get("citation_style"))["text"], ""]
+        who = ", ".join(" ".join(x for x in (a.get("given"), a.get("family"), a.get("literal")) if x)
+                        for a in p.get("authors") or [])
+        source = " · ".join(str(x) for x in (who, p.get("year"), p.get("venue")) if x)
+        link = f"https://doi.org/{p['doi']}" if p.get("doi") else p.get("url") or ""
+        lines = [f"# {p['title']}", "", source + (f"  \n{link}" if link else ""), ""]
         for a in db.list_annotations(pid):
             lines.append(f"> {a['text']}" if a["text"] else "> (메모)")
             lines.append(f"> — p.{a['page']}")
@@ -499,7 +525,10 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
 
     @app.patch("/api/tags/{tid}")
     def patch_tag(tid: int, data: dict = Body(...)):
-        db.update_tag(tid, data.get("name"), data.get("color"))
+        try:
+            db.update_tag(tid, data.get("name"), data.get("color"))
+        except sqlite3.IntegrityError as e:
+            raise HTTPException(400, "같은 이름의 태그가 이미 있어요") from e
         return {"ok": True}
 
     @app.delete("/api/tags/{tid}")
@@ -508,12 +537,13 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         return {"ok": True}
 
     # ---------------------------------------------------------- citations
+    def cite_payload(p: dict) -> dict:
+        return {"csl": citations.to_csl_item(p), "issues": citations.citation_issues(p),
+                "bibtex": citations.to_bibtex([p]), "ris": citations.to_ris([p])}
+
     @app.get("/api/papers/{pid}/cite")
     def cite(pid: int):
-        p = need_paper(pid)
-        return {"styles": {k: {**citations.format_citation(p, k), "in_text": citations.in_text(p, k)}
-                           for k in citations.STYLES},
-                "bibtex": citations.to_bibtex([p]), "ris": citations.to_ris([p])}
+        return cite_payload(need_paper(pid))
 
     def papers_for(data: dict) -> list[dict]:
         if data.get("ids"):
@@ -522,16 +552,87 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             return db.list_papers(collection_id=int(data["collection_id"]), limit=100000)["items"]
         return db.list_papers(limit=100000)["items"]
 
-    @app.post("/api/bibliography")
-    def bibliography(data: dict = Body(...)):
-        style = data.get("style") or settings.get("citation_style")
+    @app.post("/api/csl")
+    def csl_items(data: dict = Body(...)):
+        """화면의 citeproc-js가 인용·참고문헌을 만들 때 쓰는 CSL-JSON (요청한 순서 유지)"""
         papers = papers_for(data)
-        entries = [citations.format_citation(p, style) for p in papers]
-        if style in ("ieee", "vancouver"):
-            entries = [{"html": f"[{i}] {e['html']}", "text": f"[{i}] {e['text']}"} for i, e in enumerate(entries, 1)]
-        else:
-            entries.sort(key=lambda e: e["text"].lower())
-        return {"entries": entries}
+        return {"items": [citations.to_csl_item(p) for p in papers],
+                "issues": {str(p["id"]): citations.citation_issues(p) for p in papers}}
+
+    # 인용 스타일 (공식 CSL 저장소의 .csl 파일)
+    def style_dirs() -> list[tuple[Path, bool]]:
+        return [(STATIC_DIR / "vendor" / "csl" / "styles", True), (data_dir / "styles", False)]
+
+    def style_info(path: Path, builtin: bool) -> dict | None:
+        info = csl_style.read_info(path.read_bytes())
+        if not info:
+            return None
+        info.update(id=path.stem, builtin=builtin)
+        return info
+
+    def find_style(style_id: str) -> Path | None:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9\-]{0,120}", style_id or ""):
+            return None
+        for d, _ in reversed(style_dirs()):
+            path = d / f"{style_id}.csl"
+            if path.exists():
+                return path
+        return None
+
+    @app.get("/api/styles")
+    def list_styles():
+        seen, out = set(), []
+        for d, builtin in reversed(style_dirs()):
+            if not d.exists():
+                continue
+            for path in sorted(d.glob("*.csl")):
+                if path.stem in seen:
+                    continue
+                info = style_info(path, builtin)
+                if info:
+                    seen.add(path.stem)
+                    out.append(info)
+        order = {k: i for i, k in enumerate(csl_style.FEATURED)}
+        out.sort(key=lambda x: (not x["builtin"], x["group"] != "주요 스타일", order.get(x["id"], 999), x["title"].lower()))
+        return out
+
+    @app.get("/api/styles/{style_id}")
+    def get_style(style_id: str):
+        path = find_style(style_id)
+        if not path:
+            raise HTTPException(404, "인용 스타일을 찾을 수 없어요")
+        info = csl_style.read_info(path.read_bytes()) or {}
+        # 종속 스타일은 서식이 없고 부모 스타일을 가리키기만 하므로 부모 서식을 보낸다
+        if info.get("parent"):
+            parent = find_style(info["parent"])
+            if not parent:
+                raise HTTPException(404, f"이 스타일이 기반으로 하는 '{info['parent']}' 스타일이 없어요. 그 스타일도 추가해 주세요.")
+            path = parent
+        return Response(path.read_bytes(), media_type="application/xml; charset=utf-8")
+
+    @app.post("/api/styles")
+    def upload_style(file: UploadFile = File(...)):
+        raw = file.file.read(2 * 1024 * 1024 + 1)
+        if len(raw) > 2 * 1024 * 1024:
+            raise HTTPException(400, "스타일 파일이 너무 커요")
+        info = csl_style.read_info(raw)
+        if not info:
+            raise HTTPException(400, "CSL 스타일(.csl) 파일이 아니에요")
+        if info.get("parent") and not find_style(info["parent"]):
+            raise HTTPException(400, f"이 스타일은 '{info['parent']}' 스타일을 기반으로 해요. 그 스타일 파일을 먼저 추가해 주세요.")
+        style_id = csl_style.slug(info["source_id"] or file.filename or info["title"])
+        d = data_dir / "styles"
+        d.mkdir(exist_ok=True)
+        (d / f"{style_id}.csl").write_bytes(raw)
+        return {**info, "id": style_id, "builtin": False}
+
+    @app.delete("/api/styles/{style_id}")
+    def delete_style(style_id: str):
+        path = find_style(style_id)
+        if not path or path.parent != data_dir / "styles":
+            raise HTTPException(400, "직접 추가한 스타일만 지울 수 있어요")
+        path.unlink()
+        return {"ok": True}
 
     @app.post("/api/export")
     def export(data: dict = Body(...)):
@@ -541,10 +642,6 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             body, mt, ext = citations.to_ris(papers), "application/x-research-info-systems", "ris"
         elif fmt == "csljson":
             body, mt, ext = citations.to_csl_json(papers), "application/json", "json"
-        elif fmt == "txt":
-            style = data.get("style") or settings.get("citation_style")
-            body = "\n\n".join(sorted(citations.format_citation(p, style)["text"] for p in papers))
-            mt, ext = "text/plain", "txt"
         else:
             body, mt, ext = citations.to_bibtex(papers), "application/x-bibtex", "bib"
         return Response(body, media_type=f"{mt}; charset=utf-8",

@@ -151,3 +151,12 @@ def test_cli_engine_with_fake_claude(tmp_path, monkeypatch):
     ctx = ai.PaperContext(title="T", pdf_bytes=None, page_texts=["첫 쪽", "둘째 쪽"])
     done = list(svc.chat(ctx, [], "어디에 나와?"))[-1]
     assert done["text"] == "두 번째 쪽에 나와요 [1]" and done["citations"][0]["page"] == 2
+
+
+def test_pdf_limits_fall_back_to_text():
+    big = ai.PaperContext(title="T", pdf_bytes=b"%PDF" + b"0" * (23 * 1024 * 1024), page_texts=["a"])
+    assert not big.usable_pdf("claude-opus-5-5")
+    long = ai.PaperContext(title="T", pdf_bytes=b"%PDF", page_texts=["p"] * 150)
+    assert long.usable_pdf("claude-opus-5-5") and not long.usable_pdf("claude-haiku-4-5")
+    svc = ai.AIService({"model": "claude-haiku-4-5"}.get)
+    assert svc._document_block(long, citations=True)["source"]["type"] == "content"

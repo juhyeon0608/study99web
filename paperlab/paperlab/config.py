@@ -20,6 +20,10 @@ DEFAULT_SETTINGS: dict = {
     "openalex_api_key": "",
     "semantic_scholar_api_key": "",
     "citation_style": "apa",
+    # 인용 문구의 용어 언어 (en-US: et al., and / ko-KR: 외, 및)
+    "citation_locale": "en-US",
+    # 참고문헌 목록에서 국문 문헌을 영문 문헌보다 앞에 둘지 (국내 학위논문 관례)
+    "korean_first": True,
 }
 
 SECRET_KEYS = ("anthropic_api_key", "openalex_api_key", "semantic_scholar_api_key")

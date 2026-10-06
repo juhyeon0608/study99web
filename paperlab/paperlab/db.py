@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
-from .citations import make_citekey
+from .citations import format_issued, make_citekey, parse_issued
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS papers (
@@ -127,8 +127,12 @@ JSON_FIELDS = ("authors", "keywords")
 EDITABLE_FIELDS = (
     "title", "authors", "year", "venue", "volume", "issue", "pages", "publisher",
     "doi", "arxiv_id", "openalex_id", "s2_id", "url", "pdf_url", "abstract", "item_type",
-    "keywords", "status", "starred", "rating", "cited_by_count", "citekey", "page_count",
+    "keywords", "status", "starred", "rating", "cited_by_count", "citekey", "page_count", "issued", "language",
 )
+# 처음 버전 뒤에 추가된 열: 기존 서재 파일에는 시작할 때 덧붙인다
+MIGRATIONS = {
+    "papers": [("issued", "TEXT NOT NULL DEFAULT ''"), ("language", "TEXT NOT NULL DEFAULT ''")],
+}
 SORTS = {
     "added": "p.added_at DESC",
     "updated": "p.updated_at DESC",
@@ -162,6 +166,11 @@ class Database:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
             conn.executescript(FTS_SCHEMA)
+            for table, cols in MIGRATIONS.items():
+                have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+                for name, decl in cols:
+                    if name not in have:
+                        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
 
     @contextmanager
     def connect(self):
@@ -247,9 +256,14 @@ class Database:
                     value = None
                 if key == "rating" and value is None:
                     value = 0
+            elif key == "issued":
+                value = format_issued(parse_issued(str(value or "")))
             elif value is None:
                 value = ""
             out[key] = value
+        # 날짜만 들어오면 연도도 채운다
+        if out.get("issued") and not out.get("year") and "year" not in data:
+            out["year"] = int(out["issued"][:4])
         return out
 
     def add_paper(self, data: dict) -> int:
@@ -371,8 +385,6 @@ class Database:
                 params.extend(ids)
             clause = ("WHERE " + " AND ".join(where)) if where else ""
             order = SORTS.get(sort, SORTS["added"])
-            if sort == "opened":
-                clause = (clause + " AND " if clause else "WHERE ") + "p.last_opened_at IS NOT NULL"
             total = conn.execute(f"SELECT COUNT(*) FROM papers p {clause}", params).fetchone()[0]
             rows = conn.execute(f"SELECT p.* FROM papers p {clause} ORDER BY {order} LIMIT ? OFFSET ?",
                                 [*params, limit, offset]).fetchall()
@@ -499,8 +511,10 @@ class Database:
 
     def update_tag(self, tag_id: int, name: str | None = None, color: str | None = None) -> None:
         with self._write_lock, self.connect() as conn:
-            if name:
+            if name and name.strip():
                 conn.execute("UPDATE tags SET name = ? WHERE id = ?", (name.strip(), tag_id))
+                for (pid,) in conn.execute("SELECT paper_id FROM paper_tags WHERE tag_id = ?", (tag_id,)).fetchall():
+                    self._reindex(conn, pid)
             if color is not None:
                 conn.execute("UPDATE tags SET color = ? WHERE id = ?", (color, tag_id))
 

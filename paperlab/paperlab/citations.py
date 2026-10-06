@@ -1,23 +1,16 @@
-"""인용 형식(APA·MLA·Chicago·IEEE·Harvard·Vancouver)과 BibTeX·RIS·CSL-JSON 가져오기/내보내기."""
+"""인용 데이터: CSL-JSON 변환(인용 스타일은 화면의 citeproc-js가 공식 CSL로 만든다),
+인용 정보 점검, BibTeX·RIS·CSL-JSON 가져오기/내보내기."""
 
 from __future__ import annotations
 
-import html
 import json
 import re
 
 from .sources import split_name
 
-STYLES = {
-    "apa": "APA 7판",
-    "mla": "MLA 9판",
-    "chicago": "Chicago (저자-연도)",
-    "ieee": "IEEE",
-    "harvard": "Harvard",
-    "vancouver": "Vancouver",
-}
-
 HANGUL_CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7a3]")
+HANGUL = re.compile(r"[\uac00-\ud7a3]")
+PARTICLES = {"van", "von", "de", "der", "den", "da", "di", "del", "della", "la", "le", "du", "dos", "das", "ter", "ten"}
 
 
 def _is_cjk(a: dict) -> bool:
@@ -32,278 +25,134 @@ def _full(a: dict) -> str:
     return " ".join(x for x in (a.get("given"), a.get("family")) if x)
 
 
-def _initials(given: str, sep: str = ". ", end: str = ".") -> str:
-    parts = [p for p in re.split(r"[\s.]+", given or "") if p]
-    out = []
-    for p in parts:
-        if "-" in p:
-            out.append("-".join(x[0] + "." for x in p.split("-") if x).rstrip("."))
-        else:
-            out.append(p[0])
-    return (sep.join(out) + end) if out else ""
+# ------------------------------------------------------------- 날짜
+def parse_issued(issued: str | None, year=None) -> list[int]:
+    """'2017-06-12' / '2017-06' / '2017' → [2017, 6, 12]"""
+    parts = [int(x) for x in re.findall(r"\d+", issued or "")[:3]]
+    if parts and 1000 <= parts[0] <= 2999:
+        parts = [parts[0]] + [x for x in parts[1:] if x]
+        if len(parts) > 1 and not 1 <= parts[1] <= 12:
+            parts = parts[:1]
+        if len(parts) > 2 and not 1 <= parts[2] <= 31:
+            parts = parts[:2]
+        return parts
+    try:
+        return [int(year)] if year else []
+    except (TypeError, ValueError):
+        return []
 
 
-def _family_initials(a: dict, comma: bool = True, compact: bool = False) -> str:
-    """'Vaswani, A.' / 'Vaswani A' (compact=Vancouver)"""
-    if a.get("literal") or _is_cjk(a):
-        return _full(a)
-    fam = a.get("family") or ""
-    if compact:
-        ini = "".join(p[0] for p in re.split(r"[\s.\-]+", a.get("given") or "") if p)
-        return f"{fam} {ini}".strip()
-    ini = _initials(a.get("given") or "")
-    if not ini:
-        return fam
-    return f"{fam}, {ini}" if comma else f"{fam} {ini}"
-
-
-def _join(items: list[str], last_sep: str, sep: str = ", ") -> str:
-    if not items:
+def format_issued(parts: list) -> str:
+    parts = [int(x) for x in parts if x]
+    if not parts:
         return ""
-    if len(items) == 1:
-        return items[0]
-    return sep.join(items[:-1]) + last_sep + items[-1]
+    return "-".join([f"{parts[0]:04d}"] + [f"{x:02d}" for x in parts[1:3]])
 
 
-def _e(s) -> str:
-    return html.escape(str(s or ""), quote=False)
+# ---------------------------------------------------------- CSL-JSON
+CSL_TYPES = {"article": "article-journal", "conference": "paper-conference", "book": "book",
+             "chapter": "chapter", "thesis": "thesis", "report": "report", "preprint": "article",
+             "dataset": "dataset"}
+CSL_TYPES_REV = {"article-journal": "article", "article": "article", "article-magazine": "article",
+                 "article-newspaper": "article", "paper-conference": "conference", "book": "book",
+                 "chapter": "chapter", "thesis": "thesis", "report": "report", "dataset": "dataset",
+                 "manuscript": "preprint", "post": "article", "webpage": "article"}
 
 
-def _i(s: str) -> str:
-    return f"<i>{_e(s)}</i>" if s else ""
+def _csl_name(a: dict) -> dict:
+    if a.get("literal"):
+        return {"literal": a["literal"]}
+    if _is_cjk(a):
+        # 한국어·중국어·일본어 이름은 본문 인용에서도 성만 쓰지 않도록 전체 이름 그대로 쓴다 (홍길동)
+        return {"literal": _full(a)}
+    family, given = (a.get("family") or "").strip(), (a.get("given") or "").strip()
+    out: dict = {"family": family, "given": given}
+    words = family.split(" ")
+    i = 0
+    while i < len(words) - 1 and words[i].lower() in PARTICLES:
+        i += 1
+    if i:
+        out["non-dropping-particle"] = " ".join(words[:i])
+        out["family"] = " ".join(words[i:])
+    return out
 
 
-def _end(s: str, ch: str = ".") -> str:
-    s = (s or "").strip()
-    return s if not s or s[-1] in ".?!" else s + ch
+def to_csl_item(p: dict) -> dict:
+    """서재 항목을 CSL-JSON 한 건으로. citeproc-js와 Zotero가 쓰는 필드 규칙을 따른다."""
+    t = p.get("item_type") or "article"
+    it: dict = {
+        "id": str(p.get("id") or p.get("citekey") or make_citekey(p)),
+        "type": CSL_TYPES.get(t, "article"),
+        "title": (p.get("title") or "").strip(),
+        "author": [_csl_name(a) for a in p.get("authors") or [] if a],
+    }
+    if p.get("citekey"):
+        it["citation-key"] = p["citekey"]
+    date = parse_issued(p.get("issued"), p.get("year"))
+    if date:
+        it["issued"] = {"date-parts": [date]}
+    doi = (p.get("doi") or "").strip()
+    arxiv = (p.get("arxiv_id") or "").strip()
+    if t == "preprint" or (arxiv and not p.get("venue")):
+        # Zotero 방식의 프리프린트: 학술지 대신 저장소(arXiv)를 출판처로, 식별자를 번호로
+        it["type"] = "article"
+        it["genre"] = "Preprint"
+        if arxiv:
+            it["publisher"] = "arXiv"
+            it["number"] = f"arXiv:{arxiv}"
+            doi = doi or f"10.48550/arXiv.{arxiv}"
+        elif p.get("venue"):
+            it["publisher"] = p["venue"]
+    elif p.get("venue"):
+        it["container-title"] = p["venue"]
+    if t == "thesis" and p.get("venue"):
+        it.pop("container-title", None)
+        it["publisher"] = p["venue"]
+    for src, dst in (("volume", "volume"), ("issue", "issue"), ("pages", "page")):
+        if p.get(src):
+            it[dst] = str(p[src]).replace("--", "-").replace("–", "-")
+    if p.get("publisher") and "publisher" not in it:
+        it["publisher"] = p["publisher"]
+    if doi:
+        it["DOI"] = doi
+    elif p.get("url"):
+        it["URL"] = p["url"]
+    if p.get("language"):
+        it["language"] = p["language"]
+    elif HANGUL.search(it["title"]):
+        it["language"] = "ko"
+    return it
 
 
-def _doi_url(p: dict) -> str:
-    if p.get("doi"):
-        return f"https://doi.org/{p['doi']}"
-    if p.get("arxiv_id"):
-        return f"https://arxiv.org/abs/{p['arxiv_id']}"
-    return p.get("url") or ""
+# --------------------------------------------------------- 인용 점검
+REQUIRED = {
+    "article": [("venue", "학술지 이름"), ("volume", "권"), ("pages", "쪽")],
+    "conference": [("venue", "학술대회(프로시딩) 이름"), ("pages", "쪽")],
+    "chapter": [("venue", "책 제목"), ("publisher", "출판사"), ("pages", "쪽")],
+    "book": [("publisher", "출판사")],
+    "thesis": [("venue", "학위 수여 기관")],
+    "report": [("publisher", "발행 기관")],
+}
 
 
-def _venue(p: dict) -> str:
-    v = p.get("venue") or ""
-    if not v and p.get("arxiv_id"):
-        v = "arXiv"
-    return v
-
-
-def format_citation(p: dict, style: str = "apa") -> dict:
-    """{"html": ..., "text": ...} 를 돌려준다. html에는 기울임(<i>)만 쓴다."""
-    fn = {"apa": _apa, "mla": _mla, "chicago": _chicago, "ieee": _ieee,
-          "harvard": _harvard, "vancouver": _vancouver}.get(style, _apa)
-    out = re.sub(r"\s+", " ", fn(p)).strip()
-    out = out.replace(" ,", ",").replace(" .", ".").replace("..", ".")
-    text = html.unescape(re.sub(r"<[^>]+>", "", out))
-    return {"html": out, "text": text}
-
-
-def _apa(p: dict) -> str:
-    authors = p.get("authors") or []
-    names = [_family_initials(a) for a in authors]
-    if len(names) > 20:
-        a = ", ".join(names[:19]) + ", … " + names[-1]
-    else:
-        a = _join(names, ", & " if len(names) > 2 else " & ")
-    year = p.get("year") or "n.d."
-    title = _end(p.get("title") or "")
-    venue = _venue(p)
-    if authors and all(_is_cjk(x) for x in authors):
-        # 국문 표기: 홍길동, 김철수 (2023).
-        a = ", ".join(_full(x) for x in authors)
-        lead = _e(a)
-    else:
-        lead = _e(_end(a)) if a else ""
-    parts = [lead, f"({year}).", ]
-    if p.get("item_type") == "book":
-        parts.append(_i(title))
-        if p.get("publisher"):
-            parts.append(_e(_end(p["publisher"])))
-    else:
-        parts.append(_e(title))
-        if venue:
-            src = _i(venue)
-            if p.get("volume"):
-                src += ", " + _i(p["volume"])
-                if p.get("issue"):
-                    src += f"({_e(p['issue'])})"
-            if p.get("pages"):
-                src += ", " + _e(p["pages"].replace("--", "–").replace("-", "–"))
-            parts.append(src + ".")
-    url = _doi_url(p)
-    if url:
-        parts.append(_e(url))
-    return " ".join(x for x in parts if x)
-
-
-def _mla(p: dict) -> str:
-    authors = p.get("authors") or []
-    if not authors:
-        a = ""
-    else:
-        first = authors[0]
-        lead = _full(first) if _is_cjk(first) or first.get("literal") else \
-            ", ".join(x for x in (first.get("family"), first.get("given")) if x)
-        if len(authors) == 1:
-            a = lead
-        elif len(authors) == 2:
-            a = f"{lead}, {_full(authors[1])}" if _is_cjk(authors[1]) else f"{lead}, and {_full(authors[1])}"
-        else:
-            a = f"{lead}, et al"
-    parts = [_e(_end(a)) if a else "", f"“{_e(_end(p.get('title') or ''))}”"]
-    src = []
-    if _venue(p):
-        src.append(_i(_venue(p)))
-    if p.get("volume"):
-        src.append(f"vol. {_e(p['volume'])}")
-    if p.get("issue"):
-        src.append(f"no. {_e(p['issue'])}")
-    if p.get("year"):
-        src.append(str(p["year"]))
-    if p.get("pages"):
-        src.append(f"pp. {_e(p['pages'].replace('--', '-'))}")
-    if src:
-        parts.append(", ".join(src) + ".")
-    if p.get("doi"):
-        parts.append(_e(f"https://doi.org/{p['doi']}."))
-    elif _doi_url(p):
-        parts.append(_e(_doi_url(p) + "."))
-    return " ".join(x for x in parts if x)
-
-
-def _chicago(p: dict) -> str:
-    authors = p.get("authors") or []
-    names = []
-    for i, au in enumerate(authors[:10]):
-        if i == 0 and not (_is_cjk(au) or au.get("literal")):
-            names.append(", ".join(x for x in (au.get("family"), au.get("given")) if x))
-        else:
-            names.append(_full(au))
-    if len(authors) > 10:
-        names = names[:7] + ["et al"]
-        a = ", ".join(names)
-    else:
-        a = _join(names, ", and " if len(names) > 2 else " and ")
-    parts = [_e(_end(a)) if a else "", f"{p.get('year') or 'n.d.'}.", f"“{_e(_end(p.get('title') or ''))}”"]
-    src = _i(_venue(p))
-    if p.get("volume"):
-        src += f" {_e(p['volume'])}"
-        if p.get("issue"):
-            src += f" ({_e(p['issue'])})"
-    if p.get("pages"):
-        src += f": {_e(p['pages'].replace('--', '–').replace('-', '–'))}"
-    if src:
-        parts.append(src + ".")
-    if _doi_url(p):
-        parts.append(_e(_doi_url(p) + "."))
-    return " ".join(x for x in parts if x)
-
-
-def _ieee(p: dict) -> str:
-    authors = p.get("authors") or []
-    names = []
-    for au in authors:
-        if _is_cjk(au) or au.get("literal"):
-            names.append(_full(au))
-        else:
-            ini = _initials(au.get("given") or "")
-            names.append(f"{ini} {au.get('family') or ''}".strip())
-    if len(names) > 6:
-        a = names[0] + " et al."
-    else:
-        a = _join(names, ", and " if len(names) > 2 else " and ")
-    parts = [_e(a + ",") if a else "", f"“{_e(p.get('title') or '')},”"]
-    src = []
-    if _venue(p):
-        src.append(_i(_venue(p)))
-    if p.get("volume"):
-        src.append(f"vol. {_e(p['volume'])}")
-    if p.get("issue"):
-        src.append(f"no. {_e(p['issue'])}")
-    if p.get("pages"):
-        src.append(f"pp. {_e(p['pages'].replace('--', '–').replace('-', '–'))}")
-    if p.get("year"):
-        src.append(str(p["year"]))
-    if p.get("doi"):
-        src.append(f"doi: {_e(p['doi'])}")
-    elif p.get("arxiv_id"):
-        src.append(f"arXiv:{_e(p['arxiv_id'])}")
-    parts.append(", ".join(src) + ".")
-    return " ".join(x for x in parts if x)
-
-
-def _harvard(p: dict) -> str:
-    authors = p.get("authors") or []
-    names = [_family_initials(a) for a in authors]
-    if len(names) > 3:
-        a = names[0] + " et al."
-    else:
-        a = _join(names, " and ")
-    parts = [_e(a) if a else "", f"({p.get('year') or 'n.d.'})", f"‘{_e(p.get('title') or '')}’,"]
-    src = _i(_venue(p))
-    if p.get("volume"):
-        src += f", {_e(p['volume'])}"
-        if p.get("issue"):
-            src += f"({_e(p['issue'])})"
-    if p.get("pages"):
-        src += f", pp. {_e(p['pages'].replace('--', '–').replace('-', '–'))}"
-    parts.append((src + ".") if src else "")
-    if p.get("doi"):
-        parts.append(f"doi:{_e(p['doi'])}.")
-    elif _doi_url(p):
-        parts.append(f"Available at: {_e(_doi_url(p))}.")
-    return " ".join(x for x in parts if x)
-
-
-def _vancouver(p: dict) -> str:
-    authors = p.get("authors") or []
-    names = [_family_initials(a, compact=True) for a in authors]
-    if len(names) > 6:
-        names = names[:6] + ["et al"]
-    a = ", ".join(names)
-    parts = [_e(_end(a)) if a else "", _e(_end(p.get("title") or ""))]
-    src = _e(_venue(p))
-    if src:
-        src += ". "
-    src += str(p.get("year") or "")
-    if p.get("volume"):
-        src += f";{_e(p['volume'])}"
-        if p.get("issue"):
-            src += f"({_e(p['issue'])})"
-    if p.get("pages"):
-        src += f":{_e(p['pages'].replace('--', '-'))}"
-    parts.append(src + ".")
-    if p.get("doi"):
-        parts.append(f"doi:{_e(p['doi'])}")
-    return " ".join(x for x in parts if x)
-
-
-def in_text(p: dict, style: str = "apa") -> str:
-    """본문 내 인용 표기 (예: (Vaswani et al., 2017))"""
-    authors = p.get("authors") or []
-    year = p.get("year") or "n.d."
-    fam = lambda a: _full(a) if _is_cjk(a) or a.get("literal") else (a.get("family") or "")  # noqa: E731
-    if style in ("ieee", "vancouver"):
-        return "[1]"
-    if not authors:
-        who = (p.get("title") or "")[:30]
-    elif len(authors) == 1:
-        who = fam(authors[0])
-    elif len(authors) == 2:
-        joiner = " & " if style == "apa" else " and "
-        who = fam(authors[0]) + joiner + fam(authors[1])
-    else:
-        who = fam(authors[0]) + " et al."
-    if style == "mla":
-        return f"({who})"
-    if style == "chicago":
-        return f"({who} {year})"
-    return f"({who}, {year})"
+def citation_issues(p: dict) -> list[str]:
+    """인용하기 전에 채워야 할 빈 항목을 알려준다."""
+    issues = []
+    if not (p.get("title") or "").strip():
+        issues.append("제목")
+    if not p.get("authors"):
+        issues.append("저자")
+    if not p.get("year") and not p.get("issued"):
+        issues.append("연도")
+    t = p.get("item_type") or "article"
+    if t == "preprint" or (t == "article" and p.get("arxiv_id") and not p.get("venue")):
+        if not p.get("arxiv_id") and not p.get("doi") and not p.get("url"):
+            issues.append("arXiv ID 또는 DOI")
+        return issues
+    for key, label in REQUIRED.get(t, []):
+        if not p.get(key):
+            issues.append(label)
+    return issues
 
 
 # --------------------------------------------------------------- BibTeX
@@ -363,6 +212,9 @@ def to_bibtex(papers: list[dict]) -> str:
                 fields.append((k, str(v) if k in ("doi", "url") else _bib_escape(v)))
         if p.get("issue"):
             fields.append(("number", _bib_escape(p["issue"])))
+        date = parse_issued(p.get("issued"), p.get("year"))
+        if len(date) > 1:
+            fields.append(("month", MONTHS[date[1] - 1]))
         if p.get("arxiv_id"):
             fields += [("eprint", p["arxiv_id"]), ("archivePrefix", "arXiv")]
         if p.get("abstract"):
@@ -373,6 +225,8 @@ def to_bibtex(papers: list[dict]) -> str:
         out.append(f"@{t}{{{p.get('citekey') or make_citekey(p)},\n{body}\n}}")
     return "\n\n".join(out) + "\n"
 
+
+MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
 
 LATEX_ACCENTS = {
     r"\"a": "ä", r"\"o": "ö", r"\"u": "ü", r"\"A": "Ä", r"\"O": "Ö", r"\"U": "Ü", r"\ss": "ß",
@@ -464,6 +318,12 @@ def parse_bibtex(text: str) -> list[dict]:
         p["authors"] = authors
         year = re.search(r"\d{4}", fields.get("year", "") or fields.get("date", ""))
         p["year"] = int(year.group(0)) if year else None
+        if fields.get("date"):
+            p["issued"] = format_issued(parse_issued(fields["date"]))
+        elif p["year"] and fields.get("month"):
+            mon = fields["month"].strip().lower()[:3]
+            num = MONTHS.index(mon) + 1 if mon in MONTHS else (int(mon) if mon.isdigit() and 1 <= int(mon) <= 12 else 0)
+            p["issued"] = format_issued([p["year"], num])
         p["venue"] = _delatex(fields.get("journal") or fields.get("journaltitle") or fields.get("booktitle")
                               or fields.get("school") or fields.get("institution") or "")
         for k in ("volume", "publisher", "abstract"):
@@ -501,6 +361,9 @@ def to_ris(papers: list[dict]) -> str:
             lines.append(f"{'T2' if p.get('item_type') == 'conference' else 'JO'}  - {p['venue']}")
         if p.get("year"):
             lines.append(f"PY  - {p['year']}")
+        date = parse_issued(p.get("issued"), p.get("year"))
+        if len(date) > 1:
+            lines.append("DA  - " + "/".join(f"{x:02d}" if i else str(x) for i, x in enumerate(date)) + "/")
         for tag, key in (("VL", "volume"), ("IS", "issue"), ("PB", "publisher"), ("DO", "doi"),
                          ("UR", "url"), ("AB", "abstract")):
             if p.get(key):
@@ -550,9 +413,12 @@ def parse_ris(text: str) -> list[dict]:
             cur["_last"] = "title"
         elif tag in ("JO", "JF", "T2", "J2", "JA", "BT") and not cur.get("venue"):
             cur["venue"] = val
-        elif tag in ("PY", "Y1", "DA") and not cur.get("year"):
-            y = re.search(r"\d{4}", val)
-            cur["year"] = int(y.group(0)) if y else None
+        elif tag in ("PY", "Y1", "DA"):
+            date = parse_issued(val.replace("/", "-"))
+            if date and not cur.get("year"):
+                cur["year"] = date[0]
+            if len(date) > len(parse_issued(cur.get("issued"))):
+                cur["issued"] = format_issued(date)
         elif tag == "VL":
             cur["volume"] = val
         elif tag in ("IS", "CP"):
@@ -582,28 +448,16 @@ def parse_ris(text: str) -> list[dict]:
 
 
 # -------------------------------------------------------------- CSL-JSON
-CSL_TYPES = {"article": "article-journal", "conference": "paper-conference", "book": "book",
-             "chapter": "chapter", "thesis": "thesis", "report": "report", "preprint": "article",
-             "dataset": "dataset"}
-
-
 def to_csl_json(papers: list[dict]) -> str:
-    items = []
-    for p in papers:
-        it = {"id": p.get("citekey") or str(p.get("id")), "type": CSL_TYPES.get(p.get("item_type"), "article"),
-              "title": p.get("title") or "",
-              "author": [({"literal": a["literal"]} if a.get("literal") else
-                          {"family": a.get("family", ""), "given": a.get("given", "")})
-                         for a in p.get("authors") or []]}
-        if p.get("year"):
-            it["issued"] = {"date-parts": [[p["year"]]]}
-        for src, dst in (("venue", "container-title"), ("volume", "volume"), ("issue", "issue"),
-                         ("pages", "page"), ("publisher", "publisher"), ("doi", "DOI"), ("url", "URL"),
-                         ("abstract", "abstract")):
-            if p.get(src):
-                it[dst] = p[src]
-        items.append(it)
-    return json.dumps(items, ensure_ascii=False, indent=2)
+    return json.dumps([to_csl_item(p) for p in papers], ensure_ascii=False, indent=2)
+
+
+def _from_csl_name(a: dict) -> dict:
+    if a.get("literal"):
+        return split_name(a["literal"]) if HANGUL_CJK.search(a["literal"]) else {"literal": a["literal"]}
+    family = " ".join(x for x in (a.get("non-dropping-particle"), a.get("family")) if x)
+    given = " ".join(x for x in (a.get("given"), a.get("dropping-particle")) if x)
+    return {"family": family, "given": given}
 
 
 def parse_any(text: str) -> list[dict]:
@@ -615,17 +469,34 @@ def parse_any(text: str) -> list[dict]:
     if t.startswith("["):
         items = json.loads(t)
         out = []
+        if isinstance(items, dict):
+            items = [items]
+        def text(v) -> str:
+            if isinstance(v, list):
+                return " ".join(str(x) for x in v if x is not None)
+            return "" if v is None else str(v)
+
         for it in items:
-            year = ((it.get("issued") or {}).get("date-parts") or [[None]])[0][0]
+            if not isinstance(it, dict):
+                continue
+            it = {k: (v if k in ("author", "issued") else text(v)) for k, v in it.items()}
+            date = ((it.get("issued") or {}).get("date-parts") or [[]])[0] or []
+            number = str(it.get("number") or "")
+            arxiv = re.sub(r"^arxiv:\s*", "", number, flags=re.I) if number.lower().startswith("arxiv") else ""
+            doi = it.get("DOI", "") or ""
+            if doi.lower().startswith("10.48550/arxiv."):
+                # arXiv DOI는 서재에서 arXiv ID로 관리한다
+                arxiv, doi = arxiv or doi.split(".", 2)[2], ""
+            is_preprint = (it.get("genre") or "").lower() == "preprint" or number.lower().startswith("arxiv")
             out.append({
-                "title": it.get("title", ""), "year": year,
-                "authors": [{"family": a.get("family", ""), "given": a.get("given", "")} if not a.get("literal")
-                            else {"literal": a["literal"]} for a in it.get("author") or []],
-                "venue": it.get("container-title", ""), "volume": str(it.get("volume", "") or ""),
-                "issue": str(it.get("issue", "") or ""), "pages": it.get("page", ""),
-                "publisher": it.get("publisher", ""), "doi": it.get("DOI", ""), "url": it.get("URL", ""),
-                "abstract": it.get("abstract", ""),
-                "item_type": {v: k for k, v in CSL_TYPES.items()}.get(it.get("type"), "article"),
+                "title": it.get("title", ""), "year": date[0] if date else None, "issued": format_issued(date),
+                "authors": [_from_csl_name(a) for a in it.get("author") or [] if isinstance(a, dict)],
+                "venue": it.get("container-title", "") or ("" if is_preprint else ""),
+                "volume": str(it.get("volume", "") or ""), "issue": str(it.get("issue", "") or ""),
+                "pages": str(it.get("page", "") or ""), "doi": doi, "url": it.get("URL", ""), "arxiv_id": arxiv,
+                "publisher": "" if arxiv else it.get("publisher", ""), "abstract": it.get("abstract", ""),
+                "citekey": it.get("citation-key", ""),
+                "item_type": "preprint" if is_preprint else CSL_TYPES_REV.get(it.get("type"), "article"),
             })
         return out
     raise ValueError("BibTeX(.bib), RIS(.ris), CSL-JSON(.json) 형식만 가져올 수 있어요")

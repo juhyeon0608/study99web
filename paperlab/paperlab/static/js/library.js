@@ -2,12 +2,13 @@
 
 import { api, qs } from "./api.js";
 import {
-  addByIdentifierDialog, addPaper, bibliographyDialog, citeDialog, editPaperDialog, exportPapers, importDialog, uploadPdfs,
+  addByIdentifierDialog, addPaper, bibliographyDialog, citeDialog, editPaperDialog, exportPapers, importDialog, issuesBox,
+  uploadPdfs,
 } from "./dialogs.js";
 import { refreshAll, state } from "./state.js";
 import {
   $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
-  popupMenu, promptDialog, renderMarkdown, toast,
+  popupMenu, promptDialog, renderMarkdown, safeUrl, toast,
 } from "./ui.js";
 
 let root = null;
@@ -84,8 +85,7 @@ export function renderLibrary(main) {
       "-",
       { label: "BibTeX (.bib)", sub: "LaTeX · Zotero", action: () => exportPapers("bibtex", scope) },
       { label: "RIS (.ris)", sub: "EndNote · Mendeley", action: () => exportPapers("ris", scope) },
-      { label: "CSL-JSON (.json)", action: () => exportPapers("csljson", scope) },
-      { label: "인용 텍스트 (.txt)", action: () => exportPapers("txt", scope) },
+      { label: "CSL-JSON (.json)", sub: "Zotero · Pandoc", action: () => exportPapers("csljson", scope) },
     ]);
   };
   const list = $(".lib-list", root);
@@ -278,8 +278,10 @@ async function renderDetail() {
   if (!root) return;
   const body = $(".lib-body", root);
   const panel = $(".detail", root);
-  if (noteSaver) { noteSaver.flush(); noteSaver = null; }
   const token = ++detailToken;
+  // 쓰던 노트를 먼저 저장하고 나서 다시 불러와야 방금 친 글자가 사라지지 않는다
+  if (noteSaver) { const pending = noteSaver.flush(); noteSaver = null; await pending; }
+  if (token !== detailToken) return;
   if (!state.activeId) { body.classList.add("no-detail"); panel.innerHTML = ""; return; }
   let p;
   try { p = await api.get(`/api/papers/${state.activeId}`); } catch (e) { return errorToast(e); }
@@ -288,7 +290,7 @@ async function renderDetail() {
   body.classList.remove("no-detail");
   const ids = (p.doi ? `<dt>DOI</dt><dd><a href="https://doi.org/${esc(p.doi)}" target="_blank" rel="noopener">${esc(p.doi)}</a></dd>` : "")
     + (p.arxiv_id ? `<dt>arXiv</dt><dd><a href="https://arxiv.org/abs/${esc(p.arxiv_id)}" target="_blank" rel="noopener">${esc(p.arxiv_id)}</a></dd>` : "")
-    + (p.url && !p.doi ? `<dt>링크</dt><dd><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\//, "").slice(0, 50))}</a></dd>` : "");
+    + (safeUrl(p.url) && !p.doi ? `<dt>링크</dt><dd><a href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\//, "").slice(0, 50))}</a></dd>` : "");
   const venueBits = [p.venue, p.volume && `${p.volume}권`, p.issue && `${p.issue}호`, p.pages && `${p.pages}쪽`].filter(Boolean).join(", ");
   panel.innerHTML = "";
   const inner = el(`<div class="detail-inner">
@@ -303,6 +305,7 @@ async function renderDetail() {
       <button class="btn" data-cite>인용</button>
       <span class="menu-wrap"><button class="btn" data-more>⋯</button></span>
     </div>
+    <div data-issues></div>
     <div class="row" style="gap:14px;flex-wrap:wrap">
       <div class="seg" data-status>${Object.entries(state.meta.statuses).map(([k, v]) => `<button data-v="${k}" class="${p.status === k ? "active" : ""}">${v}</button>`).join("")}</div>
       <div class="rating" title="중요도">${[1, 2, 3, 4, 5].map((n) => `<button data-r="${n}" class="${p.rating >= n ? "on" : ""}">★</button>`).join("")}</div>
@@ -320,6 +323,12 @@ async function renderDetail() {
   panel.appendChild(inner);
   const reload = () => { refreshAll(); };
 
+  const ib = issuesBox(p.cite_issues, () => editPaperDialog(p));
+  if (ib) {
+    ib.insertAdjacentHTML("beforeend", `<button class="btn sm ghost" data-online>온라인에서 찾기</button>`);
+    $("[data-online]", ib).onclick = () => fillOnline(p);
+    $("[data-issues]", inner).appendChild(ib);
+  }
   $("[data-close]", inner).onclick = () => { state.activeId = null; renderList(); renderDetail(); };
   const read = $("[data-read]", inner);
   if (read) read.onclick = () => openPaper(p);
@@ -337,18 +346,7 @@ async function renderDetail() {
     e.stopPropagation();
     popupMenu(e.currentTarget, [
       { label: "정보 수정", action: () => editPaperDialog(p) },
-      { label: "온라인 정보로 채우기", sub: "DOI·arXiv·제목", action: async () => {
-        try {
-          await api.post(`/api/papers/${p.id}/refresh`, {});
-          toast("빈 항목과 피인용 수를 채웠어요", "success");
-          reload();
-        } catch (err) {
-          const id = await promptDialog(`${err.message}\nDOI나 arXiv ID를 직접 입력해 주세요`, { placeholder: "10.xxxx/..." });
-          if (!id) return;
-          try { await api.post(`/api/papers/${p.id}/refresh`, { identifier: id, overwrite: true }); reload(); }
-          catch (e2) { errorToast(e2); }
-        }
-      } },
+      { label: "온라인 정보로 채우기", sub: "DOI·arXiv·제목", action: () => fillOnline(p) },
       ...(p.has_pdf ? [{ label: "PDF 바꾸기", action: () => attachPdf(p.id) },
         { label: "PDF 파일 열기", action: () => window.open(`/api/papers/${p.id}/pdf`, "_blank") }] : []),
       { label: "하이라이트·노트 내보내기 (.md)", action: () => window.open(`/api/annotations/export/${p.id}`, "_blank") },
@@ -436,7 +434,7 @@ function noteEditor(p) {
     try { await api.put(`/api/papers/${p.id}/note`, { content: ta.value }); p.note = ta.value; st.textContent = "저장됨"; }
     catch (e) { st.textContent = "저장 실패"; errorToast(e); }
   }, 700);
-  noteSaver = { flush: () => { if (ta.value !== (p.note || "")) save.flush(); } };
+  noteSaver = { flush: () => (ta.value !== (p.note || "") ? save.flush() : null) };
   ta.oninput = () => { st.textContent = "입력 중…"; save(); };
   $$(".seg button", v).forEach((b) => (b.onclick = () => {
     $$(".seg button", v).forEach((x) => x.classList.toggle("active", x === b));
@@ -454,12 +452,15 @@ function relatedView(p) {
     <div class="seg"><button data-k="cited_by">이 논문을 인용한 논문</button><button data-k="references">참고문헌</button><button data-k="related">관련 논문</button></div>
     <div class="mini-list" style="margin-top:8px"></div></div>`);
   const list = $(".mini-list", v);
+  let seq = 0;
   const load = async (kind, page = 1) => {
+    const mine = ++seq;
     relatedKind = kind;
     $$(".seg button", v).forEach((b) => b.classList.toggle("active", b.dataset.k === kind));
     if (page === 1) list.innerHTML = `<div class="status-line" style="margin-top:6px"><span class="spinner"></span> OpenAlex에서 불러오는 중…</div>`;
     try {
       const res = await api.get(`/api/papers/${p.id}/related${qs({ kind, page })}`);
+      if (mine !== seq) return; // 그사이 다른 탭을 눌렀다
       if (page === 1) list.innerHTML = `<div class="small muted" style="padding:6px 0">${fmtNum(res.total)}편${kind === "cited_by" ? " (피인용 많은 순)" : ""}</div>`;
       else $(".more", list)?.remove();
       for (const it of res.items) list.appendChild(miniResult(it));
@@ -470,7 +471,7 @@ function relatedView(p) {
         list.appendChild(more);
       }
     } catch (e) {
-      list.innerHTML = `<div class="status-line bad" style="margin-top:6px">${esc(e.message)}</div>`;
+      if (mine === seq) list.innerHTML = `<div class="status-line bad" style="margin-top:6px">${esc(e.message)}</div>`;
     }
   };
   $$(".seg button", v).forEach((b) => (b.onclick = () => load(b.dataset.k)));
@@ -480,7 +481,7 @@ function relatedView(p) {
 
 export function miniResult(it) {
   const m = el(`<div class="mini">
-    <div class="t">${it.url ? `<a href="${esc(it.url)}" target="_blank" rel="noopener">${esc(it.title)}</a>` : esc(it.title)}</div>
+    <div class="t">${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener">${esc(it.title)}</a>` : esc(it.title)}</div>
     <div class="s">${esc(authorsShort(it.authors, 2))}${it.venue ? ` · ${esc(it.venue)}` : ""}${it.year ? ` · ${it.year}` : ""}${it.cited_by_count != null ? ` · 인용 ${fmtNum(it.cited_by_count)}` : ""}</div>
     <div class="a">${it.in_library ? `<span class="chip success">서재에 있음</span>` : `<button class="btn sm" data-add>＋ 서재에 추가</button>`}
       ${it.pdf_url && !it.in_library ? `<button class="btn sm ghost" data-addpdf>PDF 포함 추가</button>` : ""}</div></div>`);
@@ -496,6 +497,21 @@ export function miniResult(it) {
   const ap = $("[data-addpdf]", m);
   if (ap) ap.onclick = () => add(true, ap);
   return m;
+}
+
+async function fillOnline(p) {
+  try {
+    const fresh = await api.post(`/api/papers/${p.id}/refresh`, {});
+    const left = fresh.cite_issues || [];
+    toast(left.length ? `채웠어요. 아직 빈 항목: ${left.join(", ")}` : "빈 항목과 피인용 수를 채웠어요", left.length ? "" : "success");
+    refreshAll();
+  } catch (err) {
+    toast(err.message, "error");
+    const id = await promptDialog("DOI나 arXiv ID를 직접 입력해 주세요", { placeholder: "10.xxxx/... 또는 2303.08774" });
+    if (!id) return;
+    try { await api.post(`/api/papers/${p.id}/refresh`, { identifier: id, overwrite: true }); refreshAll(); }
+    catch (e2) { errorToast(e2); }
+  }
 }
 
 async function attachPdf(id) {

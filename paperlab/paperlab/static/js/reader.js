@@ -1,7 +1,8 @@
 // 읽기 화면: PDF 뷰어(PDF.js) + 하이라이트/메모 + AI 요약·질문 + 노트 + 인용
 
 import { api, streamEvents } from "./api.js";
-import { citeDialog, settingsDialog } from "./dialogs.js";
+import { listStyles, render, styleOptions } from "./cite.js";
+import { citeDialog, editPaperDialog, issuesBox, settingsDialog } from "./dialogs.js";
 import { state } from "./state.js";
 import {
   $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, renderMarkdown, renderTex, toast,
@@ -12,6 +13,7 @@ const LEVELS = [["elementary", "초등"], ["middle", "중등"], ["high", "고등
 
 let pdfjs = null;
 let R = null; // 현재 열린 논문의 읽기 상태
+let openSeq = 0; // 열기 도중 다른 화면으로 가면 늦게 끝난 열기를 버린다
 
 async function loadPdfjs() {
   if (!pdfjs) {
@@ -29,8 +31,10 @@ function savePrefs(patch) {
 }
 
 function teardown() {
+  openSeq++;
   if (!R) return;
   R.observer && R.observer.disconnect();
+  R.resizeObserver && R.resizeObserver.disconnect();
   R.abort && R.abort.abort();
   R.pollTimer && clearTimeout(R.pollTimer);
   R.noteSave && R.noteSave.flush();
@@ -47,14 +51,16 @@ export function closeReader() {
 
 export async function openReader(main, pid, startPage = null) {
   teardown();
+  const seq = openSeq;
   main.innerHTML = `<div class="empty"><span class="spinner"></span></div>`;
   let paper;
   try {
     [paper] = await Promise.all([api.get(`/api/papers/${pid}`), api.post(`/api/papers/${pid}/open`)]);
   } catch (e) {
-    main.innerHTML = `<div class="empty"><h3>논문을 열 수 없어요</h3><p>${esc(e.message)}</p><a class="btn" href="#/library">서재로</a></div>`;
+    if (seq === openSeq) main.innerHTML = `<div class="empty"><h3>논문을 열 수 없어요</h3><p>${esc(e.message)}</p><a class="btn" href="#/library">서재로</a></div>`;
     return;
   }
+  if (seq !== openSeq) return;
   const p0 = prefs();
   R = {
     pid, paper, annotations: [], pages: [], scale: 1, fit: p0.fit !== false, color: p0.color || "yellow",
@@ -135,12 +141,14 @@ async function loadPdf(startPage) {
     if (R !== me) { doc.destroy(); return; }
     R.doc = doc;
     $("[data-total]", R.view).textContent = doc.numPages;
+    const pages = [];
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i);
       if (R !== me) return;
       const vp = page.getViewport({ scale: 1 });
-      R.pages.push({ num: i, page, w: vp.width, h: vp.height, el: null, rendered: false, renderTask: null });
+      pages.push({ num: i, page, w: vp.width, h: vp.height, el: null, rendered: false, renderTask: null });
     }
+    R.pages = pages;
   } catch (e) {
     R.pagesEl.innerHTML = `<div class="empty"><h3>PDF를 열지 못했어요</h3><p>${esc(e.message)}</p></div>`;
     return;
@@ -157,11 +165,12 @@ async function loadPdf(startPage) {
     if (!e.target.closest(".sel-pop")) hidePopups();
   });
   let lastW = R.scroller.clientWidth;
-  new ResizeObserver(() => {
-    if (!R || !R.fit || Math.abs(R.scroller.clientWidth - lastW) < 8) return;
+  R.resizeObserver = new ResizeObserver(() => {
+    if (R !== me || !R.fit || Math.abs(R.scroller.clientWidth - lastW) < 8) return;
     lastW = R.scroller.clientWidth;
     setScale(fitScale(), true);
-  }).observe(R.scroller);
+  });
+  R.resizeObserver.observe(R.scroller);
   if (startPage) setTimeout(() => goToPage(startPage), 50);
 }
 
@@ -264,7 +273,7 @@ function onSelectionChange() {
 }
 
 function setScale(scale, fit) {
-  if (!R || !R.pages.length) return;
+  if (!R || !R.pages.length || !R.pages[0].el) return;
   const anchorPage = R.currentPage || 1;
   const pg = R.pages[anchorPage - 1];
   const offset = pg && pg.el ? (R.scroller.scrollTop - pg.el.offsetTop) / pg.el.offsetHeight : 0;
@@ -301,6 +310,7 @@ export function goToPage(n, flashTextStr = "") {
   if (!R || !R.pages.length) return;
   n = Math.max(1, Math.min(R.pages.length, Number(n) || 1));
   const pg = R.pages[n - 1];
+  if (!pg.el) return;
   R.scroller.scrollTo({ top: pg.el.offsetTop - 12, behavior: "smooth" });
   pg.el.classList.add("flash");
   setTimeout(() => pg.el.classList.remove("flash"), 1300);
@@ -559,25 +569,33 @@ function drawJob(body) {
     <p class="small">${esc(j.message || "")}${pct != null ? ` · ${pct}%` : ""}</p>
     <div class="progress ${pct == null ? "indeterminate" : ""}" style="margin:14px 20px"><div style="width:${pct || 0}%"></div></div>
     <p class="small muted">보통 1~3분 걸려요. 그동안 논문을 읽거나 다른 화면에 다녀와도 괜찮아요.</p></div>`));
+  pollJob();
+}
+
+function pollJob() {
   const me = R;
+  if (!R || R.pollTimer) return; // 이미 확인 중
   R.pollTimer = setTimeout(async () => {
     if (R !== me) return;
-    try {
-      R.job = await api.get(`/api/jobs/${j.id}`);
-    } catch (e) { R.job = { ...j, status: "error", error: e.message }; }
+    let job;
+    try { job = await api.get(`/api/jobs/${me.job.id}`); } catch (e) { job = { ...me.job, status: "error", error: e.message }; }
     if (R !== me) return;
-    if (R.job.status === "done") {
-      const r = await api.get(`/api/papers/${R.pid}/summary`);
+    R.pollTimer = null;
+    R.job = job;
+    if (job.status === "running") {
+      pollJob();
+    } else if (job.status === "done") {
+      let r;
+      try { r = await api.get(`/api/papers/${me.pid}/summary`); } catch (e) { r = { summary: null }; }
+      if (R !== me) return;
       R.summary = r.summary;
       R.job = null;
       toast("AI 요약이 준비됐어요", "success");
     }
     if (R.tab !== "summary") return;
-    const b = $(".panel-body", R.view);
-    if (R.job && R.job.status === "error") {
-      const err = R.job.error;
+    if (job.status === "error") {
       R.job = null;
-      return drawSummaryCta(b, err);
+      return drawSummaryCta($(".panel-body", R.view), job.error);
     }
     showTab("summary");
   }, 1500);
@@ -875,22 +893,44 @@ async function noteTab(body) {
 // ------------------------------------------------------------ info/cite
 async function citeTab(body) {
   const me = R;
-  const [p, cite] = await Promise.all([api.get(`/api/papers/${R.pid}`), api.get(`/api/papers/${R.pid}/cite`)]);
+  const [p, cite, styles] = await Promise.all([api.get(`/api/papers/${R.pid}`), api.get(`/api/papers/${R.pid}/cite`),
+    listStyles().catch(() => [])]);
   if (R !== me || R.tab !== "cite") return;
-  const pref = state.settings.citation_style || "apa";
-  const s = cite.styles[pref];
   const v = el(`<div>
     <h3 style="margin:0 0 4px;font-size:15px;line-height:1.4">${esc(p.title)}</h3>
     <div class="small muted">${esc(authorsShort(p.authors, 8))}</div>
-    <div class="small muted">${esc([p.venue, p.year].filter(Boolean).join(" · "))}</div>
+    <div class="small muted">${esc([p.venue, p.issued || p.year].filter(Boolean).join(" · "))}</div>
     ${p.abstract ? `<div class="section-title">초록</div><div class="abstract">${esc(p.abstract)}</div>` : ""}
-    <div class="section-title">인용 (${esc(state.meta.styles[pref])})</div>
-    <div class="cite-block"><div class="body">${s.html}</div>
-      <div class="row" style="margin-top:8px"><span class="small muted">본문: ${esc(s.in_text)}</span><span class="spacer"></span>
-      <button class="btn sm" data-copy>복사</button><button class="btn sm" data-bib>BibTeX</button><button class="btn sm" data-all>모든 형식</button></div></div>
+    <div class="section-title">인용</div>
+    <div data-issues></div>
+    <select class="input" data-style style="width:100%;margin-bottom:8px">${styleOptions(styles, state.settings.citation_style || "apa")}</select>
+    <div data-out><div class="status-line"><span class="spinner"></span> 만드는 중…</div></div>
+    <div class="row" style="margin-top:8px"><span class="spacer"></span><button class="btn sm" data-bib>BibTeX 복사</button><button class="btn sm" data-all>자세히</button></div>
   </div>`);
-  $("[data-copy]", v).onclick = () => copyText(s.text, s.html);
+  const ib = issuesBox(cite.issues, async () => editPaperDialog(await api.get(`/api/papers/${R.pid}`)));
+  if (ib) $("[data-issues]", v).appendChild(ib);
+  const draw = async () => {
+    const out = $("[data-out]", v);
+    try {
+      const r = await render([cite.csl], { style: $("[data-style]", v).value });
+      const e = r.entries[0] || { html: "", text: "" };
+      out.innerHTML = "";
+      const block = el(`<div class="cite-block"><div class="body">${e.html || window.DOMPurify.sanitize(r.citation.html)}</div>
+        <div class="row" style="margin-top:8px"><span class="small muted">${r.note ? "각주" : "본문"}: ${window.DOMPurify.sanitize(r.citation.html)}</span><span class="spacer"></span>
+        <button class="btn sm" data-c1>참고문헌 복사</button><button class="btn sm" data-c2>본문 인용 복사</button></div></div>`);
+      $("[data-c1]", block).onclick = () => copyText(e.text || r.citation.text, e.html || r.citation.html);
+      $("[data-c2]", block).onclick = () => copyText(r.citation.text, r.citation.html);
+      out.appendChild(block);
+    } catch (err) {
+      out.innerHTML = `<div class="status-line bad">${esc(err.message)}</div>`;
+    }
+  };
+  $("[data-style]", v).onchange = async () => {
+    try { state.settings = await api.put("/api/settings", { citation_style: $("[data-style]", v).value }); } catch { /* 무시 */ }
+    draw();
+  };
   $("[data-bib]", v).onclick = () => copyText(cite.bibtex);
   $("[data-all]", v).onclick = () => citeDialog(R.pid);
   body.appendChild(v);
+  draw();
 }

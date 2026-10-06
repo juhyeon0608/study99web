@@ -16,7 +16,7 @@ export function el(html) {
 export function debounce(fn, ms) {
   let t;
   const wrapped = (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
-  wrapped.flush = (...args) => { clearTimeout(t); fn(...args); };
+  wrapped.flush = (...args) => { clearTimeout(t); return fn(...args); };
   return wrapped;
 }
 
@@ -159,10 +159,46 @@ export function renderMarkdown(text, { citations = false } = {}) {
     .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => keep(tex(m.trim(), false)))
     .replace(/(^|[^\\$])\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d)/g, (_, pre, m) => pre + keep(tex(m, false)));
   let html = window.marked ? window.marked.parse(src, { breaks: true, gfm: true }) : `<p>${esc(src)}</p>`;
-  html = window.DOMPurify ? window.DOMPurify.sanitize(html) : html;
-  html = html.replace(/@@MATH(\d+)@@/g, (_, i) => store[Number(i)]);
-  if (citations) html = html.replace(/\[(\d{1,3})\]/g, '<button class="cite-ref" data-cite="$1">$1</button>');
-  return html;
+  html = window.DOMPurify ? window.DOMPurify.sanitize(html) : esc(src);
+  // 수식·인용 번호는 정화한 뒤 텍스트 노드에서만 바꾼다 (속성 안의 같은 글자는 건드리지 않는다)
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  const walker = document.createTreeWalker(t.content, NodeFilter.SHOW_TEXT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  const pattern = citations ? /@@MATH(\d+)@@|\[(\d{1,3})\]/g : /@@MATH(\d+)@@/g;
+  for (const node of nodes) {
+    const text = node.nodeValue;
+    if (!pattern.test(text)) continue;
+    pattern.lastIndex = 0;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const m of text.matchAll(pattern)) {
+      frag.append(text.slice(last, m.index));
+      if (m[1] !== undefined) {
+        const span = document.createElement("span");
+        span.innerHTML = store[Number(m[1])];
+        frag.append(...span.childNodes);
+      } else {
+        const b = document.createElement("button");
+        b.className = "cite-ref";
+        b.dataset.cite = m[2];
+        b.textContent = m[2];
+        frag.append(b);
+      }
+      last = m.index + m[0].length;
+    }
+    frag.append(text.slice(last));
+    node.replaceWith(frag);
+  }
+  const div = document.createElement("div");
+  div.appendChild(t.content);
+  return div.innerHTML;
+}
+
+// http(s) 주소만 링크로 쓴다 (javascript: 같은 주소 차단)
+export function safeUrl(url) {
+  return /^https?:\/\//i.test(String(url || "").trim()) ? String(url).trim() : "";
 }
 
 export function renderTex(latex, display = true) {

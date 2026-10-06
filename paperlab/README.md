@@ -67,10 +67,16 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 �
 - **질문하기**: 논문 내용을 근거로 답하고, 답의 `[1]`을 누르면 근거가 있는 쪽으로 이동해 해당 문장을 표시
 
 ### 5. 인용 · 내보내기
-- APA 7판, MLA 9판, Chicago(저자-연도), IEEE, Harvard, Vancouver — 서식 그대로 복사, 본문 내 인용 표기 포함
-- 한국어 저자 이름은 국문 표기(홍길동, 김철수 (2023).)
-- **BibTeX(.bib) · RIS(.ris, EndNote/Mendeley) · CSL-JSON** 가져오기/내보내기
-- 선택한 논문이나 컬렉션으로 **참고문헌 목록** 만들기
+인용 문구는 **Zotero·Mendeley와 같은 인용 엔진(citeproc-js)과 공식 CSL 스타일 파일**로 만듭니다. 손으로 짠 규칙이 아니라 학계 표준 스타일 정의를 그대로 따르므로 형식이 정확합니다.
+
+- **기본 제공 20개 스타일**: APA 7판, IEEE, Chicago(저자-연도·각주), MLA 9판, Harvard, Vancouver(NLM), Nature, AMA, ACS, ACM, Elsevier, Springer, ASA, 국내 학술지(대한내과학회지, Korean Journal of Radiology, 대한토목학회논문집 등)
+- **어떤 학술지 형식이든 추가**: [Zotero 스타일 저장소](https://www.zotero.org/styles)(10,000+개)에서 투고할 학술지의 `.csl` 파일을 받아 *설정 → 학술지 스타일 추가*. 종속 스타일도 지원
+- **본문 인용과 참고문헌 항목을 따로 복사** (기울임꼴 등 서식 유지 → Word·한글·Google Docs에 그대로 붙여넣기), 각주 스타일은 각주 문구
+- **참고문헌 목록**: 선택한 논문·컬렉션으로 생성, 저자-연도 스타일은 **국문 문헌 먼저** 정렬(국내 학위논문 관례), 번호식 스타일은 본문 인용 순서대로 ↑↓ 재배열, `.txt`·`.html`(Word에서 열림) 저장
+- **인용 정보 점검**: 스타일에 필요한 항목(학술지명·권·쪽·출판사 등)이 비면 상세 패널·인용 창에 경고하고, *온라인에서 찾기*로 채움
+- 정확한 메타데이터: 발행일(월·일까지), arXiv 프리프린트는 저장소·식별자·DOI(10.48550/arXiv.…) 형식, 한국어 저자는 전체 이름으로 인용(홍길동 & 김철수, 2023), `van`·`de` 같은 성 앞 접두어 처리
+- APA처럼 제목을 문장형으로 쓰는 스타일을 위한 *문장형으로* 변환 버튼 (약어·고유명사는 확인 후 저장)
+- **BibTeX(.bib) · RIS(.ris, EndNote/Mendeley) · CSL-JSON** 가져오기/내보내기 (발행일 포함)
 
 ## 비교
 
@@ -93,7 +99,7 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 �
 | macOS | `~/Library/Application Support/PaperLab` |
 | Linux | `~/.local/share/paperlab` |
 
-`library.db`(서재·노트·하이라이트·AI 결과), `pdfs/`(PDF 파일), `settings.json`(설정·API 키)이 들어 있습니다.
+`library.db`(서재·노트·하이라이트·AI 결과), `pdfs/`(PDF 파일), `styles/`(직접 추가한 인용 스타일), `settings.json`(설정·API 키)이 들어 있습니다.
 폴더째 복사하면 백업되고, `PAPERLAB_HOME` 환경변수나 `--data-dir`로 위치를 바꿀 수 있습니다.
 
 ## 구조
@@ -108,12 +114,18 @@ paperlab/
 │  ├─ db.py          SQLite: 논문·컬렉션·태그·하이라이트·노트·AI 결과, FTS5 전문 검색
 │  ├─ pdf.py         PyMuPDF: 쪽별 텍스트 추출, DOI/arXiv/제목 인식
 │  ├─ sources.py     OpenAlex · arXiv · Semantic Scholar · Crossref
-│  ├─ citations.py   인용 스타일, BibTeX · RIS · CSL-JSON
+│  ├─ citations.py   CSL-JSON 변환, 인용 정보 점검, BibTeX · RIS · CSL-JSON
+│  ├─ csl_style.py   CSL 스타일 파일 정보
 │  ├─ ai.py          요약(구조화 출력) · Q&A(인용) — Anthropic API / Claude CLI
 │  ├─ config.py      데이터 폴더, settings.json
-│  └─ static/        화면 (HTML · CSS · ES 모듈 JS, PDF.js · KaTeX · marked · DOMPurify 포함)
+│  └─ static/        화면 (HTML · CSS · ES 모듈 JS, PDF.js · citeproc-js · CSL 스타일 · KaTeX · marked · DOMPurify 포함)
 └─ tests/            pytest
 ```
+
+## 보안
+
+서버는 `127.0.0.1`에서만 열리고, 다른 호스트 이름(DNS 리바인딩)·다른 사이트에서 온 요청(`Origin` 검사)·
+화면이 붙이는 `X-PaperLab` 헤더가 없는 쓰기 요청(CSRF)을 거부합니다. AI 답변과 외부 데이터는 DOMPurify로 거른 뒤 표시합니다.
 
 ## 개발
 

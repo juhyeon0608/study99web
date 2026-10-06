@@ -1,7 +1,8 @@
 // 서버 API 호출 도우미
 
 async function request(method, url, body, opts = {}) {
-  const init = { method, headers: {} };
+  // 쓰기 요청을 이 화면에서 보냈다는 표시 (서버가 다른 사이트의 요청을 막는 데 쓴다)
+  const init = { method, headers: { "X-PaperLab": "1" } };
   if (body instanceof FormData) {
     init.body = body;
   } else if (body !== undefined) {
@@ -43,7 +44,7 @@ export function qs(params) {
 export async function streamEvents(url, body, onEvent, signal) {
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", "X-PaperLab": "1" },
     body: JSON.stringify(body),
     signal,
   });

@@ -9,7 +9,7 @@ description = "설치형 논문 연구 도구: 검색·수집, 서재 관리, PD
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-  "fastapi>=0.110",
+  "fastapi>=0.115",
   "uvicorn>=0.29",
   "python-multipart>=0.0.9",
   "pymupdf>=1.24",

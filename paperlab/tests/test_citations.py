@@ -1,27 +1,56 @@
 from paperlab import citations
 
 
-def test_apa(sample):
-    out = citations.format_citation(sample, "apa")
-    assert out["text"].startswith("Vaswani, A., Shazeer, N., & Parmar, N. (2017). Attention Is All You Need.")
-    assert "<i>Advances in Neural Information Processing Systems</i>" in out["html"]
-    assert "https://doi.org/10.48550/arxiv.1706.03762" in out["text"]
+def test_csl_item_conference(sample):
+    sample.update(doi="10.5555/3295222.3295349", issued="2017-12-04", citekey="vaswani2017attention", id=7)
+    it = citations.to_csl_item(sample)
+    assert it["id"] == "7" and it["citation-key"] == "vaswani2017attention"
+    assert it["type"] == "paper-conference"
+    assert it["container-title"] == "Advances in Neural Information Processing Systems"
+    assert it["issued"] == {"date-parts": [[2017, 12, 4]]}
+    assert it["page"] == "5998-6008" and it["DOI"] == "10.5555/3295222.3295349"
+    assert it["author"][0] == {"family": "Vaswani", "given": "Ashish"}
 
 
-def test_other_styles(sample):
-    assert citations.format_citation(sample, "mla")["text"].startswith("Vaswani, Ashish, et al. “Attention Is All You Need.”")
-    assert citations.format_citation(sample, "ieee")["text"].startswith(
-        "A. Vaswani, N. Shazeer, and N. Parmar, “Attention Is All You Need,”")
-    assert citations.format_citation(sample, "chicago")["text"].startswith(
-        "Vaswani, Ashish, Noam Shazeer, and Niki Parmar. 2017.")
-    assert citations.format_citation(sample, "vancouver")["text"].startswith("Vaswani A, Shazeer N, Parmar N.")
-    assert citations.in_text(sample, "apa") == "(Vaswani et al., 2017)"
+def test_csl_item_arxiv_preprint():
+    p = {"title": "GPT-4 Technical Report", "authors": [{"literal": "OpenAI"}], "year": 2023,
+         "arxiv_id": "2303.08774", "item_type": "preprint", "venue": "arXiv"}
+    it = citations.to_csl_item(p)
+    assert it["type"] == "article" and it["genre"] == "Preprint" and it["publisher"] == "arXiv"
+    assert it["number"] == "arXiv:2303.08774" and it["DOI"] == "10.48550/arXiv.2303.08774"
+    assert "container-title" not in it and it["author"] == [{"literal": "OpenAI"}]
 
 
-def test_korean_names():
-    p = {"title": "한국어 논문", "authors": [{"family": "홍", "given": "길동"}, {"family": "김", "given": "철수"}],
-         "year": 2023, "venue": "정보과학회논문지"}
-    assert citations.format_citation(p, "apa")["html"].startswith("홍길동, 김철수 (2023). 한국어 논문. <i>")
+def test_csl_names_korean_and_particles():
+    p = {"title": "그래프 신경망 연구", "year": 2023, "venue": "정보과학회논문지",
+         "authors": [{"family": "홍", "given": "길동"}, {"family": "van Beethoven", "given": "Ludwig"}]}
+    it = citations.to_csl_item(p)
+    assert it["author"][0] == {"literal": "홍길동"}
+    assert it["author"][1] == {"family": "Beethoven", "given": "Ludwig", "non-dropping-particle": "van"}
+    assert it["language"] == "ko"
+
+
+def test_citation_issues(sample):
+    assert citations.citation_issues(sample) == []
+    assert citations.citation_issues(dict(sample, pages="")) == ["쪽"]
+    assert citations.citation_issues({"title": "x", "item_type": "book"}) == ["저자", "연도", "출판사"]
+    pre = {"title": "x", "authors": [{"family": "a"}], "year": 2020, "item_type": "preprint", "arxiv_id": "2001.00001"}
+    assert citations.citation_issues(pre) == []
+    art = {"title": "x", "authors": [{"family": "a"}], "year": 2020, "item_type": "article"}
+    assert citations.citation_issues(art) == ["학술지 이름", "권", "쪽"]
+
+
+def test_csl_import_tolerates_arrays():
+    out = citations.parse_any('[{"type": "article-journal", "title": ["Deep", "Learning"], "container-title": ["Nature"],'
+                              ' "volume": 521, "author": [{"family": "LeCun", "given": "Yann"}]}]')
+    assert out[0]["title"] == "Deep Learning" and out[0]["venue"] == "Nature" and out[0]["volume"] == "521"
+
+
+def test_issued_parsing():
+    assert citations.parse_issued("2017-06-12") == [2017, 6, 12]
+    assert citations.parse_issued("2017/13/40") == [2017]
+    assert citations.parse_issued("", 2015) == [2015]
+    assert citations.format_issued([2017, 6]) == "2017-06"
 
 
 def test_bibtex_roundtrip(sample):
@@ -31,6 +60,8 @@ def test_bibtex_roundtrip(sample):
     assert "pages = {5998--6008}" in bib
     back = citations.parse_bibtex(bib)[0]
     assert back["title"] == sample["title"]
+    assert "month = {dec}" in citations.to_bibtex([dict(sample, issued="2017-12-04")])
+    assert citations.parse_bibtex(citations.to_bibtex([dict(sample, issued="2017-12-04")]))[0]["issued"] == "2017-12"
     assert back["authors"][0] == {"given": "Ashish", "family": "Vaswani"}
     assert back["year"] == 2017 and back["pages"] == "5998-6008"
     assert back["item_type"] == "conference"
@@ -60,13 +91,19 @@ def test_ris_roundtrip(sample):
     assert "TY  - CONF" in ris and "SP  - 5998" in ris and "EP  - 6008" in ris
     [back] = citations.parse_ris(ris)
     assert back["title"] == sample["title"]
+    assert citations.parse_ris(citations.to_ris([dict(sample, issued="2017-12-04")]))[0]["issued"] == "2017-12-04"
     assert back["pages"] == "5998-6008"
     assert back["authors"][1] == {"given": "Noam", "family": "Shazeer"}
 
 
 def test_parse_any_csl(sample):
-    out = citations.parse_any(citations.to_csl_json([sample]))
-    assert out[0]["title"] == sample["title"] and out[0]["year"] == 2017
+    out = citations.parse_any(citations.to_csl_json([dict(sample, issued="2017-12-04")]))
+    assert out[0]["title"] == sample["title"] and out[0]["year"] == 2017 and out[0]["issued"] == "2017-12-04"
+    assert out[0]["item_type"] == "conference"
+    pre = citations.parse_any(citations.to_csl_json([{"title": "P", "arxiv_id": "2303.08774", "item_type": "preprint",
+                                                     "authors": [{"family": "홍", "given": "길동"}]}]))[0]
+    assert pre["arxiv_id"] == "2303.08774" and pre["item_type"] == "preprint" and pre["doi"] == ""
+    assert pre["authors"] == [{"family": "홍", "given": "길동"}]
 
 
 def test_bibtex_key_without_library_id(sample):

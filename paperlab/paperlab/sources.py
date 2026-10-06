@@ -25,7 +25,7 @@ S2 = "https://api.semanticscholar.org/graph/v1"
 CROSSREF = "https://api.crossref.org"
 
 S2_FIELDS = ("title,authors,year,venue,externalIds,abstract,citationCount,openAccessPdf,url,"
-             "publicationTypes,journal,tldr")
+             "publicationTypes,journal,publicationDate")
 
 ATOM = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom",
         "opensearch": "http://a9.com/-/spec/opensearch/1.1/"}
@@ -82,7 +82,7 @@ def _empty(source: str) -> dict:
     return {"source": source, "title": "", "authors": [], "year": None, "venue": "", "volume": "",
             "issue": "", "pages": "", "publisher": "", "doi": "", "arxiv_id": "", "openalex_id": "",
             "s2_id": "", "url": "", "pdf_url": "", "abstract": "", "cited_by_count": None,
-            "item_type": "article", "keywords": [], "tldr": ""}
+            "item_type": "article", "keywords": [], "tldr": "", "issued": ""}
 
 
 def _openalex_abstract(inv: dict | None) -> str:
@@ -106,6 +106,8 @@ def norm_openalex(w: dict) -> dict:
     p["authors"] = [split_name((a.get("author") or {}).get("display_name", ""))
                     for a in w.get("authorships") or []]
     p["year"] = w.get("publication_year")
+    p["issued"] = w.get("publication_date") or ""
+    p["language"] = w.get("language") or ""
     loc = w.get("primary_location") or {}
     src = loc.get("source") or {}
     p["venue"] = src.get("display_name") or ""
@@ -148,6 +150,7 @@ def norm_arxiv_entry(e: ET.Element) -> dict:
     p["authors"] = [split_name(a.findtext("a:name", "", ATOM)) for a in e.findall("a:author", ATOM)]
     published = text("a:published")
     p["year"] = int(published[:4]) if published[:4].isdigit() else None
+    p["issued"] = published[:10]
     abs_url = text("a:id")
     m = re.search(r"arxiv\.org/abs/(.+?)(v\d+)?$", abs_url)
     p["arxiv_id"] = m.group(1) if m else ""
@@ -167,6 +170,7 @@ def norm_s2(d: dict) -> dict:
     p["title"] = d.get("title") or ""
     p["authors"] = [split_name(a.get("name", "")) for a in d.get("authors") or []]
     p["year"] = d.get("year")
+    p["issued"] = d.get("publicationDate") or ""
     journal = d.get("journal") or {}
     p["venue"] = d.get("venue") or journal.get("name") or ""
     p["volume"] = journal.get("volume") or ""
@@ -200,8 +204,13 @@ def norm_crossref(m: dict) -> dict:
         parts = (m.get(key) or {}).get("date-parts") or [[None]]
         if parts and parts[0] and parts[0][0]:
             p["year"] = parts[0][0]
+            p["issued"] = "-".join([f"{parts[0][0]:04d}"] + [f"{x:02d}" for x in parts[0][1:3] if x])
             break
+    if m.get("language"):
+        p["language"] = m["language"]
     p["venue"] = " ".join(m.get("container-title") or [])
+    if not p["venue"] and m.get("type") == "dissertation":
+        p["venue"] = ((m.get("institution") or [{}])[0] or {}).get("name", "")
     p["volume"] = m.get("volume") or ""
     p["issue"] = m.get("issue") or ""
     p["pages"] = (m.get("page") or "").replace("--", "-")
