@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PaperLab</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b5bdb'/%3E%3Cpath d='M10 8h9l5 5v11a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z' fill='white'/%3E%3Cpath d='M12 17h8M12 21h6' stroke='%233b5bdb' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/vendor/katex/katex.min.css" />
+  <link rel="stylesheet" href="/static/css/app.css" />
+  <script src="/static/vendor/katex/katex.min.js" defer></script>
+  <script src="/static/vendor/marked.min.js" defer></script>
+  <script src="/static/vendor/purify.min.js" defer></script>
+  <script type="module" src="/static/js/app.js"></script>
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div class="brand">
+        <span class="brand-mark">P</span>
+        <span class="brand-name">PaperLab</span>
+      </div>
+      <nav class="nav-main">
+        <button class="nav-item" data-view="discover"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4"/></svg>논문 찾기</button>
+      </nav>
+      <div class="nav-section">
+        <div class="nav-title">내 서재</div>
+        <button class="nav-item" data-filter="all"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h4v14H4zM10 5h4v14h-4zM16.5 5.5l3.5-1 3 13.5-3.5 1z"/></svg>모든 논문<span class="count" data-count="total"></span></button>
+        <button class="nav-item" data-filter="recent"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"/></svg>최근 연 논문</button>
+        <button class="nav-item" data-filter="starred"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9z"/></svg>즐겨찾기<span class="count" data-count="starred"></span></button>
+        <button class="nav-item" data-filter="status:unread"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16z"/></svg>읽을 예정<span class="count" data-count="unread"></span></button>
+        <button class="nav-item" data-filter="status:reading"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 4v16"/><path d="M12 4a8 8 0 0 0 0 16z" fill="currentColor" stroke="none"/></svg>읽는 중<span class="count" data-count="reading"></span></button>
+        <button class="nav-item" data-filter="status:done"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM8.5 12.2l2.4 2.3 4.6-4.8"/></svg>다 읽음<span class="count" data-count="done"></span></button>
+        <button class="nav-item" data-filter="unfiled"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7.5h11L20 13v5.5H4zM4 13h5l1 2h4l1-2h5"/></svg>미분류<span class="count" data-count="unfiled"></span></button>
+      </div>
+      <div class="nav-section">
+        <div class="nav-title">컬렉션 <button class="icon-btn small" id="add-collection" title="새 컬렉션"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <div id="collection-tree"></div>
+      </div>
+      <div class="nav-section">
+        <div class="nav-title">태그</div>
+        <div id="tag-list"></div>
+      </div>
+      <div class="sidebar-foot">
+        <button class="nav-item" id="open-settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4"/></svg>설정</button>
+        <button class="icon-btn" id="theme-toggle" title="밝게/어둡게"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+      </div>
+    </aside>
+    <main id="main"></main>
+  </div>
+  <div id="toasts" aria-live="polite"></div>
+  <div id="drop-overlay" class="hidden"><div>PDF를 놓으면 서재에 추가돼요</div></div>
+</body>
+</html>
