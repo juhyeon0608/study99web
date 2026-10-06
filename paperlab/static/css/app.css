@@ -8,10 +8,11 @@
   --text: #1b1f27;
   --text-2: #4a5161;
   --text-3: #7a8293;
-  --accent: #3b5bdb;
-  --accent-hover: #2f4cc4;
-  --accent-soft: #e9eefe;
-  --accent-text: #2c47b8;
+  --accent: #1e3a8a;
+  --accent-hover: #1e40af;
+  --accent-soft: #eef2fa;
+  --accent-text: #1e40af;
+  --accent-rgb: 30, 58, 138; /* --accent 의 RGB 값 — 반투명 강조(rgba)용 */
   --success: #2b8a3e;
   --success-soft: #e6f4ea;
   --warn: #b35c00;
@@ -41,10 +42,12 @@
   --text: #e7e9ee;
   --text-2: #b4bac6;
   --text-3: #868d9c;
-  --accent: #6b8cff;
-  --accent-hover: #87a2ff;
-  --accent-soft: #232c4a;
-  --accent-text: #9fb4ff;
+  /* 네이비는 어두운 배경에서 대비 부족 → 같은 계열의 로열 블루. 흰 글자 4.85:1, 배경 대비 3.83:1 */
+  --accent: #4169e1;
+  --accent-hover: #3459d1;
+  --accent-soft: #1b2440;
+  --accent-text: #9db5f5;
+  --accent-rgb: 65, 105, 225;
   --success: #51cf66;
   --success-soft: #1d3324;
   --warn: #ffa94d;
@@ -63,6 +66,8 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 button, input, select, textarea { font: inherit; color: inherit; }
+/* 체크박스·라디오·범위 막대도 대표색으로 (브라우저 기본 파랑 대신) */
+input[type=checkbox], input[type=radio], input[type=range], progress { accent-color: var(--accent); }
 a { color: var(--accent-text); text-decoration: none; }
 a:hover { text-decoration: underline; }
 .hidden { display: none !important; }
@@ -329,7 +334,7 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 .hl-rect.purple { background: var(--hl-purple); }
 .hl-rect.has-comment::after { content: ""; position: absolute; right: -5px; top: -5px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
 .hl-rect.pulse { animation: pulse 1.4s ease-out 2; }
-@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(59, 91, 219, 0); } 50% { box-shadow: 0 0 0 4px rgba(59, 91, 219, .45); } }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(var(--accent-rgb), 0); } 50% { box-shadow: 0 0 0 4px rgba(var(--accent-rgb), .45); } }
 .textLayer {
   position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1; line-height: 1; text-size-adjust: none;
   forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; z-index: 1;
@@ -337,7 +342,7 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
 .textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) { z-index: 1; }
 .textLayer span.markedContent { top: 0; height: 0; }
-.textLayer ::selection { background: rgba(0, 90, 255, .25); }
+.textLayer ::selection { background: rgba(var(--accent-rgb), .25); }
 .textLayer br::selection { background: transparent; }
 .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
 .textLayer.selecting .endOfContent { top: 0; }
@@ -465,7 +470,7 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 .toast { background: #1f2430; color: #fff; padding: 9px 16px; border-radius: 10px; font-size: 13px; box-shadow: var(--shadow-lg); animation: fade .15s; max-width: 560px; pointer-events: auto; }
 .toast.error { background: var(--danger); }
 .toast.success { background: #2b8a3e; }
-#drop-overlay { position: fixed; inset: 0; z-index: 150; background: rgba(59, 91, 219, .15); border: 3px dashed var(--accent); display: grid; place-items: center; pointer-events: none; }
+#drop-overlay { position: fixed; inset: 0; z-index: 150; background: rgba(var(--accent-rgb), .15); border: 3px dashed var(--accent); display: grid; place-items: center; pointer-events: none; }
 #drop-overlay div { background: var(--surface); padding: 16px 24px; border-radius: 12px; font-weight: 650; box-shadow: var(--shadow-lg); }
 .upload-result { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; align-items: flex-start; }
 .upload-result .st { flex: none; width: 18px; }
@@ -536,7 +541,7 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 .doc pre { background: #f1f3f6; padding: 10px; border-radius: 6px; font-size: 12.5px; white-space: pre-wrap; }
 .doc .doc-pb { border-top: 1px dashed #cdd3dc; color: #7a8293; font-size: 11px; text-align: center; margin: 18px 0; }
 .doc .doc-bib.hanging { padding-left: 2em; text-indent: -2em; }
-.doc .fn-ref { color: #2c47b8; font-size: 11px; }
+.doc .fn-ref { color: #1e40af; /* 문서 미리보기는 항상 흰 종이 → 밝은 테마 --accent-text 고정 */ font-size: 11px; }
 .doc .doc-notes { border-top: 1px solid #cdd3dc; margin-top: 28px; padding-top: 8px; font-size: 12.5px; line-height: 1.6; }
 .doc .doc-notes ol { padding-left: 1.4em; margin: 0; }
 .cite-warn { background: #fff1e0; color: #b35c00; border-radius: 3px; padding: 0 2px; }
