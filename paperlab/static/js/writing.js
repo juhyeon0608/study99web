@@ -4,12 +4,18 @@
 import { api, downloadBlob, streamEvents } from "./api.js";
 import { htmlToRuns, listStyles, renderClusters, styleOptions } from "./cite.js";
 import { settingsDialog } from "./dialogs.js";
+import {
+  applyDocFormat, coverDialog, exportWarnings, formatManagerDialog, formatOptions, getFormat, listFormats,
+  missingCoverFields, usesHancomFonts, warningText,
+} from "./formats.js";
 import { state } from "./state.js";
 import {
   $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles, popupMenu, toast,
 } from "./ui.js";
 
-const W = { m: null, saver: null, previewTimer: null, papers: null, view: "split", seq: 0 };
+const W = { m: null, saver: null, previewTimer: null, papers: null, view: "split", seq: 0, formats: null, fmt: null };
+const LONG = { duration: 8000 };
+const hancomNoticeShown = new Set(); // 한컴 글꼴 안내: 세션마다 양식별 한 번
 const BIB_MARKERS = ["[참고문헌]", "[References]", "[Bibliography]", "[REFERENCES]"];
 const CITE_RE = /\[(?=[^\[\]]*@)([^\[\]]{1,400})\]/g;
 const KEY_RE = /(-?)@([\p{L}\p{N}_][\p{L}\p{N}_:.#$%&\-+?<>~/]*)/u;
@@ -279,9 +285,12 @@ export async function openManuscript(main, id) {
     return;
   }
   if (seq !== W.seq) return;
-  const styles = await listStyles().catch(() => []);
+  const [styles, formats] = await Promise.all([listStyles().catch(() => []), listFormats(true).catch(() => null)]);
   if (seq !== W.seq) return;
   W.m = m;
+  W.formats = formats;
+  m.cover = m.cover && typeof m.cover === "object" ? m.cover : {};
+  const fmtId = formats && formats.some((f) => f.id === m.doc_format) ? m.doc_format : "default";
   let viewMode = "split";
   try { viewMode = localStorage.getItem("paperlab.writeView") || "split"; } catch { /* 무시 */ }
   main.innerHTML = "";
@@ -291,6 +300,8 @@ export async function openManuscript(main, id) {
       <div class="title" data-title>${esc(m.title)}</div>
       <span class="small muted" data-save></span>
       <select class="input" data-style title="인용 스타일" style="width:auto;max-width:190px">${styleOptions(styles, m.style || state.settings.citation_style || "apa")}</select>
+      <select class="input fmt-select ${formats ? "" : "hidden"}" data-format title="내보낼 때 쓸 논문 양식" aria-label="논문 양식">${formats ? formatOptions(formats, fmtId, { manage: true }) : ""}</select>
+      <button type="button" class="btn sm cover-btn hidden" data-cover title="표지 · 속표지 · 인정서에 들어갈 정보" aria-label="표지 정보">표지 정보</button>
       <span class="menu-wrap"><button class="btn sm" data-export>내보내기 ▾</button></span>
     </div>
     <div class="writer-tools">
@@ -357,6 +368,28 @@ export async function openManuscript(main, id) {
     try { await api.patch(`/api/manuscripts/${m.id}`, { style }); m.style = style; } catch (e) { errorToast(e); }
     renderPreview(view, ta);
   };
+  // 논문 양식: 바꾸면 바로 저장하고 미리보기·표지 정보 버튼을 맞춘다
+  const fmtSel = $("[data-format]", view);
+  fmtSel.onchange = async () => {
+    const id = fmtSel.value;
+    const prev = W.fmt ? W.fmt.id : "default";
+    if (id === "__manage") {
+      fmtSel.value = prev;
+      await formatManagerDialog({ selected: prev });
+      if (W.m === m) await refreshFormats(view);
+      return;
+    }
+    try {
+      await api.patch(`/api/manuscripts/${m.id}`, { doc_format: id });
+      m.doc_format = id;
+      saveState.textContent = "저장됨";
+    } catch (e) {
+      fmtSel.value = prev;
+      return errorToast(e);
+    }
+    await setFormat(view, id);
+  };
+  $("[data-cover]", view).onclick = () => openCoverDialog(view, ta);
   $$("[data-md]", view).forEach((b) => (b.onclick = () => {
     const k = b.dataset.md;
     if (k === "bold") wrap(ta, "**", "**");
@@ -379,10 +412,86 @@ export async function openManuscript(main, id) {
     try { localStorage.setItem("paperlab.writeView", b.dataset.v); } catch { /* 무시 */ }
   }));
   $$("[data-view] button", view).forEach((x) => x.classList.toggle("active", x.dataset.v === viewMode));
+  W.fmt = { id: fmtId, entry: null, data: null };
+  setFormat(view, fmtId);
   refresh();
   renderPreview(view, ta);
   libraryPapers(true).catch(() => {});
   ta.focus();
+}
+
+// ------------------------------------------------------------------ 논문 양식 · 표지 정보
+// 원고의 # 제목 (없으면 빈 글자)
+function docTitle(ta) {
+  const m = ta.value.match(/^#\s+(.+)$/m);
+  return m ? m[1].trim() : "";
+}
+
+function coverKind() {
+  const f = W.fmt;
+  if (!f) return "none";
+  if (f.data && f.data.cover) return f.data.cover.kind || "none";
+  return (f.entry && f.entry.cover_kind) || "none";
+}
+
+// 양식을 바꾸면 양식 값을 받아 미리보기 변수(--doc-*)와 표지 정보 버튼을 맞춘다
+async function setFormat(view, id) {
+  const m = W.m;
+  const entry = (W.formats || []).find((f) => f.id === id) || null;
+  W.fmt = { id, entry, data: null };
+  updateCoverBtn(view);
+  let data = null;
+  if (W.formats) {
+    try { data = (await getFormat(id)).data; } catch { /* 양식 값을 못 받으면 미리보기는 지금 모양 그대로 */ }
+  }
+  if (W.m !== m || !W.fmt || W.fmt.id !== id) return;
+  W.fmt.data = data;
+  applyDocFormat($("[data-doc]", view), id, data);
+  updateCoverBtn(view);
+}
+
+// 양식 관리 창을 닫은 뒤: 선택지를 새로 그리고, 지금 양식이 지워졌으면 기본 (A4)로
+async function refreshFormats(view) {
+  const m = W.m;
+  let list;
+  try { list = await listFormats(true); } catch (e) { return errorToast(e); }
+  if (W.m !== m) return;
+  W.formats = list;
+  let id = W.fmt ? W.fmt.id : "default";
+  if (!list.some((f) => f.id === id)) {
+    id = "default";
+    m.doc_format = "default";
+  }
+  const sel = $("[data-format]", view);
+  sel.innerHTML = formatOptions(list, id, { manage: true });
+  sel.value = id;
+  await setFormat(view, id);
+}
+
+function updateCoverBtn(view) {
+  const btn = $("[data-cover]", view);
+  if (!btn || !W.m) return;
+  btn.classList.toggle("hidden", coverKind() === "none");
+  const missing = missingCoverFields(W.m.cover);
+  btn.toggleAttribute("data-incomplete", missing.length > 0);
+  btn.title = missing.length ? `표지 정보 — 비어 있는 칸: ${missing.join(", ")}` : "표지 · 속표지 · 인정서에 들어갈 정보";
+  btn.setAttribute("aria-label", missing.length ? "표지 정보 (빈 칸 있음)" : "표지 정보");
+}
+
+async function openCoverDialog(view, ta) {
+  const m = W.m;
+  if (!m || !W.fmt) return false;
+  const saved = await coverDialog({
+    manuscriptId: m.id,
+    cover: m.cover,
+    titleFallback: docTitle(ta),
+    format: { name: (W.fmt.entry && W.fmt.entry.name) || "", kind: coverKind(), data: W.fmt.data },
+  });
+  if (saved && W.m === m) {
+    m.cover = saved;
+    updateCoverBtn(view);
+  }
+  return !!saved;
 }
 
 // ------------------------------------------------------------------ [@ 자동완성 (입력 초점은 편집기에 그대로)
@@ -783,26 +892,67 @@ function draftDialog(ta, keys) {
 
 // ------------------------------------------------------------------ 내보내기
 function exportMenu(anchor, view, ta) {
+  const fmtName = `양식: ${(W.fmt && W.fmt.entry && W.fmt.entry.name) || "기본 (A4)"}`;
   popupMenu(anchor, [
-    { label: "워드 (.docx)", sub: "Word · 한글에서도 열려요", action: () => exportAs("docx", view, ta) },
-    { label: "한글 (.hwpx)", sub: "한컴오피스 한글", action: () => exportAs("hwpx", view, ta) },
-    { label: "마크다운 (.md)", sub: "각주 포함", action: () => exportAs("md", view, ta) },
+    { label: "워드 (.docx)", sub: fmtName, action: () => exportAs("docx", view, ta) },
+    { label: "한글 (.hwpx)", sub: fmtName, action: () => exportAs("hwpx", view, ta) },
+    { label: "마크다운 (.md)", sub: "각주 포함 · 양식과 무관", action: () => exportAs("md", view, ta) },
     "-",
     { label: "서식 그대로 복사", sub: "붙여넣기용", action: () => copyFormatted(view) },
-  ]);
+  ]).classList.add("export-menu");
+}
+
+// 표지 필수 항목이 빈 채로 내보낼 때: "go" = 그대로, "cover" = 표지 정보 입력, null = 취소
+function coverMissingDialog(missing) {
+  return new Promise((resolve) => {
+    const body = el(`<div><p style="margin:4px 0 8px">${esc(`표지 정보가 비어 있어요: ${missing.join(", ")}. 빈 칸은 ○○○로 들어가요.`)}</p></div>`);
+    const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button>
+      <button class="btn" data-go>그대로 내보내기</button><button class="btn primary" data-cover>표지 정보 입력</button></div>`);
+    let result = null;
+    const m = modal({ title: "확인", body, foot, onClose: () => resolve(result) });
+    $("[data-no]", foot).onclick = () => m.close();
+    $("[data-go]", foot).onclick = () => { result = "go"; m.close(); };
+    $("[data-cover]", foot).onclick = () => { result = "cover"; m.close(); };
+    setTimeout(() => $("[data-cover]", foot).focus(), 40);
+  });
 }
 
 async function exportAs(format, view, ta) {
   if (W.saver) await W.saver.flush();
+  const office = format === "docx" || format === "hwpx";
+  const fmtId = (W.fmt && W.fmt.id) || "default";
+  const kind = coverKind();
   try {
+    if (office && kind !== "none") {
+      const missing = missingCoverFields(W.m.cover, { full: true, kind, titleFallback: docTitle(ta) });
+      if (missing.length) {
+        const choice = await coverMissingDialog(missing);
+        if (choice === "cover") return openCoverDialog(view, ta);
+        if (choice !== "go") return;
+      }
+    }
     const built = await buildDocument(ta.value, { style: currentStyle(view), koreanFirst: state.settings.korean_first !== false });
     if (built.missingKeys.length && !(await confirmDialog(
       `서재에 없는 인용키가 있어요: ${built.missingKeys.join(", ")}\n그대로 표시해서 내보낼까요?`, { ok: "그대로 내보내기" }))) return;
     const title = $("[data-title]", view).textContent.trim() || "원고";
-    const res = await api.raw("POST", "/api/export-document", { format, blocks: stripWarn(built.blocks), meta: { title }, filename: title });
+    const payload = { format, blocks: stripWarn(built.blocks), meta: { title }, filename: title };
+    if (office && fmtId !== "default") {
+      // 표지의 국문 제목 기본값은 원고의 # 제목 (없으면 빈 칸으로 두어 ○○○로 들어가게)
+      Object.assign(payload, { doc_format: fmtId, cover: W.m.cover || {}, meta: { title: docTitle(ta) } });
+    }
+    const res = await api.raw("POST", "/api/export-document", payload);
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "내보내기 실패");
     downloadBlob(await res.blob(), `${title.replace(/[\\/:*?"<>|]+/g, "_")}.${format}`);
-    toast(`${format === "hwpx" ? "한글" : format === "docx" ? "워드" : "마크다운"} 파일로 저장했어요`, "success");
+    const label = format === "hwpx" ? "한글" : format === "docx" ? "워드" : "마크다운";
+    if (office && kind !== "none" && fmtId !== "default") {
+      toast(`${label} 파일로 저장했어요 · 목차는 워드(참조 → 목차) · 한글(도구 → 차례/색인)로 넣어 주세요`, "success", LONG);
+    } else toast(`${label} 파일로 저장했어요`, "success");
+    const warnings = exportWarnings(res);
+    if (warnings.length) toast(warningText(warnings, kind), "", LONG);
+    if (format === "docx" && fmtId !== "default" && !hancomNoticeShown.has(fmtId) && usesHancomFonts(W.fmt && W.fmt.data)) {
+      hancomNoticeShown.add(fmtId);
+      toast("휴먼명조 같은 한컴 글꼴이 없는 PC의 워드에서는 비슷한 다른 글꼴로 보여요. 제출 파일은 한컴오피스가 설치된 PC에서 확인하세요", "", LONG);
+    }
   } catch (e) { errorToast(e); }
 }
 

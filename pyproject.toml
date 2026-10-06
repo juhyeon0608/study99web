@@ -16,7 +16,7 @@ dependencies = [
   "httpx>=0.27",
   "anthropic>=1.0",
   "python-docx>=1.1",
-  "python-hwpx>=6.8",
+  "python-hwpx>=6.8,<7",  # 비공개 모듈 hwpx._document.layout 사용
 ]
 
 [project.optional-dependencies]

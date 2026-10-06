@@ -2,6 +2,7 @@
 
 import { api, downloadBlob } from "./api.js";
 import { forgetStyle, listStyles, render, sentenceCase, styleOptions } from "./cite.js";
+import { formatManagerDialog, formatOptions, listFormats } from "./formats.js";
 import { $, $$, authorsShort, confirmDialog, copyText, el, errorToast, esc, modal, pickFiles, toast } from "./ui.js";
 import { state, refreshAll } from "./state.js";
 
@@ -93,6 +94,8 @@ export async function settingsDialog() {
   const status = await api.get("/api/ai/status");
   const models = state.meta.models;
   const styles = await listStyles(true).catch(() => []);
+  const formats = await listFormats(true).catch(() => null);
+  const fmtDefault = s.doc_format_default || "default";
   const body = el(`<form autocomplete="off">
     <div class="section-title" style="margin-top:0">AI (요약 · 논문과 대화)</div>
     <div class="field"><label>AI 엔진</label>
@@ -132,6 +135,17 @@ export async function settingsDialog() {
         <a class="small" href="https://www.zotero.org/styles" target="_blank" rel="noopener">Zotero 스타일 저장소에서 찾기 (10,000+개)</a></div>
       <div class="hint">투고할 학술지 이름으로 검색해 .csl 파일을 받아 추가하면, 그 학술지 형식 그대로 인용돼요.</div>
       <div class="chips" data-custom-styles style="margin-top:6px"></div>
+    </div>
+
+    <div class="section-title">논문 양식</div>
+    <div class="field">
+      <label for="set-doc-format">새 원고 기본 양식</label>
+      <div class="row">
+        <select class="input grow" id="set-doc-format" name="doc_format_default" ${formats ? "" : "disabled"}>${formats ? formatOptions(formats, fmtDefault)
+          : `<option>양식 목록을 불러오지 못했어요</option>`}</select>
+        <button type="button" class="btn sm" data-manage-formats>양식 관리…</button>
+      </div>
+      <div class="hint">원고마다 편집 화면 위쪽에서 바꿀 수 있어요.</div>
     </div>
 
     <div class="section-title">논문 검색 데이터베이스</div>
@@ -183,6 +197,18 @@ export async function settingsDialog() {
     const sel = $("[name=citation_style]", body);
     const cur = sel.value;
     sel.innerHTML = styleOptions(list, cur);
+  };
+  // 양식 관리 창을 닫고 돌아오면 선택지를 새로 그린다 (고른 양식이 지워졌으면 기본 (A4))
+  $("[data-manage-formats]", body).onclick = async () => {
+    const sel = $("#set-doc-format", body);
+    await formatManagerDialog({ selected: sel.disabled ? fmtDefault : sel.value });
+    try {
+      const list = await listFormats(true);
+      const cur = list.some((f) => f.id === sel.value) ? sel.value : "default";
+      sel.innerHTML = formatOptions(list, cur);
+      sel.value = cur;
+      sel.disabled = false;
+    } catch (e) { errorToast(e); }
   };
   const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn primary" data-save>저장</button></div>`);
   const m = modal({ title: "설정", body, foot, wide: true });

@@ -20,10 +20,11 @@ export function debounce(fn, ms) {
   return wrapped;
 }
 
-export function toast(msg, type = "") {
+// duration(ms)을 주지 않으면 보통 3.2초 · 오류 6초. 긴 안내는 8초로 띄운다
+export function toast(msg, type = "", { duration } = {}) {
   const t = el(`<div class="toast ${type}">${esc(msg)}</div>`);
   $("#toasts").appendChild(t);
-  setTimeout(() => t.remove(), type === "error" ? 6000 : 3200);
+  setTimeout(() => t.remove(), duration || (type === "error" ? 6000 : 3200));
 }
 
 export function errorToast(e) {

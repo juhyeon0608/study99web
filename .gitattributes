@@ -1,3 +1,5 @@
 *.bat text eol=crlf
 *.sh text eol=lf
 *.command text eol=lf
+tests/golden/*.xml -text
+tests/golden/*.json -text

@@ -24,6 +24,8 @@ DEFAULT_SETTINGS: dict = {
     "citation_locale": "en-US",
     # 참고문헌 목록에서 국문 문헌을 영문 문헌보다 앞에 둘지 (국내 학위논문 관례)
     "korean_first": True,
+    # 새 원고의 기본 논문 양식 (기본 양식 id 또는 내 양식 'user-{번호}')
+    "doc_format_default": "default",
 }
 
 SECRET_KEYS = ("anthropic_api_key", "openalex_api_key", "semantic_scholar_api_key")

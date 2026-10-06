@@ -7,7 +7,7 @@ import re
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -117,6 +117,17 @@ CREATE TABLE IF NOT EXISTS manuscripts (
     updated_at TEXT NOT NULL
 );
 
+-- 내 논문 양식(기본 양식 4개는 코드에 있다). data = 양식 JSON
+-- AUTOINCREMENT: 지운 양식 id(user-N)를 다시 쓰지 않는다(원고·설정이 옛 id를 들고 있어도 새 양식에 붙지 않게)
+CREATE TABLE IF NOT EXISTS doc_formats (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT NOT NULL,
+    base       TEXT NOT NULL DEFAULT 'default',
+    data       TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS page_texts (
     paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
     page     INTEGER NOT NULL,
@@ -142,6 +153,7 @@ EDITABLE_FIELDS = (
 # 처음 버전 뒤에 추가된 열: 기존 서재 파일에는 시작할 때 덧붙인다
 MIGRATIONS = {
     "papers": [("issued", "TEXT NOT NULL DEFAULT ''"), ("language", "TEXT NOT NULL DEFAULT ''")],
+    "manuscripts": [("doc_format", "TEXT NOT NULL DEFAULT 'default'"), ("cover", "TEXT NOT NULL DEFAULT '{}'")],
 }
 SORTS = {
     "added": "p.added_at DESC",
@@ -181,6 +193,19 @@ class Database:
                 for name, decl in cols:
                     if name not in have:
                         conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+            self._upgrade_doc_formats(conn)
+
+    @staticmethod
+    def _upgrade_doc_formats(conn) -> None:
+        """AUTOINCREMENT 없이 만들어진 개발 중 doc_formats 테이블을 옮겨 만든다."""
+        row = conn.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'doc_formats'").fetchone()
+        if not row or "AUTOINCREMENT" in row[0].upper():
+            return
+        conn.execute("ALTER TABLE doc_formats RENAME TO doc_formats_old")
+        conn.executescript(SCHEMA)
+        conn.execute("INSERT INTO doc_formats (id, name, base, data, created_at, updated_at) "
+                     "SELECT id, name, base, data, created_at, updated_at FROM doc_formats_old")
+        conn.execute("DROP TABLE doc_formats_old")
 
     @contextmanager
     def connect(self):
@@ -619,23 +644,35 @@ class Database:
     def list_manuscripts(self) -> list[dict]:
         with self.connect() as conn:
             return [dict(r) for r in conn.execute(
-                "SELECT id, title, template, style, created_at, updated_at, length(content) AS length "
+                "SELECT id, title, template, style, doc_format, created_at, updated_at, length(content) AS length "
                 "FROM manuscripts ORDER BY updated_at DESC")]
 
     def get_manuscript(self, mid: int) -> dict | None:
         with self.connect() as conn:
             row = conn.execute("SELECT * FROM manuscripts WHERE id = ?", (mid,)).fetchone()
-            return dict(row) if row else None
+            if not row:
+                return None
+            m = dict(row)
+            try:
+                m["cover"] = json.loads(m.get("cover") or "{}")
+            except json.JSONDecodeError:
+                m["cover"] = {}
+            if not isinstance(m["cover"], dict):
+                m["cover"] = {}
+            return m
 
-    def add_manuscript(self, title: str, content: str, template: str = "") -> int:
+    def add_manuscript(self, title: str, content: str, template: str = "", doc_format: str = "default") -> int:
         ts = now()
         with self._write_lock, self.connect() as conn:
             return conn.execute(
-                "INSERT INTO manuscripts (title, content, template, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
-                (title, content, template, ts, ts)).lastrowid
+                "INSERT INTO manuscripts (title, content, template, doc_format, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (title, content, template, doc_format, ts, ts)).lastrowid
 
     def update_manuscript(self, mid: int, data: dict) -> None:
-        fields = {k: str(data[k]) for k in ("title", "content", "style") if k in data and data[k] is not None}
+        fields = {k: str(data[k]) for k in ("title", "content", "style", "doc_format")
+                  if k in data and data[k] is not None}
+        if isinstance(data.get("cover"), dict):
+            fields["cover"] = json.dumps(data["cover"], ensure_ascii=False)
         if not fields:
             return
         fields["updated_at"] = now()
@@ -646,6 +683,68 @@ class Database:
     def delete_manuscript(self, mid: int) -> None:
         with self._write_lock, self.connect() as conn:
             conn.execute("DELETE FROM manuscripts WHERE id = ?", (mid,))
+
+    # --------------------------------------------------------- doc formats
+    def _row_to_format(self, row: sqlite3.Row) -> dict:
+        f = dict(row)
+        try:
+            f["data"] = json.loads(f["data"] or "{}")
+        except json.JSONDecodeError:
+            f["data"] = {}
+        return f
+
+    def list_doc_formats(self) -> list[dict]:
+        with self.connect() as conn:
+            return [self._row_to_format(r) for r in conn.execute(
+                "SELECT * FROM doc_formats ORDER BY updated_at DESC, id DESC")]
+
+    def get_doc_format(self, fid: int) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM doc_formats WHERE id = ?", (fid,)).fetchone()
+            return self._row_to_format(row) if row else None
+
+    def count_doc_formats(self) -> int:
+        with self.connect() as conn:
+            return conn.execute("SELECT COUNT(*) FROM doc_formats").fetchone()[0]
+
+    def add_doc_format(self, name: str, base: str, data: dict) -> int:
+        ts = now()
+        with self._write_lock, self.connect() as conn:
+            return conn.execute(
+                "INSERT INTO doc_formats (name, base, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (name, base, json.dumps(data, ensure_ascii=False), ts, ts)).lastrowid
+
+    def update_doc_format(self, fid: int, name: str | None = None, data: dict | None = None) -> None:
+        fields: dict = {}
+        if name is not None:
+            fields["name"] = name
+        if data is not None:
+            fields["data"] = json.dumps(data, ensure_ascii=False)
+        if not fields:
+            return
+        ts = now()
+        with self._write_lock, self.connect() as conn:
+            # 같은 초에 두 번 바꿔도 updated_at이 바뀌도록 한다
+            old = conn.execute("SELECT updated_at FROM doc_formats WHERE id = ?", (fid,)).fetchone()
+            if old and old[0] >= ts:
+                ts = (datetime.fromisoformat(old[0]) + timedelta(seconds=1)).isoformat(timespec="seconds")
+            fields["updated_at"] = ts
+            sets = ", ".join(f"{k} = ?" for k in fields)
+            conn.execute(f"UPDATE doc_formats SET {sets} WHERE id = ?", [*fields.values(), fid])
+
+    def delete_doc_format(self, fid: int, format_key: str) -> int:
+        """양식을 지우고 그 양식을 쓰던 원고를 'default'로 돌린다. 돌린 원고 수를 돌려준다."""
+        with self._write_lock, self.connect() as conn:
+            n = conn.execute("UPDATE manuscripts SET doc_format = 'default' WHERE doc_format = ?",
+                             (format_key,)).rowcount
+            conn.execute("DELETE FROM doc_formats WHERE id = ?", (fid,))
+            return n
+
+    def doc_format_usage(self) -> dict[str, int]:
+        """양식 id → 그 양식을 쓰는 원고 수"""
+        with self.connect() as conn:
+            return {r[0]: r[1] for r in conn.execute(
+                "SELECT doc_format, COUNT(*) FROM manuscripts GROUP BY doc_format")}
 
     def papers_by_citekeys(self, keys: list[str]) -> dict[str, dict]:
         keys = [k for k in dict.fromkeys(keys) if k]

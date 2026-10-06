@@ -10,13 +10,14 @@ import sqlite3
 import threading
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.concurrency import run_in_threadpool
 
-from . import __version__, citations, compose, csl_style, pdf, writer
+from . import __version__, citations, compose, csl_style, doc_formats, format_import, pdf, writer
 from .manuscripts import TEMPLATES
 from .ai import MODELS, AIError, AIService, PaperContext
 from .config import Settings, default_data_dir
@@ -201,14 +202,23 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
     def stats():
         return db.stats()
 
+    def public_settings() -> dict:
+        out = settings.public()
+        # 지워진 양식을 가리키면 기본 양식으로 돌려준다
+        if not format_exists(out.get("doc_format_default")):
+            out["doc_format_default"] = doc_formats.DEFAULT_ID
+        return out
+
     @app.get("/api/settings")
     def get_settings():
-        return settings.public()
+        return public_settings()
 
     @app.put("/api/settings")
     def put_settings(changes: dict = Body(...)):
+        if "doc_format_default" in changes and not format_exists(changes["doc_format_default"]):
+            raise HTTPException(400, "양식을 찾을 수 없어요")
         settings.update(changes)
-        return settings.public()
+        return public_settings()
 
     @app.get("/api/ai/status")
     def ai_status():
@@ -799,29 +809,205 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         return StreamingResponse(events(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
+    # ------------------------------------------------------- doc formats
+    def user_format_id(format_id) -> int | None:
+        if not isinstance(format_id, str):
+            return None
+        m = re.fullmatch(r"user-(\d{1,9})", str(format_id or ""))
+        return int(m.group(1)) if m else None
+
+    def format_exists(format_id) -> bool:
+        if doc_formats.is_builtin(format_id):
+            return True
+        fid = user_format_id(format_id)
+        return fid is not None and db.get_doc_format(fid) is not None
+
+    def user_format_view(row: dict) -> dict:
+        base = row["base"] if doc_formats.is_builtin(row["base"]) else doc_formats.DEFAULT_ID
+        try:
+            data = doc_formats.normalize(row["data"], base)
+        except doc_formats.FormatError:
+            data = doc_formats.builtin_data(base)
+        return {"id": f"user-{row['id']}", "name": row["name"], "builtin": False, "base": row["base"],
+                "cover_kind": data["cover"]["kind"], "description": "", "updated_at": row["updated_at"],
+                "data": data, "created_at": row["created_at"]}
+
+    def load_format(format_id) -> dict | None:
+        """양식 id → 조회 응답 모양(data 포함). 없으면 None"""
+        if doc_formats.is_builtin(format_id):
+            return dict(doc_formats.builtin_entry(format_id), data=doc_formats.builtin_data(format_id),
+                        created_at=None)
+        fid = user_format_id(format_id)
+        row = db.get_doc_format(fid) if fid is not None else None
+        return user_format_view(row) if row else None
+
+    def usage_counts() -> dict[str, int]:
+        """양식 id → 쓰는 원고 수. 지워진 양식을 가리키는 원고는 기본 양식으로 센다"""
+        usage = db.doc_format_usage()
+        out: dict[str, int] = {}
+        for key, n in usage.items():
+            key = key if format_exists(key) else doc_formats.DEFAULT_ID
+            out[key] = out.get(key, 0) + n
+        return out
+
+    def format_detail(format_id) -> dict | None:
+        """조회 응답: 목록 항목(used_by 포함) + data, created_at"""
+        found = load_format(format_id)
+        if found:
+            found["used_by"] = usage_counts().get(found["id"], 0)
+        return found
+
+    def need_user_format(format_id) -> dict:
+        if doc_formats.is_builtin(format_id):
+            raise HTTPException(403, "기본 양식은 바꿀 수 없어요. 복사해서 내 양식으로 만들어 쓰세요")
+        fid = user_format_id(format_id)
+        row = db.get_doc_format(fid) if fid is not None else None
+        if not row:
+            raise HTTPException(404, "양식을 찾을 수 없어요")
+        return row
+
+    def format_name(data: dict) -> str:
+        name = data.get("name")
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 60:
+            raise HTTPException(400, "name: 이름은 1~60자로 입력해 주세요")
+        return name.strip()
+
+    @app.get("/api/doc-formats")
+    def list_doc_formats():
+        usage = usage_counts()
+        out = [doc_formats.builtin_entry(k) for k in doc_formats.BUILTINS]
+        for r in db.list_doc_formats():
+            item = user_format_view(r)
+            item.pop("data")
+            item.pop("created_at")
+            out.append(item)
+        for item in out:
+            item["used_by"] = usage.get(item["id"], 0)
+        return out
+
+    @app.get("/api/doc-formats/{format_id}")
+    def get_doc_format(format_id: str):
+        found = format_detail(format_id)
+        if not found:
+            raise HTTPException(404, "양식을 찾을 수 없어요")
+        return found
+
+    @app.post("/api/doc-formats/import")
+    async def import_doc_format(request: Request):
+        """양식 파일에서 서식을 읽어 저장하지 않은 양식으로 돌려준다.
+
+        20MB 제한은 업로드를 끝까지 받기 전에 적용한다(Content-Length, 받는 중 누적 크기).
+        """
+        too_big = HTTPException(400, "파일이 너무 커요 (20MB 초과)")
+        limit = format_import.MAX_BYTES + 256 * 1024  # 파일 + multipart 머리글 여유
+        try:
+            declared = int(request.headers.get("content-length") or 0)
+        except ValueError:
+            declared = 0
+        if declared > limit:
+            raise too_big
+        body = bytearray()
+        async for chunk in request.stream():
+            body.extend(chunk)
+            if len(body) > limit:
+                raise too_big
+        sent = False
+
+        async def replay():
+            nonlocal sent
+            if sent:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            sent = True
+            return {"type": "http.request", "body": bytes(body), "more_body": False}
+
+        try:
+            form = await Request(request.scope, replay).form()
+        except Exception as e:  # noqa: BLE001 - 깨진 multipart
+            raise HTTPException(400, f"올린 파일을 읽지 못했어요: {e}") from e
+        file = form.get("file")
+        if file is None or isinstance(file, str):
+            raise HTTPException(400, "양식 파일(file)을 올려 주세요")
+        raw = await file.read(format_import.MAX_BYTES + 1)
+        base = form.get("base") if isinstance(form.get("base"), str) else ""
+        try:
+            return await run_in_threadpool(format_import.import_format, file.filename or "", raw,
+                                           base or doc_formats.DEFAULT_ID)
+        except format_import.FormatImportError as e:
+            raise HTTPException(400, str(e)) from e
+
+    @app.post("/api/doc-formats")
+    def add_doc_format(data: dict = Body(...)):
+        base = data.get("base")
+        if not doc_formats.is_builtin(base):
+            raise HTTPException(400, "base: 기본 양식 id(" + ", ".join(doc_formats.BUILTINS) + ") 중 하나를 골라 주세요")
+        name = format_name(data)
+        if db.count_doc_formats() >= 50:
+            raise HTTPException(400, "내 양식은 50개까지 만들 수 있어요. 안 쓰는 양식을 지워 주세요")
+        try:
+            fmt_data = doc_formats.normalize(data.get("data"), base)
+        except doc_formats.FormatError as e:
+            raise HTTPException(400, str(e)) from e
+        return format_detail(f"user-{db.add_doc_format(name, base, fmt_data)}")
+
+    @app.patch("/api/doc-formats/{format_id}")
+    def patch_doc_format(format_id: str, data: dict = Body(...)):
+        row = need_user_format(format_id)
+        name = format_name(data) if "name" in data else None
+        fmt_data = None
+        if "data" in data:
+            try:
+                # data는 통째로 바꾼다(빠진 항목은 base 값)
+                fmt_data = doc_formats.normalize(data["data"], row["base"])
+            except doc_formats.FormatError as e:
+                raise HTTPException(400, str(e)) from e
+        db.update_doc_format(row["id"], name, fmt_data)
+        return format_detail(format_id)
+
+    @app.delete("/api/doc-formats/{format_id}")
+    def delete_doc_format(format_id: str):
+        row = need_user_format(format_id)
+        key = f"user-{row['id']}"
+        reset = db.delete_doc_format(row["id"], key)
+        if settings.get("doc_format_default") == key:
+            settings.update({"doc_format_default": doc_formats.DEFAULT_ID})
+        return {"ok": True, "reset_manuscripts": reset}
+
     # -------------------------------------------------------- manuscripts
     @app.get("/api/manuscript-templates")
     def manuscript_templates():
         return [{"id": k, "name": v["name"], "description": v["description"]} for k, v in TEMPLATES.items()]
 
+    def with_format(m: dict) -> dict:
+        # 지워진 양식을 가리키면 기본 양식으로 돌려준다
+        if not format_exists(m.get("doc_format")):
+            m["doc_format"] = doc_formats.DEFAULT_ID
+        return m
+
     @app.get("/api/manuscripts")
     def list_manuscripts():
-        return db.list_manuscripts()
+        return [with_format(m) for m in db.list_manuscripts()]
 
     @app.post("/api/manuscripts")
     def add_manuscript(data: dict = Body(default={})):
         tpl = TEMPLATES.get(data.get("template") or "blank", TEMPLATES["blank"])
         content = data.get("content") if data.get("content") is not None else tpl["content"]
         title = (data.get("title") or "").strip() or _md_title(content) or "제목 없는 원고"
-        mid = db.add_manuscript(title, content, data.get("template") or "blank")
-        return db.get_manuscript(mid)
+        fmt_id = data.get("doc_format")
+        if fmt_id is not None and not format_exists(fmt_id):
+            raise HTTPException(400, "양식을 찾을 수 없어요")
+        if fmt_id is None:
+            fmt_id = settings.get("doc_format_default")
+            if not format_exists(fmt_id):
+                fmt_id = doc_formats.DEFAULT_ID
+        mid = db.add_manuscript(title, content, data.get("template") or "blank", fmt_id)
+        return with_format(db.get_manuscript(mid))
 
     @app.get("/api/manuscripts/{mid}")
     def get_manuscript(mid: int):
         m = db.get_manuscript(mid)
         if not m:
             raise HTTPException(404, "원고를 찾을 수 없어요")
-        return m
+        return with_format(m)
 
     @app.patch("/api/manuscripts/{mid}")
     def patch_manuscript(mid: int, data: dict = Body(...)):
@@ -829,6 +1015,13 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             raise HTTPException(404, "원고를 찾을 수 없어요")
         if "content" in data and "title" not in data:
             data["title"] = _md_title(data["content"] or "") or None
+        if "doc_format" in data and not format_exists(data["doc_format"]):
+            raise HTTPException(400, "양식을 찾을 수 없어요")
+        if "cover" in data:
+            try:
+                data["cover"] = doc_formats.validate_cover(data["cover"])
+            except doc_formats.FormatError as e:
+                raise HTTPException(400, str(e)) from e
         db.update_manuscript(mid, data)
         return {"ok": True, "updated_at": db.get_manuscript(mid)["updated_at"]}
 
@@ -860,16 +1053,34 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         blocks = data.get("blocks") or []
         if fmt not in ("docx", "hwpx", "md") or not isinstance(blocks, list):
             raise HTTPException(400, "format은 docx, hwpx, md 중 하나예요")
+        # 양식: 없거나 'default'면 지금 서식 그대로. 마크다운은 양식과 무관
+        fmt_data, cover = None, None
+        fmt_id = data.get("doc_format")
+        if fmt != "md" and fmt_id not in (None, "", doc_formats.DEFAULT_ID):
+            found = load_format(fmt_id)
+            if not found:
+                raise HTTPException(400, "양식을 찾을 수 없어요")
+            fmt_data = found["data"]
+            if fmt_data["cover"]["kind"] != "none" and data.get("cover") is not None:
+                try:
+                    cover = doc_formats.validate_cover(data["cover"])
+                except doc_formats.FormatError as e:
+                    raise HTTPException(400, str(e)) from e
+        warnings: list[str] = []
         try:
             if fmt == "docx":
-                body = writer.to_docx(blocks, data.get("meta") or {})
+                body = writer.to_docx(blocks, data.get("meta") or {}, fmt_data, cover, warnings)
             elif fmt == "hwpx":
-                body = writer.to_hwpx(blocks, data.get("meta") or {})
+                body = writer.to_hwpx(blocks, data.get("meta") or {}, fmt_data, cover, warnings)
             else:
                 body = writer.to_markdown(blocks).encode("utf-8")
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(400, f"문서를 만들지 못했어요: {e}") from e
-        return _file_response(body, data.get("filename") or "원고", fmt)
+        response = _file_response(body, data.get("filename") or "원고", fmt)
+        if warnings:
+            # 화면이 토스트로 보여 준다 (예: ["cover-missing:name,department"])
+            response.headers["X-PaperLab-Warnings"] = quote(json.dumps(warnings, ensure_ascii=False))
+        return response
 
     # 워드·한글 문서의 [@인용키] → 서식 있는 인용 (원래 서식 유지)
     compose_store: dict[str, dict] = {}

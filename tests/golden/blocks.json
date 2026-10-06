@@ -1,0 +1,21 @@
+[
+  {"type": "title", "runs": [{"text": "스마트 제조 연구"}]},
+  {"type": "paragraph", "runs": [{"text": "국문 초록: 첫 장 앞의 본문 문단입니다."}]},
+  {"type": "heading", "level": 1, "runs": [{"text": "1. 서론"}]},
+  {"type": "paragraph", "runs": [{"text": "어텐션만 쓴다 "}, {"text": "(Vaswani et al., 2017)"}, {"text": ". "},
+                                 {"text": "굵게", "b": true}, {"text": " x"}, {"text": "2", "sup": true},
+                                 {"footnote": [{"text": "각주 "}, {"text": "기울임", "i": true}]}, {"text": " 끝."}]},
+  {"type": "list_item", "ordered": true, "number": 1, "depth": 0, "runs": [{"text": "항목"}]},
+  {"type": "heading", "level": 2, "runs": [{"text": "1.1 연구 배경"}]},
+  {"type": "paragraph", "runs": [{"text": "절 본문 H"}, {"text": "2", "sub": true}, {"text": "O."}]},
+  {"type": "heading", "level": 3, "runs": [{"text": "1.1.1 세부 항목"}]},
+  {"type": "quote", "runs": [{"text": "인용문 문단입니다."}]},
+  {"type": "code", "text": "print('hi')"},
+  {"type": "heading", "level": 1, "runs": [{"text": "2. 본론"}]},
+  {"type": "paragraph", "runs": [{"text": "둘째 장 본문."}, {"footnote": [{"text": "둘째 각주"}]}]},
+  {"type": "page_break"},
+  {"type": "bib_heading", "text": "참고문헌"},
+  {"type": "bib_entry", "hanging": true, "runs": [{"text": "Vaswani, A. (2017). Attention. "},
+                                                  {"text": "NeurIPS", "i": true}, {"text": "."}]},
+  {"type": "bib_entry", "hanging": false, "runs": [{"text": "[1] 홍길동. (2023). 그래프 연구."}]}
+]
