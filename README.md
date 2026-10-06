@@ -3,6 +3,8 @@
 논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰고 → 인용하는** 과정을 한 프로그램에서 끝내는 데스크톱 도구입니다.
 Python 백엔드와 HTML/JS 화면으로 만들었고, 내 컴퓨터에서만 실행되며 모든 데이터는 내 컴퓨터에 저장됩니다.
 
+> 📘 **모든 기능의 자세한 사용법은 [FEATURES.md](FEATURES.md)(기능 안내서)를 보세요.**
+
 ## 설치와 실행
 
 필요한 것: **Python 3.10 이상** ([python.org](https://www.python.org/downloads/), Windows는 설치할 때 *Add python.exe to PATH* 체크)
