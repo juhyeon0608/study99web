@@ -107,6 +107,16 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_chat_paper ON chat_messages(paper_id, id);
 
+CREATE TABLE IF NOT EXISTS manuscripts (
+    id         INTEGER PRIMARY KEY,
+    title      TEXT NOT NULL DEFAULT '',
+    content    TEXT NOT NULL DEFAULT '',
+    template   TEXT NOT NULL DEFAULT '',
+    style      TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS page_texts (
     paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
     page     INTEGER NOT NULL,
@@ -604,6 +614,46 @@ class Database:
             return conn.execute(
                 "INSERT INTO chat_messages (paper_id, role, content, citations, created_at) VALUES (?, ?, ?, ?, ?)",
                 (paper_id, role, content, json.dumps(citations or [], ensure_ascii=False), now())).lastrowid
+
+    # --------------------------------------------------------- manuscripts
+    def list_manuscripts(self) -> list[dict]:
+        with self.connect() as conn:
+            return [dict(r) for r in conn.execute(
+                "SELECT id, title, template, style, created_at, updated_at, length(content) AS length "
+                "FROM manuscripts ORDER BY updated_at DESC")]
+
+    def get_manuscript(self, mid: int) -> dict | None:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM manuscripts WHERE id = ?", (mid,)).fetchone()
+            return dict(row) if row else None
+
+    def add_manuscript(self, title: str, content: str, template: str = "") -> int:
+        ts = now()
+        with self._write_lock, self.connect() as conn:
+            return conn.execute(
+                "INSERT INTO manuscripts (title, content, template, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+                (title, content, template, ts, ts)).lastrowid
+
+    def update_manuscript(self, mid: int, data: dict) -> None:
+        fields = {k: str(data[k]) for k in ("title", "content", "style") if k in data and data[k] is not None}
+        if not fields:
+            return
+        fields["updated_at"] = now()
+        sets = ", ".join(f"{k} = ?" for k in fields)
+        with self._write_lock, self.connect() as conn:
+            conn.execute(f"UPDATE manuscripts SET {sets} WHERE id = ?", [*fields.values(), mid])
+
+    def delete_manuscript(self, mid: int) -> None:
+        with self._write_lock, self.connect() as conn:
+            conn.execute("DELETE FROM manuscripts WHERE id = ?", (mid,))
+
+    def papers_by_citekeys(self, keys: list[str]) -> dict[str, dict]:
+        keys = [k for k in dict.fromkeys(keys) if k]
+        if not keys:
+            return {}
+        with self.connect() as conn:
+            rows = conn.execute(f"SELECT * FROM papers WHERE citekey IN ({','.join('?' * len(keys))})", keys).fetchall()
+            return {r["citekey"]: self._row_to_paper(conn, r, detail=True) for r in rows}
 
     def clear_chat(self, paper_id: int) -> None:
         with self._write_lock, self.connect() as conn:

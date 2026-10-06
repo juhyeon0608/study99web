@@ -5,8 +5,9 @@ import { settingsDialog, uploadPdfs } from "./dialogs.js";
 import { renderDiscover } from "./discover.js";
 import { loadPapers, renderLibrary } from "./library.js";
 import { closeReader, openReader } from "./reader.js";
+import { closeWriter, composeDialog, openManuscript, renderWriteList } from "./writing.js";
 import { onRefresh, refreshAll, state } from "./state.js";
-import { $, $$, confirmDialog, el, errorToast, esc, modalOpen, popupMenu, promptDialog } from "./ui.js";
+import { $, $$, confirmDialog, el, errorToast, esc, modalOpen, popupMenu, promptDialog, toast } from "./ui.js";
 
 const main = $("#main");
 const COLLAPSE_KEY = "paperlab.collapsed";
@@ -185,6 +186,7 @@ async function route() {
   const hash = location.hash || "#/library";
   const app = $("#app");
   const m = hash.match(/^#\/read\/(\d+)(?:\/p(\d+))?/);
+  if (!hash.startsWith("#/write")) closeWriter();
   if (m) {
     state.view = "reader";
     app.classList.add("reading");
@@ -192,6 +194,13 @@ async function route() {
     return openReader(main, Number(m[1]), m[2] ? Number(m[2]) : null);
   }
   closeReader();
+  const w = hash.match(/^#\/write(?:\/(\d+))?/);
+  if (w) {
+    state.view = "write";
+    app.classList.toggle("reading", !!w[1]);
+    renderSidebar();
+    return w[1] ? openManuscript(main, Number(w[1])) : renderWriteList(main);
+  }
   app.classList.remove("reading");
   if (hash.startsWith("#/discover")) {
     state.view = "discover";
@@ -211,7 +220,12 @@ onRefresh(async () => { if (state.view === "library") await loadPapers(); });
 // PDF 끌어다 놓기 (서재 화면 어디든)
 let dragDepth = 0;
 const isFileDrag = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
-window.addEventListener("dragenter", (e) => { if (isFileDrag(e) && state.view !== "reader") { dragDepth++; $("#drop-overlay").classList.remove("hidden"); } });
+window.addEventListener("dragenter", (e) => {
+  if (!isFileDrag(e) || state.view === "reader" || /^#\/write\/\d/.test(location.hash)) return;
+  dragDepth++;
+  $("#drop-overlay div").textContent = state.view === "write" ? "워드·한글 문서를 놓으면 인용을 넣어 드려요" : "PDF를 놓으면 서재에 추가돼요";
+  $("#drop-overlay").classList.remove("hidden");
+});
 window.addEventListener("dragleave", (e) => { if (isFileDrag(e) && --dragDepth <= 0) { dragDepth = 0; $("#drop-overlay").classList.add("hidden"); } });
 window.addEventListener("dragover", (e) => { if (isFileDrag(e)) e.preventDefault(); });
 window.addEventListener("drop", (e) => {
@@ -220,7 +234,14 @@ window.addEventListener("drop", (e) => {
   dragDepth = 0;
   $("#drop-overlay").classList.add("hidden");
   if (state.view === "reader") return;
-  uploadPdfs([...e.dataTransfer.files]);
+  const files = [...e.dataTransfer.files];
+  if (state.view === "write") {
+    const doc = files.find((f) => /\.(docx|hwpx)$/i.test(f.name));
+    if (doc) composeDialog(doc);
+    else toast("워드(.docx)나 한글(.hwpx) 문서를 놓으면 인용을 넣어 드려요");
+    return;
+  }
+  uploadPdfs(files);
 });
 
 // 단축키: / 검색, Esc는 각 화면/모달이 처리

@@ -8,7 +8,7 @@ import {
 import { refreshAll, state } from "./state.js";
 import {
   $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
-  popupMenu, promptDialog, renderMarkdown, safeUrl, toast,
+  copyText, popupMenu, promptDialog, renderMarkdown, safeUrl, toast,
 } from "./ui.js";
 
 let root = null;
@@ -413,12 +413,13 @@ function infoView(p, ids) {
       ${p.publisher ? `<dt>출판사</dt><dd>${esc(p.publisher)}</dd>` : ""}
       ${p.cited_by_count != null ? `<dt>피인용</dt><dd>${fmtNum(p.cited_by_count)}회</dd>` : ""}
       ${p.page_count ? `<dt>쪽수</dt><dd>${p.page_count}쪽</dd>` : ""}
-      <dt>인용 키</dt><dd><code>${esc(p.citekey)}</code></dd>
+      <dt>인용 키</dt><dd><code>${esc(p.citekey)}</code> <button class="btn sm" data-copykey title="원고·워드·한글 본문에 붙여넣으세요">[@인용키] 복사</button></dd>
       <dt>추가한 날</dt><dd>${fmtDate(p.added_at)}</dd>
       ${p.last_opened_at ? `<dt>최근 읽음</dt><dd>${fmtDate(p.last_opened_at)}</dd>` : ""}
     </dl></div>`);
   const abs = $(".abstract", v);
   if (abs) abs.onclick = () => abs.classList.toggle("clamp");
+  $("[data-copykey]", v).onclick = () => copyText(`[@${p.citekey}]`);
   return v;
 }
 

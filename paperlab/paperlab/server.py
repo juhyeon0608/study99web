@@ -16,7 +16,8 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, Up
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, citations, csl_style, pdf
+from . import __version__, citations, compose, csl_style, pdf, writer
+from .manuscripts import TEMPLATES
 from .ai import MODELS, AIError, AIService, PaperContext
 from .config import Settings, default_data_dir
 from .db import Database
@@ -36,6 +37,11 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1", "testserver"}
 def _slug(text: str) -> str:
     s = re.sub(r"[^\w\-]+", "-", (text or "paper"), flags=re.U).strip("-")
     return s[:60] or "paper"
+
+
+def _md_title(content: str) -> str:
+    m = re.search(r"^#\s+(.+)$", content or "", re.M)
+    return m.group(1).strip()[:200] if m else ""
 
 
 class Jobs:
@@ -756,6 +762,160 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
 
         return StreamingResponse(events(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+    @app.post("/api/ai/write")
+    def ai_write(data: dict = Body(...)):
+        """원고 글쓰기 도우미 (스트리밍)"""
+        st = ai.status()
+        if not st["ready"]:
+            raise HTTPException(400, st["message"])
+        text = (data.get("text") or "").strip()
+        mode = data.get("mode") or "polish"
+        if not text and mode != "draft":
+            raise HTTPException(400, "다듬을 글을 선택해 주세요")
+        sources = []
+        for key, p in db.papers_by_citekeys([str(k) for k in data.get("keys") or []][:30]).items():
+            summary = db.get_summary(p["id"])
+            highlights = [a["text"] + (f" — {a['comment']}" if a["comment"] else "")
+                          for a in db.list_annotations(p["id"])[:15] if a["text"]]
+            note = "\n".join(filter(None, [p.get("note") or ""] + [f"하이라이트: {h}" for h in highlights]))
+            sources.append({
+                "key": key, "title": p["title"], "year": p.get("year"),
+                "authors": ", ".join(" ".join(x for x in (a.get("given"), a.get("family"), a.get("literal")) if x)
+                                     for a in (p.get("authors") or [])[:6]),
+                "abstract": (p.get("abstract") or "")[:2500],
+                "summary": (summary["data"].get("tldr", "") + " " + summary["data"].get("results", "")).strip() if summary else "",
+                "note": note[:3000],
+            })
+
+        def events():
+            try:
+                for ev in ai.write(mode, text, instruction=(data.get("instruction") or "")[:2000],
+                                   context=(data.get("context") or "")[:6000], sources=sources):
+                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+            except AIError as e:
+                yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+
+        return StreamingResponse(events(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+    # -------------------------------------------------------- manuscripts
+    @app.get("/api/manuscript-templates")
+    def manuscript_templates():
+        return [{"id": k, "name": v["name"], "description": v["description"]} for k, v in TEMPLATES.items()]
+
+    @app.get("/api/manuscripts")
+    def list_manuscripts():
+        return db.list_manuscripts()
+
+    @app.post("/api/manuscripts")
+    def add_manuscript(data: dict = Body(default={})):
+        tpl = TEMPLATES.get(data.get("template") or "blank", TEMPLATES["blank"])
+        content = data.get("content") if data.get("content") is not None else tpl["content"]
+        title = (data.get("title") or "").strip() or _md_title(content) or "제목 없는 원고"
+        mid = db.add_manuscript(title, content, data.get("template") or "blank")
+        return db.get_manuscript(mid)
+
+    @app.get("/api/manuscripts/{mid}")
+    def get_manuscript(mid: int):
+        m = db.get_manuscript(mid)
+        if not m:
+            raise HTTPException(404, "원고를 찾을 수 없어요")
+        return m
+
+    @app.patch("/api/manuscripts/{mid}")
+    def patch_manuscript(mid: int, data: dict = Body(...)):
+        if not db.get_manuscript(mid):
+            raise HTTPException(404, "원고를 찾을 수 없어요")
+        if "content" in data and "title" not in data:
+            data["title"] = _md_title(data["content"] or "") or None
+        db.update_manuscript(mid, data)
+        return {"ok": True, "updated_at": db.get_manuscript(mid)["updated_at"]}
+
+    @app.delete("/api/manuscripts/{mid}")
+    def delete_manuscript(mid: int):
+        db.delete_manuscript(mid)
+        return {"ok": True}
+
+    @app.post("/api/citekeys")
+    def lookup_citekeys(data: dict = Body(...)):
+        """인용키 → CSL-JSON (없는 키는 null)"""
+        keys = [str(k) for k in data.get("keys") or []][:2000]
+        found = db.papers_by_citekeys(keys)
+        return {"items": {k: (citations.to_csl_item(found[k]) if k in found else None) for k in keys},
+                "issues": {k: citations.citation_issues(found[k]) for k in found}}
+
+    def _file_response(body: bytes, filename: str, fmt: str) -> Response:
+        types = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                 "hwpx": "application/hwp+zip", "md": "text/markdown; charset=utf-8"}
+        safe = re.sub(r'[\\/:*?"<>|\r\n]+', "_", filename or "document").strip() or "document"
+        from urllib.parse import quote
+        return Response(body, media_type=types[fmt], headers={
+            "Content-Disposition": f"attachment; filename=\"document.{fmt}\"; filename*=UTF-8''{quote(safe + '.' + fmt)}"})
+
+    @app.post("/api/export-document")
+    def export_document(data: dict = Body(...)):
+        """화면이 서식을 입힌 원고(블록 목록)를 워드·한글·마크다운 파일로 만든다."""
+        fmt = data.get("format")
+        blocks = data.get("blocks") or []
+        if fmt not in ("docx", "hwpx", "md") or not isinstance(blocks, list):
+            raise HTTPException(400, "format은 docx, hwpx, md 중 하나예요")
+        try:
+            if fmt == "docx":
+                body = writer.to_docx(blocks, data.get("meta") or {})
+            elif fmt == "hwpx":
+                body = writer.to_hwpx(blocks, data.get("meta") or {})
+            else:
+                body = writer.to_markdown(blocks).encode("utf-8")
+        except (ValueError, KeyError, TypeError) as e:
+            raise HTTPException(400, f"문서를 만들지 못했어요: {e}") from e
+        return _file_response(body, data.get("filename") or "원고", fmt)
+
+    # 워드·한글 문서의 [@인용키] → 서식 있는 인용 (원래 서식 유지)
+    compose_store: dict[str, dict] = {}
+
+    @app.post("/api/compose/scan")
+    def compose_scan(file: UploadFile = File(...)):
+        data = file.file.read(60 * 1024 * 1024 + 1)
+        if len(data) > 60 * 1024 * 1024:
+            raise HTTPException(400, "파일이 너무 커요 (60MB 초과)")
+        try:
+            kind = compose.detect_kind(file.filename or "", data)
+            scan = compose.docx_scan(data) if kind == "docx" else compose.hwpx_scan(data)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except Exception as e:  # noqa: BLE001 - 손상된 문서
+            raise HTTPException(400, f"문서를 읽지 못했어요: {e}") from e
+        token = uuid.uuid4().hex
+        while len(compose_store) >= 10:
+            compose_store.pop(next(iter(compose_store)))
+        compose_store[token] = {"data": data, "kind": kind, "filename": file.filename or f"document.{kind}"}
+        keys = [it["key"] for c in scan["citations"] for it in c.items]
+        found = db.papers_by_citekeys(keys)
+        return {
+            "token": token, "kind": kind, "filename": file.filename,
+            "has_bib_marker": scan["has_bib_marker"],
+            "citations": [{"raw": c.raw, "items": c.items} for c in scan["citations"]],
+            "items": {k: (citations.to_csl_item(found[k]) if k in found else None) for k in dict.fromkeys(keys)},
+        }
+
+    @app.post("/api/compose/apply")
+    def compose_apply(data: dict = Body(...)):
+        entry = compose_store.get(data.get("token") or "")
+        if not entry:
+            raise HTTPException(404, "올린 문서를 찾을 수 없어요. 다시 올려 주세요.")
+        rendered = data.get("rendered") or []
+        bibliography = data.get("bibliography") or []
+        bib_title = data.get("bib_title") or "참고문헌"
+        try:
+            if entry["kind"] == "docx":
+                body = compose.docx_apply(entry["data"], rendered, bibliography, bib_title, bool(data.get("note_style")))
+            else:
+                body = compose.hwpx_apply(entry["data"], rendered, bibliography, bib_title)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        stem = re.sub(r"\.(docx|hwpx)$", "", entry["filename"], flags=re.I)
+        return _file_response(body, f"{stem}_인용완료", entry["kind"])
 
     # -------------------------------------------------------------- static
     @app.get("/")

@@ -137,3 +137,104 @@ export function sentenceCase(title) {
     }).join("-");
   }).join("");
 }
+
+/**
+ * 원고 전체의 인용을 문서 순서대로 처리한다 (번호식은 처음 인용 순서로 번호, 각주식은 Ibid. 처리).
+ * itemsByKey: {인용키: CSL-JSON | null}
+ * clusters: [{items: [{key, locator, label, prefix, suffix, suppress_author}]}]
+ * 결과: { clusters: [{html, text, missing: [키…]} | null], entries: [{key, html, text}], note, numeric, hangingIndent }
+ */
+export async function renderClusters(itemsByKey, clusters, { style, locale, koreanFirst = false } = {}) {
+  const CSL = await loadEngine();
+  style = style || state.settings.citation_style || "apa";
+  locale = locale || state.settings.citation_locale || "en-US";
+  const xml = await styleXml(style);
+  const defaultLocale = (xml.match(/<style[^>]*default-locale="([^"]+)"/) || [])[1];
+  await Promise.all(["en-US", locale, defaultLocale].filter(Boolean).map(preloadLocale));
+  const byKey = new Map();
+  for (const [key, item] of Object.entries(itemsByKey || {})) {
+    if (item) byKey.set(key, { ...item, id: key });
+  }
+  const sys = {
+    retrieveLocale: (lang) => localeCache.get(lang) || [...localeCache].find(([k]) => k.startsWith(lang.slice(0, 2)))?.[1]
+      || localeCache.get("en-US"),
+    retrieveItem: (id) => byKey.get(String(id)),
+  };
+  const engine = new CSL.Engine(sys, xml, locale, locale === "ko-KR");
+  const note = engine.opt.xclass === "note";
+  const numeric = /citation-format="numeric"/.test(xml) || /variable="citation-number"/.test(xml);
+  const citations = [];
+  const out = { clusters: [], entries: [], note, numeric, hangingIndent: false };
+  clusters.forEach((c, i) => {
+    const known = c.items.filter((it) => byKey.has(it.key));
+    const missing = c.items.filter((it) => !byKey.has(it.key)).map((it) => it.key);
+    out.clusters.push(known.length ? { missing } : null);
+    if (!known.length) return;
+    citations.push({
+      citationID: `c${i}`,
+      citationItems: known.map((it) => {
+        const ci = { id: it.key };
+        if (it.locator) { ci.locator = it.locator; ci.label = it.label || "page"; }
+        if (it.prefix) ci.prefix = it.prefix + " ";
+        if (it.suffix) ci.suffix = " " + it.suffix;
+        if (it.suppress_author) ci["suppress-author"] = true;
+        return ci;
+      }),
+      properties: { noteIndex: note ? citations.length + 1 : 0 },
+    });
+  });
+  if (!citations.length) return out;
+  const fill = (mode) => {
+    const res = engine.rebuildProcessorState(citations, mode, []);
+    for (const [id, , str] of res) {
+      const idx = Number(id.slice(1));
+      out.clusters[idx][mode] = str;
+    }
+  };
+  fill("html");
+  fill("text");
+  engine.setOutputFormat("html");
+  const bibHtml = engine.makeBibliography();
+  engine.setOutputFormat("text");
+  const bibText = engine.makeBibliography();
+  if (bibHtml) {
+    const [meta, entries] = bibHtml;
+    out.hangingIndent = !!meta.hangingindent;
+    out.entries = entries.map((h, i) => ({ key: String(meta.entry_ids[i][0]), html: cleanEntry(h),
+      text: bibText[1][i].replace(/\s+/g, " ").trim() }));
+  }
+  if (koreanFirst && !numeric && !note) {
+    const ko = out.entries.filter((e) => isKorean(byKey.get(e.key) || {}));
+    out.entries = [...ko, ...out.entries.filter((e) => !ko.includes(e))];
+  }
+  return out;
+}
+
+// citeproc HTML → 서식 런 [{text, i, b, sup, sub}]
+export function htmlToRuns(html, base = {}) {
+  const t = document.createElement("template");
+  t.innerHTML = html;
+  const runs = [];
+  const walk = (node, fmt) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === Node.TEXT_NODE) {
+        if (!child.nodeValue) continue;
+        const last = runs[runs.length - 1];
+        const same = last && ["i", "b", "sup", "sub"].every((k) => !!last[k] === !!fmt[k]);
+        if (same) last.text += child.nodeValue; else runs.push({ text: child.nodeValue, ...fmt });
+      } else if (child.nodeType === Node.ELEMENT_NODE) {
+        const tag = child.tagName.toLowerCase();
+        const style = (child.getAttribute("style") || "").toLowerCase();
+        const next = { ...fmt };
+        if (tag === "i" || tag === "em" || /font-style:\s*italic/.test(style)) next.i = true;
+        if (/font-style:\s*normal/.test(style)) next.i = false;
+        if (tag === "b" || tag === "strong" || /font-weight:\s*bold/.test(style)) next.b = true;
+        if (tag === "sup") next.sup = true;
+        if (tag === "sub") next.sub = true;
+        walk(child, next);
+      }
+    }
+  };
+  walk(t.content, { ...base });
+  return runs;
+}

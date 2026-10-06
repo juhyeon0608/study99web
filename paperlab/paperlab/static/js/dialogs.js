@@ -68,7 +68,11 @@ export async function citeDialog(paperOrId) {
         $("button", ref).onclick = () => copyText(entry.text, entry.html);
         out.appendChild(ref);
       }
-      out.appendChild(el(`<div class="small muted">복사하면 기울임꼴 같은 서식도 함께 붙여넣어져요 (Word·한글·Google Docs).</div>`));
+      const key = data.csl["citation-key"];
+      const tip = el(`<div class="row small muted"><span class="grow">복사하면 기울임꼴 같은 서식도 함께 붙여넣어져요 (Word·한글·Google Docs).</span>
+        ${key ? `<button class="btn sm" title="논문 쓰기·워드·한글 문서에 넣으면 나중에 스타일을 바꿔도 자동으로 맞춰져요">[@${esc(key)}] 복사</button>` : ""}</div>`);
+      if (key) $("button", tip).onclick = () => copyText(`[@${key}]`);
+      out.appendChild(tip);
     } catch (e) {
       out.innerHTML = `<div class="status-line bad">${esc(e.message)}</div>`;
     }

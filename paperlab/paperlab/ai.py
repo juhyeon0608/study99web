@@ -120,6 +120,23 @@ CHAT_SYSTEM = """당신은 연구자가 논문을 이해하도록 돕는 조수�
 - 수식은 $...$(인라인) 또는 $$...$$(블록) LaTeX로 쓰세요.
 - 답은 핵심부터, 필요한 만큼만 길게."""
 
+WRITE_MODES = {
+    "polish": "아래 글의 뜻과 주장은 그대로 두고, 문장을 자연스럽고 매끄럽게 다듬어 주세요.",
+    "academic": "아래 글을 학술 논문에 맞는 문체로 바꿔 주세요. 구어체·과장 표현을 없애고 객관적으로 쓰세요.",
+    "concise": "아래 글에서 군더더기를 덜어내 핵심만 간결하게 다시 써 주세요.",
+    "expand": "아래 글의 논리를 더 자세히 풀어 써 주세요. 새로운 사실·수치·출처를 지어내지 마세요.",
+    "to_en": "아래 글을 자연스러운 학술 영어로 번역해 주세요.",
+    "to_ko": "아래 글을 자연스러운 학술 한국어로 번역해 주세요.",
+    "continue": "아래 글에 자연스럽게 이어지는 다음 문단을 써 주세요.",
+    "draft": "주어진 참고 자료만 근거로, 요청한 절의 초안을 써 주세요.",
+}
+
+WRITE_SYSTEM = """당신은 연구자의 논문 집필을 돕는 편집자입니다.
+- 결과 글만 마크다운으로 출력하세요. 설명, 머리말, 따옴표로 감싸기 없이.
+- 글에 있는 [@인용키] 표시는 바꾸거나 지우지 말고 그대로 두세요.
+- 인용을 새로 달 때는 제공된 자료의 [@인용키]만 쓰세요. 목록에 없는 문헌·저자·수치를 지어내지 마세요.
+- 근거가 부족한 주장은 쓰지 말고, 필요하면 [확인 필요]라고 표시하세요."""
+
 CLI_CITE_RULE = "\n- 근거가 되는 쪽은 문장 끝에 [p.쪽번호] 형식으로 표시하세요 (예: [p.3])."
 
 
@@ -362,6 +379,50 @@ class AIService:
             raise AIError("모델이 이 질문에 답하지 않았어요 (안전 정책).")
         text, cites = api_citations(final.content, page_based=ctx.usable_pdf(self.model))
         yield {"type": "done", "text": text, "citations": cites}
+
+    def write(self, mode: str, text: str, *, instruction: str = "", context: str = "",
+              sources: list[dict] | None = None) -> Iterator[dict]:
+        """글쓰기 도우미. 이벤트: {"type":"delta","text"} … {"type":"done","text"}"""
+        if mode not in WRITE_MODES:
+            raise AIError("알 수 없는 글쓰기 모드예요")
+        parts = [WRITE_MODES[mode]]
+        if instruction:
+            parts.append(f"추가 요청: {instruction}")
+        if sources:
+            lines = []
+            for s in sources:
+                lines.append(f"<source key=\"{s['key']}\">\n제목: {s.get('title', '')}\n"
+                             f"저자·연도: {s.get('authors', '')} ({s.get('year') or 'n.d.'})\n"
+                             + "\n".join(f"{k}: {v}" for k, v in (("초록", s.get("abstract")), ("요약", s.get("summary")),
+                                                                 ("내 메모", s.get("note"))) if v)
+                             + "\n</source>")
+            parts.append("<sources>\n" + "\n".join(lines) + "\n</sources>")
+        if context:
+            parts.append(f"<context>\n{context}\n</context>")
+        parts.append(f"<text>\n{text}\n</text>")
+        prompt = "\n\n".join(parts)
+
+        if self.engine == "cli":
+            out = self._run_cli(prompt, system=WRITE_SYSTEM).strip()
+            yield {"type": "delta", "text": out}
+            yield {"type": "done", "text": out}
+            return
+        kw = self._request_kwargs(effort=self.get_setting("effort") or "medium")
+        chunks = []
+        try:
+            with self._client().beta.messages.stream(
+                    max_tokens=16000, system=WRITE_SYSTEM, messages=[{"role": "user", "content": prompt}], **kw) as stream:
+                for event in stream:
+                    if event.type == "text" and event.text:
+                        chunks.append(event.text)
+                        yield {"type": "delta", "text": event.text}
+                final = stream.get_final_message()
+        except anthropic.APIError as e:
+            raise self._call_errors(e) from e
+        if final.stop_reason == "refusal":
+            raise AIError("모델이 이 요청을 처리하지 않았어요 (안전 정책).")
+        text_out = "".join(b.text for b in final.content if b.type == "text").strip()
+        yield {"type": "done", "text": text_out}
 
     # ------------------------------------------------------------ CLI engine
     def _run_cli(self, prompt: str, system: str) -> str:
