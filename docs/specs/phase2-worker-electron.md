@@ -144,7 +144,7 @@ PLAN 2단계 완료 기준(그대로 수용 기준에 들어감 — 17장): 키 
 | `engine` | text not null | `claude` · `codex` · `gemini` |
 | `route` | jsonb not null | 이 작업이 시도할 **경로 목록**(만들 때 고정): `[{"runner":"api","engine":"claude"},{"runner":"cli","engine":"claude"}]`, `route_index int`가 지금 위치 |
 | `route_index` | integer not null default 0 | |
-| `params` | jsonb not null default '{}' | 종류별 입력 값만(예: chat `{"question": "…"}`, write `{"mode","text","instruction","context","keys"}`). **논문 본문 · 프롬프트는 넣지 않음**(잡을 때 만듦). 최대 64KB(서버 검사) |
+| `params` | jsonb not null default '{}' | 종류별 입력 값만(예: chat `{"question": "…"}`, write `{"mode","text","instruction","context","keys","manuscript_id"}` — `manuscript_id`는 7장 `manuscript_title` 조회용, 팀장 결정 2026-10-08). **논문 본문 · 프롬프트는 넣지 않음**(잡을 때 만듦). 최대 64KB(서버 검사) |
 | `paper_id` | bigint null | `(paper_id, user_id) references papers(id, user_id) on delete cascade` — 논문을 지우면 작업도 지움 |
 | `parent_id` | bigint null | 4단계 묶음 작업 자리(2단계는 늘 null) |
 | `device_id` | bigint null | 지금(또는 마지막으로) 맡은 PC. `(device_id, user_id) references devices(id, user_id) on delete set null (device_id)` |
@@ -321,13 +321,18 @@ returning j.*;
 ```json
 {"id": 41, "kind": "summary", "status": "queued", "runner": "cli", "engine": "claude",
  "paper_id": 7, "paper_title": "Attention Is All You Need",
+ "manuscript_title": "석사 논문 2장" | null,
  "device": {"id": 3, "name": "집 PC"} | null,
  "waiting_reason": "no_online_worker" | "no_engine_on_worker" | "all_workers_busy" | null,
  "progress": {"message": "…", "fraction": 0.4, "partial_text": "…"},
  "attempts": 1, "error_code": "", "error": "", "cancel_requested": false,
  "history": [{"runner": "api", "engine": "claude", "error_code": "api_auth", "at": "…"}],
+ "deadline_at": "…+00:00" | null,
  "created_at": "…+00:00", "started_at": null, "finished_at": null}
 ```
+**시안 반영 추가 필드**(디자인 16장 요청 5 · 7, 2026-10-08):
+- `deadline_at`: `status = queued`일 때 그 작업의 대기 기한(6.6절 — 화면이 "오후 3:10까지"처럼 보임. 화면이 기한 상수를 따로 갖지 않게), 그 밖 상태는 `null`.
+- `manuscript_title`(팀장 결정 2026-10-08): `kind = write` 작업의 `params.manuscript_id`(5.3절)로 **작업 보기를 조회할 때 사용자 권한 트랜잭션(RLS)에서 원고 제목을 읽어** 넣음(작업 목록 제목 "원고: …"). 원고가 지워졌으면 `null` → 화면은 **"삭제된 원고"** 로 표시. `write`가 아니면 `null`. **작업을 만들 때 제목을 복사해 두지 않음**(개인 데이터를 두 곳에 두지 않기 위해).
 `waiting_reason`(화면 문구용, `queued` + `runner = cli`일 때만, 아래 순서로 판정):
 1. 해지 안 된 기기 중 그 엔진을 **광고한 기기가 하나도 없음** → `no_engine_on_worker`("codex가 있는 PC 없음")
 2. 그런 기기는 있지만 **온라인 + 로그인됨 + 일시 중지 아님**인 기기가 없음 → `no_online_worker`("켜진 PC 없음" — 꺼짐 · 로그인 필요 · 일시 중지를 모두 포함, 화면은 기기 목록에서 이유를 보여 줌)
@@ -342,7 +347,7 @@ returning j.*;
 | `GET /api/papers/{pid}/summary` | `{"summary": …, "job": 진행 중이거나 마지막 요약 작업 | null}` — 1단계에서 늘 null이던 `job` 필드를 다시 씀(화면 호환) |
 | `POST /api/papers/{pid}/chat` | SSE 유지. 첫 경로가 API면 지금 그대로 스트리밍. **CLI면** `{"type":"queued","job": 작업 보기}` 한 이벤트 후 끝. API 스트림이 폴백 대상 오류로 실패하면 `{"type":"fallback","job": 작업 보기}`(9.3절) |
 | `POST /api/ai/write` | `/chat`과 같은 규칙. CLI 결과는 작업의 `result.text` |
-| `GET /api/jobs` | 쿼리 `status=active|recent|all`(기본 `active` = queued+running, `recent` = 최근 7일 전체), `paper_id`, `kind`, `limit`(기본 50, 최대 200). `created_at desc` |
+| `GET /api/jobs` | 쿼리 `status=active|recent|all`(기본 `active` = queued+running, `recent` = 최근 7일 전체), `paper_id`, `kind`, `limit`(기본 50, 최대 200). `created_at desc`. 응답에 작업 보기 목록과 함께 **`total` = 조건에 맞는 전체 개수**(`limit`와 무관 — 사이드바 배지를 `limit=1`로 가볍게, 디자인 16장 요청 6) |
 | `GET /api/jobs/{id}` | 작업 보기. 남의 작업 · 없는 작업 → 404 |
 | `POST /api/jobs/{id}/cancel` | 6.5절. 끝난 작업이면 409 "이미 끝난 작업이에요" |
 | `POST /api/jobs/{id}/retry` | `failed` · `cancelled`만. 같은 `kind` · `paper_id` · `params`로 **새 작업**(경로는 지금 설정으로 다시 정함) → `202 {"job"}` |
@@ -359,7 +364,7 @@ returning j.*;
 
 | 엔드포인트 | 내용 |
 |---|---|
-| `GET /api/devices` | `[{id, name, online, last_seen_at, engines, app_version, os, paused, revoked, running_jobs, created_at}]` — 해지된 기기는 30일까지 `revoked: true`로. **토큰 해시는 보내지 않음** |
+| `GET /api/devices` | `[{id, name, online, last_seen_at, engines, app_version, os, paused, revoked, running_jobs, update_required, created_at}]` — 해지된 기기는 30일까지 `revoked: true`로. **토큰 해시는 보내지 않음**. `update_required: bool` = `app_version`이 서버 상수 `min_app_version`(8.3절)보다 낮음(화면 "업데이트 필요" 칩 — 화면이 서버 상수를 모르게, 디자인 16장 요청 3). 연결 코드 창은 새 API 없이 이 목록을 3초마다 불러 `created_at`이 코드 발급 시각보다 늦은 기기가 보이면 성공으로 처리(디자인 16장 요청 4) |
 | `POST /api/devices/pair-codes` | 연결 코드 만들기 → `{"code": "K7QF-2M9X", "expires_at": "…"}`(12.1절). 이전 유효 코드는 끝냄 |
 | `PATCH /api/devices/{id}` | `{name}` (1~60자) |
 | `DELETE /api/devices/{id}` | **해지**: `revoked_at = now()`. 그 기기가 `running`으로 잡은 작업은 즉시 `queued`로 되돌림(`excluded_devices`에 추가 안 함 — 리스 토큰이 바뀌어 옛 결과는 버려짐). 응답 `{"ok": true, "requeued_jobs": n}` |
@@ -370,7 +375,13 @@ returning j.*;
 |---|---|
 | `GET /api/ai/status` | **바뀜**: `{"ready": bool, "kinds": {"summary": {"route": [{"runner","engine","available","reason"}], "first": {"runner","engine"} | null}, …}, "message": "…"}`. `ready` = 요약 경로 중 하나라도 지금 쓸 수 있음(API 키 있음, 또는 그 엔진을 가진 기기가 **연결돼 있음** — 온라인 여부와 무관, 꺼져 있으면 대기). 화면의 AI 버튼 활성화에 씀 |
 | `GET /api/ai/engines` | 엔진별 요약: `{"claude": {"api_key": true, "devices_online": 1, "devices_total": 2, "cli_model": "default"}, …}` — 설정 화면용 |
-| `GET/PUT /api/settings` | 새 키 `ai_routing` · `cli_models`(9.4절), 새 비밀 키(U2). 모양 규칙은 1단계 그대로(비밀은 `*_set`/`*_status`) |
+| `GET/PUT /api/settings` | 새 키 `ai_routing` · `cli_models`(9.4절), 새 비밀 키(U2). 모양 규칙은 1단계 그대로(비밀은 `*_set`/`*_status`). **추가(디자인 16장 요청 1)**: `GET`에 `{anthropic,openai,google}_api_key_hint` — 저장된 키의 **끝 4자리**, `*_status = set`일 때만(지금 `user_secrets.hint` 값 — `crypto.hint`는 키가 12자 미만이면 빈 값, 키 원문은 보내지 않음) |
+
+**키별 최근 실패 `{name}_last_error`**(디자인 16장 요청 2 · AC-93 — S3 "최근 실패" 표시, 팀장 결정 2026-10-08):
+- 응답: **`GET /api/settings`** 에 `{anthropic,openai,google}_api_key_last_error` — 모양 `{"code": "api_auth" | "api_permission", "at": "…+00:00"} | null`.
+- 저장: 기존 **`profiles.settings`**(JSON, RLS 적용) 안의 값. **새 표 · 열 없음**.
+- 기록: **API 실행기**(15.2절 · 대화 · 글쓰기 SSE 경로 포함)가 그 키로 실행한 작업이 `api_auth` · `api_permission`(9.6절)으로 실패하면 그 사용자 권한 트랜잭션에서 씀. 그 밖 오류(한도 · 서버 · 연결)는 키 문제가 아니라 기록하지 않음.
+- 지우기: **그 키를 다시 저장하면 지움**(`PUT /api/settings`로 그 키를 바꿀 때 같은 트랜잭션에서).
 
 ## 8. 워커 API (기기 토큰)
 
@@ -478,7 +489,7 @@ returning j.*;
 | `summary` | **서버 프로세스 안 API 실행기**(15장 — K2', 탭을 닫아도 계속 · 확정 U8). 엔진에 따라 Anthropic · OpenAI · Google 실행기(9.5절) | 폴백 대상 오류면 같은 작업 행을 다음 칸(예: `{cli, claude}`)으로 `queued` |
 | `chat` · `write` | 지금처럼 **사용자 요청 안 SSE 스트림**(대화형이라 탭을 닫으면 멈추는 것이 자연스러움). 작업 행을 `running(api)`으로 만들어 두고 끝나면 `succeeded` | 스트림 **시작 전 · 도중** 폴백 대상 오류면 작업 행을 `{cli, …}`로 `queued` + SSE `{"type":"fallback","job"}` → 화면이 작업을 따라감. 이미 화면에 일부 글이 나왔으면 화면은 그 글을 지우고 "PC에서 다시 만드는 중"을 보여 줌 |
 
-- 탭을 닫아 대화 SSE가 끊기면: API 칸은 `cancelled`(지금 동작과 같음). 이미 CLI로 넘어간 작업은 탭과 무관하게 끝까지 돌고 결과가 저장됩니다(대화 메시지 저장 — 다음에 열면 보임).
+- 탭을 닫아 대화 SSE가 끊기면: API 칸은 `cancelled`(지금 동작과 같음). 이미 CLI로 넘어간 작업은 탭과 무관하게 끝까지 돌고 결과가 저장됩니다(대화 메시지 저장 — 다음에 열면 보임). 단 **글쓰기 도우미 창을 사용자가 닫으면**(✕ · Esc · 바깥 클릭 · [취소]) 화면이 그 작업을 **대기 중이든 실행 중이든** 취소합니다(PD-4 — `POST /api/jobs/{id}/cancel`, 6.5절). 창을 닫지 않은 채 탭이 닫히면 작업은 계속되고 결과 글은 24시간 작업 목록에 남습니다.
 
 ### 9.4 설정 키
 
@@ -651,7 +662,7 @@ returning j.*;
 | 흐름 | 언제 | 순서 |
 |---|---|---|
 | ① **앱 창에서 한 번에** | 이 PC의 앱 창에서 로그인한 상태 | 설정 "연결된 PC" → [이 PC 연결] → 화면이 `POST /api/devices/pair-codes`로 코드를 받아 `window.paperlabDesktop.pair(code)`로 **main 프로세스에 코드만** 넘김 → main이 `POST /api/worker/pair` → 토큰 저장. **토큰은 화면(원격 페이지)에 절대 오지 않음** |
-| ② **코드 입력** | 다른 기기의 브라우저에서 코드를 만든 경우, 또는 앱 창이 다른 계정으로 로그인한 경우 | 트레이 메뉴 · 앱의 "이 PC 상태" 창 → [코드로 연결] → 코드 입력 → main이 교환 |
+| ② **코드 입력** | 다른 기기의 브라우저에서 코드를 만든 경우, 또는 앱 창이 다른 계정으로 로그인한 경우 | 트레이 메뉴 [코드로 연결…] 또는 앱의 "이 PC 상태" 창 → 그 창 안 **"연결" 구역**의 코드 칸(PD-7 — 따로 창 없음, 트레이에서 오면 코드 칸에 초점) → 코드 입력 → main이 교환 |
 
 - 앱 창에 로그인한 계정과 워커가 연결된 계정이 **다르면** 앱의 "이 PC 상태" 창과 설정 "연결된 PC"에 경고: "이 PC의 작업 실행은 a***@example.com 계정에 연결돼 있어요"(`account_hint` — 13.4절).
 - 이미 연결된 PC에서 다시 연결하면: 옛 토큰을 지우고 새 기기 행(이름 같음)이 생김 — 옛 행은 사용자가 해지하라고 안내(자동 해지는 서버가 옛 토큰을 모르므로 못 함, 가정).
@@ -694,7 +705,9 @@ desktop/                        (같은 저장소 study99web — 기획팀 추�
     cloud-preload.js            클라우드 화면용 — 최소 API만(13.3절)
     local-preload.js            앱 자체 화면용(첫 실행 · 이 PC 상태)
   ui/                           앱 자체 화면(app:// 사용자 정의 프로토콜로 — file:// 안 씀)
-    setup.html  status.html  pair.html  *.css  *.js
+    setup.html  status.html  offline.html  *.js   (코드로 연결은 status.html 안 구역 — PD-7, pair.html 없음)
+    app.css                     빌드 때 paperlab/static/css/app.css를 복사(PD-5 — 손으로 고른 사본을 두지 않음)
+    local.css                   로컬 화면 전용 몇 줄만
   build/icon.ico                디자인팀(1단계 deploy/paperlab.ico와 같은 모양)
   test/*.test.js                node:test + 가짜 CLI(17장 F)
 ```
@@ -791,8 +804,8 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | 항목 | 결정(**확정 U4: 자동 시작 + 트레이**, 세부는 기획팀 안) |
 |---|---|
 | 창 닫기(X) | 앱을 끄지 않고 **트레이로 숨김**(워커 계속). 처음 한 번 "PaperLab은 트레이에서 계속 실행돼요" 안내 |
-| 트레이 메뉴 | 열기 · 이 PC 상태 · 작업 받기 일시 중지/다시 시작 · 업데이트 확인 · 로그 폴더 열기 · 종료 |
-| 트레이 아이콘 상태 | 보통 / 실행 중(작업 수) / 일시 중지 / 연결 안 됨 · 오류 — 디자인팀(16장 E3) |
+| 트레이 메뉴 | 열기 · 이 PC 상태 · 작업 받기 일시 중지/다시 시작 · 업데이트 확인 · 로그 폴더 열기 · 종료 (메뉴 첫 줄 · 툴팁 · 업데이트 준비됨 항목 · [코드로 연결…] 등 세부 문구는 시안 11.5절) |
+| 트레이 아이콘 상태 | 보통 / 실행 중(작업 수) / 일시 중지 / 연결 안 됨 · 오류 — 디자인팀(16장 E3). 파일은 `desktop/build/tray-{idle,running,paused,error}.ico`(16 · 20 · 24 · 32px 한 파일 — PD-6, Windows 배율 100~200%에 맞는 크기를 OS가 고름) |
 | 종료 | 실행 중 작업이 있으면 확인 창("실행 중인 작업 n개는 다른 PC로 넘어가거나 다시 대기해요") → `bye` 후 종료 |
 | 자동 시작 | **켬**(기본) — Windows 로그인 때 트레이로만 시작(`app.setLoginItemSettings({openAtLogin:true, args:["--hidden"]})`). 앱 설정에서 끌 수 있음 |
 | 절전 | 작업 실행 중에만 `powerSaveBlocker.start('prevent-app-suspension')`, 끝나면 해제 |
@@ -803,7 +816,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 
 - **첫 실행**(U6 개정): 내장 주소로 `GET {주소}/api/health` · `/api/public-config` 확인 → 앱 창 열기. 주소 입력 단계 없음.
 - **서버에 연결할 수 없음(신규)**: 확인이 실패하거나 앱 창이 서버에서 화면을 못 받으면 로컬 화면 "PaperLab 서버에 연결할 수 없어요. 서버 PC가 꺼져 있거나 인터넷이 끊겼을 수 있어요. 관리자에게 알려 주세요. [다시 시도]"(30초마다 자동 재시도). 워커는 그동안 claim을 쉬고(백오프 최대 5분 — 가정) 연결되면 이어서. (서버 PC 한 대에 모두 걸림 — 1단계 18장)
-- **이 PC 상태**: 연결된 계정(`account_hint`) · 기기 이름 · 엔진별 상태(설치 · 버전 · 로그인 · 켜짐/끔 · 동시 실행 수) · 실행 중 작업(종류 · 경과 시간 · [취소]는 서버 취소 API가 아니라 워커가 끄고 `cancelled` 보고) · [코드로 연결] · [연결 끊기(이 PC에서 토큰 삭제)] · [로그 폴더 열기] · 앱 버전 · 업데이트 상태.
+- **이 PC 상태**: 연결된 계정(`account_hint`) · 기기 이름 · 엔진별 상태(설치 · 버전 · 로그인 · 켜짐/끔 · 동시 실행 수) · 실행 중 작업(종류 · 경과 시간 · [취소]는 서버 취소 API가 아니라 워커가 끄고 `cancelled` 보고) · **"연결" 구역**(코드로 연결 — E6, PD-7) · [연결 끊기(이 PC에서 토큰 삭제)] · [로그 폴더 열기] · 앱 버전 · 업데이트 상태.
 - 작업 완료 · 실패 알림: 트레이 풍선(앱 창이 숨었을 때만, 끌 수 있음 — 가정).
 - **업데이트 상태(개정 U10)**: "이 PC 상태"에 지금 버전 · 마지막 확인 시각 · 상태(최신 / 받는 중 n% / 준비됨 — [지금 다시 시작] / 확인 실패). 업데이트 주소는 서버와 같은 출처(`/downloads/`)라 **서버에 연결할 수 없을 때의 확인 실패는 오류 창을 띄우지 않고** 상태 줄에만 "업데이트 확인 실패 — 서버 연결 안 됨"(다음 주기에 다시). 내려받은 파일의 sha512가 맞지 않으면 설치하지 않고 "업데이트 파일이 손상됐어요 — 다음에 다시 받아요"(13.7.1절 무결성), `main.log`에 WARN.
 - **수동 업데이트 확인**: 트레이 · 이 PC 상태의 [업데이트 확인]은 서버 `/downloads/latest.yml`을 즉시 확인.
@@ -820,7 +833,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | 받는 곳(개정 U10) | **서버 PC가 내려주는 `https://kimjuhyeon.tailac17f6.ts.net/downloads/`**(13.7.1절). 처음 설치 파일은 클라우드 화면 설정 "연결된 PC"의 [PC 앱 받기](S4) | GitHub Releases 안 씀(사용자 결정 2026-10-07) |
 | 업데이트 확인 | 시작 때 + **6시간마다**(가정) | `electron-updater` + **generic provider**(`url` = 위 주소, 빌드가 `app-update.yml`에 넣음 — `setFeedURL`을 코드에서 부르지 않음, 공식 문서). 개정 전: GitHub provider |
 | 다운그레이드 | 하지 않음(`allowDowngrade: false` — 기본). 서버를 옛 커밋으로 되돌려도 앱은 그대로(13.7.1절) | |
-| 받기 · 설치 | 자동으로 받고, **다음 종료 때 설치**(`autoInstallOnAppQuit`) + 트레이 "업데이트 준비됨 — [지금 다시 시작]". 작업 실행 중에는 다시 시작을 미룸 | **확정 U5** |
+| 받기 · 설치 | 자동으로 받고, **다음 종료 때 설치**(`autoInstallOnAppQuit`) + 트레이 "업데이트 준비됨 — [지금 다시 시작]". 작업 실행 중에는 다시 시작을 미룸. 알림은 **트레이 · 이 PC 상태에만**, 앱 창(클라우드 화면)에는 띄우지 않음(PD-8) | **확정 U5** |
 | 필수 업데이트 | 서버가 `426 update_required`(8.3절)를 주면 작업을 받지 않고 즉시 업데이트를 권함 | |
 | 서명 | **코드 서명 없음**(확정) → 첫 설치 때 SmartScreen "Windows의 PC 보호" → [추가 정보] → [실행] 안내. 업데이트 파일 서명 검증(`publisherName`)은 설정하지 않음 — 대신 **HTTPS + `latest.yml` sha512**(13.7.1절 무결성) | 공식 문서: NSIS 업데이트는 적용 전 Authenticode 검증(`verifyUpdateCodeSignature` 기본 켬, `publisherName` 사용). **서명 없는 앱에서 이 검증이 건너뛰어지는지 · 업데이트가 경고 없이 설치되는지 · 백신 오탐 확인 필요**(AC-71) |
 | 메타데이터 | 빌드가 `latest.yml`(버전 · 파일 이름 · **sha512** · 크기) · `.blockmap`(차등 받기) 생성 → 서버 PC `D:\PaperLab\releases`에 둠(13.7.1절) | electron-builder 공식: 받은 파일을 `latest.yml`의 sha512로 검증 |
@@ -973,20 +986,20 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 
 ## 16. 화면 변경 (디자인팀 목록)
 
-디자인팀은 `docs/design/phase2-worker-ui.md`(신규)에 시안 · 문구 · **CSS 클래스 이름 목록**을 먼저 쓰고, 개발팀이 그 이름으로 마크업합니다(1단계와 같은 순서). 앱 자체 화면(E*)은 같은 문서의 별도 절로.
+디자인팀은 [`docs/design/phase2-worker-electron-ui.md`](../design/phase2-worker-electron-ui.md)(작성됨 2026-10-08)에 시안 · 문구 · **CSS 클래스 이름 목록**을 먼저 쓰고, 개발팀이 그 이름으로 마크업합니다(1단계와 같은 순서). 앱 자체 화면(E*)은 같은 문서의 별도 절로. **디자인 결정 PD-1~PD-9는 디자인팀 추천안으로 확정**(20.2절) — 아래 표는 그 결정을 반영한 내용입니다.
 
 ### 클라우드 화면 (브라우저 · 앱 창 공통)
 | # | 화면 | 내용 |
 |---|---|---|
-| S1 | **설정 "AI" 구역 재구성** | 1단계의 "API / Claude CLI" 선택 버튼 **삭제** → 안내 한 줄 "API 키가 있으면 API로 먼저, 안 되면 연결된 PC의 CLI로 실행해요" + "PC를 꺼도 AI를 쓰려면 API 키가 필요해요"(PLAN 5장). API 모델 · effort는 "API 설정"으로 묶음 |
-| S2 | **작업별 엔진** | 요약 · 논문과 대화 · 글쓰기 도우미 줄마다 엔진 칩 목록(순서 바꾸기 · 추가 · 빼기, 1~3개), 칩 옆 상태(API 키 ✓/✗ · 켜진 PC n대). 엔진별 CLI 모델 선택(claude: 기본/opus/sonnet/haiku) |
-| S3 | **API 키 구역** | **Anthropic · OpenAI · Google 세 칸**(확정 U2) — 각 칸에 저장 상태("…ab12 저장됨" / 없음 / "저장된 키를 읽지 못했어요"), 키 옆 "최근 실패: 키가 올바르지 않음 (10월 7일)" 표시 자리, OpenAI · Google 칸 아래 "PDF 그림 · 쪽 인용 없이 본문 글만 보내요" 안내와 **API 모델 입력**(`api_models` — 9.4절) |
-| S4 | **연결된 PC** | 목록: 이름 · 켜짐(초록)/꺼짐(회색, "마지막 접속 3시간 전") · 일시 중지 · 엔진 칩(✓ 로그인됨 / ! 로그인 필요 / 없음) · 앱 버전(낮으면 "업데이트 필요") · 실행 중 작업 수 · [이름 바꾸기] [연결 해지]. 해지된 PC는 흐리게. 빈 목록: "연결된 PC가 없어요" + **[PC 앱 받기]**(개정 U10: `GET /api/desktop/release`의 `/downloads/PaperLab-Setup-<버전>.exe` — 같은 출처 링크, 옆에 버전 · 크기 · **SHA-256**(접어 두기) · "받은 파일 확인 방법" 도움말) + SmartScreen 안내 링크. 목록이 있을 때도 구역 아래에 작게 [PC 앱 받기]. 아직 빌드가 없으면(404) "PC 앱을 준비 중이에요 — 관리자에게 알려 주세요" |
+| S1 | **설정 "AI 엔진" 구역 재구성**(구역 이름 "AI 엔진" — PD-9) | 1단계의 "API / Claude CLI" 선택 버튼 **삭제** → 안내 한 줄 "API 키가 있으면 API로 먼저, 안 되면 연결된 PC의 CLI로 실행해요" + "PC를 꺼도 AI를 쓰려면 API 키가 필요해요"(PLAN 5장). API 모델 · effort는 "API 설정"으로 묶음 |
+| S2 | **작업별 엔진** | 요약 · 논문과 대화 · 글쓰기 도우미 줄마다 **고르기 상자 3개(1 · 2 · 3순위)** — 1순위는 늘 하나, 2 · 3순위는 "없음" 가능, 겹치면 뒤 칸을 비우고 당김(PD-1 — 칩 재정렬 · 추가 · 빼기 단추는 쓰지 않음). 줄 아래 **경로 줄**: 9.2절 규칙대로 펼친 경로와 상태(예: "Anthropic API → 안 되면 PC의 claude (켜진 PC 1대)", 경로가 비면 주황 경고). 엔진별 CLI 모델 선택(claude: 기본/opus/sonnet/haiku) |
+| S3 | **API 키 구역** | **Anthropic · OpenAI · Google 세 칸**(확정 U2) — 각 칸에 저장 상태("…ab12 저장됨" — `*_api_key_hint`, 7.3절 / 없음 / "저장된 키를 읽지 못했어요"), 키 옆 **최근 실패** "최근 실패: 키가 올바르지 않아요 (10월 7일 오후 2:14)"(`*_last_error`, 7.3절). **키마다 [확인] 버튼은 두지 않음**(PD-2 — 새 API · 각 회사 호출 비용 없음, 저장 상태와 실제 작업의 최근 실패만 보임), OpenAI · Google 칸 아래 "PDF 그림 · 쪽 인용 없이 본문 글만 보내요" 안내와 **API 모델 입력**(`api_models` — 9.4절) |
+| S4 | **연결된 PC**(구역 이름 "연결된 PC" — PD-9. "이 PC 연결"은 버튼 이름) | 목록: 이름 · 켜짐(초록)/꺼짐(회색, "마지막 접속 3시간 전") · 일시 중지 · 엔진 칩(✓ 로그인됨 / ! 로그인 필요 / 없음 — 칩에 **엔진별 `slots`**, PC 전체 동시 실행 수는 웹에 보이지 않음 · 앱 "이 PC 상태"에서만 — PD-3) · 앱 버전(`update_required`면 "업데이트 필요" — 7.2절) · 실행 중 작업 수 · [이름 바꾸기] [연결 해지]. 해지된 PC는 흐리게. 빈 목록: "연결된 PC가 없어요" + **[PC 앱 받기]**(개정 U10: `GET /api/desktop/release`의 `/downloads/PaperLab-Setup-<버전>.exe` — 같은 출처 링크, 옆에 버전 · 크기 · **SHA-256**(접어 두기) · "받은 파일 확인 방법" 도움말) + SmartScreen 안내 링크. 목록이 있을 때도 구역 아래에 작게 [PC 앱 받기]. 아직 빌드가 없으면(404) "PC 앱을 준비 중이에요 — 관리자에게 알려 주세요" |
 | S5 | **이 PC 연결 대화상자** | 앱 창이면 [이 PC 연결] 한 번 → 진행 → "연결됐어요: 집 PC". 브라우저면 코드 크게 표시 · 남은 시간 · 복사 · "앱 트레이 메뉴 → 코드로 연결에 넣어 주세요" · [새 코드] |
 | S6 | **작업 목록(신규)** | 사이드바 아래 "작업" 항목 + 진행 중 개수 배지. 목록: 종류 · 논문 제목 · 상태 문구(아래 S8) · 엔진/경로 · 경과 시간 · [취소] [다시 시도] · 실패 사유 펼치기(`history` — "API: 키가 올바르지 않음 → PC: 실행 중") |
 | S7 | **요약 진행(읽기 화면)** | 1단계 D11 "이 탭을 닫으면 요약이 멈춰요" **삭제**(확정 U8 · K2') → 작업 상태 표시 + "탭을 닫아도 계속돼요" + [취소]. 다시 열면 진행 중 작업을 이어서 보여 줌 |
 | S8 | **상태 문구 모음** | 대기 중 — 켜진 PC 없음 / 대기 중 — codex가 있는 PC 없음 / 대기 중 — PC가 다른 작업 중 / API로 실행 중 / "집 PC"에서 실행 중(claude) / 완료 / 실패: … / 취소됨 / PC 연결이 끊겨 다른 PC로 넘겼어요 |
-| S9 | **대화 · 글쓰기의 PC 실행** | CLI로 갈 때 답 자리에 "PC에서 답을 만드는 중…"(중간 글이 오면 점점 보임), 폴백 때 "API가 실패해서 PC로 넘겼어요(키가 올바르지 않음)". 탭을 닫아도 대화 답은 저장된다는 작은 안내 |
+| S9 | **대화 · 글쓰기의 PC 실행** | CLI로 갈 때 답 자리에 "PC에서 답을 만드는 중…"(중간 글이 오면 점점 보임), 폴백 때 "API가 실패해서 PC로 넘겼어요(키가 올바르지 않음)". 탭을 닫아도 대화 답은 저장된다는 작은 안내. **글쓰기 도우미는 창을 닫으면(✕ · Esc · 바깥 클릭 · [취소]) 그 CLI 작업을 대기 중 · 실행 중 모두 취소**(PD-4 — 6.5절 취소 API, API 경로가 창을 닫으면 멈추는 것과 같게). 대기 · 실행 중에 "창을 닫으면 이 작업은 취소돼요." 표시. 창을 닫지 않고 탭을 닫아 끊긴 글쓰기 작업은 계속 돌아 결과가 24시간 남고 작업 목록에서 [결과 복사] |
 | S10 | **AI 버튼 비활성 안내** | 경로가 없을 때(9.2절 400 문구)와 같은 문구를 버튼 옆 도움말로 |
 | S11 | **앱 창 표시** | 앱 창에서 열렸을 때 계정 메뉴에 "이 PC: 집 PC (연결됨)" 한 줄 · 워커 계정이 다르면 경고 |
 
@@ -996,11 +1009,11 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | E1 | **앱 아이콘** | `desktop/build/icon.ico`(16 · 24 · 32 · 48 · 64 · 128 · 256px) — 1단계 `deploy/paperlab.ico`와 같은 모양(**확정 U3**) |
 | E2 | **첫 실행** | 환영 · 서버 확인 중 · [시작] (**주소 입력 없음** — 확정 U6) |
 | E9 | **서버에 연결할 수 없음(신규)** | 13.6절 문구 · [다시 시도] · 자동 재시도 표시 |
-| E3 | **트레이 아이콘 4상태 + 메뉴** | 13.5절 |
+| E3 | **트레이 아이콘 4상태 + 메뉴** | 13.5절. 아이콘은 `.ico` 한 파일에 16 · 20 · 24 · 32px(PD-6) |
 | E4 | **이 PC 상태 창** | 13.6절 |
 | E5 | **브라우저 로그인 대기** | 13.4절 문구 · 버튼 |
-| E6 | **코드로 연결 창** | 8자리 입력(대시 자동) · 오류 문구 · 성공 |
-| E7 | **업데이트 알림** | "새 버전 0.2.1 준비됨 — [지금 다시 시작] [나중에]" · 필수 업데이트 문구. (개정 U10) "이 PC 상태"의 업데이트 상태 줄 · 확인 실패 · 손상 파일 문구(13.6절) |
+| E6 | **코드로 연결** | **"이 PC 상태" 창 안의 "연결" 구역**(따로 창 `pair.html`을 만들지 않음 — PD-7). 트레이 [코드로 연결…]은 이 PC 상태 창을 열고 코드 칸에 초점. 8자리 입력(대시 자동) · 오류 문구 · 성공 |
+| E7 | **업데이트 알림** | 트레이 메뉴 · 트레이 알림 · "이 PC 상태"에만 — "새 버전 0.2.1 준비됨 — [지금 다시 시작] [나중에]" · 필수 업데이트 문구. **앱 창(클라우드 화면)에는 띄우지 않음**(PD-8 — U5대로 종료 때 자동 설치, `paperlabDesktop`에 업데이트 함수를 더하지 않음 — 13.3절). (개정 U10) "이 PC 상태"의 업데이트 상태 줄 · 확인 실패 · 손상 파일 문구(13.6절) |
 | E8 | **설치 안내 문서** | `desktop/README.md`(기획팀 문구, 디자인팀 스크린샷): **설정 "연결된 PC" [PC 앱 받기]로 받기**(개정 U10 — GitHub 아님) · 선택: `Get-FileHash`로 SHA-256 비교, SmartScreen [추가 정보] → [실행], CLI 설치 · 로그인(`claude` / `codex` / `gemini` 처음 한 번), 이 PC 연결, 해지 · 제거 |
 
 ---
@@ -1191,7 +1204,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 
 ### 20.2 팀장 결정
 
-**K1~K17은 기획팀 추천안을 모두 채택했습니다(2026-10-07).** 단 서버 PC 전환으로 **K2 · K14는 다시 정해야 하고(K2' · K14')**, K1은 근거가 바뀌어 확인(K1'), 새 항목 K19 · K20이 생겼습니다. **K1' · K2' · K14' · K20도 기획팀 추천안으로 팀장 결정(2026-10-07).** **K21**(1A 연결 개정 — 이름 붙은 호스트 밖의 http(s) 링크)은 **①로 팀장 결정(2026-10-07)**. 남은 팀장 결정 필요는 **K19**(OpenAI · Google 기본 모델 id — 개발팀 제안 뒤)입니다. U10 변경(2026-10-07)으로 생긴 **K22 · K23 · K24**(배포 보안)는 **기획팀 추천안으로 팀장 결정(2026-10-07)**. K12는 U10 변경으로 **K12'**(14장)로 바뀌고, **K20은 해당 없음**(Q-S3).
+**K1~K17은 기획팀 추천안을 모두 채택했습니다(2026-10-07).** 단 서버 PC 전환으로 **K2 · K14는 다시 정해야 하고(K2' · K14')**, K1은 근거가 바뀌어 확인(K1'), 새 항목 K19 · K20이 생겼습니다. **K1' · K2' · K14' · K20도 기획팀 추천안으로 팀장 결정(2026-10-07).** **K21**(1A 연결 개정 — 이름 붙은 호스트 밖의 http(s) 링크)은 **①로 팀장 결정(2026-10-07)**. 남은 팀장 결정 필요는 **K19**(OpenAI · Google 기본 모델 id — 개발팀 제안 뒤)입니다. U10 변경(2026-10-07)으로 생긴 **K22 · K23 · K24**(배포 보안)는 **기획팀 추천안으로 팀장 결정(2026-10-07)**. K12는 U10 변경으로 **K12'**(14장)로 바뀌고, **K20은 해당 없음**(Q-S3). 디자인 시안(2026-10-08)의 **PD-1~PD-9는 모두 디자인팀 추천안으로 팀장 결정(2026-10-08)** — 표 아래.
 
 | # | 항목 | 선택지 | 결정 / 기획팀 추천 |
 |---|---|---|---|
@@ -1223,6 +1236,19 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | **K17** | 수치 가정 일괄 | 기기 10대 · 진행 중 작업 30개 · 코드 10분 · 프롬프트 4MB · 결과 2MB · 부분 글 64KB · 하트비트 묶음 · 쉬는 폴링 60초/활동 5초 · 업데이트 확인 6시간 · 로그 5MB×3 | **그대로**(운영하며 조정) |
 | **K21** | (1A 연결 — 13.2.1절 5번) 이름 붙은 허용 호스트 밖의 http(s) 링크(출판사 논문 주소 · 검색 결과 제목 · [PDF] 링크) | ① 스킴만 맞으면(http(s)) 호스트와 상관없이 시스템 브라우저로 엶 ② 이름 붙은 호스트만 열고 나머지는 거부(그 링크는 앱에서 눌러도 아무 일도 없음) | **팀장 결정(2026-10-07): ①**(기획팀 추천과 같음) — AC-73 "화면 안의 외부 링크는 시스템 브라우저로"를 지키기 위함. 사용자가 누른 링크를 시스템 브라우저가 여는 것이라 브라우저에서 쓰는 지금과 비슷하지만, 앱에는 브라우저의 팝업 차단 같은 장치가 없으므로 13.2.1절 규칙으로 보완함 — 위험한 스킴(`file:` · 사용자 정의 프로토콜) 거부(2번), 서버 출처 최상위 프레임에서 온 요청만 처리(7번), 짧은 시간 안 개수 제한(8번, 기본 10초에 5개). **앱 창 안 이동 금지 · 앱 안 새 창 금지는 그대로** |
 
+**디자인 결정 PD-1~PD-9** ([시안](../design/phase2-worker-electron-ui.md) 17장) — **팀장 결정(2026-10-08): 모두 디자인팀 추천안 확정**
+| # | 항목 | 팀장 결정(= 디자인팀 추천) | 반영한 곳 |
+|---|---|---|---|
+| **PD-1** | 작업별 엔진 순서 고르기 | **고르기 상자 3개(1 · 2 · 3순위) + 경로 줄**. 칩 재정렬 · 추가 · 빼기는 쓰지 않음 | 16장 S2 |
+| **PD-2** | API 키 확인 | **[확인] 버튼 없음**(새 API `…/check` 없음). 저장 상태(끝 4자리)와 실제 작업의 **최근 실패**만 | 16장 S3 · 7.3절 |
+| **PD-3** | 웹의 PC 동시 실행 수 | **엔진별 `slots`만**. PC 전체 동시 수는 앱 "이 PC 상태"에서만(서버 · 표 변경 없음) | 16장 S4 |
+| **PD-4** | 글쓰기 도우미 창을 닫을 때 CLI 작업 | **취소 — 대기 중 · 실행 중 모두**(팀장 확인 2026-10-08, 시안대로. `queued`는 바로 `cancelled`, `running`은 `cancel_requested` — 6.5절. "창을 닫으면 이 작업은 취소돼요" 표시). 탭이 닫혀 끊긴 작업만 결과가 작업 목록에 남음 | 9.3절 · 16장 S9 |
+| **PD-5** | 앱 로컬 화면 CSS | **빌드 때 `app.css`를 `desktop/ui/`로 복사**해 그대로 쓰고 `local.css`에는 로컬 전용 몇 줄만 | 13.1절 · 21장 |
+| **PD-6** | 트레이 아이콘 형식 | **`.ico` 한 파일에 16 · 20 · 24 · 32px** (`tray-{idle,running,paused,error}.ico`) | 13.5절 · 16장 E3 · 21장 |
+| **PD-7** | E6 코드로 연결 | **"이 PC 상태" 창 안의 "연결" 구역**(`pair.html` 없음). 트레이 [코드로 연결…]은 그 창을 열고 코드 칸에 초점 | 12.2 · 13.1 · 13.6절 · 16장 E6 |
+| **PD-8** | 업데이트 알림을 앱 창에도 | **띄우지 않음** — 트레이 · 트레이 알림 · 이 PC 상태만(`paperlabDesktop`에 함수 추가 없음 — 13.3절 그대로) | 13.7절 · 16장 E7 |
+| **PD-9** | 설정 창 구역 이름 | **"AI 엔진" · "연결된 PC"**. "이 PC 연결"은 버튼 이름 | 16장 S1 · S4 |
+
 ### 20.3 확인 필요 (개발팀 첫 주 — 확인 후 이 문서 개정)
 
 | 항목 | 상태 |
@@ -1248,7 +1274,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 
 ## 21. 작업 분담 (파일 단위)
 
-같은 파일을 두 팀이 동시에 고치지 않습니다. 순서: (질문 답 · 팀장 결정) → 디자인 시안(`docs/design/phase2-worker-ui.md`) · 개발 서버 작업 동시 → 개발 화면 · 앱 작업 → 품질 검증 → 승인 → 관리자 커밋 · 푸시 · 서버 배포 → 앱 릴리스(14장).
+같은 파일을 두 팀이 동시에 고치지 않습니다. 순서: (질문 답 · 팀장 결정) → 디자인 시안(`docs/design/phase2-worker-electron-ui.md`) · 개발 서버 작업 동시 → 개발 화면 · 앱 작업 → 품질 검증 → 승인 → 관리자 커밋 · 푸시 · 서버 배포 → 앱 릴리스(14장).
 
 ### 개발팀
 
@@ -1282,10 +1308,10 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 
 | 파일 | 할 일 |
 |---|---|
-| `docs/design/phase2-worker-ui.md` (신규) | 16장 S1~S11 · E1~E9 시안 · 문구 · **CSS 클래스 이름 목록**(S3은 키 세 칸 · API 모델 입력) — 개발팀 화면 작업 전에 먼저 |
-| `paperlab/static/css/app.css` | S 화면 스타일(엔진 칩 · 기기 목록 · 작업 목록 · 상태 문구 · 연결 코드) |
-| `desktop/ui/*.css` | E 화면 스타일 |
-| `desktop/build/icon.ico` · 트레이 아이콘 4종(`desktop/build/tray-*.png`) | E1 · E3 |
+| `docs/design/phase2-worker-electron-ui.md` (작성됨 2026-10-08) | 16장 S1~S11 · E1~E9 시안 · 문구 · **CSS 클래스 이름 목록**(S3은 키 세 칸 · API 모델 입력) — 개발팀 화면 작업 전에 먼저 |
+| `paperlab/static/css/app.css` | S 화면 스타일(엔진 고르기 상자 · 경로 줄 · 기기 목록 · 작업 목록 · 상태 문구 · 연결 코드) — 시안 부록 A를 맨 끝에(개발 단계) |
+| `desktop/ui/*.css` | E 화면 스타일 — **빌드 때 `app.css`를 복사해 쓰고**, 로컬 전용 몇 줄만 따로(PD-5) |
+| `desktop/build/icon.ico` · 트레이 아이콘 4종(`desktop/build/tray-{idle,running,paused,error}.ico` — 16 · 20 · 24 · 32px 한 파일, PD-6) | E1 · E3 |
 
 ### 기획팀 (구현 후)
 - `desktop/README.md` 설치 안내 문구(E8 — [PC 앱 받기] · SHA-256 확인 · SmartScreen · CLI 설치 · 연결 · 해지 · 제거), `README.md` · `FEATURES.md`(PC 앱 · 작업 목록 · 엔진 설정).
