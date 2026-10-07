@@ -147,6 +147,30 @@ function Set-PLRestrictedAcl {
   } | Out-Null
 }
 
+function Reset-PLInheritedAcl {
+  <# 폴더 하나의 권한을 상속 상태로 되돌림 — 그 폴더만(icacls /reset, 하위로 내려가는 스위치 없음). 상속받는 하위 항목은
+     시스템이 다시 전파하고 정션은 따라가지 않는다. 하위로 내려가게 하면 정션을 따라 바깥 폴더 ACL까지 초기화됨
+     (품질팀 점검 · 팀장 결정 B). icacls 종료 코드를 돌려준다 — /C 를 붙이면 실패해도 0 이라 붙이지 않음(한 폴더만이라 필요 없음) #>
+  param([Parameter(Mandatory = $true)][string]$Path)
+  & icacls.exe $Path /reset /Q | Out-Null
+  return $LASTEXITCODE
+}
+
+function Get-PLReparsePoints {
+  <# 주어진 경로 중 재분석 지점(정션 · 심볼릭 링크)인 것만 돌려줌. 아직 없는 경로는 건너뜀(통과) — 팀장 결정 C.
+     대상이 없는 정션도 항목은 있으므로 걸린다. 같은 경로(대소문자 · 끝의 \ 만 다른 것 포함)는 한 번만 #>
+  param([string[]]$Paths = @())
+  $hits = @()
+  $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+  foreach ($p in $Paths) {
+    if (-not $p) { continue }
+    if (-not $seen.Add($p.TrimEnd('\'))) { continue }
+    $item = Get-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+    if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $hits += $p }
+  }
+  return $hits
+}
+
 function Find-PLTailscale {
   $cmd = Get-Command tailscale -ErrorAction SilentlyContinue
   if ($cmd) { return $cmd.Source }

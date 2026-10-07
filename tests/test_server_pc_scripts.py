@@ -367,6 +367,184 @@ def test_install_requires_admin_for_task_registration(tmp_path, fake_env):
     assert not root.exists() and _acl(fake_env) == acl_before  # 아무것도 바꾸지 않음
 
 
+def ps_common(snippet: str, **env: str) -> subprocess.CompletedProcess:
+    """common.ps1 을 읽은 뒤 snippet 실행 (경로는 환경 변수로 넘김)"""
+    common = str(SERVER_PC / "common.ps1").replace("'", "''")
+    command = (f"[Console]::OutputEncoding=[Text.Encoding]::UTF8; $ErrorActionPreference='Stop'; "
+               f". '{common}'; {snippet}")
+    return subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+                           command], env=dict(os.environ, **env), capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=120)
+
+
+def _icacls(*args: str):
+    subprocess.run(["icacls", *args], check=True, capture_output=True)
+
+
+def _my_sid() -> str:
+    return subprocess.run(["powershell", "-NoProfile", "-Command",
+                           "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value"],
+                          capture_output=True, text=True).stdout.strip()
+
+
+@pytest.fixture
+def junctions():
+    """cmd /c mklink /J 로 정션 만들기(관리자 권한 불필요). 정리할 때 정션을 먼저 cmd /c rmdir 로 지운다 —
+    대상 폴더는 건드리지 않고, 지울 수 없는 폴더를 남기지 않음"""
+    made: list[Path] = []
+
+    def make(link: Path, target: Path, create_target: bool = True) -> Path:
+        if create_target:
+            target.mkdir(parents=True, exist_ok=True)
+        link.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True)
+        made.append(link)
+        return link
+
+    yield make
+    for link in reversed(made):
+        subprocess.run(["cmd", "/c", "rmdir", str(link)], capture_output=True)
+        assert not os.path.lexists(link), link
+
+
+def test_reset_acl_does_not_follow_junctions(tmp_path, junctions):
+    """품질팀 점검 · 팀장 결정 B: 하위 폴더 권한 되돌리기는 그 폴더만(icacls /reset). 하위 정션이 가리키는 바깥 폴더의
+    보호 ACL(그 안의 보호된 폴더 · 파일 포함)은 바뀌지 않는다. 대조로 예전 명령(/reset /T)은 바꾼다는 것도 확인"""
+    me = _my_sid()
+    root, outside = tmp_path / "root", tmp_path / "outside"
+    child = root / "tmp"
+    child.mkdir(parents=True)
+    _icacls(str(root), "/inheritance:r", "/grant:r", f"*{me}:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F")
+    _icacls(str(child), "/grant", "*S-1-5-32-545:(OI)(CI)RX")       # 루트 밖 계정(Users) 명시 항목 → 되돌릴 대상
+    prot, inner = outside / "prot", outside / "prot" / "inner"
+    inner.mkdir(parents=True)
+    (inner / "f.txt").write_text("x", encoding="utf-8")
+    _icacls(str(prot), "/inheritance:r", "/grant:r", f"*{me}:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)R")
+    _icacls(str(inner), "/inheritance:r", "/grant:r", f"*{me}:(OI)(CI)F", "*S-1-5-32-545:(OI)(CI)M")
+    junctions(child / "link", prot)
+
+    def snap():
+        return [_acl(p) for p in (prot, inner, inner / "f.txt")]
+
+    before = snap()
+    p = ps_common("$a = Get-PLAclProblems -Path $env:PL_PATH; $code = Reset-PLInheritedAcl -Path $env:PL_PATH; "
+                  "$b = Get-PLAclProblems -Path $env:PL_PATH; "
+                  "Write-Output ('before=' + $a.Others.Count + ' code=' + $code + ' inherited=' + $b.Inherited + "
+                  "' others=' + $b.Others.Count)", PL_PATH=str(child))
+    assert "before=1 code=0 inherited=True others=0" in p.stdout, p.stdout + p.stderr
+    assert snap() == before                                          # 정션 대상은 그대로
+    subprocess.run(["icacls", str(child), "/reset", "/T", "/C", "/Q"], capture_output=True)
+    assert snap() != before                                          # 대조: /T 는 정션을 따라 들어감
+
+
+def test_install_scripts_do_not_reset_recursively():
+    for name in ("install.ps1", "common.ps1"):
+        text = (SERVER_PC / name).read_text(encoding="utf-8-sig")
+        assert not re.search(r"/reset\s+/T", text, re.IGNORECASE), name
+
+
+def test_reparse_point_check(tmp_path, junctions):
+    """팀장 결정 C: 정션(대상이 없는 정션 포함)만 걸리고, 실제 폴더 · 파일 · 아직 없는 경로는 통과"""
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "f.txt").write_text("x", encoding="utf-8")
+    link = junctions(tmp_path / "link", tmp_path / "target")
+    dangling = junctions(tmp_path / "dangling", tmp_path / "nowhere", create_target=False)
+    # 같은 경로가 여러 번(대소문자 · 끝의 \ 만 다름) 들어와도 한 번만 (품질팀 A-2)
+    paths = [str(x) for x in (real, real / "f.txt", tmp_path / "missing", link, link / "logs", dangling)]
+    paths += [str(link).upper(), str(link) + "\\", str(dangling)]
+    p = ps_common("Get-PLReparsePoints -Paths ($env:PL_PATHS | ConvertFrom-Json) | ForEach-Object { 'HIT ' + $_ }; "
+                  "Write-Output ('count=' + @(Get-PLReparsePoints -Paths @($env:PL_REAL)).Count)",
+                  PL_PATHS=json.dumps(paths), PL_REAL=str(real))
+    hits = [ln[4:] for ln in p.stdout.splitlines() if ln.startswith("HIT ")]
+    assert hits == [str(link), str(dangling)], p.stdout + p.stderr
+    assert "count=0" in p.stdout
+
+
+def test_reparse_point_check_file_symlink(tmp_path, fake_env):
+    """팀장 결정: cloud.env 파일 자체가 심볼릭 링크여도 걸리고, 설치 시험 실행이 -EnvFile 안내를 보여 줌.
+    파일 심볼릭 링크는 일반 권한(개발자 모드 꺼짐)으로 만들 수 없으면 건너뜀 — 그 경우 코드 경로는
+    test_install_stops_on_junction_paths[EnvFile](cloud.env 이름의 정션)로 확인"""
+    link = tmp_path / "linkcfg" / "cloud.env"
+    link.parent.mkdir()
+    try:
+        os.symlink(fake_env, link)
+    except OSError as e:
+        pytest.skip(f"파일 심볼릭 링크를 만들 권한이 없음: {e}")
+    try:
+        p = ps_common("Get-PLReparsePoints -Paths @($env:PL_PATH, $env:PL_REAL) | ForEach-Object { 'HIT ' + $_ }",
+                      PL_PATH=str(link), PL_REAL=str(fake_env))
+        assert [ln[4:] for ln in p.stdout.splitlines() if ln.startswith("HIT ")] == [str(link)], p.stdout + p.stderr
+        p = ps(SERVER_PC / "install.ps1", "-DryRun", "-Root", str(tmp_path / "root"), "-AppDir", str(tmp_path / "app"),
+               "-EnvFile", str(link), "-SkipFunnel")
+        out = p.stdout + p.stderr
+        assert p.returncode == 0 and f"{link} — -EnvFile로 실제 파일 경로를 넘기세요" in out, out
+    finally:
+        link.unlink()
+
+
+def test_reset_acl_reports_failure_and_install_warns(tmp_path):
+    """팀장 결정: Reset-PLInheritedAcl 은 icacls 종료 코드를 돌려주고(실패면 0이 아님), install 은 그때 WARN 만 남기고 계속"""
+    p = ps_common("Write-Output ('code=' + (Reset-PLInheritedAcl -Path $env:PL_PATH))", PL_PATH=str(tmp_path / "missing"))
+    m = re.search(r"code=(\d+)", p.stdout)
+    assert m and m.group(1) != "0", p.stdout + p.stderr
+    text = (SERVER_PC / "install.ps1").read_text(encoding="utf-8-sig")
+    block = text[text.index("$code = Reset-PLInheritedAcl"):]
+    block = block[:block.index("} | Out-Null")]
+    assert "if ($code -ne 0)" in block and "-Level WARN" in block and "설치는 계속" in block and "throw" not in block
+    assert 'icacls `"$child`" 를 직접 실행' in block                 # 실패한 그 경로로 확인하라고 안내 (품질팀 A-1)
+
+
+@pytest.mark.parametrize("which", ["Root", "AppDir", "LogDir", "TmpDir", "EnvDir", "EnvFile", "RootIsEnvDir"])
+def test_install_stops_on_junction_paths(tmp_path, fake_env, junctions, which):
+    """팀장 결정 C: 루트 · 저장소 · logs · tmp · cloud.env 폴더가 정션이면 시험 실행은 무엇이 걸리는지 보여 주고,
+    실제 실행은 아무것도 만들거나 바꾸기 전에 멈춘다(관리자 권한 확인보다 먼저).
+    -AppDir 는 임시 폴더라 검사가 빠져도 저장소 확인에서 멈춤 — 이 PC의 저장소 · 작업 스케줄러에 닿지 않는다"""
+    target = tmp_path / "target"
+    (target / "inner").mkdir(parents=True)
+    root, app, env_file = tmp_path / "root", tmp_path / "app", fake_env
+    log_dir, tmp_dir = root / "logs", root / "tmp"
+    if which in ("Root", "RootIsEnvDir"):
+        root = junctions(tmp_path / "rootlink", target)
+        log_dir, tmp_dir = root / "logs", root / "tmp"
+        if which == "RootIsEnvDir":  # 같은 정션이 루트이자 cloud.env 폴더 → 한 번만 보고 (품질팀 A-2)
+            env_file = root / "cloud.env"
+    elif which == "AppDir":
+        app = junctions(tmp_path / "applink", target)
+    elif which == "LogDir":
+        log_dir = junctions(root / "logs", target)
+    elif which == "TmpDir":
+        tmp_dir = junctions(root / "tmp", target)
+    elif which == "EnvDir":
+        env_file = junctions(tmp_path / "cfglink", fake_env.parent, create_target=False) / "cloud.env"
+    else:  # cloud.env 이름의 정션 — 파일 심볼릭 링크와 같은 재분석 지점 검사 경로(일반 권한으로 만들 수 있음)
+        env_file = junctions(tmp_path / "cfg2" / "cloud.env", target)
+    link = {"Root": root, "AppDir": app, "LogDir": log_dir, "TmpDir": tmp_dir, "EnvDir": env_file.parent,
+            "EnvFile": env_file, "RootIsEnvDir": root}[which]
+    args = ("-Root", str(root), "-AppDir", str(app), "-LogDir", str(log_dir), "-TmpDir", str(tmp_dir),
+            "-EnvFile", str(env_file), "-SkipFunnel")
+    msg = "정션 · 심볼릭 링크 경로는 지원하지 않아요: " + str(link)
+    hint = "-EnvFile로 실제 파일 경로를 넘기세요" if which == "EnvFile" else "실제 폴더 경로를 -Root/-LogDir/-TmpDir"
+
+    def state():
+        return (sorted(str(x) for x in tmp_path.rglob("*")), _acl(target), _acl(target / "inner"), _acl(fake_env),
+                _acl(fake_env.parent), scheduled_paperlab_tasks())
+
+    before = state()
+    p = ps(SERVER_PC / "install.ps1", "-DryRun", *args)
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out
+    assert "확인 실패(시험 실행이라 계속): " + msg + " — " + hint in out, out
+    assert out.count(msg + " — ") == 1, out                         # 같은 경로는 한 번만
+    assert state() == before
+    p = ps(SERVER_PC / "install.ps1", *args)
+    out = p.stdout + p.stderr
+    assert p.returncode != 0, out
+    assert "확인 실패: " + msg in out and "설치를 멈췄어요: 정션 · 심볼릭 링크 경로 1개" in out, out
+    assert "설치 시작" not in out                                    # 로그 파일 · 폴더를 만들기 전에 멈춤
+    assert state() == before
+
+
 def test_funnel_and_uninstall_dry_run():
     tasks_before = scheduled_paperlab_tasks()
     p = ps(SERVER_PC / "funnel.ps1", "off", "-DryRun")

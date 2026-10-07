@@ -3,7 +3,8 @@
   PaperLab 서버 PC 설치 (명세 13.1절 5번, 서버 PC 안내서 7절). 몇 번 다시 실행해도 안전합니다.
 
 .DESCRIPTION
-  1. 확인: 시간대 KST · py -3.12 · git · 절전(경고만) · cloud.env 있음 · 저장소 브랜치
+  1. 확인: 루트 · 저장소 · logs · tmp · cloud.env 폴더 · cloud.env 파일이 정션 · 심볼릭 링크가 아님 · 시간대 KST · py -3.12 · git ·
+     절전(경고만) · cloud.env 있음 · 저장소 브랜치
   2. 루트 폴더(기본 D:\PaperLab) 권한 제한(상속 끊고 현재 사용자 · SYSTEM · Administrators 만), logs · tmp 만들기
   3. cloud.env 폴더 · 파일 권한 제한(같은 세 계정)
   4. py -3.12 -m venv .venv → pip install -e .
@@ -77,6 +78,18 @@ function Run-Py {
   if ($code -ne 0) { throw "$What 실패 (종료 코드 $code)" }
 }
 
+# 정션 · 심볼릭 링크 경로는 거부 (품질팀 점검 · 팀장 결정 C) — 권한 제한이 링크 개체에만 걸리고 대상 폴더는 그대로라서.
+# 폴더 · 로그 파일을 만들기 전에 확인한다(로그 폴더가 링크면 그 대상에 쓰게 되므로 실패는 화면에만)
+$envDir = Split-Path -Parent $EnvFile
+$links = @(Get-PLReparsePoints -Paths @($Root, $AppDir, $LogDir, $TmpDir, $envDir, $EnvFile))
+foreach ($link in $links) {
+  $m = "정션 · 심볼릭 링크 경로는 지원하지 않아요: $link — 실제 폴더 경로를 -Root/-LogDir/-TmpDir 로 넘기세요 (저장소는 -AppDir, cloud.env 는 -EnvFile)"
+  if ($link -eq $EnvFile) { $m = "정션 · 심볼릭 링크 경로는 지원하지 않아요: $link — -EnvFile로 실제 파일 경로를 넘기세요" }
+  if ($DryRun) { Write-PLLog -Level WARN -Message "확인 실패(시험 실행이라 계속): $m"; $script:Problems += $m }
+  else { Write-PLLog -Level ERROR -Message "확인 실패: $m" }
+}
+if ($links.Count -gt 0 -and -not $DryRun) { throw "설치를 멈췄어요: 정션 · 심볼릭 링크 경로 $($links.Count)개 ($($links -join ', '))" }
+
 $mode = ''
 if ($DryRun) { $mode = ' (시험 실행 — 바꾸지 않음)' }
 # 작업 등록(시스템 시작 시 트리거 · 로그온 여부와 관계없이)은 관리자 권한이 필요하다 — 무엇이든 바꾸기 전에 확인 (품질팀 F4)
@@ -97,6 +110,7 @@ if ($tasksNeeded) {
 }
 
 Write-PLLog -LogFile $Log -Message "PaperLab 서버 PC 설치 시작$mode — 루트 $Root, 저장소 $AppDir, 포트 $Port, 브랜치 $Branch"
+if ($links.Count -eq 0) { Write-PLLog -LogFile $Log -Message "확인: 루트 · 저장소 · logs · tmp · cloud.env 폴더 · cloud.env 파일이 정션 · 심볼릭 링크가 아님 (없는 경로는 건너뜀)" }
 
 # ---------------------------------------------------------------- 1. 확인 (읽기만)
 $tz = Get-PLNativeText -FilePath tzutil.exe -Arguments @('/g')
@@ -146,19 +160,21 @@ foreach ($child in @($AppDir, $LogDir, $TmpDir)) {
     continue
   }
   if ($DryRun) {
-    Write-PLLog -Level DRY -Message "[DRY] 하위 폴더 권한이 루트를 상속하는지 확인 · 필요하면 초기화(icacls /reset /T): $child"
+    Write-PLLog -Level DRY -Message "[DRY] 하위 폴더 권한이 루트를 상속하는지 확인 · 필요하면 그 폴더만 상속으로 되돌리기(icacls /reset — 그 아래는 시스템이 다시 전파, 정션은 따라가지 않음): $child"
     continue
   }
+  # 검사 · 초기화는 하위 폴더 최상위만. 그 아래에 따로 남은 명시적 권한은 다루지 않음 (팀장 결정 B)
   if (Test-Path -LiteralPath $child) {
     $p = Get-PLAclProblems -Path $child
     if ($p.Others.Count -gt 0) {
-      Invoke-PLStep -LogFile $Log -Description "하위 폴더 권한을 루트 상속으로 되돌리기: $child" -Action {
-        & icacls.exe $child /reset /T /C /Q | Out-Null
+      Invoke-PLStep -LogFile $Log -Description "하위 폴더 권한을 루트 상속으로 되돌리기(그 폴더만): $child" -Action {
+        $code = Reset-PLInheritedAcl -Path $child
+        # 실패해도 설치는 계속 — 남은 다른 계정 권한은 그 경로의 icacls 확인(안내서 9절 6번)으로 잡는다 (팀장 결정)
+        if ($code -ne 0) { Write-PLLog -LogFile $Log -Level WARN -Message "하위 폴더 권한을 상속으로 되돌리지 못했어요(icacls 종료 코드 $code): $child — 설치는 계속. icacls `"$child`" 를 직접 실행해 현재 사용자 · SYSTEM · Administrators 의 (I) 상속 항목만 있는지 확인하세요 (안내서 9절 6번)" }
       } | Out-Null
     }
   }
 }
-$envDir = Split-Path -Parent $EnvFile
 if (Test-Path -LiteralPath $envDir) { Set-PLRestrictedAcl -Path $envDir -Directory -DryRun:$DryRun -LogFile $Log }
 if (Test-Path -LiteralPath $EnvFile) { Set-PLRestrictedAcl -Path $EnvFile -DryRun:$DryRun -LogFile $Log }
 
