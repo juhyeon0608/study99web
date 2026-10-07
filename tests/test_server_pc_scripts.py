@@ -1,5 +1,6 @@
 """서버 PC 스크립트 (deploy/server-pc/*.ps1 · make-shortcut.ps1) — 이 PC에서는 **바꾸지 않는** 검사만 (명세 20.1):
-PowerShell 파서 오류 0, BOM(Windows PowerShell 5.1이 한글을 바르게 읽게), 시험 실행(-DryRun)이 아무것도 바꾸지 않음,
+PowerShell 파서 오류 0, BOM(Windows PowerShell 5.1이 한글을 바르게 읽게), 시험 실행(-DryRun)이 아무것도 바꾸지 않음
+(update.ps1 만 예외 — git fetch 로 원격 추적 브랜치만 갱신),
 공개 주소를 한 곳에만 둠(S10). 실제 작업 등록 · 권한 변경 · Funnel은 서버 PC에서 확인(AC-55 · 58 · 76 · 77 · 79).
 """
 
@@ -162,6 +163,132 @@ def test_update_dry_run(repo, tmp_path):
     p = ps(SERVER_PC / "update.ps1", "-DryRun", "-Yes", "-AppDir", str(repo), "-Branch", "main", "-LogDir", str(logs))
     assert p.returncode == 1 and "local-edit.txt" in p.stdout + p.stderr
     assert _head(repo) == before
+
+
+def _is_admin() -> bool:
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         "([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole("
+         "[Security.Principal.WindowsBuiltInRole]::Administrator)"], capture_output=True, text=True).stdout.strip() == "True"
+
+
+ADMIN_WARN = ("관리자 권한으로 실행 중: 새로 받는 파일의 소유자가 Administrators가 되지만, 상속 권한으로 서버 계정이 접근할 수 "
+              "있어 동작에는 영향이 없습니다. 가능하면 일반 권한 PowerShell에서 실행하세요.")
+
+
+def test_update_dry_run_fetches_first(repo, tmp_path):
+    """서버 PC 1A: 미리 fetch 하지 않아도 시험 실행이 새 커밋을 보여 줌. fetch 만 함(원격 추적 브랜치 갱신),
+    작업 폴더 · HEAD · 브랜치는 그대로, update.log 를 만들지 않음"""
+    origin = tmp_path / "origin"
+    (origin / "a.txt").write_text("1\n2\n3\n", encoding="utf-8")
+    _git("commit", "-qam", "three-not-fetched", cwd=origin)
+    origin_head = _head(origin)
+    before, before_text = _head(repo), (repo / "a.txt").read_text(encoding="utf-8")
+    logs = tmp_path / "logs"
+    p = ps(SERVER_PC / "update.ps1", "-DryRun", "-Yes", "-AppDir", str(repo), "-Branch", "main", "-LogDir", str(logs))
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out
+    assert "three-not-fetched" in out and "two" in out and "[DRY] git fetch" in out, out
+    assert "git fetch 만 했고 나머지는 바꾸지 않음" in out
+    tracking = subprocess.run(["git", "rev-parse", "origin/main"], cwd=repo, capture_output=True, text=True).stdout.strip()
+    assert tracking == origin_head                                    # 원격 추적 브랜치는 갱신
+    assert _head(repo) == before and (repo / "a.txt").read_text(encoding="utf-8") == before_text
+    branch = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo, capture_output=True, text=True)
+    assert branch.stdout.strip() == "main" and not logs.exists()
+    assert (ADMIN_WARN in out) == _is_admin()
+
+
+def test_update_scripts_do_not_change_owner():
+    """팀장 결정(품질팀 H2): 소유자를 바꾸지 않음 — icacls /setowner 같은 재귀 소유자 변경이 update 경로에 없음"""
+    for name in ("update.ps1", "common.ps1"):
+        text = (SERVER_PC / name).read_text(encoding="utf-8-sig").lower()
+        assert "setowner" not in text and "takeown" not in text, name
+
+
+# 스크립트 임시 사본의 common.ps1 끝에 덧붙이는 가짜 함수. 파이썬 명령은 기록만 하고 PL_FAIL 에 든 낱말(pip · migrate)이
+# 인자에 있으면 처음 한 번만 실패, 작업 재시작은 기록만, 상태 확인은 기대한 커밋으로 정상, 관리자 여부는 PL_ADMIN.
+# 실제 작업 스케줄러 · DB · 권한 · 소유자에는 닿지 않는다.
+_UPDATE_STUB = (
+    "\r\nfunction Invoke-PLNative {{\r\n"
+    "  param([Parameter(Mandatory = $true)][string]$FilePath, [string[]]$Arguments = @(), [string]$WorkingDirectory)\r\n"
+    "  $line = ($Arguments -join ' ')\r\n"
+    "  $seen = ''\r\n"
+    "  if (Test-Path -LiteralPath '{calls}') {{ $seen = Get-Content -LiteralPath '{calls}' -Raw -Encoding UTF8 }}\r\n"
+    "  Add-Content -LiteralPath '{calls}' -Value $line -Encoding UTF8\r\n"
+    "  if ($env:PL_FAIL -and $line.Contains($env:PL_FAIL) -and -not $seen.Contains($env:PL_FAIL)) {{ return 1 }}\r\n"
+    "  return 0\r\n}}\r\n"
+    "function Restart-PLServerTask {{\r\n"
+    "  param([string]$TaskName, [int]$Port, [string]$LogFile, [switch]$DryRun)\r\n"
+    "  Add-Content -LiteralPath '{calls}' -Value ('restart ' + $TaskName) -Encoding UTF8\r\n}}\r\n"
+    "function Wait-PLHealth {{\r\n"
+    "  param([int]$Port, [switch]$Deep, [int]$TimeoutSec, [string]$Commit)\r\n"
+    "  return [pscustomobject]@{{ ok = $true; commit = $Commit }}\r\n}}\r\n"
+    "function Test-PLIsAdmin {{ return ($env:PL_ADMIN -eq '1') }}\r\n")
+
+
+@pytest.fixture
+def stubbed_scripts(tmp_path):
+    copy = tmp_path / "scripts"
+    shutil.copytree(SERVER_PC, copy)
+    calls = tmp_path / "calls.txt"
+    with open(copy / "common.ps1", "ab") as f:
+        f.write(_UPDATE_STUB.format(calls=calls).encode("utf-8"))
+    return copy, calls
+
+
+def _bump_pyproject(app: Path, tmp_path: Path):
+    """원격에 pyproject.toml 을 바꾸는 새 커밋(three) — update.ps1 이 pip install -e . 을 부르게"""
+    origin = tmp_path / "origin"
+    (origin / "pyproject.toml").write_text("[project]\nname = 'x'\n", encoding="utf-8")
+    _git("add", ".", cwd=origin)
+    _git("commit", "-qm", "three", cwd=origin)
+
+
+@pytest.mark.parametrize("admin", [True, False])
+def test_update_admin_warns_and_continues(repo, tmp_path, monkeypatch, stubbed_scripts, admin):
+    """팀장 결정: 관리자 권한이면 시작할 때 WARN 한 줄(화면 + update.log)만 남기고 계속 — 소유자는 바꾸지 않음"""
+    copy, calls = stubbed_scripts
+    monkeypatch.setenv("PL_ADMIN", "1" if admin else "0")
+    monkeypatch.delenv("PL_FAIL", raising=False)
+    logs = tmp_path / "logs"
+    p = ps(copy / "update.ps1", "-Yes", "-AppDir", str(repo), "-Branch", "main", "-LogDir", str(logs), "-TimeoutSec", "5")
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out
+    log = (logs / "update.log").read_text(encoding="utf-8-sig")
+    assert "업데이트 성공" in log
+    assert (("[WARN] " + ADMIN_WARN) in log) == admin and (ADMIN_WARN in out) == admin
+    if admin:
+        assert log.index(ADMIN_WARN) < log.index("git fetch")  # 시작할 때
+    assert "setowner" not in out.lower()
+
+
+@pytest.mark.parametrize("fail", ["pip", "paperlab.migrate"])
+def test_update_rolls_back_when_step_after_merge_fails(repo, tmp_path, monkeypatch, stubbed_scripts, fail):
+    """품질팀 M1: pyproject.toml 이 바뀐 업데이트에서 pip install 이 실패하면 옛 커밋으로 되돌리고(옛 의존성 다시 설치)
+    다시 시작 · 확인, 종료 코드 1. 마이그레이션 실패는 되돌리되 서버를 다시 시작하지 않음(기존 동작)"""
+    copy, calls = stubbed_scripts
+    _bump_pyproject(repo, tmp_path)
+    monkeypatch.setenv("PL_ADMIN", "0")
+    monkeypatch.setenv("PL_FAIL", fail)
+    before = _head(repo)
+    logs = tmp_path / "logs"
+    p = ps(copy / "update.ps1", "-Yes", "-AppDir", str(repo), "-Branch", "main", "-LogDir", str(logs), "-TimeoutSec", "5")
+    out = p.stdout + p.stderr
+    assert p.returncode == 1, out
+    assert _head(repo) == before and not (repo / "pyproject.toml").exists()  # 옛 커밋으로 되돌림
+    log = (logs / "update.log").read_text(encoding="utf-8-sig")
+    recorded = calls.read_text(encoding="utf-8-sig")
+    assert recorded.count(" pip install ") == 2                # 새 의존성 → (되돌린 뒤) 옛 의존성
+    assert "적용된 상태" not in log                             # 마이그레이션이 끝나지 않았으니 그 경고 없음
+    if fail == "pip":
+        assert "[ERROR] 코드 반영 · 의존성 설치 단계 오류: pip install 실패" in log
+        assert "paperlab.migrate" not in recorded
+        assert "자동 되돌림" in log and "[ERROR] 업데이트 실패 · 되돌림 완료" in log
+        assert recorded.count("restart PaperLab Server") == 1   # 옛 커밋으로 다시 시작 · 확인
+    else:
+        assert "마이그레이션 실패 — 코드를" in log and "(서버는 다시 시작하지 않음" in log
+        assert "[ERROR] 업데이트 실패: " in log and "(마이그레이션 단계)" in log
+        assert "restart" not in recorded
 
 
 def test_watchdog_dry_run_changes_nothing(tmp_path):

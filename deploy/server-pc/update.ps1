@@ -12,6 +12,12 @@
   7. /api/health?deep=1 이 정상이고 commit 이 새 커밋인지 확인. 60초 안에 안 되면 자동으로 옛 커밋으로 되돌리고
      다시 시작 · 경고 (마이그레이션은 되돌리지 않음)
   8. 결과를 update.log 에
+  코드 반영 뒤 단계(pip install · 마이그레이션 · 재시작 · 확인)가 실패하면 옛 커밋으로 되돌림 — 종료 코드 1.
+  관리자 권한(elevated)으로 실행하면 시작할 때 경고 한 줄만 남기고 계속함(새 파일 소유자가 Administrators 가 되지만
+  D:\PaperLab 상속 권한으로 서버 계정이 접근할 수 있음 — 소유자는 바꾸지 않음). 가능하면 일반 권한 PowerShell 에서 실행.
+
+  -DryRun: git fetch 만 함(원격 추적 브랜치 · FETCH_HEAD · 객체 · 태그 갱신 — 작업 폴더 · HEAD · 브랜치는 그대로).
+           반영할 커밋과 그 뒤 할 일은 [DRY] 줄로 보여 주기만 하고 update.log 도 쓰지 않음.
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1
@@ -93,12 +99,17 @@ if ($RestartOnly) {
 }
 
 # ---------------------------------------------------------------- 1 · 2. 새 커밋 · 깨끗한 작업 폴더
+if (Test-PLIsAdmin) {
+  Write-PLLog -LogFile $Log -Level WARN -Message ("관리자 권한으로 실행 중: 새로 받는 파일의 소유자가 Administrators가 되지만, " +
+    "상속 권한으로 서버 계정이 접근할 수 있어 동작에는 영향이 없습니다. 가능하면 일반 권한 PowerShell에서 실행하세요.")
+}
+# 시험 실행도 fetch 는 함 — 원격 추적 브랜치 · FETCH_HEAD · 객체 · 태그만 갱신하고 작업 폴더 · HEAD · 브랜치는 바꾸지 않음
 if ($DryRun) {
-  Write-PLLog -Level DRY -Message "[DRY] git fetch $Remote (시험 실행은 받지 않고 지금 있는 원격 기록으로 계산)"
+  Write-PLLog -Level DRY -Message "[DRY] git fetch $Remote (시험 실행도 받음 — 작업 폴더 · HEAD · 브랜치는 그대로)"
 } else {
   Write-PLLog -LogFile $Log -Message "git fetch $Remote"
-  Invoke-PLGit fetch --quiet $Remote | Out-Null
 }
+Invoke-PLGit fetch --quiet $Remote | Out-Null
 $dirty = (Invoke-PLGit status --porcelain) | Out-String
 if ($dirty.Trim()) {
   Write-PLLog -LogFile $Log -Level ERROR -Message "작업 폴더에 고친 파일이 있어 업데이트하지 않아요 (서버 PC에서 코드를 고치지 않음 — 팀장에게 보고):`n$($dirty.TrimEnd())"
@@ -137,69 +148,85 @@ if (-not $Yes -and -not $DryRun) {
   if ($answer -notin @('y', 'Y', 'yes')) { Write-Host "취소했어요."; exit 0 }
 }
 
-# ---------------------------------------------------------------- 3 · 4. 코드 반영
+# ---------------------------------------------------------------- 3 ~ 7. 반영 · 마이그레이션 · 재시작 · 확인 · 실패 시 되돌리기
+# 코드 반영 뒤 어느 단계에서 실패해도(pip install 포함 — 품질팀 M1) 옛 커밋으로 되돌리고 결과 줄을 남긴다 (품질팀 F2).
+# 마이그레이션 실패만은 서버를 멈추기 전이라 다시 시작하지 않음(서버는 옛 코드로 계속)
 Write-PLLog -LogFile $Log -Message "업데이트 시작: $oldShort → $newShort"
 $pyprojectChanged = [bool](((Invoke-PLGit diff --name-only $old $target '--' pyproject.toml) | Out-String).Trim())
-Invoke-PLStep -DryRun:$DryRun -LogFile $Log -Description "코드 반영: $newShort" -Action {
-  if ($Ref) { Invoke-PLGit reset --hard --quiet $target | Out-Null } else { Invoke-PLGit merge --ff-only --quiet $target | Out-Null }
-} | Out-Null
-if ($pyprojectChanged) { Install-Deps }
-
-# ---------------------------------------------------------------- 5. 마이그레이션 (앞으로 갈 때만)
-if ($forward) {
-  try {
-    Invoke-PLStep -DryRun:$DryRun -LogFile $Log -Description "마이그레이션: python -m paperlab.migrate → admin sync-allowlist" -Action {
-      $code = Invoke-PLNative -FilePath $Py -Arguments @('-m', 'paperlab.migrate', '--env-file', $EnvFile) -WorkingDirectory $AppDir
-      if ($code -ne 0) { throw "마이그레이션 실패" }
-      $code = Invoke-PLNative -FilePath $Py -Arguments @('-m', 'paperlab.admin', '--env-file', $EnvFile, 'sync-allowlist') -WorkingDirectory $AppDir
-      if ($code -ne 0) { throw "허용 목록 맞추기 실패" }
-    } | Out-Null
-  } catch {
-    Write-PLLog -LogFile $Log -Level ERROR -Message "$($_.Exception.Message) — 코드를 $oldShort 로 되돌려요 (서버는 다시 시작하지 않음 · 옛 코드로 계속)"
-    Invoke-PLGit reset --hard --quiet $old | Out-Null
-    if ($pyprojectChanged) { Install-Deps }
-    Write-PLLog -LogFile $Log -Level ERROR -Message "업데이트 실패: $oldShort → $newShort (마이그레이션 단계)"
-    exit 1
-  }
-} else {
-  Write-PLLog -LogFile $Log -Message "옛 커밋으로 되돌리기라 마이그레이션은 하지 않아요 (DB 마이그레이션은 되돌리지 않음)"
-}
-
-# ---------------------------------------------------------------- 6 · 7. 재시작 · 확인 · 실패 시 되돌리기
-# 재시작 단계에서 예외가 나도(작업 권한 오류 등) 옛 커밋으로 되돌리고 결과 줄을 남긴다 (품질팀 F2)
 $updated = $false
+$migrated = $false
+$migrationFailed = $false
 $result = "업데이트 실패: $oldShort → $newShort"
 try {
+  # 3 · 4. 코드 반영 → (pyproject.toml 이 바뀌었으면) 의존성 다시 설치
+  $applied = $false
   try {
-    $updated = Restart-AndCheck -ExpectCommit $newShort
-    if (-not $updated) { Write-PLLog -LogFile $Log -Level ERROR -Message "새 커밋 $newShort 상태 확인 실패($TimeoutSec 초)" }
+    Invoke-PLStep -DryRun:$DryRun -LogFile $Log -Description "코드 반영: $newShort" -Action {
+      if ($Ref) { Invoke-PLGit reset --hard --quiet $target | Out-Null } else { Invoke-PLGit merge --ff-only --quiet $target | Out-Null }
+    } | Out-Null
+    if ($pyprojectChanged) { Install-Deps }
+    $applied = $true
   } catch {
-    Write-PLLog -LogFile $Log -Level ERROR -Message "재시작 단계 오류: $($_.Exception.Message)"
+    Write-PLLog -LogFile $Log -Level ERROR -Message "코드 반영 · 의존성 설치 단계 오류: $($_.Exception.Message)"
+  }
+
+  # 5. 마이그레이션 (앞으로 갈 때만)
+  if ($applied) {
+    if ($forward) {
+      try {
+        Invoke-PLStep -DryRun:$DryRun -LogFile $Log -Description "마이그레이션: python -m paperlab.migrate → admin sync-allowlist" -Action {
+          $code = Invoke-PLNative -FilePath $Py -Arguments @('-m', 'paperlab.migrate', '--env-file', $EnvFile) -WorkingDirectory $AppDir
+          if ($code -ne 0) { throw "마이그레이션 실패" }
+          $code = Invoke-PLNative -FilePath $Py -Arguments @('-m', 'paperlab.admin', '--env-file', $EnvFile, 'sync-allowlist') -WorkingDirectory $AppDir
+          if ($code -ne 0) { throw "허용 목록 맞추기 실패" }
+        } | Out-Null
+        $migrated = $true
+      } catch {
+        Write-PLLog -LogFile $Log -Level ERROR -Message "$($_.Exception.Message) — 코드를 $oldShort 로 되돌려요 (서버는 다시 시작하지 않음 · 옛 코드로 계속)"
+        $migrationFailed = $true
+      }
+    } else {
+      Write-PLLog -LogFile $Log -Message "옛 커밋으로 되돌리기라 마이그레이션은 하지 않아요 (DB 마이그레이션은 되돌리지 않음)"
+    }
+  }
+
+  # 6 · 7. 재시작 · 확인 (재시작 단계에서 예외가 나도 — 작업 권한 오류 등 — 아래에서 되돌림)
+  if ($applied -and -not $migrationFailed) {
+    try {
+      $updated = Restart-AndCheck -ExpectCommit $newShort
+      if (-not $updated) { Write-PLLog -LogFile $Log -Level ERROR -Message "새 커밋 $newShort 상태 확인 실패($TimeoutSec 초)" }
+    } catch {
+      Write-PLLog -LogFile $Log -Level ERROR -Message "재시작 단계 오류: $($_.Exception.Message)"
+    }
   }
   if ($updated) {
-    if ($DryRun) { $result = "[DRY] 시험 실행 끝 — 바꾼 것 없음 ($oldShort → $newShort 예정)" }
+    if ($DryRun) { $result = "[DRY] 시험 실행 끝 — git fetch 만 했고 나머지는 바꾸지 않음 ($oldShort → $newShort 예정)" }
     else { $result = "업데이트 성공: $oldShort → $newShort" }
   }
 } finally {
   if (-not $updated) {
-    Write-PLLog -LogFile $Log -Level ERROR -Message "$oldShort 로 자동 되돌림"
+    if (-not $migrationFailed) { Write-PLLog -LogFile $Log -Level ERROR -Message "$oldShort 로 자동 되돌림" }
     try {
       Invoke-PLGit reset --hard --quiet $old | Out-Null
       if ($pyprojectChanged) { Install-Deps }
     } catch {
       Write-PLLog -LogFile $Log -Level ERROR -Message "코드 되돌리기 오류: $($_.Exception.Message) — 팀장에게 보고"
     }
-    if ($forward) {
-      Write-PLLog -LogFile $Log -Level WARN -Message "DB 마이그레이션은 $newShort 기준으로 적용된 상태로 남아요(되돌리지 않음) — 옛 코드와 함께 돌아도 되는 규칙이지만 팀장에게 보고"
+    if ($migrationFailed) {
+      $result = "업데이트 실패: $oldShort → $newShort (마이그레이션 단계)"
+    } else {
+      if ($migrated) {
+        Write-PLLog -LogFile $Log -Level WARN -Message "DB 마이그레이션은 $newShort 기준으로 적용된 상태로 남아요(되돌리지 않음) — 옛 코드와 함께 돌아도 되는 규칙이지만 팀장에게 보고"
+      }
+      $back = $false
+      try {
+        $back = Restart-AndCheck -ExpectCommit $oldShort
+      } catch {
+        Write-PLLog -LogFile $Log -Level ERROR -Message "되돌린 뒤 재시작 오류: $($_.Exception.Message)"
+      }
+      if ($back) { $result = "업데이트 실패 · 되돌림 완료: $newShort → $oldShort (서버 정상). 팀장에게 보고" }
+      else { $result = "업데이트 실패 · 되돌린 뒤에도 서버 상태 확인 실패 ($oldShort) — server.log 확인, 팀장에게 보고" }
     }
-    $back = $false
-    try {
-      $back = Restart-AndCheck -ExpectCommit $oldShort
-    } catch {
-      Write-PLLog -LogFile $Log -Level ERROR -Message "되돌린 뒤 재시작 오류: $($_.Exception.Message)"
-    }
-    if ($back) { $result = "업데이트 실패 · 되돌림 완료: $newShort → $oldShort (서버 정상). 팀장에게 보고" }
-    else { $result = "업데이트 실패 · 되돌린 뒤에도 서버 상태 확인 실패 ($oldShort) — server.log 확인, 팀장에게 보고" }
   }
   if ($updated) { Write-PLLog -LogFile $Log -Message $result }
   else { Write-PLLog -LogFile $Log -Level ERROR -Message $result }

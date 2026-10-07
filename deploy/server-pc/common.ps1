@@ -104,6 +104,12 @@ function Get-PLCurrentSid {
   return [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 }
 
+function Test-PLIsAdmin {
+  <# 관리자 권한(elevated)으로 실행 중인지. UAC 로 걸러진 일반 셸은 Administrators 구성원이어도 $false #>
+  return ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole(
+    [Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
 function Get-PLAclProblems {
   <# 허용(Allow) 항목 중 현재 사용자 · SYSTEM · Administrators 가 아닌 계정 이름과 상속 여부 #>
   param([Parameter(Mandatory = $true)][string]$Path)

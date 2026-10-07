@@ -62,7 +62,7 @@ D:는 내장 HDD(SATA)라 C:보다 느립니다. DB는 Supabase에 있으므로 
 |---|---|---|
 | 이 절(3절) · 4절 확인 명령, `funnel.ps1 status`, 9절 확인 대부분 | **일반 권한** | 읽기만 함 |
 | **`install.ps1`(실제 실행)** | **관리자 권한 PowerShell**("관리자 권한으로 실행" — **[사용자]** 가 UAC 창에서 허용) | "시스템 시작 시" 트리거 작업을 등록하려면 관리자 권한이 필요. 관리자 권한이 아니면 스크립트가 **처음에 멈추고** 안내함(작업 등록 단계까지 가서 실패하지 않게). `-DryRun`은 일반 권한으로도 됨 |
-| `update.ps1` · 감시 작업(`watchdog.ps1`) | 일반 권한(설계) | 서버 작업을 멈추고 다시 시작하는데, 관리자 권한으로 등록한 작업을 **일반 권한으로 멈추고 시작할 수 있는지는 서버 PC에서 확인할 항목**(9절 4번). 안 되면 팀장에게 보고(대안: update는 관리자 PowerShell에서 실행 · 감시 작업은 같은 계정 작업이라 영향 없을 수 있음) |
+| `update.ps1` · 감시 작업(`watchdog.ps1`) | 일반 권한(설계) | 서버 작업을 멈추고 다시 시작하는데, 관리자 권한으로 등록한 작업을 **일반 권한으로 멈추고 시작할 수 있는지는 서버 PC에서 확인할 항목**(9절 4번). 안 되면 팀장에게 보고(대안: update는 관리자 PowerShell에서 실행 · 감시 작업은 같은 계정 작업이라 영향 없을 수 있음). **`update.ps1`이 관리자 권한으로 돌면**(예: 이 PC의 Claude Code 세션이 관리자 권한 셸) git · pip이 새로 만든 파일의 소유자가 `BUILTIN\Administrators`가 됩니다. 저장소 루트의 소유자는 `USER` 그대로라 git 소유자 검사(9절 5번)는 통과하고, `D:\PaperLab` 상속 권한으로 `USER`가 모든 권한을 가지므로 **서버 동작에는 영향이 없습니다**. 스크립트는 시작할 때 WARN 한 줄만 남기고 계속하며 **소유자를 바꾸지 않습니다**(11절 7번). 가능하면 일반 권한 PowerShell에서 실행하고, 소유자를 바꾸려고 `icacls /setowner /T`를 돌리지 않습니다(정션을 따라 저장소 밖까지 바뀔 수 있음 — 팀장 결정) |
 
 PowerShell(일반 권한)에서:
 
@@ -242,7 +242,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 15 | 백업 | `.venv\Scripts\python -m paperlab.admin pg-dump-check` → `Start-ScheduledTask 'PaperLab Backup'` → 1~2분 뒤 `Get-ScheduledTaskInfo 'PaperLab Backup'` · `Get-Content D:\PaperLab\logs\backup.log -Tail 20` · `Get-ChildItem D:\PaperLab\tmp, $env:TEMP -Recurse -Filter *.dump` · `.venv\Scripts\python -m paperlab.admin latest-backup` | pg_dump 주 버전 **17 이상**이고 DB 서버 이상, 마지막 실행 결과 **0**, R2에 **오늘(KST)** `backups/db/<YYYYMMDD>.dump`, `.dump` 파일 **0개**, `backup.log`에 연결 문자열 · 비밀번호 · 키 **없음**. 백업 성공 = `paperlab_app`이 `service_role` 구성원이라 `pg_dump --role=service_role`이 됨(실패하면 `backup.log`에 role 권한 오류 — 팀장 보고) | Q10 · AC-70 · 71 |
 | 16 | 재부팅 | **[사용자]** 동의 후 다시 시작 → **아무도 로그인하지 않은 채** 5분 → 다른 망(휴대폰 데이터)에서 `…/api/health?deep=1` | 200 · `db: ok`(서버 작업 · Tailscale 무인 실행 · Funnel `--bg` 모두 로그온 없이 올라옴) | Q11 · AC-76 |
 | 17 | 강제 종료 · 멈춤 | (a) 작업 관리자로 서버 `python.exe` 끝내기 → 2분 뒤 9번 (b) **진단 스위치**: `New-Item D:\PaperLab\tmp\diag-hang-health -ItemType File` → 15~20분 뒤 `watchdog.log` → **반드시** `Remove-Item D:\PaperLab\tmp\diag-hang-health` → 9번 | (a) 작업 스케줄러 "실패 시 다시 시작"(1분)으로 **2분 안에** 다시 뜸(강제 종료라 종료 코드가 0이 아니어도). 안 뜨면 감시 작업이 **15분 안에** 재시작했는지 `watchdog.log`로 확인 (b) "3/3"과 재시작 기록 1건, 파일을 지운 뒤 정상. 파일을 남기면 1시간에 3번까지 재시작 후 경고만 | Q6 · AC-77 |
-| 18 | 업데이트 | 팀장이 준비한 새 커밋으로 `update.ps1` → 일부러 시작에 실패하는 시험 커밋(품질팀 준비)으로 `update.ps1` → 작업 폴더에 빈 파일 하나 만들고 `update.ps1` | 새 커밋 반영 · `/api/health`의 커밋이 새 값 · `update.log`에 옛 → 새, 실패 커밋은 60초 안에 **자동 되돌림**(서버 정상), 고친 파일이 있으면 **시작하지 않음**(종료 코드 1). 시험 파일은 지움 | Q12 · AC-79 |
+| 18 | 업데이트 | 팀장이 준비한 새 커밋으로 먼저 `update.ps1 -DryRun`(미리 `git fetch` 하지 않고) → `update.ps1` → 일부러 시작에 실패하는 시험 커밋(품질팀 준비)으로 `update.ps1` → **`pyproject.toml`을 바꾸고 pip 설치가 실패하는 시험 커밋**(품질팀 준비 — 예: 없는 패키지 의존성)으로 `update.ps1` → 작업 폴더에 빈 파일 하나 만들고 `update.ps1`. 관리자 권한 셸에서 실행했다면 `update.log`의 처음 줄 | `-DryRun`이 새 커밋 목록을 보여 줌(작업 폴더 · HEAD · 브랜치는 그대로). 새 커밋 반영 · `/api/health`의 커밋이 새 값 · `update.log`에 옛 → 새, 실패 커밋은 60초 안에 **자동 되돌림**(서버 정상), **pip 실패 커밋도 옛 커밋으로 되돌리고(옛 의존성 다시 설치) 다시 시작 · 확인** — `git log -1`이 옛 커밋, `update.log`에 "코드 반영 · 의존성 설치 단계 오류" · "되돌림 완료", 종료 코드 1, 서버 정상. 고친 파일이 있으면 **시작하지 않음**(종료 코드 1). 관리자 권한 실행이면 WARN "관리자 권한으로 실행 중: …" 한 줄이 있고 업데이트는 그대로 진행(소유자는 바꾸지 않음 — 9절 5번 git 소유자 검사는 계속 통과해야 함). 시험 파일 · 시험 커밋은 지우거나 되돌림 | Q12 · AC-79 |
 | 19 | 긴 연결 · 큰 요청 | 공개 주소에서 논문 대화(SSE)를 5분 넘게 이어지게 · 30MB에 가까운 워드 파일로 인용 넣기(compose) | SSE가 5분 넘게 끊기지 않음, compose 성공 — **걸린 시간 기록**(Funnel 대역폭 참고값) | Q13 · AC-78 |
 
 ## 10. [사용자] 설치 뒤 마무리
@@ -256,7 +256,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 
 | 하고 싶은 일 | 방법 |
 |---|---|
-| 새 버전 반영 | 팀장이 승인 · 푸시를 알리면 `powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1` (아래 "업데이트 동작"). 먼저 `-DryRun`으로 반영할 커밋을 볼 수 있음, `-Yes`는 확인 질문 생략 |
+| 새 버전 반영 | 팀장이 승인 · 푸시를 알리면 `powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1` (아래 "업데이트 동작"). 먼저 `-DryRun`으로 반영할 커밋을 볼 수 있음(**`git fetch`만 함** — 원격 추적 브랜치 · `FETCH_HEAD` · 객체 · 태그 갱신, 작업 폴더 · HEAD · 브랜치 · 서버 · 로그는 그대로. 미리 fetch할 필요 없음), `-Yes`는 확인 질문 생략 |
 | 특정 커밋으로 되돌리기 | `update.ps1 -Ref <커밋>` — 옛 커밋으로 갈 때는 마이그레이션을 하지 않음(DB 마이그레이션은 되돌리지 않음) |
 | `cloud.env`를 고친 뒤 | `update.ps1 -RestartOnly` (코드는 그대로, 서버만 다시 시작 → 상태 확인) |
 | 사용자 추가 · 빼기 | **[사용자]** Google Cloud 콘솔 → OAuth 동의 화면 → 테스트 사용자에서 추가 · 삭제(서버 재시작 필요 없음). 뺄 때는 Supabase 대시보드 Users에서 그 사용자도 삭제 |
@@ -273,12 +273,13 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 
 **업데이트 동작(`update.ps1`, 명세 13.8절)** — 로그 `D:\PaperLab\logs\update.log`
 
-1. `git fetch` → 배포 브랜치의 새 커밋 목록 → 확인(`-Yes`면 생략). 새 커밋이 없으면 끝.
+1. `git fetch` → 배포 브랜치의 새 커밋 목록 → 확인(`-Yes`면 생략). 새 커밋이 없으면 끝. **`-DryRun`도 이 `git fetch`는 실제로 함**(fetch만 함 — 원격 추적 브랜치 `origin/…` · `FETCH_HEAD` · 객체 · 태그 갱신, 작업 폴더 · HEAD · 브랜치는 그대로) — 그래야 반영할 커밋 목록이 맞음. 그 뒤 단계(코드 반영 · pip · 마이그레이션 · 재시작)는 `[DRY]` 줄로 보여 주기만 하고, `update.log`도 쓰지 않음.
 2. 작업 폴더에 고친 파일이 있거나, 지금 브랜치가 배포 브랜치가 아니거나, 앞으로만 갈 수 없으면(ff-only 불가) **시작하지 않음** → 팀장에게 보고.
-3. 코드 반영(`git merge --ff-only`, `-Ref`면 그 커밋으로) → `pyproject.toml`이 바뀌었으면 `pip install -e .`
+3. 코드 반영(`git merge --ff-only`, `-Ref`면 그 커밋으로) → `pyproject.toml`이 바뀌었으면 `pip install -e .`. **여기서 실패하면**(pip 오류 등) 6번처럼 **옛 커밋으로 되돌리고(`pyproject.toml`이 바뀐 경우 옛 의존성 다시 설치) 서버를 다시 시작 · 확인**, 마이그레이션은 하지 않음. 종료 코드 1.
 4. 마이그레이션(`paperlab.migrate`) → `admin sync-allowlist`. **여기서 실패하면**(DB 오류 · **Supabase 일시정지** 포함) **코드만 옛 커밋으로 되돌리고 서버는 다시 시작하지 않음** — 서버는 옛 코드로 계속 돎. 종료 코드 1.
 5. 서버 작업 다시 시작 → `http://127.0.0.1:8080/api/health?deep=1`이 정상이고 응답의 커밋이 새 커밋인지 60초 동안 확인.
 6. **확인 실패면 자동으로 옛 커밋으로 되돌리고 다시 시작**(마이그레이션은 되돌리지 않음). `deep=1`은 DB까지 보므로 **반영 중 Supabase가 일시정지돼 있으면 이 단계에서도 되돌림**이 일어남 — Supabase를 Restore한 뒤 다시 업데이트. 되돌린 뒤에도 정상이 아니면 오류로 남기고 팀장에게 보고.
+7. **관리자 권한(elevated)으로 실행하면** 시작할 때 WARN 한 줄을 화면과 `update.log`에 남기고 그대로 진행: "관리자 권한으로 실행 중: 새로 받는 파일의 소유자가 Administrators가 되지만, 상속 권한으로 서버 계정이 접근할 수 있어 동작에는 영향이 없습니다. 가능하면 일반 권한 PowerShell에서 실행하세요." **소유자 · 권한은 바꾸지 않음**(`icacls` 쓰지 않음 — 팀장 결정). 일반 권한이면 이 줄도 없음.
 
 ## 12. 문제 해결
 
@@ -308,11 +309,11 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 파일 · 명령 | 역할 |
 |---|---|
 | `deploy/server-pc/install.ps1` | 7절 전체. **관리자 권한 PowerShell 필요**(아니면 시작 때 멈춤, `-DryRun`은 예외). `-DryRun` · `-EnvFile` · `-RepoUrl` · `-SkipFunnel` · `-PythonVersion` · `-ReRegisterTasks` · `-RecreateVenv` · `-Root` `-AppDir` `-LogDir` `-TmpDir` `-Branch` `-Port` |
-| `deploy/server-pc/update.ps1` | 11절 업데이트 동작 · `-Ref` · `-Yes` · `-RestartOnly` · `-DryRun` · `-TimeoutSec`(기본 60) |
+| `deploy/server-pc/update.ps1` | 11절 업데이트 동작 · `-Ref` · `-Yes` · `-RestartOnly` · `-DryRun`(`git fetch`만 함) · `-TimeoutSec`(기본 60). 반영 뒤 단계(pip 포함)가 실패하면 옛 커밋으로 되돌림. 관리자 권한으로 돌면 시작할 때 WARN 한 줄만(소유자는 바꾸지 않음 — 11절 7번) |
 | `deploy/server-pc/funnel.ps1` | `on`(`tailscale funnel --bg 8080`) · `status` · `off`, `-DryRun`. `tailscale`는 PATH → `Program Files\Tailscale` 순으로 찾음 |
 | `deploy/server-pc/watchdog.ps1` | 5분마다: `/api/health` 3번 연속 실패면 서버 재시작(1시간 3번까지, 넘으면 경고만). 하루 한 번: 공개 주소 · 최근 백업(36시간) · 디스크 여유(시스템 5GB · 데이터 20GB) → `watchdog.log`(1MB × 5). **`-DryRun`은 아무것도 바꾸지 않음**(작업 재시작 없이 `[DRY]` 기록만 — 품질팀 F3, 개발팀 수정). `-SkipDaily` · `-StateFile` · `-MaxRestartsPerHour` 등은 시험용 |
 | `deploy/server-pc/uninstall.ps1` | 작업 삭제 · Funnel 끔(`cloud.env` · 저장소는 지우지 않는다고 알림) |
-| `deploy/server-pc/common.ps1` | 다른 스크립트가 함께 쓰는 함수(설정 읽기 · 로그 · 권한 · 상태 확인) |
+| `deploy/server-pc/common.ps1` | 다른 스크립트가 함께 쓰는 함수(설정 읽기 · 로그 · 권한 · 관리자 권한 확인 · 상태 확인) |
 | `deploy/server-pc/server.json` | 공개 주소 · 포트 · 루트 · 브랜치 · 작업 이름(비밀 없음 — 주소를 두는 한 곳) |
 | `python -m paperlab.serve` | 서버 실행. `--check`(설정 점검, 이름만) · `--before-app-role` · `--log-dir` · `--diag-hang-file`(진단 스위치 — 9절 17번) |
 | `python -m paperlab.admin app-role --write-env [--if-missing]` | 앱 역할 주소를 `cloud.env`에 씀(`--if-missing`: 이미 있으면 그대로) |
