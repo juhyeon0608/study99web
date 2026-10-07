@@ -1,7 +1,7 @@
 # PaperLab 기능 안내서
 
-PaperLab은 논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰고 → 인용하는** 일을 한 프로그램에서 하는 설치형 연구 도구입니다.
-내 컴퓨터에서만 실행되고, 서재·PDF·원고 같은 모든 데이터는 내 컴퓨터에 저장됩니다.
+PaperLab은 논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰고 → 인용하는** 일을 한곳에서 하는 클라우드 연구 도구입니다.
+브라우저로 접속해 허용된 구글 계정으로 로그인하면, 서재·PDF·원고 같은 데이터가 계정별로 클라우드에 저장되어 어느 기기에서나 이어서 쓸 수 있습니다.
 
 이 문서는 PaperLab의 모든 기능을 한곳에 정리한 안내서입니다.
 
@@ -9,7 +9,7 @@ PaperLab은 논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰
 
 ## 목차
 
-1. [설치와 실행](#1-설치와-실행)
+1. [접속과 로그인](#1-접속과-로그인)
 2. [화면 구성](#2-화면-구성)
 3. [논문 찾기](#3-논문-찾기)
 4. [내 서재](#4-내-서재)
@@ -19,7 +19,7 @@ PaperLab은 논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰
 8. [논문 쓰기](#8-논문-쓰기)
 9. [워드 · 한글 연동](#9-워드--한글-연동)
 10. [설정](#10-설정)
-11. [데이터 저장 위치와 백업](#11-데이터-저장-위치와-백업)
+11. [데이터 저장과 백업](#11-데이터-저장과-백업)
 12. [보안과 개인정보](#12-보안과-개인정보)
 13. [단축키](#13-단축키)
 14. [알려진 제한](#14-알려진-제한)
@@ -28,39 +28,34 @@ PaperLab은 논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰
 
 ---
 
-## 1. 설치와 실행
+## 1. 접속과 로그인
 
-### 필요한 것
-- **Python 3.10 이상** — [python.org](https://www.python.org/downloads/)에서 설치합니다.
-  Windows에서는 설치 화면의 **Add python.exe to PATH**를 꼭 체크하세요.
-- 인터넷 연결 — 처음 설치할 때, 논문을 검색할 때, AI 기능을 쓸 때 필요합니다. 서재·읽기·노트·인용은 인터넷 없이도 됩니다.
+PaperLab은 PC에 설치하지 않고 **웹 주소로 접속**해서 씁니다. 필요한 것은 인터넷에 연결된 브라우저와 **허용된 구글 계정**뿐입니다.
 
-### 프로그램 받기
-- GitHub 저장소에서 **Code → Download ZIP**으로 받아 원하는 폴더에 풀거나,
-- `git clone https://github.com/juhyeon0608/study99web.git` 으로 받습니다.
+### 여는 방법
 
-### 실행
-
-| 운영체제 | 방법 |
+| 방법 | 설명 |
 |---|---|
-| Windows | `PaperLab.bat` 더블클릭 |
-| macOS | `PaperLab.command` 더블클릭 (처음 한 번은 우클릭 → 열기) |
-| Linux | 터미널에서 `./paperlab.sh` |
+| 웹 주소 | 브라우저에서 PaperLab 주소(`https://…ts.net` 형식의 고정 주소 — 서버 PC가 Tailscale Funnel로 공개)를 엽니다. 주소는 관리자가 알려 줍니다. 즐겨찾기에 넣어 두면 편합니다. |
+| 바탕화면 바로가기 (관리자 PC) | 관리자가 `deploy/make-shortcut.ps1`로 만든 **PaperLab** 아이콘을 더블클릭합니다. 주소창·탭이 없는 **앱 창**으로 열립니다(Microsoft Edge, 없으면 Chrome. 둘 다 없으면 일반 인터넷 바로가기로 만들어짐). |
+| Windows 설치형 앱 (다른 사용자 PC, **2단계 예정**) | 앱 창(PaperLab 화면) + 내 PC의 CLI 워커를 한 앱에 담은 Electron 앱. 6단계에 폴더 동기화가 같은 앱에 추가됩니다. **GitHub Releases**에서 받아 설치하고 **자동 업데이트**됩니다. 코드 서명이 없어 처음 설치할 때 Windows SmartScreen 경고가 뜰 수 있습니다. 그전까지는 웹 주소로 접속하세요. |
 
-- **처음 실행**하면 프로그램 폴더 안에 가상환경(`.venv`)을 만들고 필요한 패키지를 설치합니다(1~3분).
-- 그다음부터는 바로 **브라우저에 PaperLab 화면**이 열립니다.
-- **종료**: 실행 창(검은 창)에서 `Ctrl+C`를 누르거나 창을 닫습니다.
-- **업데이트**: 새 버전 파일로 바꾸고 다시 실행하면, 필요한 패키지가 바뀐 경우 자동으로 다시 설치합니다. 서재 데이터는 프로그램 폴더 밖에 있으므로 그대로 남습니다.
+- PC에 설치하거나 직접 업데이트할 프로그램이 없습니다. 새 버전은 관리자가 클라우드에 배포합니다.
+- PC를 꺼도 다른 기기(노트북·다른 PC)에서 로그인하면 같은 서재와 원고가 보입니다.
 
-### 명령줄 옵션 (선택)
+### 로그인
+1. 처음 화면에서 **Google로 계속하기**를 누릅니다.
+2. 구글 계정을 고르면 PaperLab으로 돌아와 서재가 열립니다.
 
-```bash
-paperlab                       # 기본: 브라우저로 열기
-paperlab --window              # 브라우저 대신 앱 창으로 열기 (pip install -e ".[desktop]" 필요)
-paperlab --port 9000           # 포트 지정 (기본 8765, 사용 중이면 다음 번호를 씀)
-paperlab --data-dir D:\연구     # 데이터 폴더 지정
-paperlab --no-browser          # 브라우저를 자동으로 열지 않음
-```
+- **관리자가 사용 등록한 구글 계정만** 들어올 수 있습니다(사용자 3~5명 — Google 로그인 설정의 "테스트 사용자" 목록, 최대 100명). 등록되지 않은 계정은 Google 화면에서 로그인이 막히니, 계정이 필요하면 관리자에게 알려 주세요.
+- **이메일로 로그인**하는 방법은 아직 없습니다(나중에 추가 예정).
+- **로그아웃**: 사이드바 아래 **계정 버튼 → 로그아웃**, 또는 **설정 → 계정 → 로그아웃**. 로그인 화면에 "로그아웃했어요."가 표시됩니다.
+- 로그인 상태는 이 브라우저에 저장되어 다음에도 이어집니다. 여러 사람이 쓰는 PC에서는 다 쓴 뒤 로그아웃하세요.
+
+### 처음 열 때 · 로그인 만료
+- 서버는 서버 PC에서 늘 켜져 있습니다. 응답이 3초 넘게 늦으면 연결 중이라는 안내가 표시됩니다(쓰는 도중 응답이 늦을 때는 화면 위쪽 띠로 표시).
+- **서버 PC가 꺼져 있으면(전원 · 재부팅 · 인터넷 끊김) 모든 사용자가 PaperLab을 쓸 수 없습니다.** 화면이 아예 열리지 않거나 연결할 수 없다는 안내가 계속되면 관리자에게 알려 주세요. 내 PC는 꺼도 상관없습니다.
+- 로그인은 자동으로 연장됩니다. 연장에 실패하면 "로그인이 만료됐어요. 다시 로그인해 주세요."가 뜨고 로그인 화면으로 바뀝니다. 이때 **저장하지 못한 원고는 이 브라우저에 보관**해 두었다가, 같은 계정으로 다시 로그인하면 이어서 저장합니다.
 
 ---
 
@@ -77,11 +72,14 @@ paperlab --no-browser          # 브라우저를 자동으로 열지 않음
 | 내 서재 › 즐겨찾기 | 별표한 논문 |
 | 내 서재 › 읽을 예정 · 읽는 중 · 다 읽음 | 읽기 상태별 |
 | 내 서재 › 미분류 | 어느 컬렉션에도 없는 논문 |
-| **컬렉션** | 주제별 폴더 (하위 폴더 가능) |
+| **폴더** (파일 위치 · 한 곳) | 논문 파일이 실제로 있는 곳. 논문 한 편은 폴더 한 곳에만 있음 (하위 폴더 가능, 맨 끝 *폴더 없음*) |
+| **컬렉션** (분류 · 여러 곳) | 주제별 분류. 논문 한 편을 여러 컬렉션에 넣을 수 있음 (하위 컬렉션 가능) |
 | **태그** | 태그별 모아 보기 |
-| 설정 · 밝게/어둡게 | 아래쪽 버튼 |
+| 저장 공간 | 사이드바 아래 사용량 막대 (11장) |
+| 계정 · 설정 · 밝게/어둡게 | 사이드바 맨 아래 버튼. 계정 버튼을 누르면 이름·이메일 · 설정 · 로그아웃 |
 
 밝은 테마와 어두운 테마를 지원하며, 처음에는 운영체제 설정을 따릅니다.
+화면 폭이 좁으면(900px 이하) 사이드바가 숨고, 오른쪽 아래 둥근 **계정 버튼**으로 설정·로그아웃에 닿습니다.
 
 ---
 
@@ -132,7 +130,13 @@ EndNote·Zotero·Mendeley처럼 논문을 모으고 정리합니다.
 | **직접 입력** | 제목·저자·학술지 등을 손으로 입력 |
 | **BibTeX · RIS · EndNote 가져오기** | 다른 프로그램에서 내보낸 `.bib` `.ris` `.json` 파일 |
 
-지금 컬렉션을 보고 있으면 추가한 논문이 그 컬렉션에 바로 들어갑니다.
+지금 컬렉션이나 폴더를 보고 있으면 추가한 논문이 그곳에 바로 들어갑니다(BibTeX · RIS · EndNote 가져오기는 컬렉션만).
+
+### PDF 올리기
+- PDF는 **파일당 100MB**까지, **한 번에 20개**까지 올릴 수 있습니다.
+- 올리는 창에 파일마다 진행 막대와 상태(기다리는 중 → 올리는 중 → 논문 정보를 찾는 중 → 완료/이미 있음/실패)가 표시됩니다. 실패한 파일은 *다시 시도*할 수 있습니다.
+- 올리는 동안 창을 닫아도 올리기는 계속되고, 끝나면 알림이 뜹니다. **브라우저 탭은 닫지 마세요.**
+- 저장 공간이 95% 이상 차 있으면 올릴 수 없습니다(11장).
 
 ### PDF에서 서지 정보 자동 인식
 PDF를 넣으면 다음 순서로 정보를 찾아 채웁니다.
@@ -153,24 +157,45 @@ DOI, arXiv ID, 제목(띄어쓰기·기호 무시)이 같으면 같은 논문으
 
 ### 여러 편 한꺼번에 (일괄 작업)
 체크박스(또는 Shift/Ctrl+클릭)로 여러 편을 고르면 위에 작업 막대가 나타납니다.
-- 컬렉션에 넣기 · 이 컬렉션에서 빼기 · 태그 달기 · 읽기 상태 바꾸기 · 즐겨찾기 · **참고문헌 목록** · 삭제
-- 논문을 **끌어서 사이드바의 컬렉션에 놓아도** 그 컬렉션에 들어갑니다.
+- 컬렉션에 넣기 · **폴더로 이동** · 이 컬렉션에서 빼기 · 태그 달기 · 읽기 상태 바꾸기 · 즐겨찾기 · **참고문헌 목록** · 삭제
+- 논문을 **끌어서 사이드바의 컬렉션에 놓으면** 그 컬렉션에 들어가고, **폴더에 놓으면** 그 폴더로 옮겨집니다.
 
 ### 상세 패널 (논문을 한 번 클릭)
 - **읽기 · AI 요약** (PDF가 있을 때) / **PDF 받기**(무료 PDF 자동 탐색) / **PDF 첨부**
 - **인용** — 인용 창 열기
-- **⋯ 메뉴**: 정보 수정 · 온라인 정보로 채우기 · PDF 바꾸기 · PDF 파일 열기 · 하이라이트·노트 내보내기(.md) · 삭제
+- **⋯ 메뉴**: 정보 수정 · 폴더로 이동… · 온라인 정보로 채우기 · PDF 바꾸기 · PDF 파일 열기(새 탭) · 하이라이트·노트 내보내기(.md) · 삭제
 - **읽기 상태**(읽을 예정·읽는 중·다 읽음), **중요도 별점**(1~5)
 - **태그**: 입력 후 Enter, ✕로 빼기
+- **폴더**: 지금 들어 있는 폴더 경로(없으면 *폴더 없음*)와 **옮기기**
 - **컬렉션**: ＋ 넣기, ✕로 빼기
 - **인용 정보 점검**: 인용에 필요한 항목(학술지 이름·권·쪽·출판사 등)이 비어 있으면 경고하고, *채우기*(직접 수정)·*온라인에서 찾기*(자동 채움)를 제공합니다.
 - **정보 탭**: 초록, 키워드, DOI·arXiv 링크, 유형, 피인용 수, 쪽수, **인용 키**와 **[@인용키] 복사** 버튼
 - **노트 탭**: 논문별 마크다운 노트 (자동 저장, 미리보기, 수식 `$...$`)
 - **인용 관계 탭**: 이 논문을 인용한 논문 / 참고문헌 / 관련 논문 — 바로 서재에 추가 가능
 
-### 컬렉션과 태그
+### 폴더와 컬렉션
+논문을 정리하는 방법이 두 가지입니다.
+
+| | 폴더 | 컬렉션 |
+|---|---|---|
+| 뜻 | 논문 파일의 **실제 위치** | 주제별 **분류** |
+| 한 논문이 들어가는 곳 | **한 곳**만 (옮기면 이전 폴더에서 빠짐) | **여러 곳** |
+| 사이드바 표시 | 폴더 아이콘 · "파일 위치 · 한 곳" | "분류 · 여러 곳" |
+| 지울 때 | 안의 논문과 하위 폴더는 **상위 폴더로 옮겨짐**(최상위 폴더면 폴더 밖으로) | 하위 컬렉션도 함께 지워짐 |
+
+둘 다 논문과 PDF는 지우지 않습니다. 폴더를 옮기거나 컬렉션을 바꿔도 PDF 파일 자체는 그대로입니다.
+
+**폴더**
+- *폴더* 옆 **＋**로 만들고, **⋯**로 하위 폴더 만들기 · 이름 바꾸기 · 옮기기… · 삭제(논문은 남아요)
+- 폴더 이름은 1~100자이고 `/ \ : * ? " < > |`와 줄바꿈 같은 제어 문자는 쓸 수 없습니다. 마침표나 공백으로 끝날 수 없고, Windows 예약 이름(`CON` · `PRN` · `AUX` · `NUL` · `COM1~9` · `LPT1~9`)도 쓸 수 없습니다(나중에 PC 폴더와 동기화할 때 그대로 쓰기 위해). 같은 폴더 안에 이름이 같은 폴더(대소문자만 다른 것 포함)는 만들 수 없고, 폴더를 자기 안으로 옮길 수 없습니다.
+- 폴더를 누르면 그 폴더의 논문만 보이고, 맨 끝 **폴더 없음**은 어느 폴더에도 없는 논문을 보여 줍니다.
+- 논문 옮기기: 논문을 폴더에 끌어다 놓거나, 일괄 작업 막대 · 상세 패널의 **폴더로 이동…** 에서 폴더를 고릅니다(고르는 창에서 새 폴더도 만들 수 있음).
+
+**컬렉션**
 - 컬렉션 옆 **＋**로 만들고, **⋯**로 하위 컬렉션 추가·이름 바꾸기·최상위로 옮기기·삭제(논문은 남음)
 - ▸/▾로 하위 컬렉션을 접고 펼칩니다.
+
+**태그**
 - 태그 **⋯**로 이름 바꾸기·색 지정(빨강·주황·초록·파랑·보라)·삭제
 
 ---
@@ -207,14 +232,16 @@ PDF가 있는 논문을 더블클릭하거나 **읽기**를 누르면 읽기 화
 
 ## 6. AI 요약 · 논문과 대화
 
-AI 기능은 **설정 → AI 엔진**에서 켭니다. AI 없이도 다른 기능은 모두 동작합니다.
+AI 기능은 **설정 → AI**에 **본인의 Anthropic API 키**를 넣으면 켜집니다. AI 없이도 다른 기능은 모두 동작합니다.
 
 ### AI 엔진
 
 | 엔진 | 특징 |
 |---|---|
-| **Anthropic API** (권장) | API 키 필요. PDF를 그림·수식까지 통째로 읽고, 답변 근거를 **쪽 번호와 원문 인용**으로 보여 줌. 사용량만큼 요금 발생 |
-| **Claude CLI** | 이 컴퓨터에 설치·로그인된 Claude Code(`claude` 명령)를 사용. API 키 불필요. PDF에서 뽑은 텍스트만 보냄 |
+| **Anthropic API** | **각자의 API 키** 필요. 키는 계정별로 암호화해 클라우드에 저장되므로 PC를 꺼도 AI를 쓸 수 있음. PDF를 그림·수식까지 통째로 읽고, 답변 근거를 **쪽 번호와 원문 인용**으로 보여 줌. 사용량만큼 키 주인에게 요금 발생 |
+| **Claude CLI** | **지금은 쓸 수 없음**(설정에서 선택 불가). 2단계에서 내 PC를 연결하는 워커가 생긴 뒤 쓸 예정 |
+
+- 서버는 공용 API 키를 쓰지 않습니다. 키를 넣지 않으면 AI 기능은 "설정에서 Anthropic API 키를 넣어주세요."로 멈춥니다.
 
 - 모델: **Claude Opus 5.5**(기본, 가장 정확) · Claude Sonnet 5.5(빠르고 저렴) · Claude Haiku 4.5(가장 빠름)
 - 생각 깊이(effort): 낮음 · 보통(기본) · 높음 · 매우 높음
@@ -222,7 +249,7 @@ AI 기능은 **설정 → AI 엔진**에서 켭니다. AI 없이도 다른 기�
 - 안전 정책으로 거절되면 서버에서 다른 권장 모델로 자동으로 다시 시도합니다(Opus·Sonnet 5.5).
 
 ### AI 요약 (읽기 화면 → AI 요약 탭 → 요약 만들기)
-보통 1~3분 걸리며, 그동안 다른 화면에 다녀와도 됩니다. 다음 내용을 만듭니다.
+보통 1~3분 걸리며, 진행 막대로 단계가 표시됩니다. 그동안 PaperLab 안의 다른 화면에 다녀와도 되지만, **브라우저 탭을 닫으면 요약이 멈추고 저장되지 않습니다**(다시 만들어 주세요). 다음 내용을 만듭니다.
 - **한 줄 요약**, 연구 질문 · 방법 · 결과(실제 수치 포함), 키워드
 - **수준별 설명** — 초등 · 중등 · 고등 · 대학원 4단계로 논문 전체를 설명
 - **섹션별 정리** — 논문의 실제 섹션 순서대로, 섹션마다 4단계 설명과 핵심 포인트, 해당 쪽으로 이동(p.N)
@@ -258,6 +285,8 @@ AI 기능은 **설정 → AI 엔진**에서 켭니다. AI 없이도 다른 기�
 1. [Zotero 스타일 저장소](https://www.zotero.org/styles)(10,000개 이상)에서 투고할 학술지 이름으로 검색해 `.csl` 파일을 받습니다.
 2. **설정 → 학술지 스타일 추가 → .csl 파일 추가**
 3. 이제 모든 인용 창·원고에서 그 스타일을 고를 수 있습니다. 다른 스타일을 기반으로 하는 *종속 스타일*도 지원합니다(기반 스타일이 있어야 함).
+
+추가한 스타일(파일당 2MB까지)은 내 계정에 저장되어 다른 기기에서도 보이고, 다른 사용자에게는 보이지 않습니다.
 
 ### 인용 창 (상세 패널·검색 결과의 *인용*)
 - 스타일과 **용어**(영문: et al., and / 국문: 외, 및)를 고르면 바로 바뀝니다. 고른 스타일은 다음에도 기억합니다.
@@ -365,7 +394,7 @@ AI 기능은 **설정 → AI 엔진**에서 켭니다. AI 없이도 다른 기�
 - **개요**: 제목 목록. 누르면 편집 위치와 미리보기가 그곳으로 이동합니다.
 - **이 원고의 인용**: 쓰인 인용키와 논문 제목, 서재에 없는 키(⚠), 인용 정보가 빈 논문 경고
 - 아래 상태 줄: **글자 수(공백 포함/제외)**, 단어 수, 인용 개수
-- **자동 저장**(입력을 멈추면 저장, Ctrl+S로 바로 저장)
+- **자동 저장**(입력을 멈추면 저장, Ctrl+S로 바로 저장). 원고는 클라우드에 저장되어 다른 기기에서 이어서 열 수 있습니다. 같은 원고를 두 기기(또는 두 탭)에서 동시에 고치면 **나중에 저장한 내용이 남습니다**.
 
 ### AI 글쓰기 도우미 (✦ AI 도우미)
 글을 선택하거나(선택이 없으면 커서가 있는 문단) 메뉴를 고릅니다. 결과를 미리 보고 **바꾸기 / 고쳐서 넣기 / 복사 / 취소**합니다.
@@ -423,7 +452,7 @@ AI 기능은 **설정 → AI 엔진**에서 켭니다. AI 없이도 다른 기�
 2. 워드·한글 본문의 인용할 자리에 붙여넣습니다. 문법은 8장과 같습니다(`[@a; @b]`, `[@a, p. 12]`).
 3. 참고문헌이 들어갈 자리에 `[참고문헌]`(영문은 `[References]`)을 **한 줄로** 적습니다. 없으면 문서 끝에 붙습니다.
 4. 워드는 **.docx**, 한글은 **.hwpx**(다른 이름으로 저장 → 한글 문서 *.hwpx)로 저장합니다.
-5. **논문 쓰기 → 워드·한글 문서에 인용 넣기 → .docx · .hwpx 올리기** (논문 쓰기 화면에 끌어다 놓아도 됨)
+5. **논문 쓰기 → 워드·한글 문서에 인용 넣기 → .docx · .hwpx 올리기** (논문 쓰기 화면에 끌어다 놓아도 됨, **30MB까지**)
 6. 인용 표시 수, 찾은 논문 수, 서재에 없는 키, 참고문헌 자리 유무를 확인합니다.
 7. 스타일과 참고문헌 제목을 고르고 **인용 넣은 파일 받기** → `원래이름_인용완료.docx/.hwpx`
 
@@ -530,12 +559,12 @@ AI 기능은 **설정 → AI 엔진**에서 켭니다. AI 없이도 다른 기�
 
 ## 10. 설정
 
-사이드바 아래 **설정**에서 바꿉니다.
+사이드바 아래 **설정**(또는 계정 버튼 → 설정)에서 바꿉니다. 설정은 **계정마다 따로** 저장되어, 다른 기기에서 로그인해도 같은 설정이 적용됩니다.
 
 | 항목 | 설명 | 기본값 |
 |---|---|---|
-| AI 엔진 | Anthropic API / Claude CLI | Anthropic API |
-| Anthropic API 키 | 이 컴퓨터의 설정 파일에만 저장. 환경변수 `ANTHROPIC_API_KEY`도 인식 | (없음) |
+| AI 엔진 | Anthropic API만 선택 가능 (Claude CLI는 PC 연결(2단계) 뒤에) | Anthropic API |
+| Anthropic API 키 | 계정별로 암호화해 클라우드에 저장. 저장한 키는 다시 보여 주지 않고 "저장됨"으로만 표시, *저장된 키 지우기* 가능. 서버 환경 변수 키는 쓰지 않음 | (없음) |
 | 모델 | Opus 5.5 / Sonnet 5.5 / Haiku 4.5 | Opus 5.5 |
 | 생각 깊이 | 낮음 · 보통 · 높음 · 매우 높음 | 보통 |
 | AI 답변 언어 | 요약·대화·글쓰기 언어 | 한국어 |
@@ -545,45 +574,81 @@ AI 기능은 **설정 → AI 엔진**에서 켭니다. AI 없이도 다른 기�
 | 학술지 스타일 추가 | `.csl` 파일 추가·삭제 | |
 | 새 원고 기본 양식 | 새 원고에 처음 적용할 논문 양식(원고마다 편집 화면 위쪽에서 바꿀 수 있음). 옆 **양식 관리…** 로 양식 관리 창 열기 | 기본 (A4) |
 | 연락처 이메일 | OpenAlex·Crossref에 알려 더 안정적인 요청 한도를 받음 | (없음) |
-| OpenAlex · Semantic Scholar API 키 | 요청 한도를 늘림 (없어도 됨) | (없음) |
+| OpenAlex · Semantic Scholar API 키 | 요청 한도를 늘림 (없어도 됨). API 키처럼 계정별로 암호화해 저장 | (없음) |
+| 계정 | 이름 · 이메일 · **로그아웃**, 저장 공간 사용량(전체 / 내 PDF) | |
 
-AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시되고, 데이터 폴더 위치도 보여 줍니다.
+AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시됩니다.
+서버가 저장된 키를 풀지 못하면(서버의 암호화 키를 잃은 경우 등) API 키 칸 아래에 "저장된 키를 읽지 못했어요. 키를 다시 입력해 주세요."가 표시됩니다.
 
 ---
 
-## 11. 데이터 저장 위치와 백업
+## 11. 데이터 저장과 백업
 
-| 운영체제 | 데이터 폴더 |
+모든 데이터는 클라우드에 **계정별로** 저장됩니다. 내 PC에는 데이터 폴더가 없습니다.
+
+| 무엇 | 어디에 |
 |---|---|
-| Windows | `%APPDATA%\PaperLab` (예: `C:\Users\이름\AppData\Roaming\PaperLab`) |
-| macOS | `~/Library/Application Support/PaperLab` |
-| Linux | `~/.local/share/paperlab` |
+| 서재, 폴더, 컬렉션, 태그, 하이라이트, 노트, PDF 본문 텍스트(검색용), **원고**(고른 양식·표지 정보 포함), **내 양식**, 내 인용 스타일, AI 요약, 대화 기록, 설정 | **Supabase** Postgres 데이터베이스 (서울 리전) |
+| Anthropic · OpenAlex · Semantic Scholar API 키 | 같은 데이터베이스에 **계정별로 암호화**(AES-256-GCM)해 저장. 암호화 키는 데이터베이스와 따로 **서버 PC의 비밀값 파일**(`cloud.env`, 서버를 돌리는 Windows 계정만 접근)에 보관 |
+| PDF 파일 | **Cloudflare R2** 저장소 (`users/{계정 id}/papers/{논문 id}.pdf`) |
+| 데이터베이스 백업 | Cloudflare R2 (`backups/db/`) |
 
-| 파일 · 폴더 | 내용 |
+### 계정별 분리
+- 모든 개인 데이터에 계정 id가 붙고, 데이터베이스의 **행 수준 보안(RLS)** 이 로그인한 사람의 행만 보이게 합니다. 다른 사용자의 서재·PDF·메모는 검색에도 나오지 않습니다.
+- 같은 논문(같은 DOI)을 다른 사용자가 서재에 넣어도 각자 따로 저장되고, 중복 감지·인용키도 내 서재 안에서만 따집니다.
+- 서재를 다른 사람과 공유하는 기능은 없습니다.
+
+### 백업
+- **매일 04:00(한국 시간)** 데이터베이스 전체를 R2로 자동 백업하고, **최근 14개**(2주)를 보관합니다.
+- **PDF 파일은 따로 백업하지 않습니다**(R2에만 있음). 휴지통이 없어서 지운 논문·PDF는 되돌릴 수 없습니다.
+- 백업 복원은 관리자가 합니다([deploy/README.md](deploy/README.md) 5장).
+- 내 데이터를 파일로 받아 두려면: 서지 정보는 **BibTeX · RIS · CSL-JSON 내보내기**(7장), 하이라이트·노트는 **.md 내보내기**(5장), 원고는 **워드 · 한글 · 마크다운 내보내기**(8장)를 쓰세요. 내보낸 파일은 브라우저의 **다운로드** 폴더에 저장됩니다.
+- 예전 설치형 PaperLab의 데이터 폴더(`library.db` · `pdfs/`)를 옮겨 오는 기능은 없습니다(새로 시작).
+
+### 저장 공간 (10GB)
+- PDF 저장소는 R2 무료 **10GB**를 **모든 사용자의 PDF와 데이터베이스 백업이 함께** 씁니다.
+- 사이드바 아래 막대(전체 사용량)와 **설정 → 계정**(전체 · 내 PDF)에서 사용량을 볼 수 있습니다.
+
+| 사용량 | 화면 |
 |---|---|
-| `library.db` | 서재, 컬렉션, 태그, 하이라이트, 노트, **원고**(고른 양식·표지 정보 포함), **내 양식**, AI 요약, 대화 기록 (SQLite 하나) |
-| `pdfs/` | PDF 파일 |
-| `styles/` | 직접 추가한 인용 스타일 |
-| `settings.json` | 설정과 API 키 |
+| 80% 미만 | 막대만 표시 |
+| **80% 이상** | 주황색 경고 "저장 공간 N% 사용 중" — 관리자에게 알려 주세요 |
+| **95% 이상** | 빨간색 "PDF를 더 올릴 수 없어요" — PDF 올리기·첨부가 막힘 |
 
-- **백업**: 이 폴더를 통째로 복사하면 됩니다. 다른 컴퓨터로 옮길 때도 폴더째 옮깁니다.
-- 위치 바꾸기: 환경변수 `PAPERLAB_HOME` 또는 `--data-dir` 옵션
-- 프로그램 폴더를 지우거나 새 버전으로 바꿔도 데이터 폴더는 그대로 남습니다.
-- 내보낸 워드·한글·BibTeX 파일은 브라우저의 **다운로드** 폴더에 저장됩니다.
+- 필요 없는 논문을 지우면 그 PDF만큼 공간이 생깁니다. 저장 공간을 늘릴지는 관리자가 정합니다.
 
 ---
 
 ## 12. 보안과 개인정보
 
-- 프로그램은 **내 컴퓨터(127.0.0.1)에서만** 열리며 다른 컴퓨터에서 접속할 수 없습니다.
-- 다른 웹사이트가 PaperLab에 몰래 요청을 보내는 것(DNS 리바인딩·CSRF)을 막습니다.
-  - 허용되지 않은 호스트 이름·출처(`Origin`)의 요청은 거부합니다.
+### 로그인과 계정
+- **Google OAuth "테스트 사용자"로 등록된 구글 계정만** 쓸 수 있습니다(동의 화면을 "테스트" 게시 상태로 유지, 최대 100명). OAuth 앱을 **"게시"하면 구글 계정이 있는 누구나 가입할 수 있으므로 게시하지 않습니다.** Supabase는 Google 공급자만 켜고 이메일 · 익명 로그인은 끕니다. 서버 자체 허용 목록(가입 훅 + 요청마다 확인)은 선택 기능이며 운영에서는 꺼 둡니다(`PAPERLAB_ALLOWLIST=off`).
+- 모든 `/api/*` 요청에는 로그인 토큰(JWT)이 필요하고, 서버가 서명·만료·발급자를 검증합니다. 토큰이 없거나 틀리면 거부합니다(공개 예외: 상태 확인, 로그인 화면이 쓰는 공개 설정, 화면 파일).
+- 로그인 상태는 브라우저에 저장됩니다. 여러 사람이 쓰는 PC에서는 다 쓴 뒤 로그아웃하세요.
+
+### 계정별 분리
+- 서버는 요청마다 **그 사용자 권한으로** 데이터베이스에 질의해, 데이터베이스의 행 수준 보안(RLS)이 본인 행만 보이게 합니다. 서버 코드의 질의도 계정 id로 한정합니다(이중 방어).
+- 서버가 쓰는 전용 데이터베이스 역할은 RLS를 우회할 수 없습니다.
+- PDF 저장 경로는 서버가 **로그인 토큰의 계정 id로만** 만듭니다. 요청에 다른 경로를 넣어도 반영되지 않습니다.
+- 다른 사용자의 논문·하이라이트·원고 번호로 요청하면 "찾을 수 없음"으로 답합니다(있는지도 알리지 않음).
+
+### 요청 보호
+- 다른 웹사이트가 PaperLab에 몰래 요청을 보내는 것(CSRF)을 막습니다.
+  - 출처(`Origin`)가 PaperLab 주소와 다른 요청은 거부합니다. 다른 사이트에 API를 열어 주지 않습니다(CORS 없음).
   - 쓰기 요청에는 PaperLab 화면이 붙이는 전용 헤더가 있어야 합니다.
+- PDF는 브라우저가 **10분 동안만 유효한 서명 주소**로 R2에서 직접 받고 올립니다. 서명 주소는 서버 로그에 남기지 않습니다.
+- 서버가 주소에서 PDF를 받을 때(*PDF 받기* · *PDF 포함 추가*)는 `http(s)` 주소이고 그 이름이 **공인 IP로만** 해석될 때만 받습니다. 리디렉션도 단계마다 같은 검사를 합니다(내부망 · 클라우드 메타데이터 주소 접근 차단).
 - AI 답변과 외부 데이터는 화면에 표시하기 전에 걸러(DOMPurify) 악성 코드를 막고, 외부 링크는 `http(s)`만 허용합니다.
-- **외부로 나가는 데이터**
-  - 논문 검색: 검색어와 DOI 등 식별자 → OpenAlex·arXiv·Semantic Scholar·Crossref
-  - AI 기능을 쓸 때만: 해당 논문의 PDF(또는 텍스트)·질문·원고 일부 → Anthropic(API) 또는 Claude CLI
-  - 그 밖의 서재·노트·원고는 외부로 보내지 않습니다.
+
+### 비밀값과 로그
+- API 키는 계정별로 암호화해 저장하고, 화면에는 "저장됨" 여부만 보여 줍니다. 암호화 키는 데이터베이스와 따로 보관하므로 데이터베이스만으로는 키를 읽을 수 없습니다.
+- 서버 접근 로그에는 요청 id·요청 방식·경로·상태 코드·처리 시간·계정 id만 남기고, 토큰·API 키·서명 주소·요청 본문·이메일은 남기지 않습니다.
+
+### 외부로 나가는 데이터
+- 저장: 서재·원고 등은 Supabase(서울 리전), PDF와 백업은 Cloudflare R2에 있습니다. 서버는 관리자의 **서버 PC**에서 돌고 Tailscale Funnel로 공개됩니다(서버 PC에는 사용자 데이터를 저장하지 않음 — 로그에는 계정 id · 요청 경로만, 토큰 · 키 · 본문 · 이메일은 남기지 않음).
+- 논문 검색: 검색어와 DOI 등 식별자 → OpenAlex·arXiv·Semantic Scholar·Crossref
+- AI 기능을 쓸 때만: 해당 논문의 PDF(또는 텍스트)·질문·원고 일부 → Anthropic(내 API 키로)
+- 그 밖의 서재·노트·원고는 위 저장 서비스 밖으로 보내지 않습니다.
 
 ---
 
@@ -623,7 +688,20 @@ AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시되고, 데
 - **제목 문장형 변환**은 고유명사(예: Bayesian)도 소문자로 바꿀 수 있으니 확인이 필요합니다.
 - 스캔 PDF(글자 없는 이미지)는 전문 검색·AI 텍스트 모드가 제한됩니다(OCR 미지원).
 - 검색 결과는 Semantic Scholar 1,000건, OpenAlex 10,000건까지 넘겨 볼 수 있습니다(데이터베이스 제한).
-- 여러 사람이 함께 쓰는 공유 서재(클라우드 동기화)는 없습니다. 한 컴퓨터에서 한 사람이 쓰는 구조입니다.
+- 서재는 계정마다 따로이며, 다른 사람과 **공유·협업하는 기능은 없습니다**. 같은 원고를 두 기기에서 동시에 고치면 나중에 저장한 내용이 남습니다(실시간 동시 편집 없음).
+
+### 클라우드
+- **로그인은 구글 계정만** 됩니다. 이메일 로그인은 나중에 추가할 예정입니다.
+- **Claude CLI 엔진은 아직 쓸 수 없습니다.** AI는 각자의 Anthropic API 키로만 동작합니다(내 PC를 연결하는 워커는 2단계).
+- **AI 요약 중 브라우저 탭을 닫으면 요약이 멈춥니다**(저장되지 않음). 앱 안에서 다른 화면으로 옮기는 것은 괜찮습니다.
+- PDF는 **파일당 100MB**, 한 번에 20개까지 올릴 수 있습니다. 워드·한글 문서에 인용 넣기는 **30MB**, 양식 파일 가져오기는 20MB, 인용 스타일 파일은 2MB까지입니다.
+- 저장 공간은 모든 사용자가 **함께 10GB**를 씁니다(PDF + 데이터베이스 백업). 95%를 넘으면 PDF를 올릴 수 없습니다.
+- 한동안 쓰지 않은 뒤 처음 열면 서버가 깨어나는 데 몇 초 걸립니다.
+- 무료 플랜이라 **1주일 동안 아무도 쓰지 않으면 데이터베이스가 일시정지**됩니다. 이때는 "서비스가 잠시 멈춰 있어요"가 뜨고, 관리자가 Supabase 대시보드에서 다시 켜야 합니다.
+- PDF는 따로 백업하지 않고, 지운 논문·PDF를 되살리는 휴지통이 없습니다.
+- 오프라인(인터넷 없이)으로는 쓸 수 없습니다.
+- 계정 삭제(탈퇴) 화면은 없습니다(관리자에게 요청).
+- 바탕화면 바로가기는 관리자 PC(Windows)에만 만듭니다. 다른 사용자 PC용 Windows 설치형 앱은 2단계 예정이고, macOS · Linux용은 계획에 없습니다.
 
 ### 논문 양식
 - **쪽 번호 위치·규칙은 학과 확인 중**입니다. 대체 보고서 안내문의 "꼬리여백 11mm 위치"가 정확히 어디인지, 학위논문 쪽 번호 규칙(서론 앞 국문요약·목차에 로마 숫자가 필요한지)이 확인되지 않아 지금은 **임시값**(꼬리말 가운데, 첫 장부터 1쪽, 서론 앞은 번호 없음)입니다. 내 양식의 *쪽 번호*(위치 · 시작 · 용지 끝에서 거리)에서 바꿀 수 있습니다. 서론 앞 부분의 로마 숫자 쪽 번호(i, ii …)는 지금 없습니다.
@@ -643,11 +721,24 @@ AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시되고, 데
 
 | 증상 | 해결 |
 |---|---|
-| `PaperLab.bat`을 실행하면 "Python 3.10 이상이 필요해요" | python.org에서 Python을 설치하고 *Add python.exe to PATH*를 체크한 뒤 다시 실행 |
-| 설치 중 실패 | 인터넷 연결을 확인하고 다시 실행. 계속되면 프로그램 폴더의 `.venv` 폴더를 지우고 다시 실행 |
-| 브라우저가 안 열림 | 실행 창에 나온 주소(예: `http://127.0.0.1:8765/`)를 브라우저에 직접 입력 |
+| Google 화면에서 로그인이 막힘 | 그 구글 계정이 사용 등록(테스트 사용자)되지 않았습니다. 다른 계정으로 로그인하거나 관리자에게 등록을 요청하세요 |
+| "이 계정은 쓸 수 없어요" | (관리자가 서버 허용 목록을 켠 경우에만) 그 구글 계정이 허용 목록에 없습니다. **다른 계정으로 로그인**을 누르거나, 관리자에게 허용을 요청하세요 |
+| "로그인하지 못했어요" · "로그인을 취소했어요" | 구글 로그인 창에서 취소했거나 로그인이 끝나지 않았습니다. **Google로 계속하기**를 다시 누르세요 |
+| 연결 중 안내가 오래 보이거나 화면이 열리지 않음 | 서버 PC가 꺼졌거나 인터넷이 끊겼을 수 있습니다. 잠시 뒤 새로 고침, 계속되면 관리자에게 알려 주세요 |
+| "로그인이 만료됐어요. 다시 로그인해 주세요." | 다시 로그인하세요. 저장하지 못한 원고는 브라우저에 보관해 두었다가, **같은 계정**으로 로그인하면 이어서 저장합니다("보관해 둔 원고를 저장했어요") |
+| "보관해 둔 원고를 아직 저장하지 못했어요" | 이 브라우저에 그대로 두고 다음에 열 때 다시 저장합니다. 인터넷 연결을 확인하세요 |
+| "서비스가 잠시 멈춰 있어요" | 데이터베이스가 일시정지됐습니다(1주일 동안 아무도 쓰지 않으면 무료 플랜이 멈춤). 관리자에게 알려 주세요 — 관리자가 Supabase 대시보드에서 다시 켠 뒤 **다시 시도** |
+| "인터넷에 연결되지 않았어요" · "인터넷 연결이 끊겼어요" | 인터넷 연결을 확인하고 **다시 시도** |
+| "저장 공간 N% 사용 중" | 모든 사용자가 함께 쓰는 10GB의 80%를 넘었습니다. 관리자에게 알려 주세요 |
+| "저장 공간이 거의 찼어요. PDF를 더 올릴 수 없어요" | 95%를 넘어 PDF 올리기가 막혔습니다. 필요 없는 논문을 지우거나 관리자에게 알려 주세요 |
+| PDF 올리기에서 "파일이 너무 커요 (100MB 초과)" | 100MB 이하로 줄인 PDF를 올리세요 |
+| PDF 올리기에서 "올리기 시간이 지났어요" | 올리기용 주소(10분)가 만료됐습니다. **다시 시도**를 누르세요 |
+| "연결이 끊겨 요약이 멈췄어요. 다시 만들어 주세요." | 요약 중 연결이 끊겼습니다(탭 닫기 등). **요약 만들기**를 다시 누르세요 |
+| 워드·한글 문서에서 "파일이 너무 커요 (30MB 초과)" | 문서 안의 큰 그림을 줄이는 등 30MB 이하로 만들어 올리세요 |
+| "올린 문서를 찾을 수 없어요. 다시 올려 주세요." | 인용 넣기용으로 올린 문서는 서버에 잠시만 보관됩니다. 문서를 다시 올리세요 |
 | 검색 시 "요청 한도를 넘었어요" | 잠시 후 다시 시도하거나, 설정에 연락처 이메일·API 키 입력 |
-| AI 기능이 "API 키를 넣어주세요" | 설정 → AI 엔진에서 API 키 입력, 또는 Claude CLI 엔진 선택 |
+| AI 기능이 "설정에서 Anthropic API 키를 넣어주세요." | 설정 → AI에서 **본인의 Anthropic API 키**를 입력하세요(공용 키는 없음) |
+| "저장된 키를 읽지 못했어요. 키를 다시 입력해 주세요." | 설정 → AI에서 API 키를 다시 입력하세요 |
 | "PDF를 받을 수 없어요 / PDF가 아니에요" | 출판사 로그인이 필요한 PDF입니다. 직접 받아서 *PDF 첨부* |
 | PDF에서 정보를 못 찾음 | 상세 패널 *온라인 정보로 채우기*에서 DOI나 arXiv ID를 직접 입력 |
 | 인용 창에 "인용 정보가 비어 있어요" | *채우기*로 직접 입력하거나 *온라인에서 찾기* |
@@ -671,53 +762,97 @@ AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시되고, 데
 
 ```
 study99web/
-├─ PaperLab.bat · PaperLab.command · paperlab.sh   실행기 (가상환경 자동 설치)
 ├─ pyproject.toml
+├─ deploy/            make-shortcut.ps1 · paperlab.ico · make_icon.py(바탕화면 바로가기) · r2-cors.json · README.md(사용자 준비 · 관리 명령 · 복원 절차)
+│  └─ server-pc/      install · update · funnel · watchdog · uninstall · common(.ps1) · server.json(공개 주소 · 포트 · 기본 경로 · 작업 이름) · README.md(서버 PC 설치 안내서)
+├─ supabase/migrations/  SQL 마이그레이션: 확장(PGroonga) · 앱 전용 역할 · 표 · RLS · 검색 색인 · 허용 목록 훅(Before User Created — 선택 기능, 기본 미연결)
 ├─ paperlab/
-│  ├─ __main__.py     실행 (서버 시작 + 브라우저 열기)
-│  ├─ server.py       FastAPI: JSON API + 화면 제공, 로컬 요청만 허용
-│  ├─ db.py           SQLite: 논문·컬렉션·태그·하이라이트·노트·원고·내 양식·AI 결과, FTS5 전문 검색
+│  ├─ serve.py        운영 서버 실행 (python -m paperlab.serve: cloud.env 검사 · 127.0.0.1:8080 · 프록시 헤더는 127.0.0.1만 신뢰 · 회전 로그, --check 설정 점검)
+│  ├─ __main__.py     개발 서버 (PAPERLAB_DEV=1, 테스트용 Supabase 프로젝트 · 가짜 저장소, 127.0.0.1)
+│  ├─ server.py       FastAPI: JSON API + 화면 제공, Bearer 토큰 · 허용 목록 · 출처 · X-PaperLab 검사, 요청별 사용자 트랜잭션
+│  ├─ auth.py         Supabase JWT 검증(JWKS ES256·RS256 또는 레거시 HS256), 허용 목록(선택 기능)
+│  ├─ db.py           Supabase Postgres(psycopg 3 + 연결 풀): user_tx(RLS) · system_tx(이유 기록), 서재·폴더·컬렉션·태그·하이라이트·노트·원고·내 양식·내 스타일·AI 결과, PGroonga 전문 검색
+│  ├─ storage.py      저장소 계층(STORAGE_BACKEND: r2 기본 · fake 테스트): 계정별 키 규칙 · 접두어 재검사, 서명 주소, 사용량
+│  ├─ crypto.py       user_secrets 암호화(AES-256-GCM, key_id)
+│  ├─ config.py       서버 환경 변수 검사(값은 로그에 남기지 않음), 사용자별 설정(profiles.settings + user_secrets)
+│  ├─ migrate.py      SQL 마이그레이션 적용 (python -m paperlab.migrate)
+│  ├─ admin.py        관리 명령: sync-allowlist · app-role --write-env · rotate-key · orphans · backup · pg-dump-check · latest-backup · mark-test-project
 │  ├─ pdf.py          PyMuPDF: 쪽별 텍스트 추출, DOI·arXiv·제목 인식
 │  ├─ sources.py      OpenAlex · arXiv · Semantic Scholar · Crossref
 │  ├─ citations.py    CSL-JSON 변환, 인용 정보 점검, BibTeX · RIS · CSL-JSON, 인용키
 │  ├─ csl_style.py    CSL 스타일 파일 정보
-│  ├─ ai.py           요약(구조화 출력) · Q&A(쪽 인용) · 글쓰기 도우미 — Anthropic API / Claude CLI
+│  ├─ ai.py           요약(구조화 출력) · Q&A(쪽 인용) · 글쓰기 도우미 — Anthropic API (CLI 엔진은 2단계 PC 워커에서만)
 │  ├─ manuscripts.py  원고 템플릿
 │  ├─ writer.py       원고 → 워드(.docx, 각주) · 한글(.hwpx) · 마크다운, 논문 양식·표지·쪽 번호 적용
 │  ├─ doc_formats.py  논문 양식: 데이터 구조·검증, 기본 양식 4개, 단위 환산, 표지 정보 검증·문구·배치 계산
 │  ├─ format_import.py 양식 파일(.docx · .dotx · .hwpx)에서 서식 읽기
 │  ├─ compose.py      워드·한글 문서의 [@인용키] → 서식 있는 인용 + 참고문헌
-│  ├─ config.py       데이터 폴더, settings.json
 │  └─ static/         화면 (HTML · CSS · ES 모듈 JS)
-│     ├─ js/          app · library · discover · reader · writing · formats · cite · dialogs · ui · api · state
-│     │               (formats: 양식 관리 창 · 표지 정보 창 · 미리보기 --doc-* 변수 계산)
-│     └─ vendor/      PDF.js · citeproc-js · CSL 스타일·로케일 · KaTeX · marked · DOMPurify
-├─ docs/              specs/doc-formats.md(논문 양식 명세) · design/doc-formats-ui.md(화면 시안)
-└─ tests/             pytest (test_doc_formats.py, golden/ = 기본 (A4) 내보내기 골든 파일)
+│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state
+│     │               (app: 로그인 게이트 · 계정 메뉴 · 폴더 트리 · 저장 공간 / auth: supabase-js 구글 로그인 · 세션 /
+│     │                api: Bearer 토큰 · 401 갱신 · 503 · 연결 지연 띠 / formats: 양식 관리 창 · 표지 정보 창)
+│     └─ vendor/      PDF.js · citeproc-js · CSL 스타일·로케일 · KaTeX · marked · DOMPurify · supabase-js
+├─ docs/              specs/(doc-formats.md · phase1-cloud.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md)
+└─ tests/             pytest (DB 테스트는 테스트용 Supabase 프로젝트, golden/ = 기본 (A4) 내보내기 골든 파일)
 ```
 
 ### 주요 기술
-- 백엔드: Python 3.10+, FastAPI, Uvicorn, SQLite(FTS5 trigram), PyMuPDF, httpx, anthropic SDK, python-docx, python-hwpx
-- 화면: 빌드 과정 없는 ES 모듈 JavaScript, PDF.js 4, citeproc-js 2.4, KaTeX, marked, DOMPurify
+- 백엔드: Python 3.10+(서버 PC는 3.12 가상환경), FastAPI, Uvicorn, psycopg 3 · psycopg-pool, PyJWT, cryptography, boto3(R2, S3 호환), PyMuPDF, httpx, anthropic SDK, python-docx, python-hwpx
+- 서버 · 클라우드: **서버 PC**(상시 켜 둔 Windows PC, Docker 없이 Python 직접 실행, 작업 스케줄러로 자동 시작 · 매일 04:00 KST 백업(14개 보관) · 5분 감시) + **Tailscale Funnel**(공개 고정 HTTPS 주소), Supabase(Auth · Postgres · PGroonga, 서울), Cloudflare R2(PDF · 백업)
+- 화면: 빌드 과정 없는 ES 모듈 JavaScript, PDF.js 4, citeproc-js 2.4, KaTeX, marked, DOMPurify, supabase-js 2
 - 외부 라이브러리 버전·라이선스: `paperlab/static/vendor/THIRD_PARTY.md`
+
+### 개발 서버
+사용자용 로컬 실행 모드는 없고, 개발용 서버만 있습니다.
+
+```powershell
+pip install -e ".[dev]"
+$env:PAPERLAB_DEV = "1"
+python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file)
+```
+
+- `PAPERLAB_DEV=1`과 **테스트용** Supabase 값(`SUPABASE_TEST_URL` · `SUPABASE_TEST_ANON_KEY` · `SUPABASE_TEST_DB_URL`)이 있어야 뜹니다. 값은 환경 변수나 `%USERPROFILE%\.paperlab\cloud.env`(또는 `--env-file`)에서 읽고, 운영 변수(`SUPABASE_URL` · `SUPABASE_DB_URL` · `R2_*` · `APP_ENCRYPTION_KEY` · `ALLOWED_EMAILS`)는 읽지 않습니다.
+- DB는 관리자가 아니라 **앱 역할**(`paperlab_app`)로 접속합니다(비밀번호는 테스트 프로젝트에 보관된 값을 재사용 — 테스트 절 참고).
+- `127.0.0.1`에만 열고, 파일 저장소는 **같은 출처 가짜 저장소**(메모리, `/_dev_storage` — 서명 · 만료 검사)라 브라우저에서 PDF 올리기·보기를 확인할 수 있습니다. 이 경로는 운영 서버에 없습니다.
+- 로그인: 테스트 프로젝트는 구글 공급자가 꺼져 있으므로, 개발 서버에서만 `public-config`의 `dev_email_login: true`로 **이메일 · 비밀번호 로그인 칸**(`static/js/dev-login.js`)이 나옵니다. 운영 서버는 이 값을 내보내지 않고 `dev-login.js`도 404입니다.
+- 개발용 변수: `PAPERLAB_DEV_ENCRYPTION_KEY`(없으면 실행하는 동안만 쓰는 임시 키 — 다시 시작하면 저장한 API 키를 읽지 못함), `PAPERLAB_DEV_ALLOWED_EMAILS`(비우면 테스트 프로젝트의 로그인 사용자를 모두 허용).
+
+### 운영
+서버 PC 설치 · 업데이트 · Funnel · 백업 · 감시는 [deploy/server-pc/README.md](deploy/server-pc/README.md), 사용자가 먼저 준비할 것(Supabase 운영 · 테스트 프로젝트, Google OAuth 테스트 사용자, R2, `cloud.env`) · 관리 명령 · 백업 복원 절차는 [deploy/README.md](deploy/README.md)를 보세요. 명세는 [docs/specs/phase1-cloud.md](docs/specs/phase1-cloud.md) 9 · 13장입니다.
 
 ### API 요약
 
 | 영역 | 엔드포인트 |
 |---|---|
-| 일반 | `GET /api/health` `GET /api/meta` `GET /api/stats` `GET·PUT /api/settings` `GET /api/ai/status` |
-| 논문 | `GET·POST /api/papers` `GET·PATCH·DELETE /api/papers/{id}` `POST /api/papers/bulk` `POST /api/resolve` `POST /api/upload` `POST /api/papers/{id}/open` |
-| PDF | `GET·POST /api/papers/{id}/pdf` `POST /api/papers/{id}/fetch-pdf` `POST /api/papers/{id}/refresh` |
+| 공개(토큰 불필요) | `GET /api/health`(`?deep=1`이면 DB · 저장소 상태 `db` · `storage`) `GET /api/public-config`(`supabase_url` · `supabase_anon_key`) |
+| 계정 · 일반 | `GET /api/me` `GET /api/meta` `GET /api/stats` `GET /api/storage/usage` `GET·PUT /api/settings` `GET /api/ai/status` |
+| 논문 | `GET·POST /api/papers` `GET·PATCH·DELETE /api/papers/{id}` `POST /api/papers/bulk` `POST /api/resolve` `POST /api/papers/{id}/open` |
+| 업로드 | `POST /api/uploads` `POST /api/uploads/{upload_id}/complete` |
+| PDF | `GET /api/papers/{id}/pdf-url` `POST /api/papers/{id}/pdf/upload` `POST /api/papers/{id}/pdf/complete` `POST /api/papers/{id}/fetch-pdf` `POST /api/papers/{id}/refresh` |
 | 인용 관계 | `GET /api/papers/{id}/related` `POST /api/related` `GET /api/search` |
 | 노트·하이라이트 | `PUT /api/papers/{id}/note` `GET·POST /api/papers/{id}/annotations` `PATCH·DELETE /api/annotations/{id}` `GET /api/annotations/export/{id}` |
+| 폴더 | `GET·POST /api/folders` `PATCH·DELETE /api/folders/{id}` |
 | 컬렉션·태그 | `GET·POST /api/collections` `PATCH·DELETE /api/collections/{id}` `GET /api/tags` `PATCH·DELETE /api/tags/{id}` |
 | 인용 | `GET /api/papers/{id}/cite` `POST /api/cite-preview` `POST /api/csl` `POST /api/citekeys` `GET·POST /api/styles` `GET·DELETE /api/styles/{id}` `POST /api/export` `POST /api/import` |
-| AI | `GET·POST /api/papers/{id}/summary` `GET /api/jobs/{id}` `GET·POST·DELETE /api/papers/{id}/chat` `POST /api/ai/write` |
+| AI | `GET·POST /api/papers/{id}/summary` `GET·POST·DELETE /api/papers/{id}/chat` `POST /api/ai/write` |
 | 원고 | `GET /api/manuscript-templates` `GET·POST /api/manuscripts` `GET·PATCH·DELETE /api/manuscripts/{id}` `POST /api/export-document` |
 | 논문 양식 | `GET·POST /api/doc-formats` `GET·PATCH·DELETE /api/doc-formats/{id}` `POST /api/doc-formats/import` |
 | 워드·한글 | `POST /api/compose/scan` `POST /api/compose/apply` |
 
-쓰기 요청(GET 외)에는 `X-PaperLab: 1` 헤더가 필요합니다.
+**요청 규칙**
+- 공개 주소를 뺀 모든 `/api/*`에 `Authorization: Bearer <Supabase access token>`이 필요합니다. 없거나 틀리면 **401** `{"detail": "로그인이 필요해요", "code": "auth_required"}`, 서버 허용 목록을 켠 경우(`PAPERLAB_ALLOWLIST`가 `off`가 아님) 목록 밖 계정이면 **403** `{"detail": "허용되지 않은 계정이에요", "code": "not_allowed"}`.
+- 쓰기 요청(GET · HEAD · OPTIONS 외)에는 `X-PaperLab: 1` 헤더가 필요합니다(없으면 403). `Origin` 헤더가 있으면 `https://{Host}`와 같아야 합니다(다르면 403).
+- 데이터베이스에 연결할 수 없으면 **503** `{"detail": "데이터베이스에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.", "code": "db_unavailable"}`. 모든 `/api/*` 응답은 `Cache-Control: no-store`.
+- 다른 사용자의 id로 요청하면 404(존재 여부를 알리지 않음).
+
+**1단계에서 바뀐 것** (자세한 계약: `docs/specs/phase1-cloud.md` 15장)
+- 삭제: `POST /api/upload` → `POST /api/uploads`(파일 목록 `{"files": [{"name", "size"}]}`, 최대 20개 · 100MB/파일 → 파일마다 `upload_id`와 10분짜리 R2 서명 PUT 주소) + `POST /api/uploads/{upload_id}/complete`(`collection_id` · `folder_id` · `lookup` 선택). 저장 공간이 95% 이상이면 400.
+- 삭제: `GET·POST /api/papers/{id}/pdf` → `GET /api/papers/{id}/pdf-url`(`{url, expires_at}`, 10분) · `POST /api/papers/{id}/pdf/upload` · `…/pdf/complete {"upload_id"}`.
+- 삭제: `GET /api/jobs/{id}`. `POST /api/papers/{id}/summary`는 이제 **SSE 스트림**(`progress` … `done` | `error`)이고, 연결이 끊기면 저장하지 않습니다. `GET …/summary`의 `job`은 항상 `null`.
+- 추가: `GET /api/me`(`user_id` · `email` · `display_name`), `GET /api/storage/usage`(`backend` · `used_bytes` · `limit_bytes` · `mine_bytes` · `level: ok|warn|full`), 폴더 API(목록 `[{id, name, parent_id, count}]`, 삭제 응답 `{ok, moved_papers, moved_folders}`).
+- `GET /api/papers`: 쿼리 `folder` · `filter=no_folder` 추가, 항목에 `folder_id` 추가 · `pdf_path` 삭제. `PATCH /api/papers/{id}`는 `folder_id`, `POST /api/papers/bulk`는 `action: "move_folder"`(`value`: 폴더 id 또는 `null`)를 받습니다.
+- `GET /api/meta`에서 `data_dir` 삭제. `PUT /api/settings`의 `ai_engine: "cli"`는 400, 응답에 비밀값마다 `<키>_status`(`set` · `none` · `unreadable`) 추가, `env_api_key_set`은 항상 `false`.
+- `POST /api/compose/scan`은 30MB까지, 올린 문서 토큰은 사용자별(다른 사용자의 토큰은 404).
 
 **논문 양식 관련 필드** (자세한 계약: `docs/specs/doc-formats.md` 10장)
 - 양식 id: 기본 양식 `default` · `apa7-student` · `inha-mie-thesis` · `inha-mie-report`(읽기 전용, `PATCH`·`DELETE`는 403), 내 양식 `user-{번호}`.
@@ -736,4 +871,13 @@ pip install -e ".[dev]"
 pytest
 ```
 
-외부 학술 API와 AI 호출은 가짜 전송 계층으로 대체하므로 네트워크 없이 돌아갑니다.
+- **테스트 DB = 운영과 별도의 테스트용 Supabase 프로젝트**(서울, 무료). DB가 필요한 테스트(`@pytest.mark.db`)는 `SUPABASE_TEST_URL` · `SUPABASE_TEST_ANON_KEY` · `SUPABASE_TEST_SERVICE_ROLE_KEY` · `SUPABASE_TEST_DB_URL`을 환경 변수나 `cloud.env`(`PAPERLAB_ENV_FILE` 또는 `%USERPROFILE%\.paperlab\cloud.env`)에서 읽습니다. 값이 없거나 접속하지 못하면 이유를 적고 건너뜁니다(품질팀 검증 때는 건너뜀 0개여야 함).
+- 세션 시작 때 테스트 프로젝트에 마이그레이션을 적용하고, 앱 역할 비밀번호는 테스트 프로젝트의 `public.paperlab_test_secrets`(관리자 연결만 읽음)에 보관된 값을 **재사용**합니다(저장된 값으로 로그인이 안 될 때만 새로 만듦). 그다음 테스트마다 고유한 테스트 사용자를 만들어 실제 로그인 토큰으로 시험한 뒤 지웁니다. 테스트 프로젝트는 이메일+비밀번호 로그인을 켜고 이메일 확인을 꺼 둡니다([deploy/README.md](deploy/README.md) 1장).
+- **운영 보호 장치**(걸리면 테스트 전체가 즉시 중단):
+  1. `SUPABASE_TEST_URL` · `SUPABASE_TEST_DB_URL`이 운영 값(`SUPABASE_URL` · `SUPABASE_DB_URL`)과 같은 프로젝트를 가리킴
+  2. 테스트 DB에 테스트 프로젝트 표지(`public.paperlab_test_project`)가 없음 — 처음 한 번 `python -m paperlab.admin mark-test-project`로 붙입니다(운영과 같으면 거부, 프로젝트 ref를 직접 입력해 확인)
+  3. 반대로 운영용 `paperlab.migrate` · 배포 스크립트는 표지가 있는 DB를 거부합니다
+- 파일 저장소는 가짜(메모리) 구현만 씁니다. 실제 R2 계약 테스트는 `PAPERLAB_R2_CONTRACT=1`일 때만, 존재하지 않는 임의 사용자 경로에서 돌고 지웁니다.
+- 외부 학술 API와 AI 호출은 가짜 전송 계층으로 대체합니다.
+- CLI 엔진 테스트(`tests/test_ai.py::test_cli_engine_with_fake_claude`)는 Windows에서도 가짜 CLI만 써서 돕니다(실제 claude CLI 호출을 막는 단언 포함). 전체를 `pytest`로 그대로 돌리면 됩니다.
+- CI(자동 테스트 서버)는 지금 두지 않습니다.

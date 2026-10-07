@@ -1,11 +1,11 @@
 // 서재 화면: 목록, 일괄 작업, 상세 패널(정보·태그·컬렉션·노트·인용 관계)
 
-import { api, qs } from "./api.js";
+import { api, downloadBlob, qs, safeFilename } from "./api.js";
 import {
-  addByIdentifierDialog, addPaper, bibliographyDialog, citeDialog, editPaperDialog, exportPapers, importDialog, issuesBox,
-  uploadPdfs,
+  addByIdentifierDialog, addPaper, bibliographyDialog, citeDialog, editPaperDialog, exportPapers, folderIcon, folderPath,
+  importDialog, issuesBox, moveToFolderDialog, uploadPdfs,
 } from "./dialogs.js";
-import { refreshAll, state } from "./state.js";
+import { refreshAll, refreshUsage, state } from "./state.js";
 import {
   $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
   copyText, popupMenu, promptDialog, renderMarkdown, safeUrl, toast,
@@ -24,6 +24,8 @@ function filterTitle() {
   if (f.kind === "collection") return (state.collections.find((c) => c.id === f.id) || {}).name || "컬렉션";
   if (f.kind === "tag") return "#" + ((state.tags.find((t) => t.id === f.id) || {}).name || "태그");
   if (f.kind === "status") return state.meta.statuses[f.id] || "상태";
+  if (f.kind === "folder") return (state.folders.find((x) => x.id === f.id) || {}).name || "폴더";
+  if (f.kind === "no_folder") return "폴더 없음";
   return { all: "모든 논문", recent: "최근 연 논문", starred: "즐겨찾기", unfiled: "미분류" }[f.kind] || "서재";
 }
 
@@ -35,8 +37,15 @@ function queryParams() {
   if (f.kind === "status") p.status = f.id;
   if (f.kind === "starred") p.starred = true;
   if (f.kind === "unfiled") p.filter = "unfiled";
+  if (f.kind === "folder") p.folder = f.id;
+  if (f.kind === "no_folder") p.filter = "no_folder";
   if (f.kind === "recent") p.sort = "opened";
   return p;
+}
+
+// 쓰던 노트를 지금 저장한다 (로그아웃 전)
+export async function flushLibrary() {
+  if (noteSaver) await noteSaver.flush();
 }
 
 export function renderLibrary(main) {
@@ -136,6 +145,7 @@ function renderList() {
 
 function emptyState() {
   if (state.q) return el(`<div class="empty"><div class="big">⌕</div><h3>찾는 논문이 없어요</h3><p>다른 검색어를 써 보거나, ‘논문 찾기’에서 새 논문을 검색해 보세요.</p></div>`);
+  if (state.filter.kind === "folder") return el(`<div class="empty"><div class="big">▤</div><h3>이 폴더에 논문이 없어요</h3><p>논문을 끌어다 놓거나 ‘폴더로 이동…’으로 옮겨 보세요.</p></div>`);
   if (state.filter.kind !== "all") return el(`<div class="empty"><div class="big">▤</div><h3>아직 비어 있어요</h3><p>논문을 이 목록으로 끌어다 놓거나, 여기서 논문을 추가하면 이곳에 들어가요.</p></div>`);
   const e = el(`<div class="empty"><div class="big">📚</div><h3>서재가 비어 있어요</h3>
     <p>PDF를 이 창에 끌어다 놓으면 DOI·arXiv 정보를 찾아 자동으로 정리해요.<br>또는 논문을 검색해서 바로 추가할 수 있어요.</p>
@@ -231,12 +241,14 @@ async function deletePapers(ids) {
   state.selected.clear();
   toast("삭제했어요");
   refreshAll();
+  refreshUsage();
 }
 
 function bulkBar() {
   const ids = [...state.selected];
   const bar = el(`<div class="bulkbar"><b>${ids.length}편 선택</b>
     <span class="menu-wrap"><button class="btn sm" data-col>컬렉션에 넣기 ▾</button></span>
+    <button class="btn sm" data-folder>폴더로 이동…</button>
     ${state.filter.kind === "collection" ? `<button class="btn sm" data-uncol>이 컬렉션에서 빼기</button>` : ""}
     <button class="btn sm" data-tag>태그 달기</button>
     <span class="menu-wrap"><button class="btn sm" data-status>상태 ▾</button></span>
@@ -256,6 +268,7 @@ function bulkBar() {
     } });
     popupMenu(e.currentTarget, items, { left: true });
   };
+  $("[data-folder]", bar).onclick = () => moveToFolderDialog(ids);
   const un = $("[data-uncol]", bar);
   if (un) un.onclick = () => bulk("remove_collection", state.filter.id);
   $("[data-tag]", bar).onclick = async () => {
@@ -313,6 +326,8 @@ async function renderDetail() {
     <div class="section-title">태그</div>
     <div class="tag-input">${p.tags.map((t) => `<span class="chip">#${esc(t.name)}<button data-untag="${esc(t.name)}">✕</button></span>`).join("")}
       <input placeholder="태그 입력 후 Enter" list="tag-suggest"><datalist id="tag-suggest">${state.tags.map((t) => `<option value="${esc(t.name)}">`).join("")}</datalist></div>
+    <div class="section-title">폴더</div>
+    <div class="folder-line" data-folder-line></div>
     <div class="section-title">컬렉션</div>
     <div class="chips">${p.collections.map((cid) => {
       const c = state.collections.find((x) => x.id === cid);
@@ -322,6 +337,7 @@ async function renderDetail() {
     <div class="tab-body"></div></div>`);
   panel.appendChild(inner);
   const reload = () => { refreshAll(); };
+  drawFolderLine($("[data-folder-line]", inner), p);
 
   const ib = issuesBox(p.cite_issues, () => editPaperDialog(p));
   if (ib) {
@@ -336,20 +352,21 @@ async function renderDetail() {
   if (fetchBtn) fetchBtn.onclick = async () => {
     fetchBtn.disabled = true;
     fetchBtn.innerHTML = `<span class="spinner"></span> 찾는 중`;
-    try { await api.post(`/api/papers/${p.id}/fetch-pdf`); toast("PDF를 받았어요", "success"); reload(); }
+    try { await api.post(`/api/papers/${p.id}/fetch-pdf`); toast("PDF를 받았어요", "success"); reload(); refreshUsage(); }
     catch (e) { errorToast(e); fetchBtn.disabled = false; fetchBtn.textContent = "PDF 받기"; }
   };
   const attach = $("[data-attach]", inner);
-  if (attach) attach.onclick = () => attachPdf(p.id);
+  if (attach) attach.onclick = () => attachPdf(p.id, false);
   $("[data-cite]", inner).onclick = () => citeDialog(p.id);
   $("[data-more]", inner).onclick = (e) => {
     e.stopPropagation();
     popupMenu(e.currentTarget, [
       { label: "정보 수정", action: () => editPaperDialog(p) },
+      { label: "폴더로 이동…", action: () => moveToFolderDialog([p.id], p.folder_id ?? null) },
       { label: "온라인 정보로 채우기", sub: "DOI·arXiv·제목", action: () => fillOnline(p) },
-      ...(p.has_pdf ? [{ label: "PDF 바꾸기", action: () => attachPdf(p.id) },
-        { label: "PDF 파일 열기", action: () => window.open(`/api/papers/${p.id}/pdf`, "_blank") }] : []),
-      { label: "하이라이트·노트 내보내기 (.md)", action: () => window.open(`/api/annotations/export/${p.id}`, "_blank") },
+      ...(p.has_pdf ? [{ label: "PDF 바꾸기", action: () => attachPdf(p.id, true) },
+        { label: "PDF 파일 열기", action: () => openPdfFile(p.id) }] : []),
+      { label: "하이라이트·노트 내보내기 (.md)", action: () => exportAnnotations(p.id, p.title) },
       "-",
       { label: "삭제", danger: true, action: () => deletePapers([p.id]) },
     ]);
@@ -515,15 +532,48 @@ async function fillOnline(p) {
   }
 }
 
-async function attachPdf(id) {
+// PDF 첨부 · 바꾸기: 업로드 창에 한 줄로 (시안 12장)
+async function attachPdf(id, replace) {
   const [file] = await pickFiles({ accept: ".pdf,application/pdf" });
   if (!file) return;
-  const fd = new FormData();
-  fd.append("file", file);
+  uploadPdfs([file], { attachTo: id, replace });
+}
+
+// 상세 패널 "폴더" 줄: 지금 폴더 경로 + [옮기기]
+function drawFolderLine(line, p) {
+  const names = p.folder_id != null ? folderPath(p.folder_id) : [];
+  line.innerHTML = `${folderIcon(!names.length)}
+    <span class="folder-path ${names.length ? "" : "is-none"}" title="${esc(names.join(" › "))}">${names.length
+      ? names.map(esc).join(`<span class="sep">›</span>`) : "폴더 없음"}</span>
+    <button class="btn sm" data-move-folder>옮기기</button>`;
+  $("[data-move-folder]", line).onclick = () => moveToFolderDialog([p.id], p.folder_id ?? null);
+}
+
+// "PDF 파일 열기": 빈 창을 먼저 열고(팝업 차단 회피) 서명 주소로 보낸다 (명세 6.7)
+export async function openPdfFile(pid) {
+  const w = window.open("", "_blank");
+  if (w) {
+    try { w.opener = null; w.document.title = "PDF"; w.document.body.textContent = "PDF를 여는 중…"; } catch { /* 무시 */ }
+  }
   try {
-    const r = await api.post(`/api/papers/${id}/pdf`, fd);
-    (r.warnings || []).forEach((w) => toast(w));
-    toast("PDF를 붙였어요", "success");
-    refreshAll();
+    const { url } = await api.get(`/api/papers/${pid}/pdf-url`);
+    if (w && !w.closed) w.location.replace(url);
+    else window.open(url, "_blank", "noopener");
+  } catch (e) {
+    if (w && !w.closed) w.close();
+    errorToast(e);
+  }
+}
+
+// 하이라이트 · 노트 내보내기: 헤더를 붙여 받아 파일로 저장 (명세 6.7)
+export async function exportAnnotations(pid, title) {
+  try {
+    const res = await api.raw("GET", `/api/annotations/export/${pid}`);
+    if (!res.ok) {
+      let msg = `오류 (${res.status})`;
+      try { msg = (await res.json()).detail || msg; } catch { /* 본문 없음 */ }
+      throw new Error(msg);
+    }
+    downloadBlob(await res.blob(), `${safeFilename(title, "highlights")}.md`);
   } catch (e) { errorToast(e); }
 }

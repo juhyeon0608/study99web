@@ -11,7 +11,9 @@ Google Scholar는 공식 API가 없고 자동 수집을 금지하므로, 같은 
 
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 import xml.etree.ElementTree as ET
 from typing import Callable
 
@@ -230,9 +232,12 @@ def norm_crossref(m: dict) -> dict:
 
 # ------------------------------------------------------------------- client
 class Sources:
-    def __init__(self, get_setting: Callable[[str], str], transport: httpx.BaseTransport | None = None):
+    def __init__(self, get_setting: Callable[[str], str], transport: httpx.BaseTransport | None = None,
+                 resolver: Callable[[str, int], list[str]] | None = None):
         self.get_setting = get_setting
         self._transport = transport
+        # 사용자 주소로 PDF를 받을 때 쓰는 DNS 해석 (테스트에서 바꿔 넣음)
+        self._resolver = resolver or _resolve_host
 
     def _client(self) -> httpx.Client:
         email = self.get_setting("contact_email") or ""
@@ -452,27 +457,97 @@ class Sources:
             items.sort(key=lambda x: -(x.get("cited_by_count") or 0))
         return {"items": items, "total": total, "openalex_id": wid}
 
+    def _public_ip(self, host: str, port: int) -> str:
+        """호스트를 해석해 모든 주소가 공인 주소일 때만 첫 주소를 돌려준다 (SSRF 방지)"""
+        name = host.strip("[]").lower().rstrip(".")
+        if not name or name in BLOCKED_HOSTS or name.endswith(BLOCKED_SUFFIXES):
+            raise SourceError(PDF_FETCH_FAILED)
+        try:
+            ips = self._resolver(name, port)
+        except (OSError, UnicodeError):
+            raise SourceError(PDF_FETCH_FAILED) from None
+        if not ips or not all(_ip_is_public(ip) for ip in ips):
+            raise SourceError(PDF_FETCH_FAILED)
+        return ips[0]
+
     def download_pdf(self, url: str, max_bytes: int = 100 * 1024 * 1024) -> bytes:
+        """사용자가 준 주소에서 PDF를 받는다.
+
+        SSRF 방지: http/https만, 계정 정보 든 주소 거부, DNS를 해석해 사설 · 루프백 · 링크로컬(메타데이터 169.254.169.254) ·
+        예약 주소면 거부, 검사한 IP로 직접 연결(이름 재해석 방지, https는 SNI · 인증서는 원래 이름으로),
+        리디렉션은 직접 따라가며 단계마다 같은 검사. 실패 문구는 하나로(내부 탐색 단서를 주지 않음).
+        """
         if not url:
             raise SourceError("PDF 주소가 없어요")
         if re.match(r"https?://arxiv\.org/abs/", url):
             url = url.replace("/abs/", "/pdf/")
         try:
-            with self._client() as c, c.stream("GET", url, headers={"Accept": "application/pdf"}) as r:
-                if r.status_code >= 400:
-                    raise SourceError(f"PDF를 받을 수 없어요 ({r.status_code})")
-                chunks, size = [], 0
-                for chunk in r.iter_bytes():
-                    size += len(chunk)
-                    if size > max_bytes:
-                        raise SourceError("PDF가 너무 커요 (100MB 초과)")
-                    chunks.append(chunk)
-        except httpx.HTTPError as e:
-            raise SourceError(f"PDF 다운로드 실패: {e}") from e
+            current = httpx.URL(url)
+        except (httpx.InvalidURL, TypeError, ValueError):
+            raise SourceError(PDF_FETCH_FAILED) from None
+        chunks: list[bytes] = []
+        try:
+            with self._client() as c:
+                for _ in range(MAX_REDIRECTS + 1):
+                    if current.scheme not in ("http", "https") or not current.host or current.userinfo:
+                        raise SourceError(PDF_FETCH_FAILED)
+                    port = current.port or (443 if current.scheme == "https" else 80)
+                    ip = self._public_ip(current.host, port)
+                    target = current.copy_with(host=ip)
+                    headers = {"Accept": "application/pdf", "Host": current.netloc.decode("ascii")}
+                    ext = {"sni_hostname": current.host} if current.scheme == "https" else {}
+                    with c.stream("GET", target, headers=headers, extensions=ext, follow_redirects=False) as r:
+                        if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
+                            current = current.join(r.headers["location"])
+                            continue
+                        if r.status_code >= 400:
+                            raise SourceError(PDF_FETCH_FAILED)
+                        size = 0
+                        for chunk in r.iter_bytes():
+                            size += len(chunk)
+                            if size > max_bytes:
+                                raise SourceError("PDF가 너무 커요 (100MB 초과)")
+                            chunks.append(chunk)
+                        break
+                else:
+                    raise SourceError(PDF_FETCH_FAILED)  # 리디렉션이 너무 많음
+        except (httpx.HTTPError, httpx.InvalidURL, ValueError, UnicodeError):
+            raise SourceError(PDF_FETCH_FAILED) from None
         data = b"".join(chunks)
         if not data.startswith(b"%PDF"):
             raise SourceError("받은 파일이 PDF가 아니에요 (출판사 로그인 페이지일 수 있어요)")
         return data
+
+
+PDF_FETCH_FAILED = "PDF를 받지 못했어요. 주소를 확인하거나 직접 파일을 첨부해 주세요."
+MAX_REDIRECTS = 5
+BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal", "instance-data"}
+BLOCKED_SUFFIXES = (".localhost", ".internal", ".local", ".localdomain", ".home.arpa")
+
+
+def _resolve_host(host: str, port: int) -> list[str]:
+    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return list(dict.fromkeys(str(info[4][0]).split("%")[0] for info in infos))
+
+
+def _ip_is_public(value: str) -> bool:
+    """공인(전역) 유니캐스트 주소만 True. IPv4 매핑 · 6to4 · Teredo 안의 IPv4도 검사한다."""
+    try:
+        ip = ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    inner = []
+    if ip.version == 6:
+        if ip.ipv4_mapped:
+            inner.append(ip.ipv4_mapped)
+        if ip.sixtofour:
+            inner.append(ip.sixtofour)
+        if ip.teredo:
+            inner.extend(ip.teredo)
+    for x in [ip, *inner]:
+        if not x.is_global or x.is_multicast or x.is_reserved or x.is_unspecified:
+            return False
+    return True
 
 
 def parse_arxiv_feed(xml_text: str) -> dict:

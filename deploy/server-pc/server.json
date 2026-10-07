@@ -1,0 +1,12 @@
+{
+  "comment": "PaperLab 서버 PC 설정 (비밀 없음). 공개 주소는 저장소에서 이 파일 한 곳에만 둡니다 (명세 13.2, 팀장 결정 S10). 서버 프로세스는 cloud.env의 PAPERLAB_PUBLIC_URL을 씁니다.",
+  "public_url": "https://kimjuhyeon.tailac17f6.ts.net",
+  "port": 8080,
+  "root": "D:\\PaperLab",
+  "branch": "claude/paper-program-hrrhl2",
+  "tasks": {
+    "server": "PaperLab Server",
+    "backup": "PaperLab Backup",
+    "watchdog": "PaperLab Watchdog"
+  }
+}

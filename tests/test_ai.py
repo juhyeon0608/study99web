@@ -136,21 +136,45 @@ def test_refusal_is_reported():
 
 
 def test_cli_engine_with_fake_claude(tmp_path, monkeypatch):
-    fake = tmp_path / "claude"
-    fake.write_text(
-        "#!/usr/bin/env python3\n"
+    """CLI 엔진(2단계용 코드)을 **가짜 claude**로만 확인한다. 이 PC의 실제 claude CLI는 절대 부르지 않는다:
+    가짜를 PATH 맨 앞에 두고(os.pathsep), Windows는 claude.cmd 래퍼, 시작할 때 shutil.which가 가짜를 가리키는지 단언.
+    가짜는 호출 기록 파일을 남긴다(실제로 가짜가 불렸는지 확인)."""
+    import os
+    import shutil
+    import sys
+
+    calls = tmp_path / "calls.jsonl"
+    script = tmp_path / "fake_claude.py"
+    script.write_text(
         "import json, sys\n"
         "args = sys.argv[1:]\n"
+        "sys.stdin.reconfigure(encoding='utf-8')\n"
         "prompt = sys.stdin.read()\n"
+        f"open({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps({{'args': args}}, ensure_ascii=False) + '\\n')\n"
         "assert '-p' in args and '--tools' in args and '<page number=\"2\">' in prompt\n"
-        "print(json.dumps({'type': 'result', 'is_error': False, 'result': '두 번째 쪽에 나와요 [p.2]'}))\n")
-    fake.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{tmp_path}:{__import__('os').environ['PATH']}")
-    svc = ai.AIService({"ai_engine": "cli", "model": "claude-opus-5-5"}.get)
+        "sys.stdout.reconfigure(encoding='utf-8')\n"
+        "print(json.dumps({'type': 'result', 'is_error': False, 'result': '두 번째 쪽에 나와요 [p.2]'}))\n",
+        encoding="utf-8")
+    if sys.platform == "win32":
+        fake = tmp_path / "claude.cmd"
+        # cmd는 배치 파일을 OEM 코드 페이지로 읽는다 (파이썬 경로에 한글이 있을 수 있음)
+        fake.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="oem")
+    else:
+        fake = tmp_path / "claude"
+        fake.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+        fake.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
+    found = shutil.which("claude")
+    # 가짜를 못 찾으면 여기서 멈춘다 — 실제 CLI가 불리지 않게
+    assert found and os.path.samefile(found, fake), f"가짜 claude가 아닌 것을 찾았어요: {found}"
+    # 모델 인자는 가짜 CLI 기준(실제 CLI의 모델 이름 지원 여부는 2단계 범위)
+    svc = ai.AIService({"ai_engine": "cli", "model": "fake-model"}.get, cli_enabled=True)
     assert svc.status()["ready"]
     ctx = ai.PaperContext(title="T", pdf_bytes=None, page_texts=["첫 쪽", "둘째 쪽"])
     done = list(svc.chat(ctx, [], "어디에 나와?"))[-1]
     assert done["text"] == "두 번째 쪽에 나와요 [1]" and done["citations"][0]["page"] == 2
+    logged = calls.read_text(encoding="utf-8").splitlines()
+    assert len(logged) == 1 and "--model" in logged[0] and "fake-model" in logged[0]
 
 
 def test_pdf_limits_fall_back_to_text():

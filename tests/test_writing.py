@@ -4,11 +4,9 @@ import zipfile
 
 import pytest
 from docx import Document
-from fastapi.testclient import TestClient
 from hwpx import HwpxDocument
 
 from paperlab import compose, writer
-from paperlab.server import create_app
 
 from .conftest import SAMPLE
 
@@ -134,11 +132,7 @@ def test_detect_kind_rejects_legacy():
         compose.detect_kind("a.hwp", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1" + b"0" * 100)
 
 
-@pytest.fixture
-def client(tmp_path):
-    return TestClient(create_app(tmp_path), headers={"X-PaperLab": "1"})
-
-
+@pytest.mark.db
 def test_manuscript_api_and_compose_flow(client):
     tpls = client.get("/api/manuscript-templates").json()
     assert {"blank", "kr_journal", "thesis", "imrad"} <= {t["id"] for t in tpls}
@@ -196,7 +190,9 @@ def test_docx_compose_footnotes_follow_document_order():
     assert [contents[i] for i in order] == ["1", "2", "3"]
 
 
-def test_ai_write_endpoint_passes_sources(tmp_path):
+@pytest.mark.db
+def test_ai_write_endpoint_passes_sources(project, session_db, users):
+    from .conftest import Cloud
     import json as _json
 
     class FakeAI:
@@ -209,7 +205,8 @@ def test_ai_write_endpoint_passes_sources(tmp_path):
             yield {"type": "done", "text": f"초안 [@{sources[0]['key']}]"}
 
     fake = FakeAI()
-    c = TestClient(create_app(tmp_path, ai=fake), headers={"X-PaperLab": "1"})
+    cloud = Cloud(project, session_db, users, ai=fake)
+    c = cloud.client(cloud.user())
     pid = c.post("/api/papers", json=SAMPLE).json()["paper"]["id"]
     key = c.get(f"/api/papers/{pid}").json()["citekey"]
     c.put(f"/api/papers/{pid}/note", json={"content": "중요한 논문"})

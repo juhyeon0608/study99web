@@ -10,3 +10,9 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+
+# 비밀값 (cloud.env 등 — 실수로 복사돼도 커밋되지 않게)
+*.env
+.env*
+*.pem
+*.key

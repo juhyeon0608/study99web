@@ -1,30 +1,49 @@
-"""로컬 웹 서버(FastAPI). 화면(static/)과 JSON API를 함께 제공한다."""
+"""클라우드 웹 서버(FastAPI). 화면(static/)과 JSON API를 함께 제공한다 (명세 1단계).
+
+요청마다: Bearer JWT 검증 → 허용 목록 → 사용자 권한 DB 트랜잭션(user_tx) · 사용자 설정 · Sources · AIService를 만든다.
+전역(앱 전체) 상태는 연결 풀 · 저장소 · 검증기뿐이다.
+"""
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import logging
 import mimetypes
 import os
+import queue
 import re
-import sqlite3
 import threading
+import time
 import uuid
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from typing import Callable
+from urllib.parse import quote
 
-from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+import psycopg
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__, citations, compose, csl_style, doc_formats, format_import, pdf, writer
-from .manuscripts import TEMPLATES
+from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, AIError, AIService, PaperContext
-from .config import Settings, default_data_dir
-from .db import Database
+from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
+from .config import ServerConfig, UserSettings, split_settings_changes
+from .crypto import DecryptError, SecretBox
+from .db import Database, DBUnavailable, Library, NotFoundError, folder_name_problem
+from .manuscripts import TEMPLATES
 from .sources import SourceError, Sources, detect_identifier, merge
+from .storage import (MAX_PDF_BYTES, BackupSizeCache, FakeStorage, NotFound, Storage, StorageError, StorageKeyError,
+                      UserStorage, create_storage, is_upload_id, new_upload_id)
+
+log = logging.getLogger("paperlab.server")
+access_log = logging.getLogger("paperlab.access")
 
 STATIC_DIR = Path(__file__).parent / "static"
+BUILTIN_STYLES = STATIC_DIR / "vendor" / "csl" / "styles"
 # Windows 레지스트리에 .js가 text/plain으로 잘못 등록된 경우 모듈 스크립트가 막히므로 직접 지정한다
 for _ext, _type in ((".js", "text/javascript"), (".mjs", "text/javascript"), (".css", "text/css"),
                     (".woff2", "font/woff2"), (".svg", "image/svg+xml")):
@@ -32,12 +51,21 @@ for _ext, _type in ((".js", "text/javascript"), (".mjs", "text/javascript"), (".
 ITEM_TYPES = {"article": "학술지 논문", "conference": "학회 발표", "preprint": "프리프린트", "book": "단행본",
               "chapter": "책의 장", "thesis": "학위논문", "report": "보고서", "dataset": "데이터셋"}
 STATUSES = {"unread": "읽을 예정", "reading": "읽는 중", "done": "다 읽음"}
-LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1", "testserver"}
+PUBLIC_API = {("GET", "/api/health"), ("HEAD", "/api/health"), ("GET", "/api/public-config")}
+SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
+MAX_UPLOAD_FILES = 20
+COMPOSE_MAX = 30 * 1024 * 1024  # 30MB 유지 (명세 7.5, 팀장 결정 S8 — Funnel 대역폭 제한 · 변경 최소)
+STYLE_MAX = 2 * 1024 * 1024
+WARN_LEVEL, FULL_LEVEL = 0.80, 0.95
+HEALTH_DB_TIMEOUT = 4.0  # /api/health?deep=1 의 DB 연결 대기 · 문 실행 제한(초)
+SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 
-
-def _slug(text: str) -> str:
-    s = re.sub(r"[^\w\-]+", "-", (text or "paper"), flags=re.U).strip("-")
-    return s[:60] or "paper"
+# 요청 id: 들어온 X-Request-Id가 이 모양이면 그대로, 아니면 새로 (로그 줄 끼워 넣기 방지)
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+BAD_HOST = {"detail": "허용되지 않은 호스트", "code": "bad_host"}
+AUTH_REQUIRED = {"detail": "로그인이 필요해요", "code": "auth_required"}
+NOT_ALLOWED = {"detail": "허용되지 않은 계정이에요", "code": "not_allowed"}
+DB_UNAVAILABLE = {"detail": "데이터베이스에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.", "code": "db_unavailable"}
 
 
 def _md_title(content: str) -> str:
@@ -45,128 +73,279 @@ def _md_title(content: str) -> str:
     return m.group(1).strip()[:200] if m else ""
 
 
-class Jobs:
-    """요약처럼 오래 걸리는 작업을 백그라운드 스레드에서 돌리고 진행 상황을 기록한다."""
-
-    def __init__(self):
-        self._jobs: dict[str, dict] = {}
-        self._lock = threading.Lock()
-
-    def start(self, key: str, fn) -> dict:
-        with self._lock:
-            for job in self._jobs.values():
-                if job["key"] == key and job["status"] == "running":
-                    return dict(job)
-            job = {"id": uuid.uuid4().hex[:12], "key": key, "status": "running", "progress": None,
-                   "message": "시작하는 중", "error": ""}
-            # 끝난 작업은 최근 50개만 남긴다
-            done = [k for k, j in self._jobs.items() if j["status"] != "running"]
-            for k in done[:-50]:
-                del self._jobs[k]
-            self._jobs[job["id"]] = job
-
-        def progress(message: str, frac: float | None):
-            job["message"] = message
-            job["progress"] = frac
-
-        def run():
-            try:
-                fn(progress)
-                job.update(status="done", progress=1.0, message="완료")
-            except AIError as e:
-                job.update(status="error", error=str(e))
-            except Exception as e:  # noqa: BLE001 - 작업 실패는 화면에 그대로 알린다
-                job.update(status="error", error=f"{type(e).__name__}: {e}")
-
-        threading.Thread(target=run, daemon=True).start()
-        return dict(job)
-
-    def get(self, job_id: str) -> dict | None:
-        with self._lock:
-            job = self._jobs.get(job_id)
-            return dict(job) if job else None
-
-    def running_for(self, key: str) -> dict | None:
-        with self._lock:
-            for job in self._jobs.values():
-                if job["key"] == key and job["status"] == "running":
-                    return dict(job)
-        return None
+def _sse(ev: dict) -> str:
+    return f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
 
 
-def create_app(data_dir: Path | None = None, sources: Sources | None = None,
-               ai: AIService | None = None) -> FastAPI:
-    data_dir = Path(data_dir or default_data_dir())
-    data_dir.mkdir(parents=True, exist_ok=True)
-    pdf_dir = data_dir / "pdfs"
-    pdf_dir.mkdir(exist_ok=True)
-    settings = Settings(data_dir)
-    db = Database(data_dir / "library.db")
-    sources = sources or Sources(settings.get)
-    ai = ai or AIService(settings.get)
-    jobs = Jobs()
+DEV_ONLY_STATIC = (STATIC_DIR / "js" / "dev-login.js",)
 
-    app = FastAPI(title="PaperLab", version=__version__, docs_url=None, redoc_url=None)
-    app.state.db = db
-    app.state.settings = settings
-    app.state.data_dir = data_dir
+
+class AppStaticFiles(StaticFiles):
+    """정적 파일. `hidden` 파일은 어떤 경로 표기로 와도 404 (품질팀 N1).
+
+    경로 문자열을 비교하지 않고, 실제로 찾은 파일이 숨길 파일과 **같은 파일인지**(os.path.samefile) 본다 —
+    대소문자(Windows) · 중복 슬래시 · 끝 슬래시 · 끝 마침표 같은 다른 표기도 같은 파일이면 막힌다.
+    """
+
+    def __init__(self, *args, hidden=(), **kw):
+        super().__init__(*args, **kw)
+        self._hidden = [Path(h) for h in hidden if Path(h).exists()]
+
+    def lookup_path(self, path: str):
+        full, stat = super().lookup_path(path)
+        if stat is not None and full and self._hidden:
+            for h in self._hidden:
+                try:
+                    if os.path.samefile(full, h):
+                        return "", None
+                except OSError:
+                    continue
+        return full, stat
+
+
+class SummaryCancelled(Exception):
+    """요약 스트림이 끊겨 AI 호출을 멈출 때"""
+
+
+class RequestCtx:
+    """한 요청의 사용자 범위 상태. DB 트랜잭션은 처음 쓸 때 연다(lib)."""
+
+    def __init__(self, app_state, claims: dict):
+        self.state = app_state
+        self.claims = claims
+        self.uid: str = claims["sub"]
+        self.email: str = str(claims.get("email") or "").lower()
+        self.storage = UserStorage(app_state.storage, self.uid)
+        self._tx = None
+        self._lib: Library | None = None
+        self._settings: UserSettings | None = None
+        self._sources = None
+        self._ai = None
+        self.after_commit: list[Callable[[], None]] = []
+
+    @property
+    def lib(self) -> Library:
+        if self._lib is None:
+            tx = self.state.db.user_tx(self.claims)
+            lib = tx.__enter__()  # 연결 실패면 DBUnavailable (→ 503)
+            self._tx, self._lib = tx, lib
+        return self._lib
+
+    def release(self) -> None:
+        """지금 트랜잭션을 커밋하고 연결을 풀에 돌려준다(품질팀 F9).
+
+        외부 HTTP(검색 · 메타데이터 조회 · PDF 받기 · R2 받기) 전에 불러, 느린 외부 호출 동안 DB 연결을 잡지 않는다.
+        다음에 `lib`을 쓰면 새 트랜잭션이 열린다. 그 사이 다른 요청이 바꿨을 수 있으므로 뒤에서 다시 확인한다.
+        """
+        if self._tx is not None:
+            tx, self._tx, self._lib = self._tx, None, None
+            tx.__exit__(None, None, None)
+
+    def finish(self, exc: BaseException | None) -> None:
+        """트랜잭션을 끝낸다(오류면 ROLLBACK). 커밋이 끝난 뒤에만 after_commit을 실행한다."""
+        if self._tx is not None:
+            tx, self._tx, self._lib = self._tx, None, None
+            if exc is None:
+                tx.__exit__(None, None, None)
+            else:
+                tx.__exit__(type(exc), exc, exc.__traceback__)
+                return
+        if exc is None:
+            for fn in self.after_commit:
+                try:
+                    fn()
+                except Exception as e:  # noqa: BLE001 - 커밋 뒤 정리는 실패해도 응답은 성공(DB가 기준)
+                    log.warning("after_commit failed user=%s: %s", self.uid, type(e).__name__)
+
+    # ------------------------------------------------------- 사용자 설정
+    @property
+    def settings(self) -> UserSettings:
+        if self._settings is None:
+            self._settings = load_user_settings(self.lib, self.state.box, self.uid)
+        return self._settings
+
+    def reload_settings(self) -> UserSettings:
+        self._settings = None
+        return self.settings
+
+    @property
+    def sources(self):
+        if self._sources is None:
+            self._sources = self.state.sources_factory(self.settings.get)
+        return self._sources
+
+    @property
+    def ai(self):
+        if self._ai is None:
+            self._ai = self.state.ai_factory(self.settings.get)
+        return self._ai
+
+
+def load_user_settings(lib: Library, box: SecretBox, uid: str) -> UserSettings:
+    secrets, broken = {}, set()
+    for row in lib.list_secrets():
+        try:
+            secrets[row["name"]] = box.decrypt(uid, row["name"], row["ciphertext"], row["nonce"], row["key_id"])
+        except DecryptError:
+            # 키를 잃었거나 다른 행에서 복사된 값 → 설정 안 된 것으로 보고 다시 입력 안내 (AC-45)
+            broken.add(row["name"])
+    return UserSettings(lib.get_settings(), secrets, broken)
+
+
+def create_app(config: ServerConfig, *, database: Database | None = None, storage: Storage | None = None,
+               verifier: TokenVerifier | None = None, jwks: JWKSCache | None = None,
+               sources_factory: Callable | None = None, ai_factory: Callable | None = None,
+               dev: bool = False, commit: str = "", diag_hang: Callable[[], bool] | None = None) -> FastAPI:
+    """앱을 만든다. commit = 배포한 git 커밋 앞 7자리(/api/health의 version에 붙음 — update.ps1 확인용).
+    diag_hang: 감시 작업 검사용 진단 스위치(AC-77) — 참이면 /api/health가 응답하지 않는 것처럼 오래 멈춘다."""
+    db = database or Database(config.db_url, timeout=config.db_pool_timeout)
+    store = storage or create_storage(config.storage_backend, config.r2)
+    verifier = verifier or TokenVerifier(config.supabase_url, config.jwt_secret, jwks=jwks)
+    # 개발 서버에서 개발용 허용 목록이 비어 있으면 테스트 프로젝트 사용자를 모두 허용 (운영은 항상 목록대로)
+    allowlist = Allowlist(config.allowed_emails, allow_all=dev and not config.allowed_emails,
+                          enabled=config.allowlist_enabled)
+    if not config.allowlist_enabled:
+        log.warning("허용 목록 꺼짐 — Google OAuth 테스트 사용자로 제한 (PAPERLAB_ALLOWLIST=off)")
+    elif not config.allowed_emails and not dev:
+        log.warning("허용 목록이 비어 있어 모든 사용자 요청이 403이 됩니다 (ALLOWED_EMAILS · PAPERLAB_ALLOWLIST 확인)")
+    app_version = f"{__version__}+{commit}" if commit else __version__
+
+    app = FastAPI(title="PaperLab", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
+    st = app.state
+    st.config, st.db, st.storage, st.verifier, st.allowlist = config, db, store, verifier, allowlist
+    st.box = SecretBox(config.encryption_key)
+    st.sources_factory = sources_factory or (lambda get: Sources(get))
+    st.ai_factory = ai_factory or (lambda get: AIService(get))
+    st.backup_sizes = BackupSizeCache(store)
+    st.compose_store = {}
+    st.compose_lock = threading.Lock()
 
     # ------------------------------------------------------------ security
-    @app.middleware("http")
-    async def local_only(request: Request, call_next):
-        # DNS 리바인딩과 다른 웹사이트에서 보내는 요청(CSRF)을 막는다
-        host = (request.headers.get("host") or "").rsplit(":", 1)[0]
-        if host not in LOCAL_HOSTS:
-            return JSONResponse({"detail": "허용되지 않은 호스트"}, status_code=403)
-        origin = request.headers.get("origin")
-        if origin:
-            ohost = urlparse(origin).hostname or ""
-            if origin == "null" or (ohost not in LOCAL_HOSTS and f"[{ohost}]" not in LOCAL_HOSTS):
-                return JSONResponse({"detail": "허용되지 않은 출처"}, status_code=403)
-        # 쓰기 요청은 화면(api.js)이 붙이는 헤더가 있어야 한다. 다른 사이트의 폼 전송(CSRF)은 이 헤더를 못 붙인다
-        if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("x-paperlab") != "1":
-            return JSONResponse({"detail": "허용되지 않은 요청"}, status_code=403)
-        response = await call_next(request)
-        if request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
-        return response
+    # 같은 출처 판단 (명세 6.5, 팀장 결정 S2): 운영은 설정 PAPERLAB_PUBLIC_URL의 출처 하나만 — Host에서 출처를 만들지 않는다
+    # (프록시가 Host를 바꿔도 안전). 개발 서버는 지금 규칙(https · http://{Host})
+    public_origin = config.public_origin
+    allowed_hosts = config.allowed_hosts()
 
-    def need_paper(pid: int) -> dict:
-        p = db.get_paper(pid)
+    def origin_ok(request: Request, origin: str) -> bool:
+        if dev:
+            host = request.headers.get("host") or ""
+            return origin in (f"https://{host}", f"http://{host}")
+        return bool(public_origin) and origin == public_origin
+
+    def host_ok(request: Request) -> bool:
+        # DNS 리바인딩 방어: 공개 호스트 또는 서버 PC 안 상태 확인용 127.0.0.1:포트 · localhost:포트만
+        return dev or (request.headers.get("host") or "").lower() in allowed_hosts
+
+    @app.middleware("http")
+    async def security(request: Request, call_next):
+        started = time.monotonic()
+        incoming_id = request.headers.get("x-request-id") or ""
+        request_id = incoming_id if _REQUEST_ID_RE.fullmatch(incoming_id) else uuid.uuid4().hex[:16]
+        path = request.url.path
+        user_id = ""
+
+        def finish(response: Response) -> Response:
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Referrer-Policy"] = "same-origin"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["X-Request-Id"] = request_id
+            if path.startswith("/api/"):
+                response.headers["Cache-Control"] = "no-store"
+            # JSON 한 줄 로그: 토큰 · 키 · 서명 주소 · 본문 · 이메일은 남기지 않는다 (명세 13.5)
+            access_log.info(json.dumps({"request_id": request_id, "method": request.method, "path": path,
+                                        "status": response.status_code, "ms": int((time.monotonic() - started) * 1000),
+                                        "user_id": user_id}))
+            return response
+
+        if not host_ok(request):
+            return finish(JSONResponse(BAD_HOST, status_code=400))
+        # 다른 출처에서 보내는 요청 막기: Origin이 있으면 공개 주소의 출처와 정확히 같아야 한다 (null도 거부)
+        origin = request.headers.get("origin")
+        if origin is not None and not origin_ok(request, origin):
+            return finish(JSONResponse({"detail": "허용되지 않은 출처", "code": "bad_origin"}, status_code=403))
+        if path.startswith("/api/") and (request.method, path) not in PUBLIC_API:
+            token = bearer_token(request.headers.get("authorization"))
+            if not token:
+                return finish(JSONResponse(AUTH_REQUIRED, status_code=401))
+            try:
+                claims = await run_in_threadpool(verifier.verify, token)
+            except AuthError:
+                return finish(JSONResponse(AUTH_REQUIRED, status_code=401))
+            try:
+                allowlist.check(claims)
+            except NotAllowed:
+                return finish(JSONResponse(NOT_ALLOWED, status_code=403))
+            user_id = claims["sub"]
+            request.state.claims = claims
+            # 쓰기 요청은 화면(api.js)이 붙이는 헤더가 있어야 한다 (CSRF 이중 방어)
+            if request.method not in SAFE_METHODS and request.headers.get("x-paperlab") != "1":
+                return finish(JSONResponse({"detail": "허용되지 않은 요청", "code": "bad_request_header"},
+                                           status_code=403))
+        try:
+            response = await call_next(request)
+        except DBUnavailable:
+            response = JSONResponse(DB_UNAVAILABLE, status_code=503)
+        return finish(response)
+
+    @app.exception_handler(DBUnavailable)
+    async def db_unavailable(request: Request, exc: DBUnavailable):
+        return JSONResponse(DB_UNAVAILABLE, status_code=503)
+
+    @app.exception_handler(NotFoundError)
+    async def not_found(request: Request, exc: NotFoundError):
+        return JSONResponse({"detail": str(exc) or "찾을 수 없어요"}, status_code=404)
+
+    @app.exception_handler(StorageKeyError)
+    async def bad_key(request: Request, exc: StorageKeyError):
+        # 남의 경로 · backups/ · 경로 조작: 존재 여부도 알리지 않는다
+        return JSONResponse({"detail": "파일을 찾을 수 없어요"}, status_code=404)
+
+    def get_ctx(request: Request):
+        claims = getattr(request.state, "claims", None)
+        if not claims:
+            raise HTTPException(401, AUTH_REQUIRED["detail"])
+        ctx = RequestCtx(st, claims)
+        try:
+            yield ctx
+        except BaseException as e:
+            ctx.finish(e)
+            raise
+        ctx.finish(None)
+
+    # 요청 하나 = 트랜잭션 하나: 경로 함수가 끝나면(응답을 보내기 전에) 커밋한다
+    Ctx = Depends(get_ctx, scope="function")
+
+    # ------------------------------------------------------------ helpers
+    def need_paper(ctx: RequestCtx, pid: int) -> dict:
+        p = ctx.lib.get_paper(pid)
         if not p:
             raise HTTPException(404, "논문을 찾을 수 없어요")
         return p
 
-    def pdf_path_of(p: dict) -> Path | None:
-        if not p.get("pdf_path"):
-            return None
-        path = (data_dir / p["pdf_path"]).resolve()
-        if data_dir.resolve() not in path.parents or not path.exists():
-            return None
-        return path
-
-    def store_pdf(pid: int, data: bytes, title: str) -> pdf.PdfInfo:
+    def store_pdf(ctx: RequestCtx, pid: int, data: bytes) -> pdf.PdfInfo:
+        """서버가 받은 PDF(URL에서 받기)를 최종 키에 바로 올리고 본문을 저장한다."""
         info = pdf.extract(data)
-        old = db.get_paper(pid, detail=False)
-        rel = f"pdfs/{pid}-{_slug(title)}.pdf"
-        tmp = data_dir / (rel + ".part")
-        tmp.write_bytes(data)
-        os.replace(tmp, data_dir / rel)
-        db.set_pdf(pid, rel, info.page_texts)
-        if old and old.get("pdf_path") and old["pdf_path"] != rel:
-            old_path = data_dir / old["pdf_path"]
-            if old_path.exists():
-                old_path.unlink()
+        key = ctx.storage.paper_key(pid)
+        ctx.storage.put(key, data)
+        ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(), len(data))
         return info
 
-    def mark_library(items: list[dict]) -> list[dict]:
+    def attach_from_incoming(ctx: RequestCtx, pid: int, incoming: str, data: bytes, info: pdf.PdfInfo) -> None:
+        """임시 파일을 최종 키로 복사하고 DB에 기록. 임시 파일은 커밋 뒤에 지운다."""
+        key = ctx.storage.paper_key(pid)
+        ctx.storage.storage.copy(ctx.storage.check(incoming), ctx.storage.check(key))
+        ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(), len(data))
+        ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
+
+    def mark_library(ctx: RequestCtx, items: list[dict]) -> list[dict]:
         for it in items:
-            dup = db.find_duplicate(it.get("doi", ""), it.get("arxiv_id", ""), it.get("title", ""))
+            dup = ctx.lib.find_duplicate(it.get("doi", ""), it.get("arxiv_id", ""), it.get("title", ""))
             it["in_library"] = dup["id"] if dup else None
         return items
 
-    def metadata_from_pdf(info: pdf.PdfInfo) -> tuple[dict, str]:
+    def metadata_from_pdf(ctx: RequestCtx, info: pdf.PdfInfo) -> tuple[dict, str]:
         """PDF에서 찾은 식별자로 메타데이터를 채운다. (메타데이터, 출처 설명)"""
+        sources = ctx.sources
         if info.doi:
             try:
                 return sources.lookup_doi(info.doi), f"DOI {info.doi}"
@@ -188,201 +367,414 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             meta["authors"] = [split_name(a) for a in re.split(r"\s*(?:;|,| and )\s*", info.meta_author) if a]
         return meta, "PDF 정보만 사용"
 
+    def usage(ctx: RequestCtx) -> dict:
+        with db.system_tx("storage usage") as conn:
+            # 사용자 구분 없는 합계만
+            total = conn.execute("select coalesce(sum(pdf_size), 0)::bigint as n from paperlab.papers "
+                                 "where pdf_key <> ''").fetchone()["n"]
+        used = int(total) + st.backup_sizes.get()
+        limit = int(config.storage_limit_bytes)
+        frac = used / limit if limit else 1.0
+        level = "full" if frac >= FULL_LEVEL else "warn" if frac >= WARN_LEVEL else "ok"
+        return {"backend": ctx.storage.backend, "used_bytes": used, "limit_bytes": limit,
+                "mine_bytes": int(ctx.lib.mine_pdf_bytes()), "level": level}
+
+    def ensure_space(ctx: RequestCtx) -> None:
+        if usage(ctx)["level"] == "full":
+            raise HTTPException(400, "저장 공간이 거의 찼어요. 관리자에게 알려 주세요")
+
+    def own_collection(ctx: RequestCtx, value) -> int | None:
+        if value in (None, "", 0, "0"):
+            return None
+        if not ctx.lib.has_collection(value):
+            raise HTTPException(400, "컬렉션을 찾을 수 없어요")
+        return int(value)
+
+    def own_folder(ctx: RequestCtx, value) -> int | None:
+        if value in (None, ""):
+            return None
+        if not ctx.lib.has_folder(value):
+            raise HTTPException(400, "폴더를 찾을 수 없어요")
+        return int(value)
+
     # ------------------------------------------------------------- general
-    @app.get("/api/health")
-    def health():
-        return {"ok": True, "version": __version__}
+    # deep 확인: 한 번에 하나만(진행 중이면 직전 결과 재사용), DB는 연결 대기 · 문 실행 모두 짧게 (품질팀 N2).
+    # 인증 없이 열린 주소라 바깥에서 반복 호출해도 스레드 · DB 연결이 묶이지 않게
+    deep_lock = threading.Lock()
+    deep_last: dict = {}
+
+    def deep_check() -> dict:
+        if not deep_lock.acquire(blocking=False):
+            # 다른 요청이 확인 중: 직전 결과, 없으면(재시작 직후 첫 확인 중) pending — 호출 쪽이 다시 묻게 (품질팀 M1)
+            return dict(deep_last) or {"db": "pending", "storage": "pending", "pending": True}
+        try:
+            out = {}
+            try:
+                with db.system_tx("health check", timeout=HEALTH_DB_TIMEOUT) as conn:
+                    conn.execute(f"set local statement_timeout = '{int(HEALTH_DB_TIMEOUT * 1000)}ms'")
+                    conn.execute("select 1")
+                out["db"] = "ok"
+            except Exception:  # noqa: BLE001 - 오류 내용은 숨긴다
+                out["db"] = "error"
+            out["storage"] = "ok" if store.health() else "error"
+            deep_last.clear()
+            deep_last.update(out)
+            return out
+        finally:
+            deep_lock.release()
+
+    @app.api_route("/api/health", methods=["GET", "HEAD"])
+    def health(deep: int = 0):
+        if diag_hang is not None and diag_hang():
+            time.sleep(60)  # 진단 스위치: 프로세스는 살아 있는데 응답이 없는 상태 흉내 (AC-77)
+        out = {"ok": True, "version": app_version, "commit": commit}
+        if deep:
+            out.update(deep_check())
+            out["ok"] = out["db"] == "ok" and out["storage"] == "ok"
+        return out
+
+    @app.get("/api/public-config")
+    def public_config():
+        # 화면에 공개되는 값만 (anon 키는 공개용). 개발 서버에서만 테스트 프로젝트 이메일 · 비밀번호 로그인을 켠다
+        out = {"supabase_url": config.supabase_url, "supabase_anon_key": config.supabase_anon_key}
+        if dev:
+            out["dev_email_login"] = True
+        return out
+
+    @app.get("/api/me")
+    def me(ctx: RequestCtx = Ctx):
+        meta = ctx.claims.get("user_metadata") or {}
+        name = str(meta.get("full_name") or meta.get("name") or "")[:200]
+        prof = ctx.lib.ensure_profile(ctx.email, name)
+        return {"user_id": ctx.uid, "email": prof["email"] or ctx.email, "display_name": prof["display_name"]}
 
     @app.get("/api/meta")
     def meta():
-        return {"version": __version__, "models": MODELS, "item_types": ITEM_TYPES,
-                "statuses": STATUSES, "data_dir": str(data_dir)}
+        return {"version": __version__, "models": MODELS, "item_types": ITEM_TYPES, "statuses": STATUSES}
 
     @app.get("/api/stats")
-    def stats():
-        return db.stats()
+    def stats(ctx: RequestCtx = Ctx):
+        return ctx.lib.stats()
 
-    def public_settings() -> dict:
-        out = settings.public()
+    @app.get("/api/storage/usage")
+    def storage_usage(ctx: RequestCtx = Ctx):
+        return usage(ctx)
+
+    def public_settings(ctx: RequestCtx) -> dict:
+        out = ctx.settings.public()
         # 지워진 양식을 가리키면 기본 양식으로 돌려준다
-        if not format_exists(out.get("doc_format_default")):
+        if not format_exists(ctx, out.get("doc_format_default")):
             out["doc_format_default"] = doc_formats.DEFAULT_ID
         return out
 
     @app.get("/api/settings")
-    def get_settings():
-        return public_settings()
+    def get_settings(ctx: RequestCtx = Ctx):
+        return public_settings(ctx)
 
     @app.put("/api/settings")
-    def put_settings(changes: dict = Body(...)):
-        if "doc_format_default" in changes and not format_exists(changes["doc_format_default"]):
+    def put_settings(changes: dict = Body(...), ctx: RequestCtx = Ctx):
+        try:
+            plain, secret_changes = split_settings_changes(changes)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        if "doc_format_default" in plain and not format_exists(ctx, plain["doc_format_default"]):
             raise HTTPException(400, "양식을 찾을 수 없어요")
-        settings.update(changes)
-        return public_settings()
+        ctx.lib.update_settings(plain, ctx.email)
+        for name, value in secret_changes.items():
+            if value is None:
+                ctx.lib.delete_secret(name)
+            else:
+                sealed = st.box.encrypt(ctx.uid, name, value)
+                ctx.lib.set_secret(name, sealed.ciphertext, sealed.nonce, sealed.key_id, sealed.hint)
+        ctx.reload_settings()
+        return public_settings(ctx)
 
     @app.get("/api/ai/status")
-    def ai_status():
-        return ai.status()
+    def ai_status(ctx: RequestCtx = Ctx):
+        return ctx.ai.status()
 
     # -------------------------------------------------------------- papers
     @app.get("/api/papers")
     def list_papers(q: str = "", collection: int | None = None, tag: int | None = None, status: str = "",
-                    starred: bool = False, sort: str = "added", filter: str = "",
-                    limit: int = Query(500, le=2000), offset: int = 0):
-        return db.list_papers(q, collection, tag, status, starred, sort, filter, limit, offset)
+                    starred: bool = False, sort: str = "added", filter: str = "", folder: int | None = None,
+                    limit: int = Query(500, ge=0, le=2000), offset: int = Query(0, ge=0), ctx: RequestCtx = Ctx):
+        return ctx.lib.list_papers(q, collection, tag, status, starred, sort, filter, limit, offset, folder)
 
     @app.post("/api/papers")
-    def add_paper(data: dict = Body(...)):
+    def add_paper(data: dict = Body(...), ctx: RequestCtx = Ctx):
         if not (data.get("title") or "").strip():
             raise HTTPException(400, "제목이 필요해요")
+        lib = ctx.lib
         if not data.get("allow_duplicate"):
-            dup = db.find_duplicate(data.get("doi", ""), data.get("arxiv_id", ""), data.get("title", ""))
+            dup = lib.find_duplicate(data.get("doi", ""), data.get("arxiv_id", ""), data.get("title", ""))
             if dup:
                 return JSONResponse({"duplicate": True, "paper": dup}, status_code=409)
-        pid = db.add_paper(data)
-        if data.get("collection_id"):
-            db.set_paper_collections([pid], int(data["collection_id"]), True)
+        cid = own_collection(ctx, data.get("collection_id"))
+        fid = own_folder(ctx, data.get("folder_id"))
+        pid = lib.add_paper(data)
+        if cid:
+            lib.set_paper_collections([pid], cid, True)
+        if fid:
+            lib.move_papers_to_folder([pid], fid)
         if data.get("tags"):
-            db.set_paper_tags(pid, data["tags"])
+            lib.set_paper_tags(pid, data["tags"])
         warning = ""
         if data.get("download_pdf") and data.get("pdf_url"):
+            sources = ctx.sources
+            ctx.release()  # 논문을 먼저 커밋하고, PDF를 받는 동안 DB 연결을 잡지 않는다 (F9)
             try:
-                store_pdf(pid, sources.download_pdf(data["pdf_url"]), data["title"])
+                raw = sources.download_pdf(data["pdf_url"])
+                if ctx.lib.pdf_info(pid) is None:  # 그 사이 지워짐
+                    raise HTTPException(404, "논문을 찾을 수 없어요")
+                store_pdf(ctx, pid, raw)
             except SourceError as e:
                 warning = f"논문은 추가했지만 PDF는 받지 못했어요: {e}"
-        return {"paper": db.get_paper(pid), "warning": warning}
+            except HTTPException:
+                raise
+            except DBUnavailable:
+                raise
+            except Exception as e:  # noqa: BLE001 - 손상된 PDF · 저장소 오류
+                warning = f"논문은 추가했지만 PDF는 저장하지 못했어요: {type(e).__name__}"
+        return {"paper": ctx.lib.get_paper(pid), "warning": warning}
 
     @app.post("/api/resolve")
-    def resolve(data: dict = Body(...)):
+    def resolve(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        sources = ctx.sources
+        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다 (F9)
         try:
             item = sources.resolve(data.get("identifier", ""))
         except SourceError as e:
             raise HTTPException(404, str(e)) from e
-        return mark_library([item])[0]
+        return mark_library(ctx, [item])[0]
 
-    @app.post("/api/upload")
-    def upload(files: list[UploadFile] = File(...), collection_id: int | None = Form(None),
-               lookup: bool = Form(True)):
-        results = []
+    # ------------------------------------------------- uploads (명세 7.2)
+    def upload_slot(ctx: RequestCtx) -> dict:
+        upload_id = new_upload_id()
+        upload = ctx.storage.create_upload(ctx.storage.incoming_key(upload_id))
+        return {"upload_id": upload_id, "backend": ctx.storage.backend,
+                "upload": {"method": upload["method"], "url": upload["url"], "headers": upload["headers"]},
+                "expires_at": upload["expires_at"]}
+
+    def read_incoming(ctx: RequestCtx, upload_id: str) -> tuple[str, bytes | None, str]:
+        """(임시 키, 내용, 오류). 내 incoming/ 경로에 없으면 404"""
+        if not is_upload_id(upload_id):
+            raise HTTPException(404, "올린 파일을 찾을 수 없어요")
+        key = ctx.storage.incoming_key(upload_id)
+        size = ctx.storage.head(key)
+        if size is None:
+            raise HTTPException(404, "올린 파일을 찾을 수 없어요")
+        if size > MAX_PDF_BYTES:
+            ctx.storage.delete_quietly(key)
+            return key, None, "파일이 너무 커요 (100MB 초과)"
+        try:
+            data = ctx.storage.get(key)
+        except NotFound:
+            raise HTTPException(404, "올린 파일을 찾을 수 없어요") from None
+        if len(data) > MAX_PDF_BYTES:
+            ctx.storage.delete_quietly(key)
+            return key, None, "파일이 너무 커요 (100MB 초과)"
+        if not data.startswith(b"%PDF"):
+            ctx.storage.delete_quietly(key)
+            return key, None, "PDF 파일이 아니에요"
+        return key, data, ""
+
+    @app.post("/api/uploads")
+    def create_uploads(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        files = data.get("files")
+        if not isinstance(files, list) or not files:
+            raise HTTPException(400, "올릴 파일 목록(files)이 필요해요")
+        if len(files) > MAX_UPLOAD_FILES:
+            raise HTTPException(400, f"한 번에 {MAX_UPLOAD_FILES}개까지 올릴 수 있어요")
+        ensure_space(ctx)
+        out = []
         for f in files:
-            name = f.filename or "document.pdf"
-            data = f.file.read()
-            if not data.startswith(b"%PDF"):
-                results.append({"file": name, "error": "PDF 파일이 아니에요"})
-                continue
+            f = f if isinstance(f, dict) else {}
+            name = str(f.get("name") or "document.pdf")[:255]
             try:
-                info = pdf.extract(data)
-            except Exception as e:  # noqa: BLE001 - 손상된 PDF
-                results.append({"file": name, "error": f"PDF를 열 수 없어요: {e}"})
+                size = int(f.get("size") or 0)
+            except (TypeError, ValueError):
+                size = 0
+            if size > MAX_PDF_BYTES:
+                out.append({"name": name, "error": "파일이 너무 커요 (100MB 초과)"})
                 continue
-            if lookup:
-                meta_, matched_by = metadata_from_pdf(info)
+            out.append({"name": name, **upload_slot(ctx)})
+        return {"files": out}
+
+    @app.post("/api/uploads/{upload_id}/complete")
+    def complete_upload(upload_id: str, data: dict = Body(default={}), ctx: RequestCtx = Ctx):
+        name = str(data.get("name") or "document.pdf")[:255]
+        if not is_upload_id(upload_id):
+            raise HTTPException(404, "올린 파일을 찾을 수 없어요")
+        try:
+            collection_id = own_collection(ctx, data.get("collection_id"))
+            folder_id = own_folder(ctx, data.get("folder_id"))
+        except HTTPException:
+            # 검증에 실패해도 올린 임시 파일은 남기지 않는다 (F11 — 내 incoming/ 경로만)
+            ctx.storage.delete_quietly(ctx.storage.incoming_key(upload_id))
+            raise
+        lookup = data.get("lookup", True)
+        if lookup:
+            ctx.sources  # noqa: B018 - 사용자 설정(연락처 · API 키)을 먼저 읽어 둔다
+        # R2 받기 · PDF 추출 · 외부 메타데이터 조회 동안 DB 연결을 잡지 않는다 (F9)
+        ctx.release()
+        incoming, raw, error = read_incoming(ctx, upload_id)
+        if error:
+            return {"file": name, "error": error}
+        try:
+            info = pdf.extract(raw)
+        except Exception as e:  # noqa: BLE001 - 손상된 PDF
+            ctx.storage.delete_quietly(incoming)
+            return {"file": name, "error": f"PDF를 열 수 없어요: {e}"}
+        if lookup:
+            meta_, matched_by = metadata_from_pdf(ctx, info)
+        else:
+            meta_, matched_by = {"title": info.title, "doi": info.doi, "arxiv_id": info.arxiv_id}, "PDF 정보만 사용"
+        if not meta_.get("title"):
+            meta_["title"] = re.sub(r"\.pdf$", "", name, flags=re.I)
+        lib = ctx.lib  # 새 트랜잭션: 그 사이 컬렉션 · 폴더가 지워졌으면 넣지 않는다
+        if collection_id and not lib.has_collection(collection_id):
+            collection_id = None
+        if folder_id and not lib.has_folder(folder_id):
+            folder_id = None
+        dup = lib.find_duplicate(meta_.get("doi", ""), meta_.get("arxiv_id", ""), meta_.get("title", ""))
+        if dup:
+            if not dup["has_pdf"]:
+                attach_from_incoming(ctx, dup["id"], incoming, raw, info)
+                result = {"file": name, "id": dup["id"], "title": dup["title"], "matched_by": matched_by,
+                          "note": "이미 있는 논문에 PDF를 붙였어요"}
             else:
-                meta_, matched_by = {"title": info.title, "doi": info.doi, "arxiv_id": info.arxiv_id}, "PDF 정보만 사용"
-            if not meta_.get("title"):
-                meta_["title"] = re.sub(r"\.pdf$", "", name, flags=re.I)
-            dup = db.find_duplicate(meta_.get("doi", ""), meta_.get("arxiv_id", ""), meta_.get("title", ""))
-            if dup:
-                if not dup["has_pdf"]:
-                    store_pdf(dup["id"], data, dup["title"])
-                    results.append({"file": name, "id": dup["id"], "title": dup["title"],
-                                    "matched_by": matched_by, "note": "이미 있는 논문에 PDF를 붙였어요"})
-                else:
-                    results.append({"file": name, "id": dup["id"], "title": dup["title"],
-                                    "duplicate": True, "note": "이미 서재에 있어요"})
-                if collection_id:
-                    db.set_paper_collections([dup["id"]], collection_id, True)
-                continue
-            pid = db.add_paper(meta_)
-            store_pdf(pid, data, meta_["title"])
+                ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
+                result = {"file": name, "id": dup["id"], "title": dup["title"], "duplicate": True,
+                          "note": "이미 서재에 있어요"}
             if collection_id:
-                db.set_paper_collections([pid], collection_id, True)
-            results.append({"file": name, "id": pid, "title": meta_["title"], "matched_by": matched_by,
-                            "warnings": info.warnings})
-        return {"results": results}
+                lib.set_paper_collections([dup["id"]], collection_id, True)
+            return result
+        pid = lib.add_paper(meta_)
+        attach_from_incoming(ctx, pid, incoming, raw, info)
+        if collection_id:
+            lib.set_paper_collections([pid], collection_id, True)
+        if folder_id:
+            lib.move_papers_to_folder([pid], folder_id)
+        return {"file": name, "id": pid, "title": meta_["title"], "matched_by": matched_by, "warnings": info.warnings}
 
     @app.get("/api/papers/{pid}")
-    def get_paper(pid: int):
-        p = need_paper(pid)
+    def get_paper(pid: int, ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
         p["cite_issues"] = citations.citation_issues(p)
         return p
 
     @app.patch("/api/papers/{pid}")
-    def patch_paper(pid: int, data: dict = Body(...)):
-        need_paper(pid)
-        db.update_paper(pid, data)
+    def patch_paper(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        if "folder_id" in data:
+            ctx.lib.move_papers_to_folder([pid], own_folder(ctx, data["folder_id"]))
+        ctx.lib.update_paper(pid, data)
         if "tags" in data:
-            db.set_paper_tags(pid, data["tags"] or [])
-        return db.get_paper(pid)
+            ctx.lib.set_paper_tags(pid, data["tags"] or [])
+        return ctx.lib.get_paper(pid)
+
+    def delete_papers(ctx: RequestCtx, ids: list[int]) -> int:
+        """DB에서 지우고, 커밋이 끝난 뒤 저장소 PDF를 지운다(실패해도 응답은 성공 — 로그만)."""
+        keys, n = [], 0
+        for pid in ids:
+            info = ctx.lib.pdf_info(pid)
+            if not info:
+                continue
+            if info["pdf_key"]:
+                ctx.storage.check(info["pdf_key"])  # 남의 경로면 StorageKeyError → 404
+            key = ctx.lib.delete_paper(pid)
+            n += 1
+            if key:
+                keys.append(key)
+        for key in keys:
+            ctx.after_commit.append(lambda k=key: ctx.storage.delete_quietly(k))
+        return n
 
     @app.delete("/api/papers/{pid}")
-    def delete_paper(pid: int):
-        need_paper(pid)
-        rel = db.delete_paper(pid)
-        if rel:
-            path = data_dir / rel
-            if path.exists():
-                path.unlink()
+    def delete_paper(pid: int, ctx: RequestCtx = Ctx):
+        if not delete_papers(ctx, [pid]):
+            raise HTTPException(404, "논문을 찾을 수 없어요")
         return {"ok": True}
 
     @app.post("/api/papers/bulk")
-    def bulk(data: dict = Body(...)):
-        ids = [int(i) for i in data.get("ids") or []]
+    def bulk(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        try:
+            ids = [int(i) for i in data.get("ids") or []]
+        except (TypeError, ValueError):
+            raise HTTPException(400, "ids가 틀렸어요") from None
+        lib = ctx.lib
+        ids = lib.paper_ids(ids)
         action, value = data.get("action"), data.get("value")
         if action == "delete":
-            for pid in ids:
-                rel = db.delete_paper(pid)
-                if rel and (data_dir / rel).exists():
-                    (data_dir / rel).unlink()
+            delete_papers(ctx, ids)
         elif action in ("add_collection", "remove_collection"):
             if not str(value or "").isdigit():
                 raise HTTPException(400, "컬렉션을 골라 주세요")
-            db.set_paper_collections(ids, int(value), action == "add_collection")
+            if not lib.has_collection(int(value)):
+                raise HTTPException(400, "컬렉션을 찾을 수 없어요")
+            lib.set_paper_collections(ids, int(value), action == "add_collection")
+        elif action == "move_folder":
+            lib.move_papers_to_folder(ids, own_folder(ctx, value))
         elif action == "add_tag":
             if not str(value or "").strip():
                 raise HTTPException(400, "태그 이름이 필요해요")
-            db.add_tag_to_papers(ids, str(value))
+            lib.add_tag_to_papers(ids, str(value))
         elif action == "status":
             for pid in ids:
-                db.update_paper(pid, {"status": value})
+                lib.update_paper(pid, {"status": value})
         elif action == "star":
             for pid in ids:
-                db.update_paper(pid, {"starred": bool(value)})
+                lib.update_paper(pid, {"starred": bool(value)})
         else:
             raise HTTPException(400, "알 수 없는 작업")
         return {"ok": True}
 
     @app.post("/api/papers/{pid}/open")
-    def opened(pid: int):
-        p = need_paper(pid)
-        db.touch_opened(pid)
+    def opened(pid: int, ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
+        ctx.lib.touch_opened(pid)
         if p["status"] == "unread":
-            db.update_paper(pid, {"status": "reading"})
+            ctx.lib.update_paper(pid, {"status": "reading"})
         return {"ok": True}
 
     # ----------------------------------------------------------------- PDF
-    @app.get("/api/papers/{pid}/pdf")
-    def get_pdf(pid: int):
-        path = pdf_path_of(need_paper(pid))
-        if not path:
+    @app.get("/api/papers/{pid}/pdf-url")
+    def pdf_url(pid: int, ctx: RequestCtx = Ctx):
+        info = ctx.lib.pdf_info(pid)
+        if not info:
+            raise HTTPException(404, "논문을 찾을 수 없어요")
+        if not info["pdf_key"]:
             raise HTTPException(404, "PDF가 없어요")
-        return FileResponse(path, media_type="application/pdf")
+        signed = ctx.storage.sign_get(info["pdf_key"], filename=info["title"])
+        return {"url": signed["url"], "expires_at": signed["expires_at"]}
 
-    @app.post("/api/papers/{pid}/pdf")
-    def attach_pdf(pid: int, file: UploadFile = File(...)):
-        p = need_paper(pid)
-        data = file.file.read()
-        if not data.startswith(b"%PDF"):
-            raise HTTPException(400, "PDF 파일이 아니에요")
+    @app.post("/api/papers/{pid}/pdf/upload")
+    def pdf_upload_slot(pid: int, ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        ensure_space(ctx)
+        return upload_slot(ctx)
+
+    @app.post("/api/papers/{pid}/pdf/complete")
+    def pdf_complete(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        ctx.release()  # R2 받기 · 추출 동안 DB 연결을 잡지 않는다 (F9)
+        incoming, raw, error = read_incoming(ctx, str(data.get("upload_id") or ""))
+        if error:
+            raise HTTPException(400, error)
         try:
-            info = store_pdf(pid, data, p["title"])
+            info = pdf.extract(raw)
         except Exception as e:  # noqa: BLE001 - 손상된 PDF
+            ctx.storage.delete_quietly(incoming)
             raise HTTPException(400, f"PDF를 열 수 없어요: {e}") from e
-        return {"paper": db.get_paper(pid), "warnings": info.warnings}
+        need_paper(ctx, pid)  # 그 사이 지워졌으면 404 (임시 파일은 수명 주기 규칙이 정리)
+        attach_from_incoming(ctx, pid, incoming, raw, info)
+        return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings}
 
     @app.post("/api/papers/{pid}/fetch-pdf")
-    def fetch_pdf(pid: int):
-        p = need_paper(pid)
+    def fetch_pdf(pid: int, ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
+        sources = ctx.sources
+        ctx.release()  # 외부 조회 · PDF 받기 동안 DB 연결을 잡지 않는다 (F9)
         url = p.get("pdf_url")
         if not url and p.get("arxiv_id"):
             url = f"https://arxiv.org/pdf/{p['arxiv_id']}"
@@ -394,15 +786,24 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         if not url:
             raise HTTPException(404, "무료로 받을 수 있는 PDF를 찾지 못했어요. 직접 파일을 첨부해 주세요.")
         try:
-            info = store_pdf(pid, sources.download_pdf(url), p["title"])
+            data = sources.download_pdf(url)
         except SourceError as e:
             raise HTTPException(502, str(e)) from e
-        db.update_paper(pid, {"pdf_url": url})
-        return {"paper": db.get_paper(pid), "warnings": info.warnings}
+        need_paper(ctx, pid)  # 새 트랜잭션: 그 사이 지워졌으면 404
+        try:
+            info = store_pdf(ctx, pid, data)
+        except StorageError as e:
+            raise HTTPException(502, "PDF를 저장하지 못했어요") from e
+        except Exception as e:  # noqa: BLE001 - 손상된 PDF
+            raise HTTPException(400, f"PDF를 열 수 없어요: {e}") from e
+        ctx.lib.update_paper(pid, {"pdf_url": url})
+        return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings}
 
     @app.post("/api/papers/{pid}/refresh")
-    def refresh_metadata(pid: int, data: dict = Body(default={})):
-        p = need_paper(pid)
+    def refresh_metadata(pid: int, data: dict = Body(default={}), ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
+        sources = ctx.sources
+        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다 (F9)
         try:
             if p.get("doi"):
                 fresh = sources.lookup_doi(p["doi"])
@@ -424,83 +825,88 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             if fresh.get("cited_by_count") is not None:
                 update["cited_by_count"] = fresh["cited_by_count"]
         update.pop("source", None)
-        db.update_paper(pid, update)
-        out = db.get_paper(pid)
+        need_paper(ctx, pid)  # 새 트랜잭션: 그 사이 지워졌으면 404
+        ctx.lib.update_paper(pid, update)
+        out = ctx.lib.get_paper(pid)
         out["cite_issues"] = citations.citation_issues(out)
         return out
 
     @app.get("/api/papers/{pid}/related")
-    def related(pid: int, kind: str = "cited_by", page: int = 1):
-        p = need_paper(pid)
+    def related(pid: int, kind: str = "cited_by", page: int = 1, ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
         if kind not in ("cited_by", "references", "related"):
             raise HTTPException(400, "kind는 cited_by, references, related 중 하나예요")
+        sources = ctx.sources
+        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다 (F9)
         try:
             res = sources.related(p, kind, page)
         except SourceError as e:
             raise HTTPException(404, str(e)) from e
         if res.get("openalex_id") and not p.get("openalex_id"):
-            db.update_paper(pid, {"openalex_id": res["openalex_id"]})
-        res["items"] = mark_library(res["items"])
+            ctx.lib.update_paper(pid, {"openalex_id": res["openalex_id"]})
+        res["items"] = mark_library(ctx, res["items"])
         return res
 
     @app.post("/api/related")
-    def related_external(data: dict = Body(...)):
+    def related_external(data: dict = Body(...), ctx: RequestCtx = Ctx):
         """서재에 없는 검색 결과의 피인용·참고문헌·관련 논문"""
         kind = data.get("kind", "cited_by")
         if kind not in ("cited_by", "references", "related"):
             raise HTTPException(400, "kind는 cited_by, references, related 중 하나예요")
+        sources = ctx.sources
+        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다 (F9)
         try:
             res = sources.related(data.get("paper") or {}, kind, int(data.get("page") or 1))
         except SourceError as e:
             raise HTTPException(404, str(e)) from e
-        res["items"] = mark_library(res["items"])
+        res["items"] = mark_library(ctx, res["items"])
         return res
 
     @app.post("/api/cite-preview")
     def cite_preview(data: dict = Body(...)):
         """서재에 없는 논문(검색 결과)의 인용 데이터"""
-        p = data.get("paper") or {}
-        return cite_payload(p)
+        return cite_payload(data.get("paper") or {})
 
     # ------------------------------------------------------ notes/annotations
     @app.put("/api/papers/{pid}/note")
-    def save_note(pid: int, data: dict = Body(...)):
-        need_paper(pid)
-        db.save_note(pid, data.get("content", ""))
+    def save_note(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        ctx.lib.save_note(pid, str(data.get("content", "") or ""))
         return {"ok": True}
 
     @app.get("/api/papers/{pid}/annotations")
-    def annotations(pid: int):
-        need_paper(pid)
-        return db.list_annotations(pid)
+    def annotations(pid: int, ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        return ctx.lib.list_annotations(pid)
 
     @app.post("/api/papers/{pid}/annotations")
-    def add_annotation(pid: int, data: dict = Body(...)):
-        need_paper(pid)
-        aid = db.add_annotation(pid, data)
-        return next(a for a in db.list_annotations(pid) if a["id"] == aid)
+    def add_annotation(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        aid = ctx.lib.add_annotation(pid, data)
+        return ctx.lib.get_annotation(aid)
 
     @app.patch("/api/annotations/{aid}")
-    def patch_annotation(aid: int, data: dict = Body(...)):
-        a = db.update_annotation(aid, data)
+    def patch_annotation(aid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        a = ctx.lib.update_annotation(aid, data)
         if not a:
             raise HTTPException(404, "하이라이트를 찾을 수 없어요")
         return a
 
     @app.delete("/api/annotations/{aid}")
-    def delete_annotation(aid: int):
-        db.delete_annotation(aid)
+    def delete_annotation(aid: int, ctx: RequestCtx = Ctx):
+        if not ctx.lib.delete_annotation(aid):
+            raise HTTPException(404, "하이라이트를 찾을 수 없어요")
         return {"ok": True}
 
     @app.get("/api/annotations/export/{pid}")
-    def export_annotations(pid: int):
-        p = need_paper(pid)
+    def export_annotations(pid: int, ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
         who = ", ".join(" ".join(x for x in (a.get("given"), a.get("family"), a.get("literal")) if x)
                         for a in p.get("authors") or [])
         source = " · ".join(str(x) for x in (who, p.get("year"), p.get("venue")) if x)
         link = f"https://doi.org/{p['doi']}" if p.get("doi") else p.get("url") or ""
         lines = [f"# {p['title']}", "", source + (f"  \n{link}" if link else ""), ""]
-        for a in db.list_annotations(pid):
+        for a in ctx.lib.list_annotations(pid):
             lines.append(f"> {a['text']}" if a["text"] else "> (메모)")
             lines.append(f"> — p.{a['page']}")
             if a["comment"]:
@@ -512,44 +918,91 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
 
     # -------------------------------------------------------- collections
     @app.get("/api/collections")
-    def collections():
-        return db.list_collections()
+    def collections(ctx: RequestCtx = Ctx):
+        return ctx.lib.list_collections()
 
     @app.post("/api/collections")
-    def add_collection(data: dict = Body(...)):
+    def add_collection(data: dict = Body(...), ctx: RequestCtx = Ctx):
         name = (data.get("name") or "").strip()
         if not name:
             raise HTTPException(400, "이름이 필요해요")
-        return {"id": db.add_collection(name, data.get("parent_id"))}
+        try:
+            return {"id": ctx.lib.add_collection(name, own_collection(ctx, data.get("parent_id")))}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
 
     @app.patch("/api/collections/{cid}")
-    def patch_collection(cid: int, data: dict = Body(...)):
+    def patch_collection(cid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
         try:
-            db.update_collection(cid, data.get("name"), data["parent_id"] if "parent_id" in data else ...)
+            ctx.lib.update_collection(cid, data.get("name"), data["parent_id"] if "parent_id" in data else ...)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
         return {"ok": True}
 
     @app.delete("/api/collections/{cid}")
-    def delete_collection(cid: int):
-        db.delete_collection(cid)
+    def delete_collection(cid: int, ctx: RequestCtx = Ctx):
+        if not ctx.lib.delete_collection(cid):
+            raise HTTPException(404, "컬렉션을 찾을 수 없어요")
         return {"ok": True}
 
+    # ------------------------------------------------------------ folders
+    FOLDER_NAME_BAD = "이 폴더 이름은 쓸 수 없어요"
+
+    def folder_name(value) -> str:
+        name = str(value or "").strip()
+        problem = folder_name_problem(name)
+        if problem:
+            raise HTTPException(400, problem)
+        return name
+
+    @app.get("/api/folders")
+    def folders(ctx: RequestCtx = Ctx):
+        return ctx.lib.list_folders()
+
+    @app.post("/api/folders")
+    def add_folder(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        name = folder_name(data.get("name"))
+        try:
+            return {"id": ctx.lib.add_folder(name, own_folder(ctx, data.get("parent_id")))}
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except psycopg.errors.CheckViolation as e:
+            # 서버 검사를 통과했지만 DB CHECK(제어 문자 등)에 걸린 이름 → 500이 아니라 400 (승인자 L1)
+            raise HTTPException(400, FOLDER_NAME_BAD) from e
+
+    @app.patch("/api/folders/{fid}")
+    def patch_folder(fid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        name = folder_name(data["name"]) if "name" in data else None
+        parent = data["parent_id"] if "parent_id" in data else ...
+        try:
+            ctx.lib.update_folder(fid, name, parent)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from e
+        except psycopg.errors.CheckViolation as e:
+            raise HTTPException(400, FOLDER_NAME_BAD) from e
+        return {"ok": True}
+
+    @app.delete("/api/folders/{fid}")
+    def delete_folder(fid: int, ctx: RequestCtx = Ctx):
+        return {"ok": True, **ctx.lib.delete_folder(fid)}
+
+    # --------------------------------------------------------------- tags
     @app.get("/api/tags")
-    def tags():
-        return db.list_tags()
+    def tags(ctx: RequestCtx = Ctx):
+        return ctx.lib.list_tags()
 
     @app.patch("/api/tags/{tid}")
-    def patch_tag(tid: int, data: dict = Body(...)):
+    def patch_tag(tid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
         try:
-            db.update_tag(tid, data.get("name"), data.get("color"))
-        except sqlite3.IntegrityError as e:
+            ctx.lib.update_tag(tid, data.get("name"), data.get("color"))
+        except psycopg.errors.UniqueViolation as e:
             raise HTTPException(400, "같은 이름의 태그가 이미 있어요") from e
         return {"ok": True}
 
     @app.delete("/api/tags/{tid}")
-    def delete_tag(tid: int):
-        db.delete_tag(tid)
+    def delete_tag(tid: int, ctx: RequestCtx = Ctx):
+        if not ctx.lib.delete_tag(tid):
+            raise HTTPException(404, "태그를 찾을 수 없어요")
         return {"ok": True}
 
     # ---------------------------------------------------------- citations
@@ -558,102 +1011,101 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
                 "bibtex": citations.to_bibtex([p]), "ris": citations.to_ris([p])}
 
     @app.get("/api/papers/{pid}/cite")
-    def cite(pid: int):
-        return cite_payload(need_paper(pid))
+    def cite(pid: int, ctx: RequestCtx = Ctx):
+        return cite_payload(need_paper(ctx, pid))
 
-    def papers_for(data: dict) -> list[dict]:
+    def papers_for(ctx: RequestCtx, data: dict) -> list[dict]:
+        lib = ctx.lib
         if data.get("ids"):
-            return [p for p in (db.get_paper(int(i)) for i in data["ids"]) if p]
+            return [p for p in (lib.get_paper(int(i)) for i in data["ids"]) if p]
         if data.get("collection_id"):
-            return db.list_papers(collection_id=int(data["collection_id"]), limit=100000)["items"]
-        return db.list_papers(limit=100000)["items"]
+            return lib.list_papers(collection_id=int(data["collection_id"]), limit=100000)["items"]
+        return lib.list_papers(limit=100000)["items"]
 
     @app.post("/api/csl")
-    def csl_items(data: dict = Body(...)):
+    def csl_items(data: dict = Body(...), ctx: RequestCtx = Ctx):
         """화면의 citeproc-js가 인용·참고문헌을 만들 때 쓰는 CSL-JSON (요청한 순서 유지)"""
-        papers = papers_for(data)
+        papers = papers_for(ctx, data)
         return {"items": [citations.to_csl_item(p) for p in papers],
                 "issues": {str(p["id"]): citations.citation_issues(p) for p in papers}}
 
-    # 인용 스타일 (공식 CSL 저장소의 .csl 파일)
-    def style_dirs() -> list[tuple[Path, bool]]:
-        return [(STATIC_DIR / "vendor" / "csl" / "styles", True), (data_dir / "styles", False)]
+    # 인용 스타일: 기본 = 공식 CSL 저장소의 .csl 파일, 내 스타일 = DB user_styles (명세 7.7)
+    builtin_cache: dict[str, dict] = {}
 
-    def style_info(path: Path, builtin: bool) -> dict | None:
-        info = csl_style.read_info(path.read_bytes())
-        if not info:
-            return None
-        info.update(id=path.stem, builtin=builtin)
-        return info
+    def builtin_styles() -> dict[str, dict]:
+        if not builtin_cache:
+            for path in sorted(BUILTIN_STYLES.glob("*.csl")):
+                info = csl_style.read_info(path.read_bytes())
+                if info:
+                    builtin_cache[path.stem] = dict(info, id=path.stem, builtin=True)
+        return builtin_cache
 
-    def find_style(style_id: str) -> Path | None:
-        if not re.fullmatch(r"[a-z0-9][a-z0-9\-]{0,120}", style_id or ""):
+    def valid_style_id(style_id: str) -> bool:
+        return bool(re.fullmatch(r"[a-z0-9][a-z0-9\-]{0,120}", style_id or ""))
+
+    def style_xml(ctx: RequestCtx, style_id: str) -> bytes | None:
+        """내 스타일이 기본 스타일과 같은 id면 내 것 우선"""
+        if not valid_style_id(style_id):
             return None
-        for d, _ in reversed(style_dirs()):
-            path = d / f"{style_id}.csl"
-            if path.exists():
-                return path
+        mine = ctx.lib.get_user_style(style_id)
+        if mine:
+            return mine["xml"].encode("utf-8")
+        if style_id in builtin_styles():
+            return (BUILTIN_STYLES / f"{style_id}.csl").read_bytes()
         return None
 
     @app.get("/api/styles")
-    def list_styles():
-        seen, out = set(), []
-        for d, builtin in reversed(style_dirs()):
-            if not d.exists():
-                continue
-            for path in sorted(d.glob("*.csl")):
-                if path.stem in seen:
-                    continue
-                info = style_info(path, builtin)
-                if info:
-                    seen.add(path.stem)
-                    out.append(info)
+    def list_styles(ctx: RequestCtx = Ctx):
+        out = {k: dict(v) for k, v in builtin_styles().items()}
+        for row in ctx.lib.list_user_styles():
+            info = row["info"] if isinstance(row["info"], dict) else {}
+            out[row["style_id"]] = dict(info, id=row["style_id"], builtin=False)
         order = {k: i for i, k in enumerate(csl_style.FEATURED)}
-        out.sort(key=lambda x: (not x["builtin"], x["group"] != "주요 스타일", order.get(x["id"], 999), x["title"].lower()))
-        return out
+        return sorted(out.values(), key=lambda x: (not x["builtin"], x.get("group") != "주요 스타일",
+                                                   order.get(x["id"], 999), str(x.get("title", "")).lower()))
 
     @app.get("/api/styles/{style_id}")
-    def get_style(style_id: str):
-        path = find_style(style_id)
-        if not path:
+    def get_style(style_id: str, ctx: RequestCtx = Ctx):
+        raw = style_xml(ctx, style_id)
+        if raw is None:
             raise HTTPException(404, "인용 스타일을 찾을 수 없어요")
-        info = csl_style.read_info(path.read_bytes()) or {}
+        info = csl_style.read_info(raw) or {}
         # 종속 스타일은 서식이 없고 부모 스타일을 가리키기만 하므로 부모 서식을 보낸다
         if info.get("parent"):
-            parent = find_style(info["parent"])
-            if not parent:
+            parent = style_xml(ctx, info["parent"])
+            if parent is None:
                 raise HTTPException(404, f"이 스타일이 기반으로 하는 '{info['parent']}' 스타일이 없어요. 그 스타일도 추가해 주세요.")
-            path = parent
-        return Response(path.read_bytes(), media_type="application/xml; charset=utf-8")
+            raw = parent
+        return Response(raw, media_type="application/xml; charset=utf-8")
 
     @app.post("/api/styles")
-    def upload_style(file: UploadFile = File(...)):
-        raw = file.file.read(2 * 1024 * 1024 + 1)
-        if len(raw) > 2 * 1024 * 1024:
+    def upload_style(file: UploadFile = File(...), ctx: RequestCtx = Ctx):
+        raw = file.file.read(STYLE_MAX + 1)
+        if len(raw) > STYLE_MAX:
             raise HTTPException(400, "스타일 파일이 너무 커요")
         info = csl_style.read_info(raw)
         if not info:
             raise HTTPException(400, "CSL 스타일(.csl) 파일이 아니에요")
-        if info.get("parent") and not find_style(info["parent"]):
+        try:
+            xml = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            raise HTTPException(400, "스타일 파일은 UTF-8이어야 해요") from None
+        if info.get("parent") and style_xml(ctx, info["parent"]) is None:
             raise HTTPException(400, f"이 스타일은 '{info['parent']}' 스타일을 기반으로 해요. 그 스타일 파일을 먼저 추가해 주세요.")
         style_id = csl_style.slug(info["source_id"] or file.filename or info["title"])
-        d = data_dir / "styles"
-        d.mkdir(exist_ok=True)
-        (d / f"{style_id}.csl").write_bytes(raw)
+        ctx.lib.save_user_style(style_id, info["title"], info, xml)
         return {**info, "id": style_id, "builtin": False}
 
     @app.delete("/api/styles/{style_id}")
-    def delete_style(style_id: str):
-        path = find_style(style_id)
-        if not path or path.parent != data_dir / "styles":
+    def delete_style(style_id: str, ctx: RequestCtx = Ctx):
+        if not valid_style_id(style_id) or not ctx.lib.delete_user_style(style_id):
             raise HTTPException(400, "직접 추가한 스타일만 지울 수 있어요")
-        path.unlink()
         return {"ok": True}
 
     @app.post("/api/export")
-    def export(data: dict = Body(...)):
+    def export(data: dict = Body(...), ctx: RequestCtx = Ctx):
         fmt = data.get("format", "bibtex")
-        papers = papers_for(data)
+        papers = papers_for(ctx, data)
         if fmt == "ris":
             body, mt, ext = citations.to_ris(papers), "application/x-research-info-systems", "ris"
         elif fmt == "csljson":
@@ -664,8 +1116,10 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
                         headers={"Content-Disposition": f'attachment; filename="paperlab-export.{ext}"'})
 
     @app.post("/api/import")
-    def import_file(file: UploadFile = File(...), collection_id: int | None = Form(None)):
-        raw = file.file.read()
+    def import_file(file: UploadFile = File(...), collection_id: int | None = Form(None), ctx: RequestCtx = Ctx):
+        raw = file.file.read(20 * 1024 * 1024 + 1)
+        if len(raw) > 20 * 1024 * 1024:
+            raise HTTPException(400, "파일이 너무 커요 (20MB 초과)")
         try:
             text = raw.decode("utf-8-sig")
         except UnicodeDecodeError:
@@ -674,25 +1128,29 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             items = citations.parse_any(text)
         except (ValueError, json.JSONDecodeError) as e:
             raise HTTPException(400, str(e)) from e
+        cid = own_collection(ctx, collection_id)
         added = skipped = 0
+        lib = ctx.lib
         for it in items:
             if not it.get("title"):
                 skipped += 1
                 continue
-            if db.find_duplicate(it.get("doi", ""), it.get("arxiv_id", ""), it["title"]):
+            if lib.find_duplicate(it.get("doi", ""), it.get("arxiv_id", ""), it["title"]):
                 skipped += 1
                 continue
-            pid = db.add_paper(it)
-            if collection_id:
-                db.set_paper_collections([pid], collection_id, True)
+            pid = lib.add_paper(it)
+            if cid:
+                lib.set_paper_collections([pid], cid, True)
             added += 1
         return {"added": added, "skipped": skipped, "total": len(items)}
 
     # ------------------------------------------------------------- search
     @app.get("/api/search")
     def search(q: str, source: str = "openalex", page: int = 1, year_from: int | None = None,
-               year_to: int | None = None, sort: str = "relevance", oa: bool = False):
+               year_to: int | None = None, sort: str = "relevance", oa: bool = False, ctx: RequestCtx = Ctx):
         kind, value = detect_identifier(q)
+        sources = ctx.sources
+        ctx.release()  # 외부 검색 동안 DB 연결을 잡지 않는다 (F9)
         try:
             if kind in ("doi", "arxiv", "openalex"):
                 res = {"items": [sources.resolve(q)], "total": 1}
@@ -700,94 +1158,112 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
                 res = sources.search(q, source, page, 20, year_from, year_to, sort, oa)
         except SourceError as e:
             raise HTTPException(502, str(e)) from e
-        res["items"] = mark_library(res["items"])
+        res["items"] = mark_library(ctx, res["items"])
         return res
 
     # ------------------------------------------------------------------ AI
-    def context_for(p: dict) -> PaperContext:
-        path = pdf_path_of(p)
-        return PaperContext(title=p["title"], pdf_bytes=path.read_bytes() if path else None,
-                            page_texts=db.page_texts(p["id"]), abstract=p.get("abstract") or "")
+    def context_for(ctx: RequestCtx, p: dict) -> PaperContext:
+        """PDF는 서버가 저장소에서 직접 읽는다. 22MB 넘으면 텍스트로 대체(받지도 않음)."""
+        info = ctx.lib.pdf_info(p["id"]) or {}
+        page_texts = ctx.lib.page_texts(p["id"])
+        if info.get("pdf_key"):
+            ctx.storage.check(info["pdf_key"])  # 남의 경로면 StorageKeyError → 404
+        ctx.release()  # R2에서 PDF를 받는 동안 DB 연결을 잡지 않는다 (F9)
+        data = None
+        if info.get("pdf_key") and (info.get("pdf_size") or 0) <= AI_MAX_PDF_BYTES:
+            try:
+                data = ctx.storage.get(info["pdf_key"])
+            except NotFound:
+                data = None
+        return PaperContext(title=p["title"], pdf_bytes=data, page_texts=page_texts, abstract=p.get("abstract") or "")
+
+    def ready_ai(ctx: RequestCtx):
+        ai = ctx.ai
+        status = ai.status()
+        if not status["ready"]:
+            raise HTTPException(400, status["message"])
+        return ai
 
     @app.get("/api/papers/{pid}/summary")
-    def get_summary(pid: int):
-        need_paper(pid)
-        return {"summary": db.get_summary(pid), "job": jobs.running_for(f"summary:{pid}")}
+    def get_summary(pid: int, ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        # job은 항상 null (요약은 SSE 스트림 — 명세 9.3, 화면 호환용 필드)
+        return {"summary": ctx.lib.get_summary(pid), "job": None}
 
     @app.post("/api/papers/{pid}/summary")
-    def make_summary(pid: int):
-        p = need_paper(pid)
-        st = ai.status()
-        if not st["ready"]:
-            raise HTTPException(400, st["message"])
-        ctx = context_for(p)
+    def make_summary(pid: int, request: Request, ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
+        ai = ready_ai(ctx)
+        paper_ctx = context_for(ctx, p)
+        model = ctx.settings.get("model")
+        claims = ctx.claims
+        had_keywords = bool(p.get("keywords"))
 
-        def work(progress):
-            data = ai.summarize(ctx, progress)
-            db.save_summary(pid, data, settings.get("model") if settings.get("ai_engine") == "api" else "claude-cli")
-            if data.get("keywords") and not p.get("keywords"):
-                db.update_paper(pid, {"keywords": data["keywords"][:10]})
+        def save(data: dict) -> None:
+            with db.user_tx(claims) as lib:
+                lib.save_summary(pid, data, model)
+                if data.get("keywords") and not had_keywords:
+                    lib.update_paper(pid, {"keywords": data["keywords"][:10]})
 
-        return jobs.start(f"summary:{pid}", work)
+        def saved_summary() -> dict | None:
+            with db.user_tx(claims) as lib:
+                return lib.get_summary(pid)
 
-    @app.get("/api/jobs/{job_id}")
-    def job(job_id: str):
-        j = jobs.get(job_id)
-        if not j:
-            raise HTTPException(404, "작업을 찾을 수 없어요")
-        return j
+        return StreamingResponse(summary_events(ai, paper_ctx, save, saved_summary, request.is_disconnected),
+                                 media_type="text/event-stream", headers=SSE_HEADERS)
 
     @app.get("/api/papers/{pid}/chat")
-    def chat_history(pid: int):
-        need_paper(pid)
-        return db.chat_history(pid)
+    def chat_history(pid: int, ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        return ctx.lib.chat_history(pid)
 
     @app.delete("/api/papers/{pid}/chat")
-    def clear_chat(pid: int):
-        db.clear_chat(pid)
+    def clear_chat(pid: int, ctx: RequestCtx = Ctx):
+        need_paper(ctx, pid)
+        ctx.lib.clear_chat(pid)
         return {"ok": True}
 
     @app.post("/api/papers/{pid}/chat")
-    def chat(pid: int, data: dict = Body(...)):
-        p = need_paper(pid)
+    def chat(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
         question = (data.get("question") or "").strip()
         if not question:
             raise HTTPException(400, "질문을 입력해 주세요")
-        st = ai.status()
-        if not st["ready"]:
-            raise HTTPException(400, st["message"])
-        history = [{"role": m["role"], "content": m["content"]} for m in db.chat_history(pid)]
-        ctx = context_for(p)
+        ai = ready_ai(ctx)
+        history = [{"role": m["role"], "content": m["content"]} for m in ctx.lib.chat_history(pid)]
+        paper_ctx = context_for(ctx, p)
+        claims = ctx.claims
 
         def events():
+            # 긴 AI 호출 동안 트랜잭션을 잡지 않고, 저장할 때만 짧은 트랜잭션을 연다
             try:
-                for ev in ai.chat(ctx, history, question):
+                for ev in ai.chat(paper_ctx, history, question):
                     if ev["type"] == "done":
-                        db.add_chat_message(pid, "user", question)
-                        mid = db.add_chat_message(pid, "assistant", ev["text"], ev["citations"])
-                        ev["id"] = mid
-                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                        with db.user_tx(claims) as lib:
+                            lib.add_chat_message(pid, "user", question)
+                            ev["id"] = lib.add_chat_message(pid, "assistant", ev["text"], ev["citations"])
+                    yield _sse(ev)
             except AIError as e:
-                yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+                yield _sse({"type": "error", "error": str(e)})
+            except DBUnavailable:
+                yield _sse({"type": "error", "error": DB_UNAVAILABLE["detail"]})
 
-        return StreamingResponse(events(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+        return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_HEADERS)
 
     @app.post("/api/ai/write")
-    def ai_write(data: dict = Body(...)):
+    def ai_write(data: dict = Body(...), ctx: RequestCtx = Ctx):
         """원고 글쓰기 도우미 (스트리밍)"""
-        st = ai.status()
-        if not st["ready"]:
-            raise HTTPException(400, st["message"])
+        ai = ready_ai(ctx)
         text = (data.get("text") or "").strip()
         mode = data.get("mode") or "polish"
         if not text and mode != "draft":
             raise HTTPException(400, "다듬을 글을 선택해 주세요")
+        lib = ctx.lib
         sources = []
-        for key, p in db.papers_by_citekeys([str(k) for k in data.get("keys") or []][:30]).items():
-            summary = db.get_summary(p["id"])
+        for key, p in lib.papers_by_citekeys([str(k) for k in data.get("keys") or []][:30]).items():
+            summary = lib.get_summary(p["id"])
             highlights = [a["text"] + (f" — {a['comment']}" if a["comment"] else "")
-                          for a in db.list_annotations(p["id"])[:15] if a["text"]]
+                          for a in lib.list_annotations(p["id"])[:15] if a["text"]]
             note = "\n".join(filter(None, [p.get("note") or ""] + [f"하이라이트: {h}" for h in highlights]))
             sources.append({
                 "key": key, "title": p["title"], "year": p.get("year"),
@@ -802,12 +1278,11 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             try:
                 for ev in ai.write(mode, text, instruction=(data.get("instruction") or "")[:2000],
                                    context=(data.get("context") or "")[:6000], sources=sources):
-                    yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+                    yield _sse(ev)
             except AIError as e:
-                yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+                yield _sse({"type": "error", "error": str(e)})
 
-        return StreamingResponse(events(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+        return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_HEADERS)
 
     # ------------------------------------------------------- doc formats
     def user_format_id(format_id) -> int | None:
@@ -816,11 +1291,11 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         m = re.fullmatch(r"user-(\d{1,9})", str(format_id or ""))
         return int(m.group(1)) if m else None
 
-    def format_exists(format_id) -> bool:
+    def format_exists(ctx: RequestCtx, format_id) -> bool:
         if doc_formats.is_builtin(format_id):
             return True
         fid = user_format_id(format_id)
-        return fid is not None and db.get_doc_format(fid) is not None
+        return fid is not None and ctx.lib.get_doc_format(fid) is not None
 
     def user_format_view(row: dict) -> dict:
         base = row["base"] if doc_formats.is_builtin(row["base"]) else doc_formats.DEFAULT_ID
@@ -832,36 +1307,35 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
                 "cover_kind": data["cover"]["kind"], "description": "", "updated_at": row["updated_at"],
                 "data": data, "created_at": row["created_at"]}
 
-    def load_format(format_id) -> dict | None:
+    def load_format(ctx: RequestCtx, format_id) -> dict | None:
         """양식 id → 조회 응답 모양(data 포함). 없으면 None"""
         if doc_formats.is_builtin(format_id):
             return dict(doc_formats.builtin_entry(format_id), data=doc_formats.builtin_data(format_id),
                         created_at=None)
         fid = user_format_id(format_id)
-        row = db.get_doc_format(fid) if fid is not None else None
+        row = ctx.lib.get_doc_format(fid) if fid is not None else None
         return user_format_view(row) if row else None
 
-    def usage_counts() -> dict[str, int]:
+    def usage_counts(ctx: RequestCtx) -> dict[str, int]:
         """양식 id → 쓰는 원고 수. 지워진 양식을 가리키는 원고는 기본 양식으로 센다"""
-        usage = db.doc_format_usage()
         out: dict[str, int] = {}
-        for key, n in usage.items():
-            key = key if format_exists(key) else doc_formats.DEFAULT_ID
+        for key, n in ctx.lib.doc_format_usage().items():
+            key = key if format_exists(ctx, key) else doc_formats.DEFAULT_ID
             out[key] = out.get(key, 0) + n
         return out
 
-    def format_detail(format_id) -> dict | None:
+    def format_detail(ctx: RequestCtx, format_id) -> dict | None:
         """조회 응답: 목록 항목(used_by 포함) + data, created_at"""
-        found = load_format(format_id)
+        found = load_format(ctx, format_id)
         if found:
-            found["used_by"] = usage_counts().get(found["id"], 0)
+            found["used_by"] = usage_counts(ctx).get(found["id"], 0)
         return found
 
-    def need_user_format(format_id) -> dict:
+    def need_user_format(ctx: RequestCtx, format_id) -> dict:
         if doc_formats.is_builtin(format_id):
             raise HTTPException(403, "기본 양식은 바꿀 수 없어요. 복사해서 내 양식으로 만들어 쓰세요")
         fid = user_format_id(format_id)
-        row = db.get_doc_format(fid) if fid is not None else None
+        row = ctx.lib.get_doc_format(fid) if fid is not None else None
         if not row:
             raise HTTPException(404, "양식을 찾을 수 없어요")
         return row
@@ -873,28 +1347,28 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         return name.strip()
 
     @app.get("/api/doc-formats")
-    def list_doc_formats():
-        usage = usage_counts()
+    def list_doc_formats(ctx: RequestCtx = Ctx):
+        usage_map = usage_counts(ctx)
         out = [doc_formats.builtin_entry(k) for k in doc_formats.BUILTINS]
-        for r in db.list_doc_formats():
+        for r in ctx.lib.list_doc_formats():
             item = user_format_view(r)
             item.pop("data")
             item.pop("created_at")
             out.append(item)
         for item in out:
-            item["used_by"] = usage.get(item["id"], 0)
+            item["used_by"] = usage_map.get(item["id"], 0)
         return out
 
     @app.get("/api/doc-formats/{format_id}")
-    def get_doc_format(format_id: str):
-        found = format_detail(format_id)
+    def get_doc_format(format_id: str, ctx: RequestCtx = Ctx):
+        found = format_detail(ctx, format_id)
         if not found:
             raise HTTPException(404, "양식을 찾을 수 없어요")
         return found
 
     @app.post("/api/doc-formats/import")
     async def import_doc_format(request: Request):
-        """양식 파일에서 서식을 읽어 저장하지 않은 양식으로 돌려준다.
+        """양식 파일에서 서식을 읽어 저장하지 않은 양식으로 돌려준다(DB를 쓰지 않음).
 
         20MB 제한은 업로드를 끝까지 받기 전에 적용한다(Content-Length, 받는 중 누적 크기).
         """
@@ -936,22 +1410,22 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             raise HTTPException(400, str(e)) from e
 
     @app.post("/api/doc-formats")
-    def add_doc_format(data: dict = Body(...)):
+    def add_doc_format(data: dict = Body(...), ctx: RequestCtx = Ctx):
         base = data.get("base")
         if not doc_formats.is_builtin(base):
             raise HTTPException(400, "base: 기본 양식 id(" + ", ".join(doc_formats.BUILTINS) + ") 중 하나를 골라 주세요")
         name = format_name(data)
-        if db.count_doc_formats() >= 50:
+        if ctx.lib.count_doc_formats() >= 50:
             raise HTTPException(400, "내 양식은 50개까지 만들 수 있어요. 안 쓰는 양식을 지워 주세요")
         try:
             fmt_data = doc_formats.normalize(data.get("data"), base)
         except doc_formats.FormatError as e:
             raise HTTPException(400, str(e)) from e
-        return format_detail(f"user-{db.add_doc_format(name, base, fmt_data)}")
+        return format_detail(ctx, f"user-{ctx.lib.add_doc_format(name, base, fmt_data)}")
 
     @app.patch("/api/doc-formats/{format_id}")
-    def patch_doc_format(format_id: str, data: dict = Body(...)):
-        row = need_user_format(format_id)
+    def patch_doc_format(format_id: str, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        row = need_user_format(ctx, format_id)
         name = format_name(data) if "name" in data else None
         fmt_data = None
         if "data" in data:
@@ -960,16 +1434,16 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
                 fmt_data = doc_formats.normalize(data["data"], row["base"])
             except doc_formats.FormatError as e:
                 raise HTTPException(400, str(e)) from e
-        db.update_doc_format(row["id"], name, fmt_data)
-        return format_detail(format_id)
+        ctx.lib.update_doc_format(row["id"], name, fmt_data)
+        return format_detail(ctx, format_id)
 
     @app.delete("/api/doc-formats/{format_id}")
-    def delete_doc_format(format_id: str):
-        row = need_user_format(format_id)
+    def delete_doc_format(format_id: str, ctx: RequestCtx = Ctx):
+        row = need_user_format(ctx, format_id)
         key = f"user-{row['id']}"
-        reset = db.delete_doc_format(row["id"], key)
-        if settings.get("doc_format_default") == key:
-            settings.update({"doc_format_default": doc_formats.DEFAULT_ID})
+        reset = ctx.lib.delete_doc_format(row["id"], key)
+        if ctx.settings.get("doc_format_default") == key:
+            ctx.lib.update_settings({"doc_format_default": doc_formats.DEFAULT_ID}, ctx.email)
         return {"ok": True, "reset_manuscripts": reset}
 
     # -------------------------------------------------------- manuscripts
@@ -977,77 +1451,83 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
     def manuscript_templates():
         return [{"id": k, "name": v["name"], "description": v["description"]} for k, v in TEMPLATES.items()]
 
-    def with_format(m: dict) -> dict:
+    def with_format(ctx: RequestCtx, m: dict) -> dict:
         # 지워진 양식을 가리키면 기본 양식으로 돌려준다
-        if not format_exists(m.get("doc_format")):
+        if not format_exists(ctx, m.get("doc_format")):
             m["doc_format"] = doc_formats.DEFAULT_ID
         return m
 
     @app.get("/api/manuscripts")
-    def list_manuscripts():
-        return [with_format(m) for m in db.list_manuscripts()]
+    def list_manuscripts(ctx: RequestCtx = Ctx):
+        return [with_format(ctx, m) for m in ctx.lib.list_manuscripts()]
 
     @app.post("/api/manuscripts")
-    def add_manuscript(data: dict = Body(default={})):
+    def add_manuscript(data: dict = Body(default={}), ctx: RequestCtx = Ctx):
         tpl = TEMPLATES.get(data.get("template") or "blank", TEMPLATES["blank"])
         content = data.get("content") if data.get("content") is not None else tpl["content"]
         title = (data.get("title") or "").strip() or _md_title(content) or "제목 없는 원고"
         fmt_id = data.get("doc_format")
-        if fmt_id is not None and not format_exists(fmt_id):
+        if fmt_id is not None and not format_exists(ctx, fmt_id):
             raise HTTPException(400, "양식을 찾을 수 없어요")
         if fmt_id is None:
-            fmt_id = settings.get("doc_format_default")
-            if not format_exists(fmt_id):
+            fmt_id = ctx.settings.get("doc_format_default")
+            if not format_exists(ctx, fmt_id):
                 fmt_id = doc_formats.DEFAULT_ID
-        mid = db.add_manuscript(title, content, data.get("template") or "blank", fmt_id)
-        return with_format(db.get_manuscript(mid))
+        mid = ctx.lib.add_manuscript(title, content, data.get("template") or "blank", fmt_id)
+        return with_format(ctx, ctx.lib.get_manuscript(mid))
 
     @app.get("/api/manuscripts/{mid}")
-    def get_manuscript(mid: int):
-        m = db.get_manuscript(mid)
+    def get_manuscript(mid: int, ctx: RequestCtx = Ctx):
+        m = ctx.lib.get_manuscript(mid)
         if not m:
             raise HTTPException(404, "원고를 찾을 수 없어요")
-        return with_format(m)
+        return with_format(ctx, m)
 
     @app.patch("/api/manuscripts/{mid}")
-    def patch_manuscript(mid: int, data: dict = Body(...)):
-        if not db.get_manuscript(mid):
+    def patch_manuscript(mid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        if not ctx.lib.get_manuscript(mid):
             raise HTTPException(404, "원고를 찾을 수 없어요")
         if "content" in data and "title" not in data:
             data["title"] = _md_title(data["content"] or "") or None
-        if "doc_format" in data and not format_exists(data["doc_format"]):
+        if "doc_format" in data and not format_exists(ctx, data["doc_format"]):
             raise HTTPException(400, "양식을 찾을 수 없어요")
         if "cover" in data:
             try:
                 data["cover"] = doc_formats.validate_cover(data["cover"])
             except doc_formats.FormatError as e:
                 raise HTTPException(400, str(e)) from e
-        db.update_manuscript(mid, data)
-        return {"ok": True, "updated_at": db.get_manuscript(mid)["updated_at"]}
+        ctx.lib.update_manuscript(mid, data)
+        return {"ok": True, "updated_at": ctx.lib.get_manuscript(mid)["updated_at"]}
 
     @app.delete("/api/manuscripts/{mid}")
-    def delete_manuscript(mid: int):
-        db.delete_manuscript(mid)
+    def delete_manuscript(mid: int, ctx: RequestCtx = Ctx):
+        if not ctx.lib.delete_manuscript(mid):
+            raise HTTPException(404, "원고를 찾을 수 없어요")
         return {"ok": True}
 
     @app.post("/api/citekeys")
-    def lookup_citekeys(data: dict = Body(...)):
-        """인용키 → CSL-JSON (없는 키는 null)"""
+    def lookup_citekeys(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """인용키 → CSL-JSON (내 서재에 없는 키는 null)"""
         keys = [str(k) for k in data.get("keys") or []][:2000]
-        found = db.papers_by_citekeys(keys)
+        found = ctx.lib.papers_by_citekeys(keys)
         return {"items": {k: (citations.to_csl_item(found[k]) if k in found else None) for k in keys},
                 "issues": {k: citations.citation_issues(found[k]) for k in found}}
 
-    def _file_response(body: bytes, filename: str, fmt: str) -> Response:
+    def _file_response(body: bytes, filename: str, fmt: str, stream: bool = False) -> Response:
         types = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                  "hwpx": "application/hwp+zip", "md": "text/markdown; charset=utf-8"}
         safe = re.sub(r'[\\/:*?"<>|\r\n]+', "_", filename or "document").strip() or "document"
-        from urllib.parse import quote
-        return Response(body, media_type=types[fmt], headers={
-            "Content-Disposition": f"attachment; filename=\"document.{fmt}\"; filename*=UTF-8''{quote(safe + '.' + fmt)}"})
+        headers = {"Content-Disposition": f"attachment; filename=\"document.{fmt}\"; filename*=UTF-8''{quote(safe + '.' + fmt)}"}
+        if stream:
+            # 큰 응답은 1MB씩 나눠 보낸다 (명세 7.5)
+            def chunks():
+                for i in range(0, len(body), 1024 * 1024):
+                    yield body[i:i + 1024 * 1024]
+            return StreamingResponse(chunks(), media_type=types[fmt], headers=headers)
+        return Response(body, media_type=types[fmt], headers=headers)
 
     @app.post("/api/export-document")
-    def export_document(data: dict = Body(...)):
+    def export_document(data: dict = Body(...), ctx: RequestCtx = Ctx):
         """화면이 서식을 입힌 원고(블록 목록)를 워드·한글·마크다운 파일로 만든다."""
         fmt = data.get("format")
         blocks = data.get("blocks") or []
@@ -1057,7 +1537,7 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         fmt_data, cover = None, None
         fmt_id = data.get("doc_format")
         if fmt != "md" and fmt_id not in (None, "", doc_formats.DEFAULT_ID):
-            found = load_format(fmt_id)
+            found = load_format(ctx, fmt_id)
             if not found:
                 raise HTTPException(400, "양식을 찾을 수 없어요")
             fmt_data = found["data"]
@@ -1082,14 +1562,14 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
             response.headers["X-PaperLab-Warnings"] = quote(json.dumps(warnings, ensure_ascii=False))
         return response
 
-    # 워드·한글 문서의 [@인용키] → 서식 있는 인용 (원래 서식 유지)
-    compose_store: dict[str, dict] = {}
+    # 워드·한글 문서의 [@인용키] → 서식 있는 인용 (원래 서식 유지). 토큰은 사용자별(토큰 + user_id)
+    compose_store: dict[str, dict] = st.compose_store
 
     @app.post("/api/compose/scan")
-    def compose_scan(file: UploadFile = File(...)):
-        data = file.file.read(60 * 1024 * 1024 + 1)
-        if len(data) > 60 * 1024 * 1024:
-            raise HTTPException(400, "파일이 너무 커요 (60MB 초과)")
+    def compose_scan(file: UploadFile = File(...), ctx: RequestCtx = Ctx):
+        data = file.file.read(COMPOSE_MAX + 1)
+        if len(data) > COMPOSE_MAX:
+            raise HTTPException(400, "파일이 너무 커요 (30MB 초과)")
         try:
             kind = compose.detect_kind(file.filename or "", data)
             scan = compose.docx_scan(data) if kind == "docx" else compose.hwpx_scan(data)
@@ -1098,11 +1578,17 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         except Exception as e:  # noqa: BLE001 - 손상된 문서
             raise HTTPException(400, f"문서를 읽지 못했어요: {e}") from e
         token = uuid.uuid4().hex
-        while len(compose_store) >= 10:
-            compose_store.pop(next(iter(compose_store)))
-        compose_store[token] = {"data": data, "kind": kind, "filename": file.filename or f"document.{kind}"}
+        with st.compose_lock:
+            # 메모리 보호: 전체 10개, 사용자당 3개까지 (오래된 것부터 버림)
+            mine = [k for k, v in compose_store.items() if v["uid"] == ctx.uid]
+            for k in mine[:max(0, len(mine) - 2)]:
+                compose_store.pop(k, None)
+            while len(compose_store) >= 10:
+                compose_store.pop(next(iter(compose_store)))
+            compose_store[token] = {"uid": ctx.uid, "data": data, "kind": kind,
+                                    "filename": file.filename or f"document.{kind}"}
         keys = [it["key"] for c in scan["citations"] for it in c.items]
-        found = db.papers_by_citekeys(keys)
+        found = ctx.lib.papers_by_citekeys(keys)
         return {
             "token": token, "kind": kind, "filename": file.filename,
             "has_bib_marker": scan["has_bib_marker"],
@@ -1111,13 +1597,19 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
         }
 
     @app.post("/api/compose/apply")
-    def compose_apply(data: dict = Body(...)):
-        entry = compose_store.get(data.get("token") or "")
-        if not entry:
+    def compose_apply(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        with st.compose_lock:
+            entry = compose_store.get(str(data.get("token") or ""))
+        if not entry or entry["uid"] != ctx.uid:
             raise HTTPException(404, "올린 문서를 찾을 수 없어요. 다시 올려 주세요.")
         rendered = data.get("rendered") or []
         bibliography = data.get("bibliography") or []
         bib_title = data.get("bib_title") or "참고문헌"
+        # 형식 검사 (품질팀 F7): rendered = [{"runs": [...]}, …], bibliography = [[run, …], …]
+        if (not isinstance(rendered, list) or not all(isinstance(x, dict) for x in rendered)
+                or not isinstance(bibliography, list) or not all(isinstance(x, list) for x in bibliography)
+                or not isinstance(bib_title, str)):
+            raise HTTPException(400, "인용 데이터 형식이 틀렸어요")
         try:
             if entry["kind"] == "docx":
                 body = compose.docx_apply(entry["data"], rendered, bibliography, bib_title, bool(data.get("note_style")))
@@ -1125,13 +1617,99 @@ def create_app(data_dir: Path | None = None, sources: Sources | None = None,
                 body = compose.hwpx_apply(entry["data"], rendered, bibliography, bib_title)
         except ValueError as e:
             raise HTTPException(400, str(e)) from e
+        except (TypeError, KeyError, AttributeError, IndexError) as e:
+            raise HTTPException(400, "인용 데이터 형식이 틀렸어요") from e
         stem = re.sub(r"\.(docx|hwpx)$", "", entry["filename"], flags=re.I)
-        return _file_response(body, f"{stem}_인용완료", entry["kind"])
+        return _file_response(body, f"{stem}_인용완료", entry["kind"], stream=True)
+
+    # ------------------------------------------------- 개발 서버 전용 가짜 저장소
+    if dev and isinstance(store, FakeStorage):
+        # 같은 출처 경로로 가짜 저장소를 열어, 브라우저가 서명 주소로 실제로 올리고(PUT) 받게(GET) 한다 (품질팀 F10).
+        # 운영(serve.py)은 dev=False라 이 경로가 없다. 인증 대신 서명 · 만료를 검사한다(R2 서명 주소와 같은 성격).
+        @app.put("/_dev_storage/{key:path}")
+        async def dev_storage_put(key: str, request: Request):
+            q = request.query_params
+            if not store.check_signed("PUT", key, q.get("X-Amz-Expires"), q.get("X-Amz-Signature")):
+                return Response(status_code=403)
+            body = bytearray()
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > MAX_PDF_BYTES + 1024:
+                    return Response(status_code=413)
+            store.objects[key] = bytes(body)
+            return Response(status_code=200)
+
+        @app.get("/_dev_storage/{key:path}")
+        def dev_storage_get(key: str, request: Request):
+            q = request.query_params
+            if not store.check_signed("GET", key, q.get("X-Amz-Expires"), q.get("X-Amz-Signature")):
+                return Response(status_code=403)
+            data = store.objects.get(key)
+            if data is None:
+                return Response(status_code=404)
+            return Response(data, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
     # -------------------------------------------------------------- static
     @app.get("/")
     def index():
         return FileResponse(STATIC_DIR / "index.html", headers={"Cache-Control": "no-store"})
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    # 운영에서는 개발 전용 파일(이메일 로그인 모듈)을 내보내지 않는다 (1단계 운영은 구글 로그인만)
+    app.mount("/static", AppStaticFiles(directory=STATIC_DIR, hidden=() if dev else DEV_ONLY_STATIC), name="static")
     return app
+
+
+async def summary_events(ai, paper_ctx: PaperContext, save: Callable[[dict], None],
+                         saved_summary: Callable[[], dict | None], is_disconnected):
+    """요약 SSE (명세 9.3 ②): progress … done | error. 연결이 끊기면 AI 스트림을 멈추고 저장하지 않는다."""
+    loop = asyncio.get_running_loop()
+    events: queue.Queue = queue.Queue()
+    cancel = threading.Event()
+    last = {"msg": None, "frac": -1.0}
+
+    def progress(message: str, frac: float | None) -> None:
+        if cancel.is_set():
+            raise SummaryCancelled()
+        f = -1.0 if frac is None else float(frac)
+        # 너무 잦은 이벤트를 줄인다: 문구가 바뀌거나 1% 이상 움직였을 때만
+        if message != last["msg"] or f - last["frac"] >= 0.01:
+            last.update(msg=message, frac=f)
+            events.put({"type": "progress", "message": message, "progress": frac})
+
+    def work() -> dict:
+        return ai.summarize(paper_ctx, progress)
+
+    fut = loop.run_in_executor(None, work)
+    try:
+        while True:
+            while not events.empty():
+                yield _sse(events.get_nowait())
+            if fut.done():
+                break
+            if await is_disconnected():
+                cancel.set()
+                return
+            await asyncio.sleep(0.1)
+        while not events.empty():
+            yield _sse(events.get_nowait())
+        try:
+            data = fut.result()
+        except SummaryCancelled:
+            return
+        except AIError as e:
+            yield _sse({"type": "error", "error": str(e)})
+            return
+        except Exception as e:  # noqa: BLE001 - 작업 실패는 화면에 그대로 알린다
+            yield _sse({"type": "error", "error": f"{type(e).__name__}: {e}"})
+            return
+        if cancel.is_set() or await is_disconnected():
+            return
+        try:
+            await run_in_threadpool(save, data)
+            summary = await run_in_threadpool(saved_summary)
+        except DBUnavailable:
+            yield _sse({"type": "error", "error": DB_UNAVAILABLE["detail"]})
+            return
+        yield _sse({"type": "done", "summary": summary})
+    finally:
+        cancel.set()

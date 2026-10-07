@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -27,6 +26,7 @@ MODELS = {
 EFFORT_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-fable-5-1"}
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5", "claude-fable-5-1"}
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+API_BASE_URL = "https://api.anthropic.com"
 
 # 요청 한도는 32MB이고 base64로 바꾸면 약 4/3배가 되므로 원본은 22MB까지만 PDF로 보낸다
 MAX_PDF_BYTES = 22 * 1024 * 1024
@@ -227,9 +227,11 @@ ProgressFn = Callable[[str, float | None], None]
 
 
 class AIService:
-    def __init__(self, get_setting: Callable[[str], str], http_client=None):
+    def __init__(self, get_setting: Callable[[str], str], http_client=None, cli_enabled: bool = False):
         self.get_setting = get_setting
         self._http_client = http_client  # 테스트에서 가짜 전송 계층을 넣을 때 쓴다
+        # CLI 엔진은 2단계 PC 워커에서만 켠다 (클라우드 서버는 False)
+        self.cli_enabled = cli_enabled
 
     @property
     def engine(self) -> str:
@@ -241,19 +243,28 @@ class AIService:
 
     def status(self) -> dict:
         if self.engine == "cli":
+            if not self.cli_enabled:
+                # 1단계 클라우드: CLI 엔진은 2단계(PC 워커 연결) 뒤에 쓴다
+                return {"engine": "cli", "ready": False, "message": "CLI 엔진은 PC 연결(2단계) 뒤에 쓸 수 있어요"}
             path = shutil.which("claude")
             return {"engine": "cli", "ready": bool(path),
                     "message": "Claude CLI를 찾았어요" if path else "claude 명령을 찾지 못했어요. Claude Code를 설치하고 로그인해 주세요."}
-        has_key = bool(self.get_setting("anthropic_api_key") or os.environ.get("ANTHROPIC_API_KEY")
-                       or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+        # 서버 환경 변수(ANTHROPIC_API_KEY · ANTHROPIC_AUTH_TOKEN 등)는 보지 않는다 — 다른 사용자 비용으로 돌면 안 됨
+        # (명세 8.1, AC-48). 사용자 설정의 키만 본다
+        has_key = bool(self.get_setting("anthropic_api_key"))
         return {"engine": "api", "ready": has_key, "model": self.model,
                 "message": "API 키가 설정돼 있어요" if has_key else "설정에서 Anthropic API 키를 넣어주세요."}
 
     # ------------------------------------------------------------ API engine
     def _client(self) -> anthropic.Anthropic:
-        kw = {"http_client": self._http_client} if self._http_client else {}
         key = self.get_setting("anthropic_api_key") or None
-        return anthropic.Anthropic(api_key=key, **kw) if key else anthropic.Anthropic(**kw)
+        if not key:
+            raise AIError("설정에서 Anthropic API 키를 넣어주세요.")
+        kw = {"http_client": self._http_client} if self._http_client else {}
+        # api_key를 명시하면 SDK(1.x)는 자격 증명 환경 변수(ANTHROPIC_API_KEY · ANTHROPIC_AUTH_TOKEN)와 프로필 ·
+        # 기본 자격 증명 탐색을 하지 않는다. 다만 ANTHROPIC_BASE_URL은 여전히 읽으므로 주소를 고정해 사용자 키가
+        # 다른 곳으로 가지 않게 한다(승인자 L3). 운영 진입점(serve.py)은 시작할 때 ANTHROPIC_* 환경 변수를 지운다.
+        return anthropic.Anthropic(api_key=key, base_url=API_BASE_URL, **kw)
 
     def _request_kwargs(self, effort: str | None = None) -> dict:
         kw: dict = {"model": self.model}
@@ -294,12 +305,20 @@ class AIService:
         if isinstance(e, anthropic.RateLimitError):
             return AIError("요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
         if isinstance(e, anthropic.BadRequestError):
-            return AIError(f"요청 오류: {e.message}")
+            return AIError(f"요청 오류: {self._scrub(e.message)}")
         if isinstance(e, anthropic.APIStatusError):
             return AIError(f"Anthropic 서버 오류 ({e.status_code}). 잠시 후 다시 시도해 주세요.")
         if isinstance(e, anthropic.APIConnectionError):
             return AIError("Anthropic 서버에 연결할 수 없어요. 인터넷 연결을 확인해 주세요.")
-        return AIError(str(e))
+        return AIError(self._scrub(str(e)))
+
+    def _scrub(self, text: str) -> str:
+        """오류 문구에 API 키가 섞이면 지운다 (명세 8.2)"""
+        text = str(text or "")
+        key = self.get_setting("anthropic_api_key") or ""
+        if key:
+            text = text.replace(key, "***")
+        return re.sub(r"sk-ant-[A-Za-z0-9_\-]{6,}", "sk-ant-***", text)
 
     def summarize(self, ctx: PaperContext, progress: ProgressFn | None = None) -> dict:
         progress = progress or (lambda msg, frac: None)
@@ -426,6 +445,8 @@ class AIService:
 
     # ------------------------------------------------------------ CLI engine
     def _run_cli(self, prompt: str, system: str) -> str:
+        if not self.cli_enabled:
+            raise AIError("CLI 엔진은 PC 연결(2단계) 뒤에 쓸 수 있어요")
         exe = shutil.which("claude")
         if not exe:
             raise AIError("claude 명령을 찾지 못했어요. Claude Code를 설치하고 `claude`로 한 번 로그인해 주세요.")

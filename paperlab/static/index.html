@@ -5,14 +5,90 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PaperLab</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%231e3a8a'/%3E%3Cpath d='M10 8h9l5 5v11a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z' fill='white'/%3E%3Cpath d='M12 17h8M12 21h6' stroke='%231e3a8a' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+  <script>
+    // 테마를 먼저 붙인다 (모듈이 늦게 돌아 어두운 테마에서 밝은 화면이 잠깐 보이지 않게)
+    (function () {
+      var t = null;
+      try { t = localStorage.getItem("paperlab.theme"); } catch (e) { /* 저장소 없음 */ }
+      document.documentElement.dataset.theme = t || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+    })();
+  </script>
   <link rel="stylesheet" href="/static/vendor/katex/katex.min.css" />
   <link rel="stylesheet" href="/static/css/app.css" />
+  <script src="/static/vendor/supabase/supabase.js" defer></script>
   <script src="/static/vendor/katex/katex.min.js" defer></script>
   <script src="/static/vendor/marked.min.js" defer></script>
   <script src="/static/vendor/purify.min.js" defer></script>
   <script type="module" src="/static/js/app.js"></script>
 </head>
-<body>
+<body data-auth="pending">
+  <div id="gate" class="gate" data-gate="boot">
+    <section class="gate-card" aria-labelledby="gate-name">
+      <div class="gate-brand">
+        <svg class="gate-mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect class="gm-bg" width="32" height="32" rx="8" fill="#1e3a8a"/>
+          <path d="M10 8h9l5 5v11a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z" fill="#fff"/>
+          <path class="gm-line" d="M12 17h8M12 21h6" stroke="#1e3a8a" stroke-width="2" stroke-linecap="round" fill="none"/>
+        </svg>
+        <span class="gate-name" id="gate-name">PaperLab</span>
+      </div>
+
+      <!-- 시작 (D6) -->
+      <div class="gate-pane" data-pane="boot" role="status">
+        <div class="gate-boot" data-boot><span class="spinner"></span><span data-boot-text>PaperLab을 여는 중…</span></div>
+        <div class="gate-wake hidden" data-wake>
+          <h1 class="gate-title">서버에 연결하는 중…</h1>
+          <p class="gate-text">응답이 늦어지고 있어요. 잠시만 기다려 주세요.</p>
+          <div class="progress indeterminate"><div></div></div>
+        </div>
+      </div>
+
+      <!-- 로그인 (D1) -->
+      <div class="gate-pane" data-pane="login">
+        <p class="gate-text">논문을 찾고, 읽고, 쓰는 나만의 서재예요.</p>
+        <div class="notice hidden" data-tone="info" data-gate-note role="status">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>
+          <div></div>
+        </div>
+        <div class="notice hidden" data-tone="danger" data-gate-error role="alert">
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5v5.5M12 16.5v.01"/></svg>
+          <div></div>
+        </div>
+        <div class="gate-actions">
+          <button type="button" class="btn-google" data-google>
+            <svg class="btn-google-logo" viewBox="0 0 48 48" aria-hidden="true">
+              <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+              <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+              <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+              <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+            </svg>
+            <span class="spinner"></span>
+            <span class="btn-google-label">Google로 계속하기</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- 허용되지 않은 계정 (D2) -->
+      <div class="gate-pane" data-pane="denied">
+        <div class="gate-icon" data-tone="warn"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 11V8a5 5 0 0 1 10 0v3M5.5 11h13v9h-13zM12 14.5v2"/></svg></div>
+        <h1 class="gate-title" tabindex="-1">이 계정은 쓸 수 없어요</h1>
+        <p class="gate-text">이 계정은 PaperLab을 쓸 수 없어요. 관리자에게 허용을 요청해 주세요.</p>
+        <span class="gate-email hidden" data-gate-email></span>
+        <div class="gate-actions"><button type="button" class="btn primary" data-gate-switch>다른 계정으로 로그인</button></div>
+      </div>
+
+      <!-- 서비스 멈춤 · 연결 실패 (D5) -->
+      <div class="gate-pane" data-pane="down">
+        <div class="gate-icon" data-tone="warn"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM10 9v6M14 9v6"/></svg></div>
+        <h1 class="gate-title" tabindex="-1" data-down-title>서비스가 잠시 멈춰 있어요</h1>
+        <p class="gate-text" data-down-text>관리자에게 알려 주세요. (관리자: Supabase 대시보드에서 프로젝트를 다시 켜 주세요)</p>
+        <pre class="gate-detail hidden" data-gate-detail></pre>
+        <div class="gate-actions"><button type="button" class="btn primary" data-gate-retry>다시 시도</button></div>
+      </div>
+    </section>
+    <p class="gate-foot">허용된 계정만 들어올 수 있어요. 계정이 필요하면 관리자에게 알려 주세요.</p>
+  </div>
+
   <div id="app">
     <aside id="sidebar">
       <div class="brand">
@@ -33,20 +109,44 @@
         <button class="nav-item" data-filter="status:done"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM8.5 12.2l2.4 2.3 4.6-4.8"/></svg>다 읽음<span class="count" data-count="done"></span></button>
         <button class="nav-item" data-filter="unfiled"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13l2.5-7.5h11L20 13v5.5H4zM4 13h5l1 2h4l1-2h5"/></svg>미분류<span class="count" data-count="unfiled"></span></button>
       </div>
+      <div class="nav-section" data-folders>
+        <div class="nav-title" title="폴더: 논문 파일이 실제로 있는 곳이에요. 논문 한 편은 폴더 한 곳에만 있어요.">
+          <span>폴더<span class="nav-sub">파일 위치 · 한 곳</span></span>
+          <button class="icon-btn small" id="add-folder" title="새 폴더" aria-label="새 폴더"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
+        <div id="folder-tree" class="folder-tree"></div>
+      </div>
       <div class="nav-section">
-        <div class="nav-title">컬렉션 <button class="icon-btn small" id="add-collection" title="새 컬렉션"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
+        <div class="nav-title" title="컬렉션: 주제별로 묶는 분류예요. 논문 한 편을 여러 컬렉션에 넣을 수 있어요."><span>컬렉션<span class="nav-sub">분류 · 여러 곳</span></span> <button class="icon-btn small" id="add-collection" title="새 컬렉션" aria-label="새 컬렉션"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div>
         <div id="collection-tree"></div>
       </div>
       <div class="nav-section">
         <div class="nav-title">태그</div>
         <div id="tag-list"></div>
       </div>
+      <!-- 저장 공간 막대(D14)는 사용량을 받은 뒤 app.js가 이 자리(.sidebar-foot 바로 앞)에 넣는다 -->
       <div class="sidebar-foot">
-        <button class="nav-item" id="open-settings"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4"/></svg>설정</button>
-        <button class="icon-btn" id="theme-toggle" title="밝게/어둡게"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
+        <span class="menu-wrap account-wrap">
+          <button class="account-btn" id="account-btn" aria-haspopup="menu" aria-expanded="false" title="계정">
+            <span class="avatar" aria-hidden="true"></span>
+            <span class="account-name"></span>
+            <svg class="ico account-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+          </button>
+        </span>
+        <button class="icon-btn" id="open-settings" title="설정" aria-label="설정"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8M14 5v4M8 15v4"/></svg></button>
+        <button class="icon-btn" id="theme-toggle" title="밝게/어둡게" aria-label="밝게/어둡게"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg></button>
       </div>
     </aside>
     <main id="main"></main>
+  </div>
+  <span class="menu-wrap account-mini-wrap">
+    <button class="account-mini" id="account-mini" aria-haspopup="menu" aria-expanded="false" aria-label="계정 메뉴"><span class="avatar" aria-hidden="true"></span></button>
+  </span>
+  <div id="app-banner" class="app-banner hidden" data-kind="paused" role="alert">
+    <span class="spinner hidden"></span>
+    <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>
+    <span class="app-banner-text"></span>
+    <button type="button" class="btn sm" data-banner-retry>다시 시도</button>
   </div>
   <div id="toasts" aria-live="polite"></div>
   <div id="drop-overlay" class="hidden"><div>PDF를 놓으면 서재에 추가돼요</div></div>

@@ -28,6 +28,8 @@ export function toast(msg, type = "", { duration } = {}) {
 }
 
 export function errorToast(e) {
+  // 알림 띠 · 로그인 화면이 이미 알린 오류(api.js의 quiet)는 토스트를 겹쳐 띄우지 않는다
+  if (e && e.quiet) return;
   toast(e && e.message ? e.message : String(e), "error");
 }
 
@@ -93,13 +95,15 @@ export function promptDialog(title, { value = "", placeholder = "", ok = "확인
 }
 
 // 메뉴: 버튼 아래에 항목들을 띄운다. items: [{label, sub, action, danger} | "-"]
-export function popupMenu(anchor, items, { left = false } = {}) {
+// head: 맨 앞에 넣을 요소, className: 메뉴에 더할 클래스, focus: 첫 항목에 포커스(키보드로 열 때), onClose: 닫힐 때
+export function popupMenu(anchor, items, { left = false, head = null, className = "", focus = false, onClose = null } = {}) {
   closeMenus();
   const wrap = anchor.closest(".menu-wrap") || anchor.parentElement;
-  const menu = el(`<div class="menu ${left ? "left" : ""}"></div>`);
+  const menu = el(`<div class="menu ${left ? "left" : ""} ${className}" role="menu"></div>`);
+  if (head) menu.append(head, el("<hr>"));
   for (const it of items) {
     if (it === "-") { menu.appendChild(el("<hr>")); continue; }
-    const b = el(`<button class="${it.danger ? "danger" : ""}">${esc(it.label)}${it.sub ? `<span class="sub">${esc(it.sub)}</span>` : ""}</button>`);
+    const b = el(`<button role="menuitem" class="${it.danger ? "danger" : ""}">${esc(it.label)}${it.sub ? `<span class="sub">${esc(it.sub)}</span>` : ""}</button>`);
     b.onclick = (e) => { e.stopPropagation(); closeMenus(); it.action(); };
     menu.appendChild(b);
   }
@@ -109,12 +113,23 @@ export function popupMenu(anchor, items, { left = false } = {}) {
   if (r.bottom > window.innerHeight - 8) { menu.style.top = "auto"; menu.style.bottom = "calc(100% + 4px)"; }
   if (r.right > window.innerWidth - 8) { menu.style.right = "0"; menu.style.left = "auto"; }
   if (r.left < 8) { menu.style.left = "0"; menu.style.right = "auto"; }
+  // Esc = 메뉴만 닫고 연 버튼으로 포커스 (창 · 읽기 화면의 Esc보다 먼저 받는다)
+  const onKey = (e) => {
+    if (e.key !== "Escape" || !menu.isConnected) return;
+    e.preventDefault();
+    e.stopPropagation();
+    closeMenus();
+    anchor.focus();
+  };
+  window.addEventListener("keydown", onKey, true);
+  menu._onClose = () => { window.removeEventListener("keydown", onKey, true); onClose && onClose(); };
+  if (focus) { const first = $("button", menu); first && first.focus(); }
   setTimeout(() => document.addEventListener("click", closeMenus, { once: true }), 0);
   return menu;
 }
 
 export function closeMenus() {
-  $$(".menu").forEach((m) => m.remove());
+  $$(".menu").forEach((m) => { m.remove(); if (m._onClose) m._onClose(); });
 }
 
 // ------------------------------------------------------------- text format
@@ -134,6 +149,13 @@ export function authorsShort(authors, max = 3) {
 
 export function fmtNum(n) {
   return n == null ? "" : Number(n).toLocaleString("ko-KR");
+}
+
+// 저장 공간 크기: 1GiB 미만은 MB 정수, 이상은 GB 소수 한 자리 (10GB처럼 .0은 뺀다)
+export function fmtBytes(n) {
+  const b = Math.max(0, Number(n) || 0);
+  if (b < 1024 ** 3) return `${Math.round(b / 1024 ** 2)}MB`;
+  return `${(b / 1024 ** 3).toFixed(1).replace(/\.0$/, "")}GB`;
 }
 
 export function fmtDate(iso) {
@@ -200,6 +222,19 @@ export function renderMarkdown(text, { citations = false } = {}) {
 // http(s) 주소만 링크로 쓴다 (javascript: 같은 주소 차단)
 export function safeUrl(url) {
   return /^https?:\/\//i.test(String(url || "").trim()) ? String(url).trim() : "";
+}
+
+// 프로필: 사진이 있으면 <img>(구글 사진은 referrer가 있으면 막힐 수 있음, 실패하면 이니셜), 없으면 이니셜
+export function avatarEl({ name = "", photo = "" } = {}, lg = false) {
+  const first = [...String(name).trim()][0] || "?";
+  const initial = /[a-z]/i.test(first) ? first.toUpperCase() : first;
+  const span = el(`<span class="avatar ${lg ? "lg" : ""}" aria-hidden="true">${esc(initial)}</span>`);
+  const src = safeUrl(photo);
+  if (!src) return span;
+  const img = el(`<img class="avatar ${lg ? "lg" : ""}" alt="" referrerpolicy="no-referrer">`);
+  img.onerror = () => img.replaceWith(span);
+  img.src = src;
+  return img;
 }
 
 export function renderTex(latex, display = true) {

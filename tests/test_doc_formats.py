@@ -8,7 +8,6 @@
 import io
 import json
 import re
-import sqlite3
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
@@ -17,12 +16,10 @@ from urllib.parse import unquote
 import pytest
 from docx import Document
 from docx.oxml.ns import qn
-from fastapi.testclient import TestClient
 from hwpx import HwpxDocument
 
 from paperlab import doc_formats as df
 from paperlab import format_import, writer
-from paperlab.server import create_app
 
 GOLDEN = Path(__file__).parent / "golden"
 BLOCKS = json.loads((GOLDEN / "blocks.json").read_text(encoding="utf-8"))
@@ -36,9 +33,7 @@ HC = "{http://www.hancom.co.kr/hwpml/2011/core}"
 FULL = "　"
 
 
-@pytest.fixture
-def client(tmp_path):
-    return TestClient(create_app(tmp_path), headers={"X-PaperLab": "1"})
+# client = 테스트 프로젝트 DB를 쓰는 클라이언트(conftest, @pytest.mark.db), local_client = DB 없이 도는 변환 · 가져오기 API
 
 
 def fmt(fid: str, **changes) -> dict:
@@ -224,9 +219,9 @@ def test_ac01_ac02_default_export_matches_golden():
     _check_golden(writer.to_docx(BLOCKS, META), writer.to_hwpx(BLOCKS, META))
 
 
-def test_ac03_default_format_and_markdown_via_api(client):
+def test_ac03_default_format_and_markdown_via_api(local_client):
     def export(fmt_name, **extra):
-        r = client.post("/api/export-document", json={"format": fmt_name, "blocks": BLOCKS, "meta": META, **extra})
+        r = local_client.post("/api/export-document", json={"format": fmt_name, "blocks": BLOCKS, "meta": META, **extra})
         assert r.status_code == 200, r.text
         return r.content
 
@@ -238,6 +233,7 @@ def test_ac03_default_format_and_markdown_via_api(client):
 
 
 # =================================================================== B. 양식 API
+@pytest.mark.db
 def test_ac06_list_builtins(client):
     items = client.get("/api/doc-formats").json()
     assert [i["id"] for i in items] == ["default", "apa7-student", "inha-mie-thesis", "inha-mie-report"]
@@ -246,6 +242,7 @@ def test_ac06_list_builtins(client):
     assert all(i["used_by"] == 0 for i in items)
 
 
+@pytest.mark.db
 def test_ac07_ac08_create_and_patch(client):
     made = client.post("/api/doc-formats", json={"base": "inha-mie-thesis", "name": "내 학위논문"}).json()
     assert made["id"].startswith("user-") and made["builtin"] is False and made["base"] == "inha-mie-thesis"
@@ -268,6 +265,7 @@ def test_ac07_ac08_create_and_patch(client):
     assert partial["body"]["size_pt"] == 10 and partial["page"]["width_mm"] == 188
 
 
+@pytest.mark.db
 def test_ac09_builtin_readonly_and_missing(client):
     assert client.patch("/api/doc-formats/default", json={"name": "x"}).status_code == 403
     assert client.delete("/api/doc-formats/inha-mie-thesis").status_code == 403
@@ -279,6 +277,7 @@ def test_ac09_builtin_readonly_and_missing(client):
     assert client.post("/api/doc-formats", json={"base": "default", "name": "가" * 61}).status_code == 400
 
 
+@pytest.mark.db
 @pytest.mark.parametrize("data, path", [
     ({"body": {"size_pt": 0}}, "body.size_pt"),
     ({"body": {"align": "middle"}}, "body.align"),
@@ -300,6 +299,7 @@ def test_ac10_validation_reports_path(client, data, path):
     assert r.status_code == 400 and path in r.json()["detail"], r.json()
 
 
+@pytest.mark.db
 def test_ac10_pt_length_and_distance_accepted(client):
     r = client.post("/api/doc-formats", json={"base": "default", "name": "x", "data": {
         "quote": {"indent_left": {"value": 40, "unit": "pt"}}, "page_number": {"distance_mm": 11}}})
@@ -316,6 +316,7 @@ def test_length_ranges_accept_edges():
     assert ok["body"]["first_line_indent"] == {"value": 20, "unit": "ch"}  # 20 × 11pt ≈ 77.6mm
 
 
+@pytest.mark.db
 def test_ac11_delete_resets_manuscripts_and_default(client):
     fid = client.post("/api/doc-formats", json={"base": "inha-mie-report", "name": "보고서"}).json()["id"]
     ids = [client.post("/api/manuscripts", json={}).json()["id"] for _ in range(3)]
@@ -331,7 +332,8 @@ def test_ac11_delete_resets_manuscripts_and_default(client):
     assert client.get("/api/doc-formats").json()[0]["used_by"] == 3
 
 
-def test_deleted_format_id_is_not_reused(client, tmp_path):
+@pytest.mark.db
+def test_deleted_format_id_is_not_reused(cloud, client):
     first = client.post("/api/doc-formats", json={"base": "default", "name": "A"}).json()["id"]
     mid = client.post("/api/manuscripts", json={}).json()["id"]
     client.patch(f"/api/manuscripts/{mid}", json={"doc_format": first})
@@ -342,42 +344,28 @@ def test_deleted_format_id_is_not_reused(client, tmp_path):
     assert client.get(f"/api/doc-formats/{first}").status_code == 404
     assert client.get(f"/api/manuscripts/{mid}").json()["doc_format"] == "default"
     assert client.get("/api/settings").json()["doc_format_default"] == "default"
-    # 설정 파일에 남은 옛 id(지워진 양식)도 기본 양식으로 돌려준다
-    settings = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    settings["doc_format_default"] = "user-999"
-    (tmp_path / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
-    c2 = TestClient(create_app(tmp_path), headers={"X-PaperLab": "1"})
-    assert c2.get("/api/settings").json()["doc_format_default"] == "default"
-    assert c2.post("/api/manuscripts", json={}).json()["doc_format"] == "default"
+    # 설정에 남은 옛 id(지워진 양식)도 기본 양식으로 돌려준다
+    import psycopg
+    with psycopg.connect(cloud.project.admin_db, autocommit=True) as conn:
+        conn.execute("update paperlab.profiles set settings = settings || '{\"doc_format_default\": \"user-999\"}'::jsonb")
+    assert client.get("/api/settings").json()["doc_format_default"] == "default"
+    assert client.post("/api/manuscripts", json={}).json()["doc_format"] == "default"
 
 
-def test_old_doc_formats_table_upgraded(tmp_path):
-    conn = sqlite3.connect(tmp_path / "library.db")
-    conn.execute("CREATE TABLE doc_formats (id INTEGER PRIMARY KEY, name TEXT NOT NULL, base TEXT NOT NULL "
-                 "DEFAULT 'default', data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
-    conn.execute("INSERT INTO doc_formats (id, name, created_at, updated_at) VALUES (5, '옛 양식', 'x', 'x')")
-    conn.commit()
-    conn.close()
-    c = TestClient(create_app(tmp_path), headers={"X-PaperLab": "1"})
-    assert c.get("/api/doc-formats/user-5").json()["name"] == "옛 양식"
-    c.delete("/api/doc-formats/user-5")
-    assert c.post("/api/doc-formats", json={"base": "default", "name": "새"}).json()["id"] == "user-6"
-    sql = sqlite3.connect(tmp_path / "library.db").execute(
-        "SELECT sql FROM sqlite_master WHERE name = 'doc_formats'").fetchone()[0]
-    assert "AUTOINCREMENT" in sql
-
-
-def test_ac12_write_requests_need_header(tmp_path):
-    bare = TestClient(create_app(tmp_path))
+def test_ac12_write_requests_need_header(local_client):
+    """X-PaperLab 없는 쓰기 요청은 토큰이 있어도 403 (DB에 닿기 전)"""
+    from fastapi.testclient import TestClient
+    bare = TestClient(local_client.app, headers={"Authorization": local_client.headers["Authorization"]})
     assert bare.post("/api/doc-formats", json={"base": "default", "name": "x"}).status_code == 403
     assert bare.patch("/api/doc-formats/user-1", json={"name": "x"}).status_code == 403
     assert bare.delete("/api/doc-formats/user-1").status_code == 403
     files = {"file": ("a.docx", _docx_fixture(), "application/octet-stream")}
     assert bare.post("/api/doc-formats/import", files=files).status_code == 403
-    assert bare.get("/api/doc-formats").status_code == 200
+    assert bare.get("/api/meta").status_code == 200
 
 
 # =================================================================== C. 원고 설정
+@pytest.mark.db
 def test_ac13_ac14_manuscript_format_and_cover(client):
     mid = client.post("/api/manuscripts", json={}).json()["id"]
     m = client.get(f"/api/manuscripts/{mid}").json()
@@ -400,21 +388,7 @@ def test_ac13_ac14_manuscript_format_and_cover(client):
                                                                        committee=[""] * 5)}).status_code == 200
 
 
-def test_ac15_old_library_gets_new_columns(tmp_path):
-    conn = sqlite3.connect(tmp_path / "library.db")
-    conn.execute("CREATE TABLE manuscripts (id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT '', "
-                 "content TEXT NOT NULL DEFAULT '', template TEXT NOT NULL DEFAULT '', style TEXT NOT NULL DEFAULT '', "
-                 "created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
-    conn.execute("INSERT INTO manuscripts (title, content, created_at, updated_at) VALUES ('옛 원고', '# 옛', 'x', 'x')")
-    conn.commit()
-    conn.close()
-    c = TestClient(create_app(tmp_path), headers={"X-PaperLab": "1"})
-    m = c.get("/api/manuscripts/1").json()
-    assert m["title"] == "옛 원고" and m["doc_format"] == "default" and m["cover"] == {}
-    cols = {r[1] for r in sqlite3.connect(tmp_path / "library.db").execute("PRAGMA table_info(manuscripts)")}
-    assert {"doc_format", "cover"} <= cols
-
-
+@pytest.mark.db
 def test_ac16_new_manuscript_uses_setting(client):
     assert client.put("/api/settings", json={"doc_format_default": "nope"}).status_code == 400
     assert client.put("/api/settings", json={"doc_format_default": "inha-mie-report"}).status_code == 200
@@ -767,6 +741,7 @@ def test_ac42_apa_hwpx():
 
 
 # =================================================================== H. 내 양식 적용
+@pytest.mark.db
 def test_ac43_user_copy_applies(client):
     made = client.post("/api/doc-formats", json={"base": "inha-mie-thesis", "name": "12pt"}).json()
     data = made["data"]
@@ -792,31 +767,32 @@ def test_ac44_no_cover_and_document_numbering():
     assert len(h.sections) == 1 and h.sections[0].find(f".//{HP}footer") is not None
 
 
-def test_ac45_cover_warnings(client):
+def test_ac45_cover_warnings(local_client):
     req = {"format": "docx", "blocks": BLOCKS, "meta": META, "doc_format": "inha-mie-thesis"}
-    r = client.post("/api/export-document", json=req)
+    r = local_client.post("/api/export-document", json=req)
     assert r.status_code == 200
     warnings = json.loads(unquote(r.headers["X-PaperLab-Warnings"]))
     assert warnings == ["cover-missing:name,department,graduation,title_en,degree_field"]
     texts = [p.text for p in Document(io.BytesIO(r.content)).paragraphs]
     assert "○○○" in texts and "○○○학과" in texts and "○○○○년 ○월" in texts
     assert "○○석사학위 논문" in texts and "이 논문을 ○○석사학위 논문으로 제출함" in texts
-    r = client.post("/api/export-document", json=dict(req, cover=dict(COVER, name="", department="")))
+    r = local_client.post("/api/export-document", json=dict(req, cover=dict(COVER, name="", department="")))
     assert json.loads(unquote(r.headers["X-PaperLab-Warnings"])) == ["cover-missing:name,department"]
     long_title = "스마트 제조 공정의 품질 예측을 위한 딥러닝 기반 이상 탐지 모델 연구 " * 7
-    r = client.post("/api/export-document", json=dict(req, format="hwpx", cover=dict(COVER, title_ko=long_title)))
+    r = local_client.post("/api/export-document", json=dict(req, format="hwpx", cover=dict(COVER, title_ko=long_title)))
     warnings = json.loads(unquote(r.headers["X-PaperLab-Warnings"]))
     assert "cover-overflow:front" in warnings and "cover-overflow:inner" in warnings
-    r = client.post("/api/export-document", json=dict(req, cover=dict(COVER, title_en="")))
+    r = local_client.post("/api/export-document", json=dict(req, cover=dict(COVER, title_en="")))
     assert json.loads(unquote(r.headers["X-PaperLab-Warnings"])) == ["cover-missing:title_en"]
     front = [p.text for p in docx_sections(Document(io.BytesIO(r.content)))[0][1]]
     assert front[2] == "○○○"  # 영문 제목 자리표시
-    ok = client.post("/api/export-document", json=dict(req, cover=COVER))
+    ok = local_client.post("/api/export-document", json=dict(req, cover=COVER))
     assert "X-PaperLab-Warnings" not in ok.headers
-    bad = client.post("/api/export-document", json=dict(req, cover=dict(COVER, graduation="2027-13")))
+    bad = local_client.post("/api/export-document", json=dict(req, cover=dict(COVER, graduation="2027-13")))
     assert bad.status_code == 400
 
 
+@pytest.mark.db
 def test_ac45a_page_number_distance(client):
     made = client.post("/api/doc-formats", json={"base": "inha-mie-report", "name": "11mm"}).json()
     data = made["data"]
@@ -914,9 +890,9 @@ def _check_imported(res):
         assert path in res["found"], path
 
 
-def test_ac46_ac47_import_docx_and_dotx(client):
+def test_ac46_ac47_import_docx_and_dotx(local_client):
     for name, raw in (("학위논문양식.docx", _docx_fixture()), ("학위논문양식.dotx", _as_dotx(_docx_fixture()))):
-        r = client.post("/api/doc-formats/import", files={"file": (name, raw, "application/octet-stream")})
+        r = local_client.post("/api/doc-formats/import", files={"file": (name, raw, "application/octet-stream")})
         assert r.status_code == 200, r.text
         res = r.json()
         assert res["source"] == {"kind": "docx", "filename": name} and res["suggested_name"] == "학위논문양식"
@@ -986,6 +962,7 @@ def test_ac49_no_heading_styles_keep_base():
     assert {"headings.1", "headings.2", "headings.3"} <= set(res["missing"])
 
 
+@pytest.mark.db
 def test_ac50_import_does_not_save(client):
     before = len(client.get("/api/doc-formats").json())
     res = client.post("/api/doc-formats/import", files={"file": ("a.docx", _docx_fixture(), "x")},
@@ -1004,19 +981,19 @@ def test_ac50_import_does_not_save(client):
     ("a.docx", b"PK\x03\x04 broken zip"),
     ("a.hwpx", b"not a zip at all"),
 ])
-def test_ac51_bad_files(client, name, raw):
-    r = client.post("/api/doc-formats/import", files={"file": (name, raw, "x")})
+def test_ac51_bad_files(local_client, name, raw):
+    r = local_client.post("/api/doc-formats/import", files={"file": (name, raw, "x")})
     assert r.status_code == 400 and re.search(r"[가-힣]", r.json()["detail"])
 
 
-def test_l5_size_checked_before_reading_everything(client):
+def test_l5_size_checked_before_reading_everything(local_client):
     big = b"0" * (21 * 1024 * 1024)
-    r = client.post("/api/doc-formats/import", content=big,
+    r = local_client.post("/api/doc-formats/import", content=big,
                     headers={"Content-Type": "multipart/form-data; boundary=x"})
     assert r.status_code == 400 and "20MB" in r.json()["detail"]
 
 
-def test_l5_zip_bomb_rejected_before_unpacking(client, monkeypatch):
+def test_l5_zip_bomb_rejected_before_unpacking(local_client, monkeypatch):
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         z.writestr("word/document.xml", b"\0" * (60 * 1024 * 1024))
@@ -1024,14 +1001,14 @@ def test_l5_zip_bomb_rejected_before_unpacking(client, monkeypatch):
     assert len(raw) < 1024 * 1024
     called = []
     monkeypatch.setattr(zipfile.ZipFile, "testzip", lambda self: called.append(1))
-    r = client.post("/api/doc-formats/import", files={"file": ("bomb.docx", raw, "x")})
+    r = local_client.post("/api/doc-formats/import", files={"file": ("bomb.docx", raw, "x")})
     assert r.status_code == 400 and "너무 커요" in r.json()["detail"] and not called
 
 
-def test_ac51_too_big(client):
-    r = client.post("/api/doc-formats/import", files={"file": ("a.docx", b"0" * (20 * 1024 * 1024 + 10), "x")})
+def test_ac51_too_big(local_client):
+    r = local_client.post("/api/doc-formats/import", files={"file": ("a.docx", b"0" * (20 * 1024 * 1024 + 10), "x")})
     assert r.status_code == 400 and "20MB" in r.json()["detail"]
-    assert client.post("/api/doc-formats/import", files={"file": ("a.docx", _docx_fixture(), "x")},
+    assert local_client.post("/api/doc-formats/import", files={"file": ("a.docx", _docx_fixture(), "x")},
                        data={"base": "user-1"}).status_code == 400
 
 
@@ -1051,6 +1028,7 @@ def test_cover_text_rules():
     assert df.cover_pages("none", COVER) == []
 
 
+@pytest.mark.db
 @pytest.mark.parametrize("bad", [{"id": "default"}, ["user-1"], 3, True])
 def test_non_string_format_id_is_400(client, bad):
     mid = client.post("/api/manuscripts", json={}).json()["id"]

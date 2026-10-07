@@ -3,6 +3,7 @@
 import { api, streamEvents } from "./api.js";
 import { listStyles, render, styleOptions } from "./cite.js";
 import { citeDialog, editPaperDialog, issuesBox, settingsDialog } from "./dialogs.js";
+import { exportAnnotations } from "./library.js";
 import { state } from "./state.js";
 import {
   $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, renderMarkdown, renderTex, toast,
@@ -14,6 +15,27 @@ const LEVELS = [["elementary", "초등"], ["middle", "중등"], ["high", "고등
 let pdfjs = null;
 let R = null; // 현재 열린 논문의 읽기 상태
 let openSeq = 0; // 열기 도중 다른 화면으로 가면 늦게 끝난 열기를 버린다
+
+// 진행 중인 요약 스트림: 논문 id → {message, progress, abort}. 읽기 화면을 떠나도 끊지 않는다
+// (탭을 닫을 때만 멈춤 — 팀장 결정 3, 명세 9.3 ②)
+const runs = new Map();
+const failed = new Map(); // 다른 화면에 있는 동안 실패한 요약의 오류 문구 (돌아오면 한 번 보여 줌)
+const DISCONNECTED = "연결이 끊겨 요약이 멈췄어요. 다시 만들어 주세요.";
+const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
+
+export const summariesRunning = () => runs.size > 0;
+
+// 로그아웃할 때: 진행 중인 요약을 멈춘다
+export function stopSummaries() {
+  for (const run of runs.values()) run.abort.abort();
+  runs.clear();
+  failed.clear();
+}
+
+// 쓰던 노트를 지금 저장한다 (로그아웃 전)
+export async function flushReader() {
+  if (R && R.noteSave) await R.noteSave.flush();
+}
 
 async function loadPdfjs() {
   if (!pdfjs) {
@@ -35,8 +57,7 @@ function teardown() {
   if (!R) return;
   R.observer && R.observer.disconnect();
   R.resizeObserver && R.resizeObserver.disconnect();
-  R.abort && R.abort.abort();
-  R.pollTimer && clearTimeout(R.pollTimer);
+  R.abort && R.abort.abort(); // 질문 스트림만 (요약 스트림은 runs가 따로 가진다)
   R.noteSave && R.noteSave.flush();
   R.doc && R.doc.destroy();
   document.removeEventListener("keydown", R.onKey);
@@ -64,7 +85,7 @@ export async function openReader(main, pid, startPage = null) {
   const p0 = prefs();
   R = {
     pid, paper, annotations: [], pages: [], scale: 1, fit: p0.fit !== false, color: p0.color || "yellow",
-    tab: p0.tab || "summary", level: p0.level || "high", chat: null, summary: null, job: null, quote: "",
+    tab: p0.tab || "summary", level: p0.level || "high", chat: null, summary: null, quote: "",
   };
   const me = R;
   main.innerHTML = "";
@@ -135,9 +156,22 @@ async function loadPdf(startPage) {
     R.pagesEl.innerHTML = `<div class="empty"><h3>PDF가 없어요</h3><p>서재 상세 패널에서 PDF를 받거나 첨부해 주세요.</p></div>`;
     return;
   }
+  R.pagesEl.innerHTML = `<div class="empty"><span class="spinner"></span></div>`;
   try {
     const lib = await loadPdfjs();
-    const doc = await lib.getDocument({ url: `/api/papers/${R.pid}/pdf`, isEvalSupported: false }).promise;
+    // 서명 주소(10분)로 파일 전체를 받아 둔다: 주소가 만료돼도 이미 받은 파일로 계속 읽음 (명세 6.7)
+    const { url } = await api.get(`/api/papers/${R.pid}/pdf-url`);
+    if (R !== me) return;
+    let res;
+    try {
+      res = await fetch(url, { credentials: "omit" });
+    } catch {
+      throw new Error("PDF를 받지 못했어요. 인터넷 연결을 확인하고 다시 열어 주세요.");
+    }
+    if (!res.ok) throw new Error(res.status === 403 ? "PDF 주소가 만료됐어요. 다시 열어 주세요." : `PDF를 받지 못했어요 (HTTP ${res.status})`);
+    const data = new Uint8Array(await res.arrayBuffer());
+    if (R !== me) return;
+    const doc = await lib.getDocument({ data, isEvalSupported: false }).promise;
     if (R !== me) { doc.destroy(); return; }
     R.doc = doc;
     $("[data-total]", R.view).textContent = doc.numPages;
@@ -150,6 +184,7 @@ async function loadPdf(startPage) {
     }
     R.pages = pages;
   } catch (e) {
+    if (R !== me) return;
     R.pagesEl.innerHTML = `<div class="empty"><h3>PDF를 열지 못했어요</h3><p>${esc(e.message)}</p></div>`;
     return;
   }
@@ -527,13 +562,17 @@ async function summaryTab(body) {
       const r = await api.get(`/api/papers/${R.pid}/summary`);
       if (R !== me) return;
       R.summary = r.summary;
-      R.job = r.job;
       R.summaryLoaded = true;
     } catch (e) { body.innerHTML = `<div class="msg error">${esc(e.message)}</div>`; return; }
     if (R.tab !== "summary") return;
   }
   body.innerHTML = "";
-  if (R.job && R.job.status === "running") return drawJob(body);
+  if (runs.has(R.pid)) return drawProgress(body);
+  if (failed.has(R.pid)) {
+    const err = failed.get(R.pid);
+    failed.delete(R.pid);
+    return drawSummaryCta(body, err);
+  }
   if (!R.summary) return drawSummaryCta(body);
   drawSummary(body, R.summary);
 }
@@ -554,51 +593,82 @@ async function drawSummaryCta(body, error = "") {
   body.appendChild(v);
 }
 
-async function startSummary() {
+// 요약 시작: SSE 스트림(progress … done | error)을 끝까지 읽는다. 읽기 화면을 떠나도 계속된다
+function startSummary() {
+  if (!R) return;
+  const pid = R.pid;
+  if (!runs.has(pid)) {
+    const run = { message: "요약을 준비하는 중", progress: null, abort: new AbortController() };
+    runs.set(pid, run);
+    failed.delete(pid);
+    summaryStream(pid, run);
+  }
+  showTab("summary");
+}
+
+async function summaryStream(pid, run) {
+  let result = null;
+  let error = "";
   try {
-    R.job = await api.post(`/api/papers/${R.pid}/summary`);
-    showTab("summary");
-  } catch (e) { errorToast(e); }
+    await streamEvents(`/api/papers/${pid}/summary`, {}, (ev) => {
+      if (ev.type === "progress") {
+        run.message = ev.message || run.message;
+        run.progress = ev.progress == null ? null : Number(ev.progress);
+        updateProgress(pid);
+      } else if (ev.type === "done") {
+        result = ev.summary;
+      } else if (ev.type === "error") {
+        error = ev.error || "요약을 만들지 못했어요";
+      }
+    }, run.abort.signal);
+    if (!result && !error) error = DISCONNECTED;
+  } catch (e) {
+    if (e && e.name === "AbortError") return; // 로그아웃으로 멈춤
+    // 시작 뒤 연결이 끊기면 fetch가 TypeError를 던진다
+    error = e instanceof TypeError ? DISCONNECTED : (e && e.message) || DISCONNECTED;
+  } finally {
+    if (runs.get(pid) === run) runs.delete(pid);
+  }
+  if (run.abort.signal.aborted) return;
+  const here = R && R.pid === pid;
+  if (result) {
+    if (here) { R.summary = result; R.summaryLoaded = true; }
+    toast("AI 요약이 준비됐어요", "success");
+    if (here && R.tab === "summary") showTab("summary");
+    return;
+  }
+  if (here && R.tab === "summary") return drawSummaryCta($(".panel-body", R.view), error);
+  failed.set(pid, error);
+  toast(error, "error");
 }
 
-function drawJob(body) {
-  const j = R.job;
-  const pct = j.progress != null ? Math.round(j.progress * 100) : null;
+function progressParts(run) {
+  const pct = run.progress != null && Number.isFinite(run.progress) ? Math.max(0, Math.min(100, Math.round(run.progress * 100))) : null;
+  return { pct, msg: `${run.message}${pct != null ? ` · ${pct}%` : ""}` };
+}
+
+function drawProgress(body) {
+  const { pct, msg } = progressParts(runs.get(R.pid));
   body.innerHTML = "";
-  body.appendChild(el(`<div class="ai-cta"><div class="big">✦</div><h3>논문을 정리하고 있어요</h3>
-    <p class="small">${esc(j.message || "")}${pct != null ? ` · ${pct}%` : ""}</p>
-    <div class="progress ${pct == null ? "indeterminate" : ""}" style="margin:14px 20px"><div style="width:${pct || 0}%"></div></div>
-    <p class="small muted">보통 1~3분 걸려요. 그동안 논문을 읽거나 다른 화면에 다녀와도 괜찮아요.</p></div>`));
-  pollJob();
+  body.appendChild(el(`<div class="ai-cta" data-summary-progress><div class="big">✦</div><h3>논문을 정리하고 있어요</h3>
+    <p class="small" data-progress-msg>${esc(msg)}</p>
+    <div class="progress ${pct == null ? "indeterminate" : ""}" style="margin:14px 20px" role="progressbar" aria-label="요약 진행"
+      aria-valuemin="0" aria-valuemax="100" ${pct != null ? `aria-valuenow="${pct}"` : ""}><div style="width:${pct || 0}%"></div></div>
+    <div class="notice" data-tone="info" data-keep-open>${ICON_INFO}<div>다른 화면에 다녀와도 괜찮아요. 탭만 닫지 마세요.</div></div>
+    <p class="small">보통 1~3분 걸려요.</p></div>`));
 }
 
-function pollJob() {
-  const me = R;
-  if (!R || R.pollTimer) return; // 이미 확인 중
-  R.pollTimer = setTimeout(async () => {
-    if (R !== me) return;
-    let job;
-    try { job = await api.get(`/api/jobs/${me.job.id}`); } catch (e) { job = { ...me.job, status: "error", error: e.message }; }
-    if (R !== me) return;
-    R.pollTimer = null;
-    R.job = job;
-    if (job.status === "running") {
-      pollJob();
-    } else if (job.status === "done") {
-      let r;
-      try { r = await api.get(`/api/papers/${me.pid}/summary`); } catch (e) { r = { summary: null }; }
-      if (R !== me) return;
-      R.summary = r.summary;
-      R.job = null;
-      toast("AI 요약이 준비됐어요", "success");
-    }
-    if (R.tab !== "summary") return;
-    if (job.status === "error") {
-      R.job = null;
-      return drawSummaryCta($(".panel-body", R.view), job.error);
-    }
-    showTab("summary");
-  }, 1500);
+// 진행 이벤트가 올 때 그 자리에서 문구 · 막대만 바꾼다
+function updateProgress(pid) {
+  if (!R || R.pid !== pid || R.tab !== "summary") return;
+  const box = $("[data-summary-progress]", R.view);
+  if (!box) return;
+  const { pct, msg } = progressParts(runs.get(pid));
+  $("[data-progress-msg]", box).textContent = msg;
+  const bar = $(".progress", box);
+  bar.classList.toggle("indeterminate", pct == null);
+  if (pct != null) bar.setAttribute("aria-valuenow", pct); else bar.removeAttribute("aria-valuenow");
+  $("div", bar).style.width = `${pct || 0}%`;
 }
 
 function drawSummary(body, s) {
@@ -847,7 +917,7 @@ function highlightsTab(body) {
     $$("[data-filter] button", v).forEach((x) => x.classList.toggle("active", x === b));
     draw(b.dataset.c);
   }));
-  $("[data-export]", v).onclick = () => window.open(`/api/annotations/export/${R.pid}`, "_blank");
+  $("[data-export]", v).onclick = () => exportAnnotations(R.pid, R.paper.title);
   draw("");
   body.appendChild(v);
 }
@@ -870,7 +940,7 @@ async function noteTab(body) {
     try { await api.put(`/api/papers/${R.pid}/note`, { content: ta.value }); saved = ta.value; st.textContent = "저장됨"; }
     catch (e) { st.textContent = "저장 실패"; errorToast(e); }
   }, 700);
-  R.noteSave = { flush: () => { if (ta.value !== saved) save.flush(); } };
+  R.noteSave = { flush: () => (ta.value !== saved ? save.flush() : null) };
   ta.oninput = () => { st.textContent = "입력 중…"; save(); };
   $$(".seg button", v).forEach((b) => (b.onclick = () => {
     $$(".seg button", v).forEach((x) => x.classList.toggle("active", x === b));

@@ -613,7 +613,7 @@ CREATE TABLE IF NOT EXISTS doc_formats (
 - **AC-01** `doc_format` 없이 docx를 내보내면 `word/document.xml` · `word/styles.xml` · `word/footnotes.xml`이 **변경 전 코드로 만든 골든 파일**과 바이트 단위로 같다. (골든 파일은 개발팀이 `writer.py`를 고치기 **전에** 만들어 `tests/golden/`에 둔다)
 - **AC-02** `doc_format` 없이 hwpx를 내보내면 `Contents/header.xml`이 골든 파일과 같고, `Contents/section0.xml`은 무작위 값 속성(`hp:p`의 `id`, `instId`)을 지운 뒤 골든 파일과 같다.
 - **AC-03** `doc_format: "default"`를 지정해도 AC-01 · AC-02와 같다. 마크다운 내보내기는 어떤 양식을 지정해도 결과가 같다.
-- **AC-04** 기존 테스트가 모두 통과한다(Windows의 알려진 실패 `test_cli_engine_with_fake_claude` 1건 제외).
+- **AC-04** 기존 테스트가 모두 통과한다(0단계 당시에는 Windows의 알려진 실패 `test_cli_engine_with_fake_claude` 1건 제외 — 2026-10-07 해결, 이제 제외 없음).
 - **AC-05** 기본 (A4) 양식을 고른 원고의 미리보기 `.doc` 요소에 `doc-formatted` 클래스와 `--doc-*` 변수가 없다(화면이 지금과 같음, 수동 확인 가능).
 
 ### B. 양식 API

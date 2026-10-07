@@ -102,7 +102,87 @@ def test_rate_limit_message():
         s.search("x")
 
 
+PUBLIC = {"example.org": ["93.184.215.14"], "files.example.org": ["93.184.215.15"],
+          "evil.example": ["127.0.0.1"], "mixed.example": ["93.184.215.16", "10.0.0.5"],
+          "v6.example": ["2606:2800:21f:cb07:6820:80da:af6b:8b2c"], "mapped.example": ["::ffff:169.254.169.254"]}
+
+
+def _resolver(host, port):
+    if host not in PUBLIC:
+        raise OSError("no such host")
+    return PUBLIC[host]
+
+
+def _pdf_sources(handler):
+    return sources.Sources(lambda k: "", transport=httpx.MockTransport(handler), resolver=_resolver)
+
+
 def test_download_pdf_rejects_html():
-    s = _mock_sources(lambda r: httpx.Response(200, content=b"<html>login</html>"))
+    s = _pdf_sources(lambda r: httpx.Response(200, content=b"<html>login</html>"))
     with pytest.raises(sources.SourceError, match="PDF가 아니에요"):
         s.download_pdf("https://example.org/paper.pdf")
+
+
+def test_download_pdf_pins_checked_ip_and_keeps_host():
+    seen = []
+
+    def handler(r):
+        seen.append(r)
+        return httpx.Response(200, content=b"%PDF-1.4 ok")
+
+    assert _pdf_sources(handler).download_pdf("https://example.org/a.pdf") == b"%PDF-1.4 ok"
+    assert seen[0].url.host == "93.184.215.14" and seen[0].headers["host"] == "example.org"
+    assert seen[0].extensions.get("sni_hostname") == "example.org"
+
+
+@pytest.mark.parametrize("url", [
+    "http://127.0.0.1/x.pdf", "http://localhost:8080/x.pdf", "http://169.254.169.254/latest/meta-data/",
+    "http://metadata.google.internal/computeMetadata/v1/", "http://10.1.2.3/x.pdf", "http://192.168.0.1/x.pdf",
+    "http://[::1]/x.pdf", "http://2130706433/x.pdf", "http://0x7f000001/x.pdf", "http://100.64.0.1/x.pdf",
+    "http://evil.example/x.pdf", "http://mixed.example/x.pdf", "http://mapped.example/x.pdf",
+    "file:///etc/passwd", "ftp://example.org/x.pdf", "gopher://example.org/", "http://user:pw@example.org/x.pdf",
+    "http://nosuchhost.example/x.pdf", "not a url", "http:///x.pdf",
+])
+def test_download_pdf_blocks_internal_targets(url):
+    """품질팀 F3: SSRF — 사설 · 루프백 · 링크로컬 · 메타데이터 · 이상한 스킴은 연결 전에 같은 문구로 거부"""
+    called = []
+    s = _pdf_sources(lambda r: called.append(r) or httpx.Response(200, content=b"%PDF"))
+    with pytest.raises(sources.SourceError) as e:
+        s.download_pdf(url)
+    assert str(e.value) == sources.PDF_FETCH_FAILED and called == []
+
+
+def test_download_pdf_checks_every_redirect():
+    hops = []
+
+    def handler(r):
+        hops.append(str(r.url))
+        if r.headers["host"] == "example.org":
+            return httpx.Response(302, headers={"Location": "http://files.example.org/real.pdf"})
+        if r.headers["host"] == "files.example.org":
+            return httpx.Response(301, headers={"Location": "http://169.254.169.254/latest/"})
+        return httpx.Response(200, content=b"%PDF")
+
+    with pytest.raises(sources.SourceError) as e:
+        _pdf_sources(handler).download_pdf("https://example.org/a.pdf")
+    assert str(e.value) == sources.PDF_FETCH_FAILED and len(hops) == 2  # 메타데이터 주소로는 연결하지 않음
+
+    ok = _pdf_sources(lambda r: httpx.Response(302, headers={"Location": "/b.pdf"}) if r.url.path == "/a.pdf"
+                      else httpx.Response(200, content=b"%PDF-ok"))
+    assert ok.download_pdf("https://v6.example/a.pdf") == b"%PDF-ok"
+    loop = _pdf_sources(lambda r: httpx.Response(302, headers={"Location": "/again"}))
+    with pytest.raises(sources.SourceError):
+        loop.download_pdf("https://example.org/a.pdf")
+
+
+def test_download_pdf_hides_upstream_errors():
+    s = _pdf_sources(lambda r: httpx.Response(404))
+    with pytest.raises(sources.SourceError) as e:
+        s.download_pdf("https://example.org/a.pdf")
+    assert str(e.value) == sources.PDF_FETCH_FAILED
+
+    def boom(r):
+        raise httpx.ConnectError("connection refused to 10.0.0.1:22")
+    with pytest.raises(sources.SourceError) as e:
+        _pdf_sources(boom).download_pdf("https://example.org/a.pdf")
+    assert str(e.value) == sources.PDF_FETCH_FAILED

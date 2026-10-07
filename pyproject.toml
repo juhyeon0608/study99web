@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "paperlab"
 version = "0.1.0"
-description = "설치형 논문 연구 도구: 검색·수집, 서재 관리, PDF 읽기·하이라이트, 인용, AI 요약과 Q&A"
+description = "클라우드 논문 연구 도구: 검색·수집, 서재 관리, PDF 읽기·하이라이트, 인용, AI 요약과 Q&A"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -17,14 +17,16 @@ dependencies = [
   "anthropic>=1.0",
   "python-docx>=1.1",
   "python-hwpx>=6.8,<7",  # 비공개 모듈 hwpx._document.layout 사용
+  # 1단계 클라우드 (명세 9.1)
+  "psycopg[binary]>=3.2",
+  "psycopg-pool>=3.2",
+  "boto3>=1.34",
+  "PyJWT[crypto]>=2.8",
+  "cryptography>=42",
 ]
 
 [project.optional-dependencies]
-desktop = ["pywebview>=5.0"]
 dev = ["pytest>=8"]
-
-[project.scripts]
-paperlab = "paperlab.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["paperlab*"]
@@ -34,3 +36,7 @@ paperlab = ["static/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+  "db: 테스트용 Supabase 프로젝트(SUPABASE_TEST_*)가 필요한 테스트",
+  "r2: 실환경 R2 계약 테스트 (PAPERLAB_R2_CONTRACT=1 일 때만)",
+]

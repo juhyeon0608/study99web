@@ -3,8 +3,43 @@
 import { api, downloadBlob } from "./api.js";
 import { forgetStyle, listStyles, render, sentenceCase, styleOptions } from "./cite.js";
 import { formatManagerDialog, formatOptions, listFormats } from "./formats.js";
-import { $, $$, authorsShort, confirmDialog, copyText, el, errorToast, esc, modal, pickFiles, toast } from "./ui.js";
-import { state, refreshAll } from "./state.js";
+import {
+  $, $$, authorsShort, avatarEl, confirmDialog, copyText, el, errorToast, esc, fmtBytes, modal, pickFiles, promptDialog, toast,
+} from "./ui.js";
+import { actions, refreshAll, refreshUsage, state } from "./state.js";
+
+const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
+const ICON_ALERT = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5v5.5M12 16.5v.01"/></svg>`;
+const FOLDER_PATH = "M3.5 6.5A1.5 1.5 0 0 1 5 5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18z";
+// 폴더 아이콘 (none = "폴더 없음" 모양)
+export const folderIcon = (none = false) =>
+  `<svg class="ico folder-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${FOLDER_PATH}${none ? "M9.5 13.5h5" : ""}"/></svg>`;
+
+// ------------------------------------------------------------ 저장 공간 (D14)
+// 비율은 내림(79.6%를 80%로 보이면서 level은 ok인 어긋남을 막음), 색 · 문구는 서버 level을 따른다
+export function usageInfo(u) {
+  const pct = u.limit_bytes ? Math.floor((u.used_bytes / u.limit_bytes) * 100) : 100;
+  const used = fmtBytes(u.used_bytes);
+  const limit = fmtBytes(u.limit_bytes);
+  const level = ["ok", "warn", "full"].includes(u.level) ? u.level : "ok";
+  const msg = level === "warn" ? `저장 공간 ${pct}% 사용 중 (${used} / ${limit}) · 관리자에게 알려 주세요.`
+    : level === "full" ? `저장 공간이 거의 찼어요 (${pct}%). PDF를 더 올릴 수 없어요. 관리자에게 알려 주세요.` : "";
+  return { pct, used, limit, mine: fmtBytes(u.mine_bytes), level, msg };
+}
+
+// 설정 창 · 업로드 창의 큰 사용량 묶음
+export function usageBlock(u, { hint = true, notice = true, level = null } = {}) {
+  const x = usageInfo(u);
+  const lv = level || x.level;
+  const w = Math.min(100, x.pct);
+  return el(`<div class="usage-block" data-usage data-level="${lv}">
+    <div class="usage-head"><span>저장 공간</span><span class="usage-num" data-usage-text>전체 ${esc(x.used)} / ${esc(x.limit)} · 내 PDF ${esc(x.mine)}</span></div>
+    <div class="usage-bar lg" role="meter" aria-label="저장 공간" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${w}"
+      aria-valuetext="${esc(x.limit)} 중 ${esc(x.used)} 사용"><span style="width:${w}%"></span></div>
+    ${hint ? `<div class="hint">PDF와 DB 백업이 함께 쓰는 공간이에요(모든 사용자 합계). 80%를 넘으면 알려 드리고, 95%를 넘으면 PDF를 더 올릴 수 없어요.</div>` : ""}
+    ${notice ? `<div class="notice ${x.msg ? "" : "hidden"}" data-tone="${lv === "full" ? "danger" : "warn"}" data-usage-msg>${lv === "full" ? ICON_ALERT : ICON_WARN}<div>${esc(x.msg)}</div></div>` : ""}
+  </div>`);
+}
 
 // ------------------------------------------------------------------- cite
 const LOCALES = [["en-US", "영문 용어 (et al., and)"], ["ko-KR", "국문 용어 (외, 및)"]];
@@ -90,25 +125,32 @@ export async function citeDialog(paperOrId) {
 
 // --------------------------------------------------------------- settings
 export async function settingsDialog() {
-  const s = await api.get("/api/settings");
-  const status = await api.get("/api/ai/status");
+  let s, status;
+  try {
+    [s, status] = await Promise.all([api.get("/api/settings"), api.get("/api/ai/status")]);
+  } catch (e) { return errorToast(e); }
+  const usageP = refreshUsage(); // 설정 창 열 때 사용량을 다시 받는다 (사이드바 막대도 함께)
   const models = state.meta.models;
   const styles = await listStyles(true).catch(() => []);
   const formats = await listFormats(true).catch(() => null);
   const fmtDefault = s.doc_format_default || "default";
+  const keyUnreadable = s.anthropic_api_key_status === "unreadable";
+  const user = state.user || {};
   const body = el(`<form autocomplete="off">
     <div class="section-title" style="margin-top:0">AI (요약 · 논문과 대화)</div>
     <div class="field"><label>AI 엔진</label>
       <div class="seg" id="engine-seg">
-        <button type="button" data-v="api">Anthropic API</button>
-        <button type="button" data-v="cli">Claude CLI (설치된 claude 명령)</button>
+        <button type="button" data-v="api" class="active">Anthropic API</button>
+        <button type="button" data-v="cli" disabled aria-describedby="cli-soon">Claude CLI</button>
       </div>
-      <div class="hint" id="engine-hint"></div>
+      <div class="hint" id="engine-hint">PDF를 그림·수식까지 통째로 읽고, 답변에 쪽 번호 근거가 붙어요. 사용량만큼 요금이 나가요.</div>
+      <div class="hint is-strong" id="cli-soon">Claude CLI는 PC 연결(2단계) 뒤에 쓸 수 있어요.</div>
     </div>
-    <div class="field api-only"><label>Anthropic API 키</label>
-      <input class="input" type="password" name="anthropic_api_key" placeholder="${s.anthropic_api_key_set ? "저장됨 (바꾸려면 새 키 입력)" : s.env_api_key_set ? "환경변수 ANTHROPIC_API_KEY 사용 중" : "sk-ant-..."}">
-      <div class="hint">키는 이 컴퓨터의 설정 파일에만 저장돼요. <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">키 발급받기</a>
-      ${s.anthropic_api_key_set ? ' · <a href="#" id="clear-key">저장된 키 지우기</a>' : ""}</div>
+    <div class="field api-only"><label for="set-api-key">Anthropic API 키</label>
+      <input class="input" type="password" id="set-api-key" name="anthropic_api_key" placeholder="${s.anthropic_api_key_set ? "저장됨 (바꾸려면 새 키 입력)" : "sk-ant-..."}">
+      ${keyUnreadable ? `<div class="notice" data-tone="warn" data-key-warn style="margin-top:6px">${ICON_WARN}<div>저장된 키를 읽지 못했어요. 키를 다시 입력해 주세요.</div></div>` : ""}
+      <div class="hint">키는 계정별로 암호화해 클라우드에 저장돼요. PC를 꺼도 AI를 쓰려면 API 키가 필요해요. <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">키 발급받기</a>
+      ${s.anthropic_api_key_set || keyUnreadable ? ' · <a href="#" id="clear-key">저장된 키 지우기</a>' : ""}</div>
     </div>
     <div class="grid-2">
       <div class="field"><label>모델</label><select class="input" name="model">
@@ -155,19 +197,18 @@ export async function settingsDialog() {
       <div class="field"><label>OpenAlex API 키 (선택)</label><input class="input" type="password" name="openalex_api_key" placeholder="${s.openalex_api_key_set ? "저장됨" : "없어도 돼요"}"></div>
       <div class="field"><label>Semantic Scholar API 키 (선택)</label><input class="input" type="password" name="semantic_scholar_api_key" placeholder="${s.semantic_scholar_api_key_set ? "저장됨" : "없어도 돼요"}"></div>
     </div>
-    <div class="section-title">데이터</div>
-    <div class="small muted">서재 데이터와 PDF는 이 폴더에 저장돼요. 폴더째 복사하면 백업돼요.<br><code>${esc(state.meta.data_dir)}</code></div>
+
+    <div class="section-title">계정</div>
+    <div class="account-card">
+      <span data-avatar></span>
+      <div class="account-card-id"><div class="account-card-name">${esc(user.name || "")}</div><div class="account-card-email">${esc(user.email || "")}</div></div>
+      <button type="button" class="btn sm" data-logout>로그아웃</button>
+    </div>
+    <div data-usage-slot><div class="status-line"><span class="spinner"></span> 저장 공간 사용량을 불러오는 중…</div></div>
   </form>`);
-  let engine = s.ai_engine;
-  const syncEngine = () => {
-    $$("#engine-seg button", body).forEach((b) => b.classList.toggle("active", b.dataset.v === engine));
-    $$(".api-only", body).forEach((x) => x.classList.toggle("hidden", engine !== "api"));
-    $("#engine-hint", body).textContent = engine === "api"
-      ? "PDF를 그림·수식까지 통째로 읽고, 답변에 쪽 번호 근거가 붙어요. 사용량만큼 요금이 나가요."
-      : "API 키 없이, 이 컴퓨터에 로그인된 Claude Code로 실행해요. 추출한 텍스트만 보내요.";
-  };
-  $$("#engine-seg button", body).forEach((b) => (b.onclick = () => { engine = b.dataset.v; syncEngine(); }));
-  syncEngine();
+  $("[data-avatar]", body).replaceWith(avatarEl(user, true));
+  // 저장된 ai_engine이 cli여도 1단계는 API만 보여 주고, 저장하면 api가 된다 (명세 8.1)
+  const engine = "api";
   const drawCustom = (list) => {
     const box = $("[data-custom-styles]", body);
     box.innerHTML = "";
@@ -212,12 +253,25 @@ export async function settingsDialog() {
   };
   const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn primary" data-save>저장</button></div>`);
   const m = modal({ title: "설정", body, foot, wide: true });
+  // 저장 공간 (D14): 못 받으면 안내 한 줄
+  usageP.then((u) => {
+    const slot = $("[data-usage-slot]", body);
+    slot.innerHTML = "";
+    slot.appendChild(u ? usageBlock(u) : el(`<p class="small" style="color:var(--text-2)">저장 공간 사용량을 불러오지 못했어요.</p>`));
+  });
+  // 로그아웃: 저장하지 않은 설정은 버리고 바로 (시안 8장)
+  $("[data-logout]", body).onclick = () => {
+    m.close();
+    if (actions.logout) actions.logout();
+  };
   const clear = $("#clear-key", body);
   if (clear) clear.onclick = async (e) => {
     e.preventDefault();
-    await api.put("/api/settings", { anthropic_api_key: null });
-    toast("저장된 API 키를 지웠어요");
-    m.close();
+    try {
+      state.settings = await api.put("/api/settings", { anthropic_api_key: null });
+      toast("저장된 API 키를 지웠어요");
+      m.close();
+    } catch (err) { errorToast(err); }
   };
   $("[data-no]", foot).onclick = () => m.close();
   $("[data-save]", foot).onclick = async () => {
@@ -285,6 +339,7 @@ export async function addPaper(item, { downloadPdf = false } = {}) {
   delete payload.in_library;
   // 서재에서 컬렉션을 보고 있을 때만 그 컬렉션에 넣는다 (논문 찾기 화면에서는 넣지 않음)
   if (state.view === "library" && state.filter.kind === "collection") payload.collection_id = state.filter.id;
+  if (state.view === "library" && state.filter.kind === "folder") payload.folder_id = state.filter.id;
   try {
     const r = await api.post("/api/papers", payload, { allowConflict: true });
     if (r.conflict) { toast("이미 서재에 있는 논문이에요"); return r.paper; }
@@ -352,6 +407,7 @@ export function editPaperDialog(paper = null) {
         toast("저장했어요");
       } else {
         if (state.filter.kind === "collection") fd.collection_id = state.filter.id;
+        if (state.filter.kind === "folder") fd.folder_id = state.filter.id;
         const r = await api.post("/api/papers", fd, { allowConflict: true });
         if (r.conflict) return toast("같은 논문이 이미 서재에 있어요", "error");
         state.activeId = r.paper.id;
@@ -364,35 +420,430 @@ export function editPaperDialog(paper = null) {
 }
 
 // --------------------------------------------------------------- upload
-export async function uploadPdfs(files) {
-  files = files.filter((f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf");
-  if (!files.length) return toast("PDF 파일만 올릴 수 있어요", "error");
-  const body = el(`<div><div class="status-line"><span class="spinner"></span><span>${files.length}개 파일을 읽고 논문 정보를 찾는 중…</span></div><div class="list"></div></div>`);
-  const m = modal({ title: "PDF 추가", body });
-  const fd = new FormData();
-  files.forEach((f) => fd.append("files", f));
-  if (state.view === "library" && state.filter.kind === "collection") fd.append("collection_id", state.filter.id);
-  try {
-    const { results } = await api.post("/api/upload", fd);
-    const ok = results.filter((r) => r.id && !r.duplicate).length;
-    $(".status-line", body).outerHTML = `<div class="status-line ${ok ? "ok" : ""}">✓ ${ok}개 추가 · ${results.length - ok}개 건너뜀</div>`;
-    const list = $(".list", body);
-    for (const r of results) {
-      const icon = r.error ? "✕" : r.duplicate ? "＝" : "✓";
-      const detail = r.error || r.note || `정보 출처: ${r.matched_by}`;
-      list.appendChild(el(`<div class="upload-result"><span class="st">${icon}</span><div>
-        <div style="font-weight:600">${esc(r.title || r.file)}</div>
-        <div class="small muted">${esc(r.file)} · ${esc(detail)}</div>
-        ${(r.warnings || []).map((w) => `<div class="small" style="color:var(--warn)">${esc(w)}</div>`).join("")}
-      </div></div>`));
+// 브라우저 → 서명 주소로 저장소(R2)에 바로 올리고, 서버가 그 파일을 읽어 논문을 만든다 (명세 7.2, 시안 12장)
+const MAX_PDF_BYTES = 100 * 1024 * 1024;
+const PARALLEL = 3; // 동시에 올리는 파일 수 (명세 7.2 가정)
+const batches = new Set(); // 진행 중인 업로드 창들 (탭 닫기 확인 · 로그아웃 때 멈춤)
+
+export const uploadsRunning = () => [...batches].some((b) => b.running());
+
+export function cancelUploads() {
+  for (const b of batches) b.cancelAll();
+}
+
+const isPdf = (f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
+
+function fmtSize(n) {
+  if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))}KB`;
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)}MB`;
+  return fmtBytes(n);
+}
+
+// 저장소 어댑터: 서버가 준 backend · upload 값대로 보낸다 (지금은 서명 주소 PUT 하나 — 저장소를 바꿔도 여기만)
+function putToStorage(slot, file, onProgress) {
+  const up = slot.upload || {};
+  const xhr = new XMLHttpRequest();
+  const promise = new Promise((resolve, reject) => {
+    if (up.method !== "PUT" || !up.url) {
+      reject(Object.assign(new Error("지원하지 않는 저장소예요"), { unsupported: true }));
+      return;
     }
-    const first = results.find((r) => r.id);
-    if (first) state.activeId = first.id;
-    refreshAll();
-  } catch (e) {
-    m.close();
-    errorToast(e);
+    xhr.open("PUT", up.url);
+    for (const [k, v] of Object.entries(up.headers || {})) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve()
+      : reject(Object.assign(new Error(`HTTP ${xhr.status}`), { status: xhr.status })));
+    xhr.onerror = () => reject(Object.assign(new Error("network"), { network: true }));
+    xhr.onabort = () => reject(Object.assign(new Error("abort"), { aborted: true }));
+    xhr.send(file);
+  });
+  return { promise, abort: () => xhr.abort() };
+}
+
+const isFullError = (e) => e && e.status === 400 && /저장 공간이 거의 찼어요/.test(e.message || "");
+const noRetryError = (msg) => /100MB 초과|PDF 파일이 아니에요|PDF를 열 수 없어요/.test(msg || "");
+
+// 저장 공간이 꽉 찼을 때 목록 대신 보이는 안내 (시안 12.1)
+function blockedView(u) {
+  const v = el(`<div class="upload-blocked" data-upload-blocked>
+    <div class="notice" data-tone="danger" role="alert">${ICON_ALERT}<div><b>저장 공간이 거의 찼어요.</b> PDF를 더 올릴 수 없어요. 관리자에게 알려 주세요.</div></div>
+    <p class="small" style="margin:0;color:var(--text-2)">필요 없는 논문을 지우면 그 PDF만큼 공간이 생겨요.</p></div>`);
+  const put = (x) => {
+    const b = usageBlock(x, { hint: false, notice: false, level: "full" });
+    b.style.margin = "0";
+    $(".notice", v).after(b);
+  };
+  if (u) put(u);
+  else refreshUsage().then((x) => { if (x) put(x); });
+  return v;
+}
+
+function blockedDialog(title, u) {
+  const foot = el(`<div style="display:contents"><button class="btn primary" data-close-upload>닫기</button></div>`);
+  const m = modal({ title, body: blockedView(u), foot });
+  $("[data-close-upload]", foot).onclick = () => m.close();
+  setTimeout(() => $("[data-close-upload]", foot).focus(), 40);
+}
+
+// files: 올릴 PDF들. attachTo: 이미 있는 논문 id(PDF 첨부 · 바꾸기 — 파일 하나)
+export async function uploadPdfs(files, { attachTo = null, replace = false } = {}) {
+  files = (files || []).filter(isPdf);
+  if (!files.length) return toast("PDF 파일만 올릴 수 있어요", "error");
+  if (attachTo) files = files.slice(0, 1);
+  const title = attachTo ? (replace ? "PDF 바꾸기" : "PDF 첨부") : "PDF 추가";
+  const known = state.usage;
+  if (known && known.level === "full") return blockedDialog(title, known);
+  // 지금 보고 있는 컬렉션 · 폴더에 넣는다
+  const into = {};
+  if (!attachTo && state.view === "library" && state.filter.kind === "collection") into.collection_id = state.filter.id;
+  if (!attachTo && state.view === "library" && state.filter.kind === "folder") into.folder_id = state.filter.id;
+
+  const warn = known && known.level === "warn" ? usageInfo(known).msg : "";
+  const body = el(`<div>
+    ${warn ? `<div class="notice" data-tone="warn" data-upload-storage style="margin-bottom:8px">${ICON_WARN}<div>${esc(warn)}</div></div>` : ""}
+    <div class="status-line" data-upload-summary aria-live="polite"></div>
+    <div class="upload-list" data-upload-list></div></div>`);
+  const foot = el(`<div style="display:contents"></div>`);
+  let closed = false;
+  const m = modal({ title, body, foot, onClose: () => { closed = true; } });
+
+  const items = files.map((file) => ({ file, state: "waiting", pct: 0, msg: "", title: "", warnings: [], retry: false }));
+  let active = 0;
+  let announced = false;
+  let blocked = false;
+  const batch = {
+    running: () => items.some((it) => ["waiting", "uploading", "processing"].includes(it.state)),
+    cancelAll,
+  };
+  batches.add(batch);
+
+  const list = $("[data-upload-list]", body);
+  for (const it of items) {
+    it.row = el(`<div class="upload-item" data-state="waiting">
+      <span class="upload-st" aria-hidden="true"></span>
+      <div class="upload-main">
+        <div class="upload-name"><span class="upload-file"></span><span class="upload-size">${esc(fmtSize(it.file.size))}</span></div>
+        <div class="progress" role="progressbar" aria-label="${esc(it.file.name)} 올리기" aria-valuemin="0" aria-valuemax="100"><div></div></div>
+        <div class="upload-msg"></div>
+      </div></div>`);
+    list.appendChild(it.row);
+    draw(it);
   }
+
+  function draw(it) {
+    const r = it.row;
+    r.dataset.state = it.state;
+    const st = $(".upload-st", r);
+    st.innerHTML = it.state === "uploading" || it.state === "processing" ? `<span class="spinner"></span>`
+      : esc({ waiting: "○", done: "✓", duplicate: "＝", error: "✕" }[it.state]);
+    $(".upload-file", r).textContent = (it.state === "done" || it.state === "duplicate") && it.title ? it.title : it.file.name;
+    const bar = $(".progress", r);
+    bar.classList.toggle("indeterminate", it.state === "processing");
+    $("div", bar).style.width = it.state === "uploading" ? `${it.pct}%` : "0%";
+    if (it.state === "uploading") bar.setAttribute("aria-valuenow", it.pct); else bar.removeAttribute("aria-valuenow");
+    $(".upload-msg", r).textContent = it.state === "waiting" ? "기다리는 중"
+      : it.state === "uploading" ? `올리는 중 · ${it.pct}%`
+        : it.state === "processing" ? (attachTo ? "PDF를 읽는 중…" : "논문 정보를 찾는 중…") : it.msg;
+    $$(".upload-warn", r).forEach((w) => w.remove());
+    for (const w of it.warnings) $(".upload-main", r).appendChild(el(`<div class="upload-warn">${esc(w)}</div>`));
+    const btn = $("[data-retry]", r);
+    if (it.state === "error" && it.retry) {
+      if (!btn) {
+        const b = el(`<button type="button" class="btn sm" data-retry>다시 시도</button>`);
+        b.onclick = () => retry(it);
+        r.appendChild(b);
+      }
+    } else if (btn) btn.remove();
+  }
+
+  function fail(it, msg, canRetry) {
+    it.state = "error";
+    it.msg = msg;
+    it.retry = canRetry;
+    draw(it);
+  }
+
+  // 서명 주소 받기 → 올리기 → 서버 처리
+  async function run(it) {
+    it.cancelled = false;
+    it.state = "uploading";
+    it.pct = 0;
+    it.warnings = [];
+    draw(it);
+    let phase = "slot";
+    try {
+      if (it.file.size > MAX_PDF_BYTES) return fail(it, "파일이 너무 커요 (100MB 초과)", false);
+      let slot;
+      if (attachTo) slot = await api.post(`/api/papers/${attachTo}/pdf/upload`);
+      else {
+        const r = await api.post("/api/uploads", { files: [{ name: it.file.name, size: it.file.size }] });
+        slot = (r.files || [])[0] || {};
+        if (slot.error) return fail(it, slot.error, false);
+      }
+      if (it.cancelled) return fail(it, "취소했어요", false);
+      phase = "put";
+      const put = putToStorage(slot, it.file, (f) => {
+        const pct = Math.min(100, Math.floor(f * 100));
+        if (pct !== it.pct) { it.pct = pct; draw(it); }
+      });
+      it.abort = put.abort;
+      await put.promise;
+      it.abort = null;
+      phase = "complete";
+      it.state = "processing";
+      draw(it);
+      if (attachTo) {
+        const r = await api.post(`/api/papers/${attachTo}/pdf/complete`, { upload_id: slot.upload_id });
+        it.state = "done";
+        it.id = attachTo;
+        it.title = (r.paper && r.paper.title) || "";
+        it.msg = `${it.file.name} · ${replace ? "PDF를 바꿨어요" : "PDF를 붙였어요"}`;
+        it.warnings = r.warnings || [];
+      } else {
+        const r = await api.post(`/api/uploads/${encodeURIComponent(slot.upload_id)}/complete`,
+          { name: it.file.name, lookup: true, ...into });
+        if (r.error) return fail(it, r.error, false);
+        it.id = r.id;
+        it.title = r.title || "";
+        it.state = r.duplicate ? "duplicate" : "done";
+        it.msg = r.duplicate ? `${r.file || it.file.name} · ${r.note || "이미 서재에 있어요"}`
+          : `${r.file || it.file.name} · ${r.note || `정보 출처: ${r.matched_by}`}`;
+        it.warnings = r.warnings || [];
+      }
+      draw(it);
+    } catch (e) {
+      it.abort = null;
+      if (e.aborted || it.cancelled) return fail(it, "취소했어요", false);
+      if (isFullError(e)) return block();
+      if (phase === "put") {
+        if (e.status === 403) return fail(it, "올리기 시간이 지났어요. 다시 시도해 주세요.", true);
+        if (e.unsupported) return fail(it, e.message, false);
+        return fail(it, "올리지 못했어요. 인터넷 연결을 확인하고 다시 시도해 주세요.", true);
+      }
+      fail(it, e.message || "올리지 못했어요", !noRetryError(e.message));
+    }
+  }
+
+  function pump() {
+    while (!blocked && active < PARALLEL) {
+      const next = items.find((x) => x.state === "waiting" && !x.started);
+      if (!next) break;
+      next.started = true;
+      active++;
+      run(next).finally(() => { active--; pump(); update(); });
+    }
+    update();
+  }
+
+  // 다시 시도: 서명 주소부터 새로 받는다
+  function retry(it) {
+    it.started = false;
+    it.state = "waiting";
+    it.retry = false;
+    announced = false;
+    batches.add(batch);
+    draw(it);
+    pump();
+  }
+
+  function cancelAll() {
+    for (const it of items) {
+      if (it.state === "waiting") { it.started = true; fail(it, "취소했어요", false); }
+      else if (it.state === "uploading") { it.cancelled = true; if (it.abort) it.abort(); }
+    }
+    update();
+  }
+
+  // 저장 공간이 꽉 참: 남은 것은 멈추고 목록 대신 안내 (시안 12.1)
+  function block() {
+    if (blocked) return;
+    blocked = true;
+    cancelAll();
+    batches.delete(batch);
+    body.innerHTML = "";
+    body.appendChild(blockedView(null));
+    foot.innerHTML = `<button class="btn primary" data-close-upload>닫기</button>`;
+    $("[data-close-upload]", foot).onclick = () => m.close();
+    if (!closed) $("[data-close-upload]", foot).focus();
+  }
+
+  function update() {
+    if (blocked) return;
+    const n = (st) => items.filter((it) => it.state === st).length;
+    const finished = n("done") + n("duplicate") + n("error");
+    const summary = $("[data-upload-summary]", body);
+    if (batch.running()) {
+      summary.className = "status-line";
+      summary.innerHTML = `<span class="spinner"></span><span>PDF ${items.length}개를 올리고 있어요 · ${finished}개 끝남</span>`;
+      if (!foot.querySelector("[data-cancel-all]")) {
+        foot.innerHTML = `<div class="left"><span class="upload-foot-note">올리는 동안 이 탭을 닫지 마세요</span></div>
+          <button class="btn" data-cancel-all>모두 취소</button>`;
+        $("[data-cancel-all]", foot).onclick = cancelAll;
+      }
+      return;
+    }
+    const added = n("done");
+    const cancelled = items.filter((it) => it.state === "error" && it.msg === "취소했어요").length;
+    const failed = n("error") - cancelled;
+    const skipped = n("duplicate") + cancelled;
+    if (attachTo) {
+      summary.className = `status-line ${added ? "ok" : "bad"}`;
+      summary.textContent = added ? `✓ ${replace ? "PDF를 바꿨어요" : "PDF를 붙였어요"}` : `✕ ${replace ? "PDF를 바꾸지 못했어요" : "PDF를 붙이지 못했어요"}`;
+    } else {
+      summary.className = `status-line ${added ? "ok" : ""}`;
+      summary.textContent = `✓ ${added}개 추가 · ${skipped}개 건너뜀${failed ? ` · ${failed}개 실패` : ""}`;
+    }
+    if (!foot.querySelector("[data-close-upload]")) {
+      foot.innerHTML = `<button class="btn primary" data-close-upload>닫기</button>`;
+      $("[data-close-upload]", foot).onclick = () => m.close();
+      if (!closed) $("[data-close-upload]", foot).focus();
+    }
+    if (announced) return;
+    announced = true;
+    batches.delete(batch);
+    const first = items.find((it) => it.id);
+    if (first && !attachTo) state.activeId = first.id;
+    if (added || n("duplicate")) { refreshAll(); refreshUsage(); }
+    // 창을 닫은 뒤에 끝났으면 토스트로 알린다
+    if (closed && (added || failed)) {
+      if (attachTo) toast(added ? (replace ? "PDF를 바꿨어요" : "PDF를 붙였어요") : (replace ? "PDF를 바꾸지 못했어요" : "PDF를 붙이지 못했어요"), added ? "success" : "error");
+      else toast(`PDF ${added}개를 추가했어요${failed ? ` · ${failed}개는 실패했어요` : ""}`, "", { duration: 8000 });
+    }
+  }
+
+  pump();
+}
+
+// ------------------------------------------------------------ 폴더 고르기 (D9)
+// 트리 순서(부모 다음 자식, 같은 단계는 이름순)로 펼친 목록 [{f, depth}]
+export function folderTreeList(folders = state.folders) {
+  const byParent = new Map();
+  for (const f of folders) {
+    const k = f.parent_id || 0;
+    if (!byParent.has(k)) byParent.set(k, []);
+    byParent.get(k).push(f);
+  }
+  for (const arr of byParent.values()) arr.sort((a, b) => a.name.localeCompare(b.name, "ko"));
+  const out = [];
+  const walk = (pid, depth) => {
+    for (const f of byParent.get(pid) || []) {
+      out.push({ f, depth });
+      walk(f.id, depth + 1);
+    }
+  };
+  walk(0, 0);
+  return out;
+}
+
+// 폴더 경로 ["졸업논문", "2장 선행연구"]
+export function folderPath(fid) {
+  const byId = new Map(state.folders.map((f) => [f.id, f]));
+  const names = [];
+  const seen = new Set();
+  for (let f = byId.get(fid); f && !seen.has(f.id); f = byId.get(f.parent_id)) {
+    seen.add(f.id);
+    names.unshift(f.name);
+  }
+  return names;
+}
+
+// 자기와 하위 폴더 id (폴더 옮기기에서 고를 수 없음)
+export function folderSubtree(fid) {
+  const out = new Set([fid]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const f of state.folders) if (out.has(f.parent_id) && !out.has(f.id)) { out.add(f.id); grew = true; }
+  }
+  return out;
+}
+
+// current: 지금 위치(null = 폴더 없음/맨 위, undefined = 여러 편이라 없음). 고르면 {value: id|null}, 취소하면 null
+export function folderPickDialog({ title, current = undefined, firstLabel = "폴더 없음", disabled = new Set() }) {
+  return new Promise((resolve) => {
+    let result = null;
+    let picked = current === undefined ? undefined : current;
+    const body = el(`<form class="folder-pick" data-folder-pick><div class="folder-pick-list" role="radiogroup" aria-label="옮길 폴더"></div></form>`);
+    const foot = el(`<div style="display:contents">
+      <div class="left"><button type="button" class="btn" data-folder-new title="고른 폴더 안에 새 폴더를 만들어요">새 폴더…</button></div>
+      <button type="button" class="btn" data-no>취소</button>
+      <button type="button" class="btn primary" data-yes>옮기기</button></div>`);
+    const m = modal({ title, body, foot, onClose: () => resolve(result) });
+    m.el.querySelector(".modal").classList.add("folder-modal");
+    const listEl = $(".folder-pick-list", body);
+    const yes = $("[data-yes]", foot);
+    const valueOf = (v) => (v === "" ? null : Number(v));
+    const sync = () => { yes.disabled = picked === undefined || picked === current; };
+
+    const draw = () => {
+      listEl.innerHTML = "";
+      const opt = (value, name, depth, none, path) => {
+        const isCur = current !== undefined && valueOf(value) === current;
+        const off = value !== "" && disabled.has(Number(value));
+        const o = el(`<label class="folder-opt ${isCur ? "is-current" : ""} ${off ? "is-disabled" : ""}" style="--depth:${depth}" title="${esc(path)}">
+          <input type="radio" name="folder" value="${value}" ${off ? "disabled" : ""}>${folderIcon(none)}
+          <span class="folder-opt-name">${esc(name)}</span>${isCur ? `<span class="chip">지금 위치</span>` : ""}</label>`);
+        const input = $("input", o);
+        input.checked = picked !== undefined && valueOf(value) === picked;
+        input.onchange = () => { picked = valueOf(input.value); sync(); };
+        listEl.appendChild(o);
+      };
+      opt("", firstLabel, 0, true, firstLabel);
+      for (const { f, depth } of folderTreeList()) opt(String(f.id), f.name, depth, false, folderPath(f.id).join(" › "));
+      $$(".folder-pick-empty", body).forEach((x) => x.remove());
+      if (!state.folders.length) body.appendChild(el(`<div class="folder-pick-empty">아직 폴더가 없어요. [새 폴더…]로 만들어 보세요.</div>`));
+      sync();
+    };
+    draw();
+    const focusPicked = () => {
+      const input = $("input:checked", listEl) || $("input:not(:disabled)", listEl);
+      if (input) input.focus();
+    };
+    setTimeout(focusPicked, 40);
+
+    const submit = () => {
+      if (yes.disabled) return;
+      result = { value: picked };
+      m.close();
+    };
+    body.onsubmit = (e) => { e.preventDefault(); submit(); };
+    // 라디오에서 Enter = 옮기기
+    body.onkeydown = (e) => { if (e.key === "Enter" && e.target.matches("input[type=radio]")) { e.preventDefault(); submit(); } };
+    yes.onclick = submit;
+    $("[data-no]", foot).onclick = () => m.close();
+    $("[data-folder-new]", foot).onclick = async () => {
+      const parent = picked !== undefined && picked !== null && !disabled.has(picked) ? picked : null;
+      const name = await promptDialog("새 폴더 이름", { placeholder: "예: 2장 선행연구, 학회 발표 자료" });
+      if (!name) return focusPicked();
+      try {
+        const { id } = await api.post("/api/folders", { name, parent_id: parent });
+        state.folders = await api.get("/api/folders");
+        picked = id;
+        draw();
+        focusPicked();
+        refreshAll();
+      } catch (e) { errorToast(e); }
+    };
+  });
+}
+
+export function movedText(n, fid) {
+  if (fid == null) return `${n}편을 폴더 밖으로 옮겼어요`;
+  const f = state.folders.find((x) => x.id === fid);
+  return `${n}편을 ‘${f ? f.name : "폴더"}’ 폴더로 옮겼어요`;
+}
+
+// 논문을 폴더로 옮기기: 한 편이면 current = 그 논문의 folder_id
+export async function moveToFolderDialog(ids, current = undefined) {
+  if (!ids.length) return;
+  const one = ids.length === 1;
+  const r = await folderPickDialog({ title: one ? "폴더로 이동" : `${ids.length}편을 폴더로 이동`, current: one ? (current ?? null) : undefined });
+  if (!r) return;
+  try {
+    await api.post("/api/papers/bulk", { ids, action: "move_folder", value: r.value });
+    toast(movedText(ids.length, r.value));
+    refreshAll();
+  } catch (e) { errorToast(e); }
 }
 
 // ------------------------------------------------------- import / export

@@ -1,102 +1,113 @@
+"""서버 API — 변경 전 시나리오를 테스트 프로젝트 + 가짜 저장소 + 테스트 사용자 토큰으로 (AC-23 · 30 · 36 · 37 · 42 · 53)."""
+
 import json
-import time
 
 import pytest
-from fastapi.testclient import TestClient
-
-from paperlab import ai as ai_mod
-from paperlab.server import create_app
-from paperlab.sources import SourceError
 
 from .conftest import SAMPLE, make_pdf
 
-
-class FakeSources:
-    def lookup_doi(self, doi):
-        if doi == "10.1109/cvpr.2016.90":
-            return {"title": "Deep Residual Learning for Image Recognition", "doi": doi, "year": 2016,
-                    "authors": [{"given": "Kaiming", "family": "He"}], "venue": "CVPR", "item_type": "conference"}
-        raise SourceError("없음")
-
-    def lookup_arxiv(self, arxiv_id):
-        raise SourceError("없음")
-
-    def match_title(self, title):
-        return None
-
-    def resolve(self, text):
-        return dict(SAMPLE, source="openalex")
-
-    def search(self, *a, **kw):
-        return {"items": [dict(SAMPLE, source="openalex")], "total": 1}
-
-    def download_pdf(self, url):
-        return make_pdf(title="Downloaded Paper Title Here", doi="")
-
-
-class FakeAI:
-    def status(self):
-        return {"engine": "api", "ready": True, "message": ""}
-
-    def summarize(self, ctx, progress):
-        progress("작성 중", 0.5)
-        return ai_mod.normalize_summary({"tldr": f"{ctx.title} 요약", "keywords": ["resnet"]})
-
-    def chat(self, ctx, history, question):
-        yield {"type": "delta", "text": "답"}
-        yield {"type": "done", "text": f"{len(ctx.page_texts)}쪽 논문입니다[1]",
-               "citations": [{"n": 1, "page": 1, "end_page": 1, "text": "residual"}]}
+pytestmark = pytest.mark.db
 
 
 @pytest.fixture
-def client(tmp_path):
-    app = create_app(tmp_path, sources=FakeSources(), ai=FakeAI())
-    return TestClient(app, headers={"X-PaperLab": "1"})
+def client(cloud):
+    return cloud.client(cloud.user())
 
 
-def test_rejects_foreign_host_and_origin(client):
-    assert client.get("/api/health", headers={"host": "evil.example"}).status_code == 403
-    assert client.post("/api/collections", json={"name": "x"},
-                       headers={"origin": "https://evil.example"}).status_code == 403
-    assert client.post("/api/collections", json={"name": "x"},
-                       headers={"origin": "http://127.0.0.1:8765"}).status_code == 200
-    # 샌드박스 iframe의 Origin: null, 사용자 정의 헤더 없는 폼 전송은 막는다
-    assert client.post("/api/upload", files=[("files", ("a.pdf", make_pdf(), "application/pdf"))],
-                       headers={"origin": "null"}).status_code == 403
-    assert client.post("/api/collections", json={"name": "x"}, headers={"X-PaperLab": ""}).status_code == 403
-    assert client.get("/api/health", headers={"X-PaperLab": ""}).status_code == 200
-
-
-def test_index_served(client):
-    r = client.get("/")
+def test_index_and_static(cloud):
+    c = cloud.client()
+    r = c.get("/")
     assert r.status_code == 200 and "PaperLab" in r.text
+    assert c.get("/static/js/app.js").headers["content-type"].startswith("text/javascript")
+    assert c.get("/static/vendor/pdfjs/pdf.min.mjs").headers["content-type"].startswith("text/javascript")
 
 
-def test_upload_lookup_and_duplicate(client):
+def test_me_creates_profile(cloud):
+    u = cloud.user()
+    c = cloud.client(u)
+    me = c.get("/api/me").json()
+    assert me["user_id"] == u.id and me["email"] == u.email
+    assert c.get("/api/me").json() == me
+
+
+def test_upload_lookup_and_duplicate(cloud, client):
+    """AC-36 · 37: 서명 주소 업로드 → complete"""
     pdf_bytes = make_pdf()
-    r = client.post("/api/upload", files=[("files", ("resnet.pdf", pdf_bytes, "application/pdf"))])
-    [res] = r.json()["results"]
-    assert res["matched_by"] == "DOI 10.1109/cvpr.2016.90"
-    p = client.get(f"/api/papers/{res['id']}").json()
-    assert p["has_pdf"] and p["page_count"] == 2 and p["venue"] == "CVPR"
-    assert client.get(f"/api/papers/{res['id']}/pdf").content == pdf_bytes
+    res = cloud.upload(client, pdf_bytes, "resnet.pdf")
+    assert res["matched_by"] == "DOI 10.1109/cvpr.2016.90" and res["title"]
+    pid = res["id"]
+    p = client.get(f"/api/papers/{pid}").json()
+    assert p["has_pdf"] and p["page_count"] == 2 and p["venue"] == "CVPR" and "pdf_path" not in p
+    uid = client.get("/api/me").json()["user_id"]
+    assert cloud.storage.objects[f"users/{uid}/papers/{pid}.pdf"] == pdf_bytes
+    assert not [k for k in cloud.storage.objects if k.startswith(f"incoming/{uid}/")]  # 임시 파일 삭제
+    url = client.get(f"/api/papers/{pid}/pdf-url").json()
+    assert url["url"].startswith("https://") and url["expires_at"].endswith("+00:00")
 
-    again = client.post("/api/upload", files=[("files", ("copy.pdf", pdf_bytes, "application/pdf"))]).json()
-    assert again["results"][0]["duplicate"] is True
-    bad = client.post("/api/upload", files=[("files", ("x.pdf", b"hello", "application/pdf"))]).json()
-    assert "PDF 파일이 아니에요" in bad["results"][0]["error"]
+    again = cloud.upload(client, pdf_bytes, "copy.pdf")
+    assert again["duplicate"] is True
+    bad = cloud.upload(client, b"hello", "x.pdf")
+    assert bad["error"] == "PDF 파일이 아니에요"
+    assert not [k for k in cloud.storage.objects if k.startswith(f"incoming/{uid}/")]
 
     hits = client.get("/api/papers", params={"q": "shortcut connections"}).json()
     assert hits["total"] == 1
 
 
-def test_add_from_search_with_pdf_download(client):
+def test_upload_attaches_pdf_to_existing_paper(cloud, client):
+    """AC-37: PDF 없는 기존 논문과 일치하면 붙임"""
+    pid = client.post("/api/papers", json={"title": "Deep Residual Learning for Image Recognition",
+                                           "doi": "10.1109/cvpr.2016.90"}).json()["paper"]["id"]
+    res = cloud.upload(client, make_pdf(), "r.pdf")
+    assert res["id"] == pid and res["note"] == "이미 있는 논문에 PDF를 붙였어요"
+    assert client.get(f"/api/papers/{pid}").json()["has_pdf"]
+
+
+def test_upload_size_limits(cloud, client):
+    """AC-40"""
+    big = 100 * 1024 * 1024 + 1
+    files = client.post("/api/uploads", json={"files": [{"name": "big.pdf", "size": big},
+                                                       {"name": "ok.pdf", "size": 10}]}).json()["files"]
+    assert files[0]["error"] == "파일이 너무 커요 (100MB 초과)" and "upload_id" in files[1]
+    assert client.post("/api/uploads", json={"files": [{"name": "a", "size": 1}] * 21}).status_code == 400
+    # 신고는 작게, 실제로는 100MB 초과 → complete에서 오류 + 임시 파일 삭제
+    slot = files[1]
+    cloud.storage.objects[slot["upload"]["url"].split("/fake-bucket/")[1].split("?")[0]] = b"%PDF" + b"0" * big
+    r = client.post(f"/api/uploads/{slot['upload_id']}/complete", json={"name": "ok.pdf"}).json()
+    assert r["error"] == "파일이 너무 커요 (100MB 초과)"
+    assert not [k for k in cloud.storage.objects if k.startswith("incoming/")]
+    assert client.post("/api/uploads/not-a-uuid/complete", json={}).status_code == 404
+
+
+def test_attach_pdf_flow_and_replace(cloud, client):
+    pid = client.post("/api/papers", json=SAMPLE).json()["paper"]["id"]
+    slot = client.post(f"/api/papers/{pid}/pdf/upload").json()
+    assert cloud.storage.browser_put(slot["upload"]["url"], b"%PDF-1.4 broken") == 200
+    assert client.post(f"/api/papers/{pid}/pdf/complete", json={"upload_id": slot["upload_id"]}).status_code == 400
+    for title in ("First Title For Test", "Another Title For Test"):
+        slot = client.post(f"/api/papers/{pid}/pdf/upload").json()
+        data = make_pdf(title=title)
+        cloud.storage.browser_put(slot["upload"]["url"], data)
+        r = client.post(f"/api/papers/{pid}/pdf/complete", json={"upload_id": slot["upload_id"]})
+        assert r.status_code == 200 and r.json()["paper"]["has_pdf"]
+    uid = client.get("/api/me").json()["user_id"]
+    assert cloud.storage.objects[f"users/{uid}/papers/{pid}.pdf"] == data  # 같은 키에 덮어씀
+    assert client.get(f"/api/papers/{pid}/pdf-url").status_code == 200
+
+
+def test_add_from_search_with_pdf_download(cloud, client):
+    """AC-42: URL에서 받은 PDF는 최종 키에 바로"""
     item = client.get("/api/search", params={"q": "attention"}).json()["items"][0]
     assert item["in_library"] is None
     r = client.post("/api/papers", json={**item, "download_pdf": True, "pdf_url": "https://x/y.pdf"})
     assert r.status_code == 200 and r.json()["paper"]["has_pdf"]
-    assert client.get("/api/search", params={"q": "attention"}).json()["items"][0]["in_library"] == r.json()["paper"]["id"]
+    pid = r.json()["paper"]["id"]
+    uid = client.get("/api/me").json()["user_id"]
+    assert ("put", f"users/{uid}/papers/{pid}.pdf") in cloud.storage.log
+    assert client.get("/api/search", params={"q": "attention"}).json()["items"][0]["in_library"] == pid
     assert client.post("/api/papers", json=item).status_code == 409
+    p2 = client.post("/api/papers", json={"title": "No pdf yet paper", "pdf_url": "https://x/z.pdf"}).json()["paper"]
+    assert client.post(f"/api/papers/{p2['id']}/fetch-pdf").json()["paper"]["has_pdf"]
 
 
 def test_cite_export_import(client):
@@ -140,30 +151,44 @@ def test_annotations_and_note(client):
     assert "> multi-head" in md and "중요" in md and "## 정리" in md
 
 
-def test_summary_job_and_chat(client):
-    pid = client.post("/api/upload", files=[("files", ("r.pdf", make_pdf(), "application/pdf"))]).json()["results"][0]["id"]
-    job = client.post(f"/api/papers/{pid}/summary").json()
-    for _ in range(50):
-        j = client.get(f"/api/jobs/{job['id']}").json()
-        if j["status"] != "running":
-            break
-        time.sleep(0.05)
-    assert j["status"] == "done", j
-    s = client.get(f"/api/papers/{pid}/summary").json()["summary"]
-    assert s["data"]["tldr"].endswith("요약")
+def _events(resp) -> list[dict]:
+    return [json.loads(line[6:]) for line in resp.iter_lines() if line.startswith("data: ")]
+
+
+def test_summary_stream_and_chat(cloud, client):
+    """AC-53 · AC-29"""
+    pid = cloud.upload(client, make_pdf(), "r.pdf")["id"]
+    with client.stream("POST", f"/api/papers/{pid}/summary") as r:
+        assert r.headers["content-type"].startswith("text/event-stream")
+        events = _events(r)
+    assert events[0]["type"] == "progress" and events[-1]["type"] == "done"
+    assert events[-1]["summary"]["data"]["tldr"].endswith("요약")
+    s = client.get(f"/api/papers/{pid}/summary").json()
+    assert s["summary"]["data"]["tldr"].endswith("요약") and s["job"] is None
     assert client.get(f"/api/papers/{pid}").json()["keywords"] == ["resnet"]
 
     with client.stream("POST", f"/api/papers/{pid}/chat", json={"question": "몇 쪽?"}) as r:
-        events = [json.loads(line[6:]) for line in r.iter_lines() if line.startswith("data: ")]
+        events = _events(r)
     assert events[0] == {"type": "delta", "text": "답"}
     assert events[-1]["text"] == "2쪽 논문입니다[1]"
     hist = client.get(f"/api/papers/{pid}/chat").json()
     assert [m["role"] for m in hist] == ["user", "assistant"] and hist[1]["citations"][0]["page"] == 1
+    assert client.delete(f"/api/papers/{pid}/chat").json() == {"ok": True}
+    assert client.get(f"/api/papers/{pid}/chat").json() == []
+    import psycopg
+    with psycopg.connect(cloud.project.admin_db, autocommit=True) as conn:
+        n = conn.execute("select count(*) from paperlab.chat_sessions where paper_id = %s", (pid,)).fetchone()[0]
+    assert n == 1
 
 
-def test_static_mime_types(client):
-    assert client.get("/static/js/app.js").headers["content-type"].startswith("text/javascript")
-    assert client.get("/static/vendor/pdfjs/pdf.min.mjs").headers["content-type"].startswith("text/javascript")
+def test_summary_error_saves_nothing(cloud, client):
+    """AC-53: 가짜 AI 오류 → error 이벤트, 저장 없음"""
+    pid = client.post("/api/papers", json=SAMPLE).json()["paper"]["id"]
+    cloud.fake_ai.fail = True
+    with client.stream("POST", f"/api/papers/{pid}/summary") as r:
+        events = _events(r)
+    assert events[-1]["type"] == "error"
+    assert client.get(f"/api/papers/{pid}/summary").json()["summary"] is None
 
 
 def test_styles_builtin_custom_dependent(client):
@@ -178,6 +203,7 @@ def test_styles_builtin_custom_dependent(client):
                  b'<link href="http://www.zotero.org/styles/apa" rel="independent-parent"/></info></style>')
     r = client.post("/api/styles", files={"file": ("my-journal.csl", dependent, "application/xml")}).json()
     assert r["id"] == "my-journal" and r["parent"] == "apa" and r["builtin"] is False
+    assert "my-journal" in [x["id"] for x in client.get("/api/styles").json()]
     assert "APA" in client.get("/api/styles/my-journal").text  # 부모(APA) 서식을 보낸다
     assert client.post("/api/styles", files={"file": ("x.csl", b"<html/>", "text/xml")}).status_code == 400
     orphan = dependent.replace(b"styles/apa", b"styles/unknown-parent").replace(b"my-journal", b"orphan")
@@ -186,7 +212,7 @@ def test_styles_builtin_custom_dependent(client):
     assert client.delete("/api/styles/my-journal").json() == {"ok": True}
 
 
-def test_review_regressions(client):
+def test_review_regressions(cloud, client):
     a = client.post("/api/papers", json=SAMPLE).json()["paper"]["id"]
     b = client.post("/api/papers", json={"title": "Second paper title here"}).json()["paper"]["id"]
     client.post(f"/api/papers/{a}/open")
@@ -198,11 +224,29 @@ def test_review_regressions(client):
     client.patch(f"/api/tags/{tid}", json={"name": "renamedtag"})
     assert client.get("/api/papers", params={"q": "renamedtag"}).json()["total"] == 1
     client.patch(f"/api/papers/{b}", json={"tags": ["Other"]})
-    assert client.patch(f"/api/tags/{tid}", json={"name": "other"}).status_code == 400
+    r = client.patch(f"/api/tags/{tid}", json={"name": "other"})  # AC-26
+    assert r.status_code == 400 and r.json()["detail"] == "같은 이름의 태그가 이미 있어요"
     # 잘못된 입력은 500이 아니라 400
     assert client.post("/api/papers/bulk", json={"ids": [a], "action": "add_collection", "value": None}).status_code == 400
-    assert client.post(f"/api/papers/{a}/pdf", files={"file": ("x.pdf", b"%PDF-1.4 broken", "application/pdf")}).status_code == 400
-    # PDF 교체 후에도 파일이 남아 있다
-    client.post(f"/api/papers/{a}/pdf", files={"file": ("x.pdf", make_pdf(), "application/pdf")})
-    client.post(f"/api/papers/{a}/pdf", files={"file": ("y.pdf", make_pdf(title="Another Title For Test"), "application/pdf")})
-    assert client.get(f"/api/papers/{a}/pdf").status_code == 200
+
+
+def test_compose_limit(client):
+    """AC-30: compose 30MB 초과 → 400"""
+    big = b"PK" + b"0" * (30 * 1024 * 1024)
+    r = client.post("/api/compose/scan", files={"file": ("a.docx", big, "application/octet-stream")})
+    assert r.status_code == 400 and r.json()["detail"] == "파일이 너무 커요 (30MB 초과)"
+
+
+def test_folder_db_check_violation_is_400(cloud, monkeypatch):
+    """승인자 L1: 서버 검사를 지나도(여기서는 일부러 끔) DB CHECK에 걸리는 이름은 500이 아니라 400, 다음 요청은 정상.
+    (U+2028 · U+2029는 DB 로캘에 따라 [:cntrl:] 판정이 달라 서버 검사 단위 테스트에서 확인 — test_folder_name_rules)"""
+    name = "ctrl\x01x"
+    from paperlab import server as server_mod
+    monkeypatch.setattr(server_mod, "folder_name_problem", lambda n: "")
+    c = cloud.client(cloud.user())
+    r = c.post("/api/folders", json={"name": name})
+    assert r.status_code == 400, r.text
+    fid = c.post("/api/folders", json={"name": "정상 폴더"}).json()["id"]
+    r = c.patch(f"/api/folders/{fid}", json={"name": name})
+    assert r.status_code == 400, r.text
+    assert [f["name"] for f in c.get("/api/folders").json()] == ["정상 폴더"]

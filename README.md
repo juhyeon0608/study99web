@@ -1,41 +1,36 @@
-# PaperLab — 설치형 논문 연구 도구
+# PaperLab — 클라우드 논문 연구 도구
 
-논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰고 → 인용하는** 과정을 한 프로그램에서 끝내는 데스크톱 도구입니다.
-Python 백엔드와 HTML/JS 화면으로 만들었고, 내 컴퓨터에서만 실행되며 모든 데이터는 내 컴퓨터에 저장됩니다.
+논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰고 → 인용하는** 과정을 한곳에서 끝내는 웹 서비스입니다.
+브라우저로 접속해 **관리자가 등록한 구글 계정**으로 로그인하면, 서재·PDF·원고가 계정별로 클라우드에 저장되어 어느 기기에서나 같은 서재를 이어서 씁니다. PC에 설치할 것은 없습니다.
+Python 백엔드(FastAPI)와 HTML/JS 화면으로 만들었습니다. 서버는 **상시 켜 둔 서버 PC**에서 Python으로 직접 돌고 **Tailscale Funnel**의 고정 HTTPS 주소로 공개됩니다. 데이터는 Supabase(서울 리전), PDF와 백업은 Cloudflare R2에 둡니다.
+**서버 PC가 꺼져 있으면(전원 · 재부팅 · 인터넷 끊김) 아무도 PaperLab을 쓸 수 없습니다** — 내 PC는 꺼도 됩니다. 데이터는 클라우드에 있어 서버 PC가 고장 나도 남습니다.
 
 > 📘 **모든 기능의 자세한 사용법은 [FEATURES.md](FEATURES.md)(기능 안내서)를 보세요.**
 
-## 설치와 실행
+## 접속과 로그인
 
-필요한 것: **Python 3.10 이상** ([python.org](https://www.python.org/downloads/), Windows는 설치할 때 *Add python.exe to PATH* 체크)
-
-| 운영체제 | 실행 방법 |
+| 방법 | 설명 |
 |---|---|
-| Windows | `PaperLab.bat` 더블클릭 |
-| macOS | `PaperLab.command` 더블클릭 (처음 한 번은 우클릭 → 열기) |
-| Linux | `./paperlab.sh` |
+| 웹 주소 | 브라우저에서 PaperLab 주소(`https://…ts.net` 형식의 고정 주소)를 엽니다. 주소는 관리자가 알려 줍니다. |
+| 바탕화면 바로가기 (관리자 PC) | 관리자가 `deploy/make-shortcut.ps1`로 만든 **PaperLab** 아이콘을 더블클릭하면 주소창 없는 앱 창으로 열립니다(Microsoft Edge, 없으면 Chrome. 둘 다 없으면 일반 인터넷 바로가기). |
 
-처음 실행할 때 프로그램 폴더 안에 가상환경(`.venv`)을 만들고 필요한 패키지를 설치합니다(1~3분).
-그다음부터는 바로 브라우저에 PaperLab 화면이 열립니다. 종료는 실행 창에서 `Ctrl+C`.
-코드를 업데이트해서 `pyproject.toml`이 바뀌면 다음 실행 때 자동으로 다시 설치합니다.
+- 다른 사용자는 지금은 웹 주소로 접속합니다(브라우저 즐겨찾기 권장). 다른 사용자 PC용 **Windows 설치형 앱**(앱 창 + 내 PC의 CLI 워커, 나중에 폴더 동기화)은 **2단계**에서 만들 예정입니다. GitHub Releases로 배포하고 자동 업데이트되며, 코드 서명이 없어 처음 설치할 때 Windows SmartScreen 경고가 뜰 수 있습니다.
 
-직접 설치하고 싶다면:
-
-```bash
-pip install -e .           # 또는 pip install .
-paperlab                   # 브라우저로 열기
-paperlab --window          # 앱 창으로 열기 (pip install -e ".[desktop]" 필요)
-paperlab --port 9000 --data-dir D:\PaperLabData --no-browser
-```
+- 로그인은 **Google로 계속하기** 하나입니다. **관리자가 사용 등록한 구글 계정만** 들어올 수 있습니다(Google 로그인 설정의 "테스트 사용자" 목록 — 최대 100명). 등록되지 않은 계정은 Google 화면에서 로그인이 막히니, 계정이 필요하면 관리자에게 알려 주세요.
+- 이메일로 로그인하는 방법은 아직 없습니다(나중에 추가 예정).
+- 로그아웃: 사이드바 아래 **계정 버튼 → 로그아웃**(또는 설정 → 계정).
+- 서버 응답이 3초 넘게 늦으면 연결 중이라는 안내가 보입니다. 화면이 아예 열리지 않거나 "서버에 연결할 수 없어요"가 계속되면 서버 PC가 꺼졌을 수 있으니 관리자에게 알려 주세요.
 
 ### AI 기능 설정 (선택)
 
-**설정 → AI 엔진**에서 둘 중 하나를 고릅니다.
+**설정 → AI**에서 **본인의 Anthropic [API 키](https://console.anthropic.com/settings/keys)** 를 넣습니다.
 
-- **Anthropic API** (권장): [API 키](https://console.anthropic.com/settings/keys)를 넣으면 PDF를 그림·수식까지 통째로 읽고, 답변의 근거를 **쪽 번호와 원문 인용**으로 보여줍니다. 기본 모델은 Claude Opus 5.5이고, 설정에서 Sonnet 5.5 · Haiku 4.5로 바꿀 수 있습니다. 사용량만큼 요금이 나갑니다.
-- **Claude CLI**: 이미 설치·로그인된 Claude Code(`claude` 명령)를 그대로 씁니다. API 키가 필요 없고, PDF에서 뽑은 텍스트만 보냅니다.
+- 키는 **계정별로 암호화해 클라우드에 저장**되고, PC를 꺼도 AI 기능을 쓸 수 있습니다. 사용량만큼 요금이 키 주인에게 나갑니다.
+- 서버는 공용 키를 쓰지 않습니다. 키를 넣지 않으면 AI 기능은 동작하지 않습니다.
+- PDF를 그림·수식까지 통째로 읽고, 답변의 근거를 **쪽 번호와 원문 인용**으로 보여줍니다. 기본 모델은 Claude Opus 5.5이고, 설정에서 Sonnet 5.5 · Haiku 4.5로 바꿀 수 있습니다.
+- **Claude CLI 엔진은 지금 쓸 수 없습니다.** 2단계에서 내 PC를 연결하는 워커가 생긴 뒤에 쓸 수 있습니다.
 
-AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 동작합니다.
+AI 없이도 검색·서재·읽기·하이라이트·노트·인용·원고는 모두 동작합니다.
 
 ## 기능
 
@@ -48,11 +43,12 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 �
 > Google Scholar는 공식 API가 없고 자동 수집을 약관으로 금지해서, 같은 기능을 공개 학술 데이터베이스로 구현했습니다.
 
 ### 2. 내 서재 (EndNote · Zotero · Mendeley 방식)
-- **PDF를 끌어다 놓으면** 본문에서 DOI·arXiv ID·제목을 찾아 서지 정보를 자동으로 채움
-- **컬렉션**(하위 폴더 가능, 논문을 끌어다 놓아 분류), **태그**(색 지정), 읽기 상태(읽을 예정·읽는 중·다 읽음), 즐겨찾기, 중요도 별점
+- **PDF를 끌어다 놓으면** 본문에서 DOI·arXiv ID·제목을 찾아 서지 정보를 자동으로 채움 (파일당 100MB, 한 번에 20개까지, 파일별 진행률 표시)
+- **폴더**(논문 파일의 실제 위치 — 논문 한 편은 **한 곳**에만, 하위 폴더 가능)와 **컬렉션**(주제별 분류 — 한 논문을 **여러 곳**에, 하위 컬렉션 가능)을 함께 씁니다. 폴더를 지우면 안의 논문과 하위 폴더는 **상위 폴더로 옮겨지고** 논문·PDF는 지워지지 않습니다
+- **태그**(색 지정), 읽기 상태(읽을 예정·읽는 중·다 읽음), 즐겨찾기, 중요도 별점
 - **전문 검색**: 제목·저자·초록·**PDF 본문**·노트·하이라이트 메모까지 한 번에 검색, 본문에서 찾은 부분을 미리보기로 표시 (한국어 2글자 검색 지원)
 - 중복 감지(DOI·arXiv·제목), 온라인 정보로 빈 항목·피인용 수 채우기, 무료 PDF 자동 받기
-- 여러 편 선택 후 일괄 작업: 컬렉션 넣기·태그·상태·삭제·참고문헌 목록
+- 여러 편 선택 후 일괄 작업: 컬렉션 넣기·폴더로 이동·태그·상태·삭제·참고문헌 목록
 - 상세 패널의 **인용 관계** 탭: 이 논문을 인용한 논문 / 참고문헌 / 관련 논문
 
 ### 3. 읽기 화면
@@ -67,12 +63,13 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 �
 - **섹션별 정리**(핵심 포인트, 해당 쪽으로 이동), **핵심 수식 풀이**(KaTeX 렌더링, 기호 설명, 유도 과정)
 - 기여 · 한계 · 생각해 볼 질문(눌러서 바로 질문)
 - **질문하기**: 논문 내용을 근거로 답하고, 답의 `[1]`을 누르면 근거가 있는 쪽으로 이동해 해당 문장을 표시
+- 요약을 만드는 동안 PaperLab 안의 다른 화면에 다녀와도 되지만, **브라우저 탭을 닫으면 요약이 멈춥니다**(저장되지 않으니 다시 만들어 주세요)
 
 ### 5. 인용 · 내보내기
 인용 문구는 **Zotero·Mendeley와 같은 인용 엔진(citeproc-js)과 공식 CSL 스타일 파일**로 만듭니다. 손으로 짠 규칙이 아니라 학계 표준 스타일 정의를 그대로 따르므로 형식이 정확합니다.
 
 - **기본 제공 20개 스타일**: APA 7판, IEEE, Chicago(저자-연도·각주), MLA 9판, Harvard, Vancouver(NLM), Nature, AMA, ACS, ACM, Elsevier, Springer, ASA, 국내 학술지(대한내과학회지, Korean Journal of Radiology, 대한토목학회논문집 등)
-- **어떤 학술지 형식이든 추가**: [Zotero 스타일 저장소](https://www.zotero.org/styles)(10,000+개)에서 투고할 학술지의 `.csl` 파일을 받아 *설정 → 학술지 스타일 추가*. 종속 스타일도 지원
+- **어떤 학술지 형식이든 추가**: [Zotero 스타일 저장소](https://www.zotero.org/styles)(10,000+개)에서 투고할 학술지의 `.csl` 파일을 받아 *설정 → 학술지 스타일 추가*. 종속 스타일도 지원. 추가한 스타일은 내 계정에만 저장됩니다
 - **본문 인용과 참고문헌 항목을 따로 복사** (기울임꼴 등 서식 유지 → Word·한글·Google Docs에 그대로 붙여넣기), 각주 스타일은 각주 문구
 - **참고문헌 목록**: 선택한 논문·컬렉션으로 생성, 저자-연도 스타일은 **국문 문헌 먼저** 정렬(국내 학위논문 관례), 번호식 스타일은 본문 인용 순서대로 ↑↓ 재배열, `.txt`·`.html`(Word에서 열림) 저장
 - **인용 정보 점검**: 스타일에 필요한 항목(학술지명·권·쪽·출판사 등)이 비면 상세 패널·인용 창에 경고하고, *온라인에서 찾기*로 채움
@@ -91,6 +88,7 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 �
 - **AI 글쓰기 도우미**: 선택한 글을 다듬기 · 학술 문체로 · 간결하게 · 자세히 · 영어/한국어 번역 · 이어 쓰기,
   그리고 **논문을 골라 초안 쓰기**(그 논문들의 초록·AI 요약·내 메모·하이라이트만 근거로 쓰고, 인용도 그 안에서만 답니다)
 - 개요(목차) 이동, 글자 수(공백 포함/제외)·단어 수, 자동 저장(Ctrl+S)
+- 원고는 클라우드에 저장되어 다른 기기에서 이어서 열 수 있습니다. 같은 원고를 두 기기에서 동시에 고치면 **나중에 저장한 내용이 남습니다**.
 
 ### 7. 워드 · 한글 연동
 - **내보내기**: 원고를 **워드(.docx)** 와 **한글(.hwpx)** 파일로 저장합니다. 제목·장절·굵게/기울임·위첨자·목록,
@@ -99,7 +97,7 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 �
 - **워드·한글에서 쓰면서 인용만 PaperLab으로** (플러그인 설치 없음):
   1. 서재 상세 패널의 **[@인용키] 복사** → 워드·한글 본문의 인용할 자리에 붙여넣기
   2. 참고문헌 자리에 `[참고문헌]` 한 줄
-  3. `.docx` / `.hwpx`로 저장 → *논문 쓰기 → 워드·한글 문서에 인용 넣기*에 올리기 (끌어다 놓아도 됨)
+  3. `.docx` / `.hwpx`로 저장 → *논문 쓰기 → 워드·한글 문서에 인용 넣기*에 올리기 (끌어다 놓아도 됨, **30MB까지**)
   4. 스타일을 고르면 **원래 글꼴·문단 서식은 그대로 두고** 인용과 참고문헌만 채운 `파일명_인용완료` 파일을 받습니다.
      스타일을 바꾸고 싶으면 인용키가 남아 있는 원본을 다시 올리면 됩니다.
 - 예전 형식(.doc, .hwp)은 워드·한글에서 .docx/.hwpx로 다른 이름으로 저장해 주세요.
@@ -140,58 +138,99 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용은 모두 �
 | 원고 작성 · 인용 자동 서식 | – | ● (워드 플러그인) | ● (워드 플러그인) | ● (내장 편집기 + 워드·한글 파일) |
 | 한글(.hwpx) 지원 | – | – | – | ● |
 | 학교 논문 양식 · 표지/인정서 자동 생성 | – | – | – | ● |
-| 내 컴퓨터에만 저장 · 무료 | – | – | ● | ● |
 
-## 데이터 위치와 백업
+## 데이터와 백업
 
-| 운영체제 | 폴더 |
+| 무엇 | 어디에 |
 |---|---|
-| Windows | `%APPDATA%\PaperLab` |
-| macOS | `~/Library/Application Support/PaperLab` |
-| Linux | `~/.local/share/paperlab` |
+| 서재·폴더·컬렉션·태그·하이라이트·노트·PDF 본문 텍스트·원고·내 양식·내 인용 스타일·AI 요약·대화·설정 | **Supabase** Postgres (서울 리전) |
+| API 키(Anthropic · OpenAlex · Semantic Scholar) | 같은 DB에 **계정별로 암호화**(AES-256-GCM)해 저장. 암호화 키는 DB와 따로 **서버 PC의 비밀값 파일**(`cloud.env`, 서버를 돌리는 Windows 계정만 접근)에 보관 |
+| PDF 파일 | **Cloudflare R2** (`users/{계정 id}/papers/{논문 id}.pdf`) |
+| DB 백업 | Cloudflare R2 (`backups/db/`) |
 
-`library.db`(서재·원고·내 양식·노트·하이라이트·AI 결과), `pdfs/`(PDF 파일), `styles/`(직접 추가한 인용 스타일), `settings.json`(설정·API 키)이 들어 있습니다.
-폴더째 복사하면 백업되고, `PAPERLAB_HOME` 환경변수나 `--data-dir`로 위치를 바꿀 수 있습니다.
+- **계정별 분리**: 모든 개인 데이터에 계정 id가 붙고, DB의 행 수준 보안(**RLS**)이 본인 행만 보이게 합니다. 서재를 다른 사람과 공유하는 기능은 없습니다.
+- **백업**: **매일 04:00(한국 시간)** DB 전체를 R2로 자동 백업하고, **최근 14개**를 보관합니다. PDF는 따로 백업하지 않습니다. 지운 논문·PDF는 되돌릴 수 없습니다(휴지통 없음). 백업은 서버 PC의 예약 작업이 하므로, 04:00에 서버 PC가 꺼져 있었으면 켜진 뒤 실행됩니다. 복원은 관리자가 합니다([deploy/README.md](deploy/README.md) 4장).
+- **저장 공간 10GB**: R2 무료 10GB를 **모든 사용자의 PDF와 DB 백업이 함께** 씁니다. 사이드바 아래와 설정 → 계정에서 사용량을 볼 수 있고, **80%** 를 넘으면 경고, **95%** 를 넘으면 PDF를 더 올릴 수 없습니다(관리자에게 알려 주세요). 필요 없는 논문을 지우면 그 PDF만큼 공간이 생깁니다.
+- 내 데이터를 파일로 받아 두려면: 서지 정보는 BibTeX·RIS·CSL-JSON 내보내기, 하이라이트·노트는 `.md` 내보내기, 원고는 워드·한글·마크다운 내보내기를 쓰세요(브라우저의 다운로드 폴더에 저장됩니다).
+- 예전 설치형 PaperLab의 데이터 폴더를 옮겨 오는 기능은 없습니다(새로 시작).
 
 ## 구조
 
 ```
 study99web/
-├─ PaperLab.bat · PaperLab.command · paperlab.sh   실행기
 ├─ pyproject.toml
+├─ deploy/            바탕화면 바로가기(make-shortcut.ps1, paperlab.ico) · R2 CORS 값(r2-cors.json) · 운영 안내(README.md)
+│  └─ server-pc/     서버 PC 설치 · 업데이트 · Funnel · 감시 · 제거 스크립트(*.ps1), 공개 주소 · 기본 경로(server.json), 설치 안내서(README.md)
+├─ supabase/migrations/  DB 스키마 · RLS · PGroonga 색인 · 허용 목록 훅(선택 기능) (SQL 마이그레이션)
 ├─ paperlab/
-│  ├─ __main__.py    실행 (서버 시작 + 브라우저 열기)
-│  ├─ server.py      FastAPI: JSON API + 화면 제공, 로컬 요청만 허용
-│  ├─ db.py          SQLite: 논문·컬렉션·태그·하이라이트·노트·원고·내 양식·AI 결과, FTS5 전문 검색
+│  ├─ serve.py       운영 서버 실행 (python -m paperlab.serve — 127.0.0.1에만 열고 Funnel이 HTTPS로 전달, 설정 점검 --check)
+│  ├─ __main__.py    개발 서버 (PAPERLAB_DEV=1, 테스트용 Supabase 프로젝트 전용)
+│  ├─ server.py      FastAPI: JSON API + 화면 제공, 로그인 토큰 검증 · 요청 보안 규칙
+│  ├─ auth.py        Supabase 로그인 토큰(JWT) 검증, 허용 목록 확인(선택 기능 — PAPERLAB_ALLOWLIST)
+│  ├─ db.py          Supabase Postgres: 사용자 권한 트랜잭션(RLS), 서재 · 폴더 · 원고 · 내 양식 · AI 결과, PGroonga 전문 검색
+│  ├─ storage.py     파일 저장소(R2 · 테스트용 가짜): 계정별 키 규칙, 서명 주소, 사용량
+│  ├─ crypto.py      API 키 암호화(AES-256-GCM)
+│  ├─ config.py      서버 환경 변수, 사용자별 설정
+│  ├─ migrate.py     SQL 마이그레이션 적용 도구
+│  ├─ admin.py       관리 명령(허용 목록 동기화 · 앱 역할 주소 쓰기 · 키 회전 · 고아 PDF 정리 · 백업 · pg_dump 버전 확인 · 최근 백업 확인 · 테스트 프로젝트 표지)
 │  ├─ pdf.py         PyMuPDF: 쪽별 텍스트 추출, DOI/arXiv/제목 인식
 │  ├─ sources.py     OpenAlex · arXiv · Semantic Scholar · Crossref
 │  ├─ citations.py   CSL-JSON 변환, 인용 정보 점검, BibTeX · RIS · CSL-JSON
 │  ├─ csl_style.py   CSL 스타일 파일 정보
-│  ├─ ai.py          요약(구조화 출력) · Q&A(인용) · 글쓰기 도우미 — Anthropic API / Claude CLI
+│  ├─ ai.py          요약(구조화 출력) · Q&A(인용) · 글쓰기 도우미 — Anthropic API (CLI 엔진은 2단계)
 │  ├─ manuscripts.py 원고 템플릿
 │  ├─ writer.py      원고 → 워드(.docx, 각주 포함) · 한글(.hwpx) · 마크다운, 논문 양식·표지 적용
 │  ├─ doc_formats.py 논문 양식: 기본 양식 4개 · 검증 · 단위 환산 · 표지 문구와 배치
 │  ├─ format_import.py 양식 파일(.docx · .dotx · .hwpx)에서 서식 읽기
 │  ├─ compose.py     워드·한글 문서의 [@인용키] → 서식 있는 인용 + 참고문헌
-│  ├─ config.py      데이터 폴더, settings.json
-│  └─ static/        화면 (HTML · CSS · ES 모듈 JS, PDF.js · citeproc-js · CSL 스타일 · KaTeX · marked · DOMPurify 포함)
+│  └─ static/        화면 (HTML · CSS · ES 모듈 JS, PDF.js · citeproc-js · CSL 스타일 · KaTeX · marked · DOMPurify · supabase-js 포함)
+│     ├─ js/auth.js  구글 로그인 · 로그아웃 · 세션
 │     └─ js/formats.js 양식 관리 · 표지 정보 창, 미리보기 양식 반영
-└─ tests/            pytest
+└─ tests/            pytest (DB 테스트는 테스트용 Supabase 프로젝트)
 ```
 
 ## 보안
 
-서버는 `127.0.0.1`에서만 열리고, 다른 호스트 이름(DNS 리바인딩)·다른 사이트에서 온 요청(`Origin` 검사)·
-화면이 붙이는 `X-PaperLab` 헤더가 없는 쓰기 요청(CSRF)을 거부합니다. AI 답변과 외부 데이터는 DOMPurify로 거른 뒤 표시합니다.
+- **로그인**: Google OAuth 동의 화면을 **"테스트" 게시 상태**로 두고 **테스트 사용자 목록**에 넣은 구글 계정만 로그인할 수 있습니다(최대 100명). OAuth 앱을 **"게시"하면 구글 계정이 있는 누구나 가입할 수 있으므로 게시하지 않습니다.** Supabase에서는 Google 공급자만 켜고 이메일 · 익명 로그인은 끕니다. 서버 자체 허용 목록(`ALLOWED_EMAILS` + 가입 훅)은 선택 기능으로 남아 있고 운영에서는 `PAPERLAB_ALLOWLIST=off`로 꺼 둡니다(켜면 목록 밖 계정은 403).
+- **요청 인증**: 모든 `/api/*` 요청에는 로그인 토큰(`Authorization: Bearer`)이 필요하고, 서버가 서명·만료·발급자를 검증합니다(공개 예외: `GET /api/health`, `GET /api/public-config`, 화면 파일).
+- **계정별 분리**: 서버는 요청마다 그 사용자 권한으로 DB에 질의해 RLS가 적용됩니다. 서버 전용 DB 역할은 RLS를 우회하지 못합니다. PDF 저장 경로는 서버가 로그인한 계정 id로만 만듭니다.
+- **다른 사이트의 요청 차단**: `Origin`이 PaperLab 주소와 다르면 거부하고, 쓰기 요청에는 화면이 붙이는 `X-PaperLab` 헤더가 있어야 합니다(CSRF 이중 방어). CORS는 열지 않습니다.
+- **PDF**: 브라우저는 **10분 동안만 유효한 서명 주소**로 R2에서 직접 받고 올립니다.
+- **비밀값**: API 키는 암호화해 저장하고 화면에 다시 보여 주지 않습니다. 서버 로그에는 토큰·키·서명 주소·요청 본문·이메일을 남기지 않습니다.
+- AI 답변과 외부 데이터는 DOMPurify로 거른 뒤 표시합니다.
+- 로그인 상태는 브라우저에 저장됩니다. 여러 사람이 쓰는 PC에서는 다 쓴 뒤 로그아웃하세요.
 
 ## 개발
 
 ```bash
 pip install -e ".[dev]"
+```
+
+**개발 서버** — 사용자용 로컬 실행 모드는 없고, 개발용 서버만 있습니다.
+
+```powershell
+$env:PAPERLAB_DEV = "1"
+python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file 로 바꿈)
+```
+
+- `PAPERLAB_DEV=1`과 **테스트용** Supabase 값(`SUPABASE_TEST_URL` · `SUPABASE_TEST_ANON_KEY` · `SUPABASE_TEST_DB_URL`)이 있어야 뜹니다. 값은 환경 변수나 `%USERPROFILE%\.paperlab\cloud.env`(또는 `--env-file`)에서 읽습니다.
+- `127.0.0.1`에만 열고, 운영 변수(`SUPABASE_URL` · `SUPABASE_DB_URL` · `R2_*` · `APP_ENCRYPTION_KEY` · `ALLOWED_EMAILS`)는 읽지 않습니다. DB는 운영과 같은 앱 역할로 접속합니다.
+- 파일 저장소는 같은 출처 가짜 저장소(메모리, `/_dev_storage`)라 브라우저에서 PDF 올리기·보기를 확인할 수 있습니다.
+- 로그인: 테스트 프로젝트의 **이메일 · 비밀번호 로그인 칸**이 개발 서버에서만 나옵니다(운영은 구글 로그인만).
+- 개발용 변수: `PAPERLAB_DEV_ENCRYPTION_KEY`(없으면 실행하는 동안만 쓰는 임시 키 — 다시 시작하면 저장한 API 키를 읽지 못함), `PAPERLAB_DEV_ALLOWED_EMAILS`(비우면 테스트 프로젝트의 로그인 사용자를 모두 허용).
+
+**테스트**
+
+```bash
 pytest
 ```
 
-외부 API와 AI 호출은 테스트에서 가짜 전송 계층으로 대체하므로 네트워크 없이 돌아갑니다.
+- DB가 필요한 테스트(`@pytest.mark.db`)는 운영과 **별도의 테스트용 Supabase 프로젝트**에서만 돕니다. `SUPABASE_TEST_*` 4개(`…_URL` · `…_ANON_KEY` · `…_SERVICE_ROLE_KEY` · `…_DB_URL`)가 없거나 접속하지 못하면 이유를 적고 건너뜁니다.
+- **운영 보호 장치**: 테스트 주소·DB가 운영 값과 같거나, 테스트 DB에 테스트 프로젝트 표지(`python -m paperlab.admin mark-test-project`로 한 번 붙임)가 없으면 테스트 전체가 즉시 중단됩니다. 반대로 운영용 마이그레이션·배포는 표지가 있는 DB를 거부합니다.
+- 파일 저장소는 가짜 구현을, 외부 학술 API와 AI 호출은 가짜 전송 계층을 씁니다. 실제 R2 계약 테스트는 `PAPERLAB_R2_CONTRACT=1`일 때만 돕니다.
+- CLI 엔진 테스트(`tests/test_ai.py::test_cli_engine_with_fake_claude`)는 Windows에서도 가짜 CLI만 써서 돕니다(실제 claude CLI 호출을 막는 단언 포함) — 빼고 돌릴 테스트는 없습니다.
+
+**운영** — 서버 PC 설치 · 업데이트 · Funnel · 백업 · 감시는 [deploy/server-pc/README.md](deploy/server-pc/README.md), 사용자 준비 작업 · 관리 명령 · 복원 절차는 [deploy/README.md](deploy/README.md)를 보세요. 명세: [docs/specs/phase1-cloud.md](docs/specs/phase1-cloud.md) 9 · 13장.
 
 워드 파일은 [python-docx](https://github.com/python-openxml/python-docx)(MIT)로, 한글 파일은
 [python-hwpx](https://github.com/airmang/python-hwpx)(Apache-2.0)로 만들며 저장 전에 OWPML 구조 검증을 거칩니다.

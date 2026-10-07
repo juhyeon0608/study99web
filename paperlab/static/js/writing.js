@@ -201,6 +201,7 @@ export function closeWriter() {
   if (W.saver) W.saver.flush();
   W.saver = null;
   W.m = null;
+  W.ta = null;
   clearTimeout(W.previewTimer);
   W.seq++;
   $$(".cite-picker").forEach((p) => p.remove());
@@ -274,6 +275,17 @@ function helpDialog() {
     <p class="small muted">각주 스타일(Chicago 각주 등)은 워드 문서에서 진짜 각주로 들어가요. 한글 문서에서는 저자-연도나 번호 스타일을 써 주세요.</p></div>` });
 }
 
+// 쓰던 원고를 지금 저장한다 (로그아웃 전 — 시안 6.1). 저장할 게 없으면 바로 끝남
+export async function flushWriter() {
+  if (W.saver) await W.saver.flush();
+}
+
+// 저장하지 못한 원고 {id, title, content} (로그인 만료 때 브라우저에 임시 보관 — 시안 6.1). 없으면 null
+export function unsavedDraft() {
+  if (!W.m || !W.ta || W.ta.value === W.m.content) return null;
+  return { id: W.m.id, title: W.m.title || "", content: W.ta.value };
+}
+
 // ------------------------------------------------------------------ 편집 화면
 export async function openManuscript(main, id) {
   closeWriter();
@@ -328,6 +340,7 @@ export async function openManuscript(main, id) {
   main.appendChild(view);
   const ta = $(".writer-ta", view);
   ta.value = m.content;
+  W.ta = ta;
 
   // 저장
   const saveState = $("[data-save]", view);

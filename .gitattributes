@@ -3,3 +3,4 @@
 *.command text eol=lf
 tests/golden/*.xml -text
 tests/golden/*.json -text
+*.ps1 text eol=crlf

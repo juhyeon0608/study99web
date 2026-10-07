@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://kimjuhyeon.tailac17f6.ts.net"],
+    "AllowedMethods": ["GET", "HEAD", "PUT"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag", "Content-Length"],
+    "MaxAgeSeconds": 3600
+  }
+]
