@@ -4,6 +4,7 @@ import os
 import re
 import time
 import uuid
+from datetime import datetime, timezone
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -76,6 +77,7 @@ def contract(backend: st.Storage, uid: str) -> None:
         assert us.get(inc) == b"%PDF-1.4 contract"
         us.move(inc, final)
         assert us.head(inc) is None and us.get(final) == b"%PDF-1.4 contract"
+        assert abs((backend.modified(final) - datetime.now(timezone.utc)).total_seconds()) < 600  # UTC, 시간대 포함
         signed = us.sign_get(final, filename="제목: 테스트")
         assert signed["url"].startswith("https://") and "X-Amz-Signature=" in signed["url"]
         with pytest.raises(st.NotFound):
@@ -159,10 +161,14 @@ def test_r2_operations_with_stubbed_client():
                           aws_access_key_id="AKID", aws_secret_access_key="SECRET")
     r2 = _r2(client)
     key = st.paper_key(UID, 7)
+    when = datetime(2026, 10, 7, 7, 0, tzinfo=timezone.utc)
     with Stubber(client) as stub:
         stub.add_response("head_object", {"ContentLength": 42}, {"Bucket": "papers-bucket", "Key": key})
         stub.add_client_error("head_object", "404", http_status_code=404,
                               expected_params={"Bucket": "papers-bucket", "Key": key})
+        stub.add_response("head_object", {"ContentLength": 42, "LastModified": when},
+                          {"Bucket": "papers-bucket", "Key": key})
+        stub.add_client_error("head_object", "NotFound", http_status_code=404)
         stub.add_response("get_object", {"Body": StreamingBody(io.BytesIO(b"%PDF"), 4)},
                           {"Bucket": "papers-bucket", "Key": key})
         stub.add_client_error("get_object", "NoSuchKey", http_status_code=404)
@@ -175,6 +181,8 @@ def test_r2_operations_with_stubbed_client():
         stub.add_response("head_bucket", {}, {"Bucket": "papers-bucket"})
         assert r2.head(key) == 42
         assert r2.head(key) is None
+        assert r2.modified(key) == when
+        assert r2.modified(key) is None
         assert r2.get(key) == b"%PDF"
         with pytest.raises(st.NotFound):
             r2.get(key)

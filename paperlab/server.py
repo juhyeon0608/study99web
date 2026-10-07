@@ -257,8 +257,13 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             response.headers["Referrer-Policy"] = "same-origin"
             response.headers["X-Frame-Options"] = "DENY"
             response.headers["X-Request-Id"] = request_id
+            # 공개 주소는 HTTPS(Funnel)뿐. ts.net 공유 도메인이라 includeSubDomains는 붙이지 않는다 (http 개발 서버에선 브라우저가 무시)
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
             if path.startswith("/api/"):
                 response.headers["Cache-Control"] = "no-store"
+            elif path.startswith("/static/"):
+                # 매번 ETag · Last-Modified로 재검증(바뀌지 않았으면 304) — 업데이트 뒤 옛 JS 모듈이 섞이지 않게
+                response.headers["Cache-Control"] = "no-cache"
             # JSON 한 줄 로그: 토큰 · 키 · 서명 주소 · 본문 · 이메일은 남기지 않는다 (명세 13.5)
             access_log.info(json.dumps({"request_id": request_id, "method": request.method, "path": path,
                                         "status": response.status_code, "ms": int((time.monotonic() - started) * 1000),

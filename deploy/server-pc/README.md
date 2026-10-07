@@ -208,6 +208,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 - `--bg`로 켰으므로 재부팅 뒤에도 자동으로 다시 켜집니다(공식 문서).
 - 인증서 발급이 실패하면 **계속 다시 시도하지 않습니다** — Let's Encrypt 한도에 걸리면 약 34시간 기다려야 합니다(공식 문서). 10분 기다렸다 한 번만 다시.
 - 이 PC에서 다른 프로그램을 Funnel로 공개하지 않습니다.
+- **HSTS 주의**: PaperLab은 모든 응답에 `Strict-Transport-Security: max-age=31536000`(1년, includeSubDomains 없음)을 보냅니다. 공개 주소를 한 번 연 브라우저는 1년 동안 같은 호스트 이름(`kimjuhyeon.tailac17f6.ts.net`)을 **https로만** 엽니다 — 이 이름의 다른 포트로 `http://` 서비스를 띄우면 그 브라우저에서는 https로 바뀌어 열리지 않습니다. 되돌리려면 그 브라우저의 `chrome://net-internals/#hsts`(Edge는 `edge://net-internals/#hsts`) → *Delete domain security policies*에 이름을 넣어 지우거나, 서버가 `max-age=0`을 보내도록 바꾼 뒤 https로 한 번 접속합니다.
 
 ## 9. 설치 후 확인 (19항목 — 품질팀 서버 PC 체크리스트 Q1~Q16 + 기존 확인 합침)
 

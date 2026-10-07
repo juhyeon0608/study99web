@@ -308,14 +308,16 @@ def run_backup(conninfo: str, storage: Storage, keep: int = BACKUP_KEEP, today: 
 
 
 def latest_backup(storage: Storage, now: datetime | None = None) -> tuple[str, float | None]:
-    """(가장 최근 백업 날짜 YYYYMMDD, 그날 04:00 KST부터 지난 시간). 없으면 ('', None). 감시 작업이 쓴다(13.5절)."""
+    """(가장 최근 백업 날짜 YYYYMMDD, 그 파일을 올린 뒤 지난 시간). 없으면 ('', None). 감시 작업이 쓴다(13.5절)."""
     days = sorted(k[len("backups/db/"):-len(".dump")] for k, _ in storage.list_prefix("backups/db/")
                   if _BACKUP_RE.fullmatch(k))
     if not days:
         return "", None
     day = days[-1]
-    start = datetime.strptime(day, "%Y%m%d").replace(hour=4, tzinfo=KST)
-    hours = ((now or datetime.now(KST)) - start).total_seconds() / 3600
+    # 실제로 올린 시각(R2 LastModified) 기준. 파일 이름 날짜의 04:00 KST로 세면 낮에 손으로 만든 백업이
+    # "12시간 전"처럼 보인다. 목록과 조회 사이에 지워졌으면 예전처럼 04:00 KST로 센다
+    made = storage.modified(backup_key(day)) or datetime.strptime(day, "%Y%m%d").replace(hour=4, tzinfo=KST)
+    hours = max(0.0, ((now or datetime.now(KST)) - made).total_seconds() / 3600)
     return day, hours
 
 

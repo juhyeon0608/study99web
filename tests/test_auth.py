@@ -280,8 +280,22 @@ def test_origin_rules_and_headers(app_env):
     assert r.headers["cache-control"] == "no-store" and r.headers["x-content-type-options"] == "nosniff"
     assert r.headers["referrer-policy"] == "same-origin" and r.headers["x-frame-options"] == "DENY"
     assert c.get("/").headers["x-content-type-options"] == "nosniff"
+    assert r.headers["strict-transport-security"] == "max-age=31536000"  # includeSubDomains 없음 (ts.net 공유)
     meta = r.json()
     assert "data_dir" not in meta and "models" in meta
+
+
+def test_static_revalidates_with_304(app_env):
+    """정적 파일: no-cache(매번 재검증) + ETag가 같으면 304. index.html은 no-store 그대로"""
+    app, _ = app_env
+    c = TestClient(app)
+    assert c.get("/").headers["cache-control"] == "no-store"
+    for path in ("/static/js/app.js", "/static/css/app.css", "/static/vendor/d3/d3-force.min.js"):
+        r = c.get(path)
+        assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+        assert r.headers["strict-transport-security"] == "max-age=31536000"
+        again = c.get(path, headers={"If-None-Match": r.headers["etag"]})
+        assert again.status_code == 304 and again.headers["cache-control"] == "no-cache" and not again.content, path
 
 
 def test_db_unavailable_returns_503(app_env):

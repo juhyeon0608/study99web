@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg
@@ -190,5 +190,30 @@ def test_latest_backup_age():
     for d in ("20261005", "20261006"):
         store.put(f"backups/db/{d}.dump", b"x", "application/octet-stream")
     store.put("backups/db/notes.txt", b"x", "text/plain")
-    day, hours = latest_backup(store, now=datetime(2026, 10, 7, 16, 0, tzinfo=KST))
+    store.mtimes["backups/db/20261006.dump"] = datetime(2026, 10, 6, 4, 10, tzinfo=KST)
+    day, hours = latest_backup(store, now=datetime(2026, 10, 7, 16, 10, tzinfo=KST))
     assert day == "20261006" and hours == pytest.approx(36.0)
+
+
+def test_latest_backup_age_uses_upload_time():
+    """방금 손으로 만든 백업은 0시간 전 (예전: 파일 이름 날짜 04:00 KST로 세어 오후에 만들면 "12시간 전")"""
+    from paperlab.admin import KST
+    store = FakeStorage()
+    run_backup(APP_URL, store, today="20261007", dump=lambda c, p: p.write_bytes(b"dump"))
+    day, hours = latest_backup(store)
+    assert day == "20261007" and hours < 0.1
+    # R2 LastModified는 UTC — 시간대가 달라도 같은 순간이면 경과 시간이 같다
+    store.mtimes["backups/db/20261007.dump"] = datetime(2026, 10, 7, 7, 0, tzinfo=timezone.utc)  # = 16:00 KST
+    assert latest_backup(store, now=datetime(2026, 10, 7, 17, 30, tzinfo=KST))[1] == pytest.approx(1.5)
+
+
+def test_latest_backup_age_edge_cases():
+    """목록을 읽은 뒤 조회 전에 지워짐 → 그날 04:00 KST 기준. 올린 시각이 미래(시계 차이) → 0"""
+    from paperlab.admin import KST
+    store = FakeStorage()
+    store.put("backups/db/20261006.dump", b"x", "application/octet-stream")
+    now = datetime(2026, 10, 7, 16, 0, tzinfo=KST)
+    store.mtimes["backups/db/20261006.dump"] = datetime(2026, 10, 7, 16, 5, tzinfo=KST)
+    assert latest_backup(store, now=now) == ("20261006", 0.0)
+    store.modified = lambda key: None  # 목록 뒤 HeadObject 사이에 지워짐(404)
+    assert latest_backup(store, now=now)[1] == pytest.approx(36.0)

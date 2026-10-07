@@ -1013,7 +1013,7 @@ python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file)
 **요청 규칙**
 - 공개 주소를 뺀 모든 `/api/*`에 `Authorization: Bearer <Supabase access token>`이 필요합니다. 없거나 틀리면 **401** `{"detail": "로그인이 필요해요", "code": "auth_required"}`, 서버 허용 목록을 켠 경우(`PAPERLAB_ALLOWLIST`가 `off`가 아님) 목록 밖 계정이면 **403** `{"detail": "허용되지 않은 계정이에요", "code": "not_allowed"}`.
 - 쓰기 요청(GET · HEAD · OPTIONS 외)에는 `X-PaperLab: 1` 헤더가 필요합니다(없으면 403). `Origin` 헤더가 있으면 `https://{Host}`와 같아야 합니다(다르면 403).
-- 데이터베이스에 연결할 수 없으면 **503** `{"detail": "데이터베이스에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.", "code": "db_unavailable"}`. 모든 `/api/*` 응답은 `Cache-Control: no-store`.
+- 데이터베이스에 연결할 수 없으면 **503** `{"detail": "데이터베이스에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.", "code": "db_unavailable"}`. 모든 `/api/*` 응답은 `Cache-Control: no-store`. 화면 파일(`/static/*`)은 `Cache-Control: no-cache`(매번 재검증 — 바뀌지 않았으면 304라 업데이트 뒤 옛 파일이 섞이지 않음), 모든 응답에 `Strict-Transport-Security: max-age=31536000`(includeSubDomains 없음).
 - 다른 사용자의 id로 요청하면 404(존재 여부를 알리지 않음).
 
 **1단계에서 바뀐 것** (자세한 계약: `docs/specs/phase1-cloud.md` 15장)

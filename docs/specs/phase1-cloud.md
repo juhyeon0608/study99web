@@ -386,8 +386,8 @@ grant select, insert, update, delete on paperlab.<표> to authenticated;
 | CORS | **열지 않음**(CORS 미들웨어 없음 — 화면과 API가 같은 출처). R2 버킷 CORS만 따로(7.6절) |
 | 인증 | `/api/*`는 `Authorization: Bearer <JWT>` 필수, 없거나 틀리면 **401** `{"detail": "로그인이 필요해요", "code": "auth_required"}`. 예외(공개): `GET /api/health`, `GET /api/public-config`, 정적 파일 `/`, `/static/*` |
 | CSRF | 토큰을 쿠키가 아니라 헤더로 보내므로 다른 사이트가 사용자 대신 요청을 만들 수 없음. 그래도 **`X-PaperLab: 1` 헤더 규칙은 유지**(쓰기 요청 없으면 403, 0단계 AC-12와 같은 의미) — 비용이 거의 없고 이중 방어 |
-| 캐시 | `/api/*` 응답 `Cache-Control: no-store` 유지 |
-| 보안 헤더(추가) | `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY`. CSP는 범위 밖(17장) |
+| 캐시 | `/api/*` 응답 `Cache-Control: no-store` 유지. `/static/*`는 `Cache-Control: no-cache`(매번 재검증, 304) |
+| 보안 헤더(추가) | `X-Content-Type-Options: nosniff`, `Referrer-Policy: same-origin`, `X-Frame-Options: DENY`, `Strict-Transport-Security: max-age=31536000`(includeSubDomains 없음 — ts.net 공유 도메인). CSP는 범위 밖(17장) |
 | 오류 응답 | DB 일시정지 · 연결 실패 → **503** `{"detail": "데이터베이스에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.", "code": "db_unavailable"}`(13.4절) |
 
 ### 6.6 세션 만료
@@ -1235,7 +1235,7 @@ Q-S2~Q-S7은 설치를 막지 않으므로 **미정 유지**(답이 오면 개�
 | `/api/storage/usage` 의 전체 합계 | `system_tx` | `storage usage` (사용자 구분 없는 합계만) |
 | `admin mark-test-project` | 테스트 프로젝트 관리자 연결 | `mark test project` |
 | `admin pg-dump-check` (신규 — 설치 스크립트 · 수동) | **앱 역할 주소**(`SUPABASE_APP_DB_URL`)로 접속해 DB 서버 버전만 읽음(표를 읽지 않음, 역할 전환 없음 — 관리 권한 사용 아님), `pg_dump --version`과 주 버전 비교. 관리자 주소로 대신 붙지 않음 | (없음 — 표를 읽지 않음) |
-| `admin latest-backup` (신규 — 감시 작업 하루 한 번) | DB 접속 없음. R2 `backups/db/` 목록만 읽어 가장 최근 날짜(36시간 넘거나 없으면 종료 코드 2) | (없음 — DB를 쓰지 않음) |
+| `admin latest-backup` (신규 — 감시 작업 하루 한 번) | DB 접속 없음. R2 `backups/db/` 목록을 읽고 가장 최근 파일 하나에 HeadObject 한 번(올린 시각 `LastModified` 기준 경과 시간 — 36시간 넘거나 없으면 종료 코드 2) | (없음 — DB를 쓰지 않음) |
 | `admin backup` (서버 PC 작업 스케줄러 — 개정 전 Cloud Run Job) | 앱 역할(`SUPABASE_APP_DB_URL`) + `pg_dump --role=service_role`, R2 `backups/db/`에 쓰기 · 세대 정리 | `backup` |
 | `/api/health?deep=1` 의 `select 1` | `system_tx` | `health check` (표를 읽지 않음) |
 

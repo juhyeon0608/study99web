@@ -120,6 +120,10 @@ class Storage:
         """크기(바이트). 없으면 None"""
         raise NotImplementedError
 
+    def modified(self, key: str) -> datetime | None:
+        """마지막으로 올린 시각(UTC, 시간대 포함). 없으면 None"""
+        raise NotImplementedError
+
     def put(self, key: str, data: bytes, content_type: str = PDF_TYPE) -> None:
         raise NotImplementedError
 
@@ -153,6 +157,7 @@ class FakeStorage(Storage):
         # 서명 주소 앞부분. 개발 서버는 같은 출처 경로("/_dev_storage")로 바꿔 브라우저가 실제로 올리고 받게 한다
         self.url_base = (url_base or f"https://fake-storage.test/{bucket}").rstrip("/")
         self.objects: dict[str, bytes] = {}
+        self.mtimes: dict[str, datetime] = {}
         self.log: list[tuple[str, str]] = []
         self.fail_delete = False
         self._secret = uuid.uuid4().bytes
@@ -199,6 +204,7 @@ class FakeStorage(Storage):
             return 403
         with self._lock:
             self.objects[key] = bytes(data)
+            self.mtimes[key] = datetime.now(timezone.utc)
         return 200
 
     def get(self, key):
@@ -213,10 +219,15 @@ class FakeStorage(Storage):
         data = self.objects.get(key)
         return None if data is None else len(data)
 
+    def modified(self, key):
+        self._record("head", key)
+        return self.mtimes.get(key) if key in self.objects else None
+
     def put(self, key, data, content_type=PDF_TYPE):
         self._record("put", key)
         with self._lock:
             self.objects[key] = bytes(data)
+            self.mtimes[key] = datetime.now(timezone.utc)
 
     def copy(self, src, dst):
         self._record("copy", dst)
@@ -224,6 +235,7 @@ class FakeStorage(Storage):
             if src not in self.objects:
                 raise NotFound(src)
             self.objects[dst] = self.objects[src]
+            self.mtimes[dst] = datetime.now(timezone.utc)
 
     def delete(self, key):
         self._record("delete", key)
@@ -296,14 +308,22 @@ class R2Storage(Storage):
                 raise NotFound(key) from None
             raise StorageError("저장소에서 파일을 받지 못했어요") from None
 
-    def head(self, key):
+    def _head(self, key) -> dict | None:
         from botocore.exceptions import ClientError
         try:
-            return int(self.client.head_object(Bucket=self.bucket, Key=key)["ContentLength"])
+            return self.client.head_object(Bucket=self.bucket, Key=key)
         except ClientError as e:
             if self._missing(e):
                 return None
             raise StorageError("저장소 파일 정보를 받지 못했어요") from None
+
+    def head(self, key):
+        h = self._head(key)
+        return None if h is None else int(h["ContentLength"])
+
+    def modified(self, key):
+        h = self._head(key)
+        return None if h is None else h["LastModified"]
 
     def put(self, key, data, content_type=PDF_TYPE):
         from botocore.exceptions import ClientError
