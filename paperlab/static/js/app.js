@@ -10,6 +10,7 @@ import { renderDiscover } from "./discover.js";
 import { closeGraph, renderGraph, resetGraphMemory } from "./graph.js";
 import { flushLibrary, loadPapers, renderLibrary } from "./library.js";
 import { closeReader, flushReader, openReader, stopSummaries, summariesRunning } from "./reader.js";
+import { resetRefMemory } from "./refpane.js";
 import { closeWriter, composeDialog, flushWriter, openManuscript, renderWriteList, unsavedDraft } from "./writing.js";
 import { actions, onRefresh, refreshAll, resetState, setUsageLoader, state } from "./state.js";
 import {
@@ -206,6 +207,7 @@ async function boot({ retry = false } = {}) {
 
 async function enterApp(me) {
   resetGraphMemory(); // 만료 뒤 다른 계정으로 로그인한 경우에도 이전 그래프를 쓰지 않음
+  resetRefMemory(); // 참고 패널 추천 결과(메모리)도 같이
   const user = await sessionUser();
   const meta = (user && user.user_metadata) || {};
   state.user = {
@@ -381,6 +383,7 @@ function clearApp() {
   closeReader();
   closeWriter();
   resetGraphMemory(); // 다음 사용자에게 이전 계정의 그래프(서재 표시)가 남지 않게
+  resetRefMemory(); // 참고 패널 추천 결과 · 진행 중인 추천(메모리만 — 1C 명세 9.8절)
   resetState();
   main.innerHTML = "";
   for (const id of ["#collection-tree", "#folder-tree", "#tag-list"]) $(id).innerHTML = "";

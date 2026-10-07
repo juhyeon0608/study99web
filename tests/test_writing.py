@@ -65,6 +65,10 @@ def test_parse_citation_syntax():
     cites = compose.find_citations("문장 [@a; @b]. 그리고 [참고]와 [@c, pp. 3-5].")
     assert [c.raw for c in cites] == ["[@a; @b]", "[@c, pp. 3-5]"]
     assert cites[1].items[0]["locator"] == "3-5"
+    # 품질팀 F2: 앞에 \가 붙은 [는 인용이 아님 — 참고 패널이 이스케이프해 넣은 PDF 글 속 [@…]로 키를 주입하지 못함
+    # (refquote.js의 CITE_RE와 같은 규칙 — tests/js/refquote.test.mjs)
+    text = "“as in \\[@evil, p. 9\\] and \\[@evil2\\]” [@k, p. 3] 그리고 [@a]"
+    assert [c.raw for c in compose.find_citations(text)] == ["[@k, p. 3]", "[@a]"]
 
 
 def _docx_with_markers() -> bytes:

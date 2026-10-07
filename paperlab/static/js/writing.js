@@ -1,4 +1,4 @@
-// 논문 쓰기: 원고 목록 · 마크다운 편집기 · 인용 넣기 · 서식 미리보기 · AI 글쓰기 도우미 ·
+// 논문 쓰기: 원고 목록 · 마크다운 편집기 · 인용 넣기 · 서식 미리보기 · AI 글쓰기 도우미 · 참고 패널(refpane.js) ·
 // 워드(.docx)·한글(.hwpx) 내보내기 · 워드·한글 문서의 [@인용키] 변환
 
 import { api, downloadBlob, streamEvents } from "./api.js";
@@ -8,40 +8,20 @@ import {
   applyDocFormat, coverDialog, exportWarnings, formatManagerDialog, formatOptions, getFormat, listFormats,
   missingCoverFields, usesHancomFonts, warningText,
 } from "./formats.js";
+import { ICON_REF, refPane } from "./refpane.js";
+import { CITE_RE, parseCitation } from "./refquote.js";
 import { state } from "./state.js";
 import {
   $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles, popupMenu, toast,
 } from "./ui.js";
 
-const W = { m: null, saver: null, previewTimer: null, papers: null, view: "split", seq: 0, formats: null, fmt: null };
+const W = { m: null, saver: null, previewTimer: null, papers: null, view: "split", seq: 0, formats: null, fmt: null, ref: null };
+const MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
+const PEEK_KEY = MAC ? "⌘+Enter" : "Ctrl+Enter";
 const LONG = { duration: 8000 };
 const hancomNoticeShown = new Set(); // 한컴 글꼴 안내: 세션마다 양식별 한 번
 const BIB_MARKERS = ["[참고문헌]", "[References]", "[Bibliography]", "[REFERENCES]"];
-const CITE_RE = /\[(?=[^\[\]]*@)([^\[\]]{1,400})\]/g;
-const KEY_RE = /(-?)@([\p{L}\p{N}_][\p{L}\p{N}_:.#$%&\-+?<>~/]*)/u;
-const LOCATOR_RE = /^\s*,?\s*(?:(p|pp|page|pages|쪽|면)\.?\s*)?([\divxlcIVXLC][\w\-–,\s]*?)\s*(쪽|면)?\s*$/;
-
-// ------------------------------------------------------------- 인용 표시 해석 (compose.py와 같은 규칙)
-export function parseCitation(inner) {
-  const items = [];
-  for (const part of inner.split(";")) {
-    const m = part.match(KEY_RE);
-    if (!m) return null;
-    const item = { key: m[2].replace(/[.,]+$/, ""), suppress_author: m[1] === "-" };
-    const prefix = part.slice(0, m.index).trim();
-    if (prefix) item.prefix = prefix;
-    const rest = part.slice(m.index + m[0].length).trim();
-    if (rest) {
-      const lm = rest.match(LOCATOR_RE);
-      if (lm && (lm[1] || lm[3] || /^\s*,?\s*\d/.test(rest))) {
-        item.locator = lm[2].trim();
-        item.label = "page";
-      } else item.suffix = rest.replace(/^[,\s]+/, "");
-    }
-    items.push(item);
-  }
-  return items.length ? items : null;
-}
+// 인용 표시 정규식 · parseCitation은 refquote.js 한 곳에(참고 패널이 만든 인용 글과 같은 규칙으로 읽음 — AC-R34)
 
 // 원고 → 자리표시가 들어간 마크다운 + 인용 묶음 목록
 function prepare(text) {
@@ -198,6 +178,8 @@ function blocksToHtml(blocks) {
 
 // ------------------------------------------------------------------ 목록 화면
 export function closeWriter() {
+  if (W.ref) W.ref.destroy(); // 패널 닫기 · PDF 메모리 풀기 · 진행 중인 추천 멈춤
+  W.ref = null;
   if (W.saver) W.saver.flush();
   W.saver = null;
   W.m = null;
@@ -327,6 +309,8 @@ export async function openManuscript(main, id) {
       <button class="btn sm primary" data-cite title="[@ 를 입력해도 열려요">＋ 인용 넣기</button>
       <button class="btn sm ghost" data-bib title="참고문헌이 들어갈 자리">[참고문헌]</button>
       <span class="menu-wrap"><button class="btn sm" data-ai>✦ AI 도우미 ▾</button></span>
+      <button type="button" class="btn sm" data-ref-toggle aria-pressed="false" aria-controls="ref-pane" aria-keyshortcuts="Alt+R"
+        title="참고 패널 (Alt+R)">${ICON_REF}참고</button>
       <span class="spacer"></span>
       <div class="seg" data-view><button data-v="edit">편집</button><button data-v="split">나란히</button><button data-v="preview">미리보기</button></div>
     </div>
@@ -335,8 +319,10 @@ export async function openManuscript(main, id) {
         <div class="section-title">이 원고의 인용</div><div data-cites class="small"></div></aside>
       <div class="writer-edit"><textarea class="writer-ta" spellcheck="false" placeholder="# 제목\n\n## 1. 서론\n\n본문에 [@인용키] 로 인용을 넣으세요."></textarea></div>
       <div class="writer-preview"><div class="doc" data-doc></div></div>
+      <aside class="panel ref-pane" id="ref-pane" aria-label="참고 패널"></aside>
     </div>
-    <div class="writer-status small muted" data-status></div></section>`);
+    <div class="writer-status small muted" data-status></div>
+    <div class="sr-only" role="status" data-ref-live></div></section>`);
   main.appendChild(view);
   const ta = $(".writer-ta", view);
   ta.value = m.content;
@@ -425,11 +411,29 @@ export async function openManuscript(main, id) {
     try { localStorage.setItem("paperlab.writeView", b.dataset.v); } catch { /* 무시 */ }
   }));
   $$("[data-view] button", view).forEach((x) => x.classList.toggle("active", x.dataset.v === viewMode));
+  // 참고 패널 (docs/specs/writing-reference-pane.md): 넣기는 insertText 하나로, 서재 추가 뒤에는 목록 · 미리보기를 새로
+  W.ref = refPane(view, $("#ref-pane", view), {
+    mid: m.id, ta,
+    insert: (text) => insertText(ta, text),
+    pick: (onPick) => citePicker(ta, null, { multi: false, onPick }),
+    papers: () => W.papers,
+    built: () => W.built,
+    libraryChanged: async () => {
+      await libraryPapers(true).catch(() => {});
+      if (W.m === m) await renderPreview(view, ta);
+    },
+  });
+  $("[data-ref-toggle]", view).onclick = () => W.ref && W.ref.toggle();
+  $("[data-cites]", view).addEventListener("click", (e) => {
+    const b = e.target.closest("button[data-ref-open]");
+    if (b && W.ref) W.ref.open(Number(b.dataset.refOpen));
+  });
   W.fmt = { id: fmtId, entry: null, data: null };
   setFormat(view, fmtId);
   refresh();
   renderPreview(view, ta);
-  libraryPapers(true).catch(() => {});
+  // 서재 목록이 오면 왼쪽 "이 원고의 인용"을 누를 수 있는 줄로 다시 그림
+  libraryPapers(true).then(() => { if (W.m === m && W.built) drawCites(view, W.built); }).catch(() => {});
   ta.focus();
 }
 
@@ -549,12 +553,20 @@ function autocomplete(ta) {
     document.body.appendChild(SG.box);
   }
   SG.box.innerHTML = SG.items.map((p, i) => `<div class="cs-item ${i === SG.active ? "active" : ""}" data-i="${i}">
-    <code>@${esc(p.citekey)}</code><span>${esc((p.title || "").slice(0, 70))}</span><span class="muted">${esc(p.year || "")}</span></div>`).join("")
-    + `<div class="cs-hint">↑↓ 고르기 · Enter/Tab 넣기 · Esc 닫기</div>`;
+    <code>@${esc(p.citekey)}</code><span>${esc((p.title || "").slice(0, 70))}</span><span class="muted">${esc(p.year || "")}</span>
+    <button type="button" class="btn sm cs-peek" data-ref-peek tabindex="-1" title="참고 패널에서 보기 (${PEEK_KEY})">보기</button></div>`).join("")
+    + `<div class="cs-hint">↑↓ 고르기 · Enter/Tab 넣기 · ${PEEK_KEY} 옆에 보기 · Esc 닫기</div>`;
   $$(".cs-item", SG.box).forEach((row) => row.addEventListener("mousedown", (e) => {
     e.preventDefault();
     SG.active = Number(row.dataset.i);
     acceptSuggest(ta);
+  }));
+  // [보기]: 넣지 않고 참고 패널에서 보기 — 줄의 넣기가 같이 일어나지 않게, 원고 초점도 그대로
+  $$("[data-ref-peek]", SG.box).forEach((b) => b.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    SG.active = Number(b.closest(".cs-item").dataset.i);
+    peekSuggest(ta);
   }));
   const { x, y } = caretCoords(ta);
   const w = Math.min(520, window.innerWidth - 24);
@@ -573,8 +585,21 @@ function acceptSuggest(ta) {
   insertText(ta, p.citekey + (closes ? "" : "]"));
 }
 
+// 자동완성에서 고른 논문을 참고 패널에서 보기(넣지 않음 — 목록 · 원고 입력 초점 그대로)
+function peekSuggest(ta) {
+  const p = SG.items[SG.active];
+  if (!p || !W.ref) return;
+  W.ref.open(p.id, { peek: true, title: p.title || "" });
+  autocomplete(ta);
+}
+
 function suggestKey(e, ta) {
   if (!SG.box) return false;
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.isComposing) {
+    e.preventDefault();
+    peekSuggest(ta);
+    return true;
+  }
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault();
     SG.active = (SG.active + (e.key === "ArrowDown" ? 1 : -1) + SG.items.length) % SG.items.length;
@@ -609,6 +634,7 @@ async function renderPreview(view, ta) {
     W.built = built;
     doc.innerHTML = blocksToHtml(built.blocks) || `<p class="muted">왼쪽에 글을 쓰면 여기에 서식대로 보여요.</p>`;
     drawCites(view, built);
+    if (W.ref) W.ref.citesChanged();
   } catch (e) {
     if (seq === W.seq) doc.innerHTML = `<div class="status-line bad">${esc(e.message)}</div>`;
   }
@@ -659,12 +685,20 @@ function drawCites(view, built) {
     return;
   }
   box.innerHTML = "";
+  const byKey = new Map((W.papers || []).map((p) => [p.citekey, p]));
+  const cur = W.ref ? W.ref.currentId() : null;
   for (const k of keys) {
     const it = built.items[k];
     const issues = (built.issues || {})[k] || [];
-    box.appendChild(el(`<div class="cite-row ${it ? "" : "missing"}" title="${esc(it ? it.title : "서재에 이 인용키를 가진 논문이 없어요")}">
-      <code>@${esc(k)}</code><div class="muted">${it ? esc((it.title || "").slice(0, 60)) : "⚠ 서재에 없는 키"}</div>
-      ${issues.length ? `<div class="warn-text">빈 항목: ${esc(issues.join(", "))}</div>` : ""}</div>`));
+    const warn = issues.length ? `<span class="warn-text">빈 항목: ${esc(issues.join(", "))}</span>` : "";
+    const p = it && byKey.get(k);
+    if (p) { // 서재에 있는 키: 누르면 참고 패널에서 그 논문
+      box.appendChild(el(`<button type="button" class="cite-row" data-ref-open="${p.id}" ${p.id === cur ? `aria-current="true"` : ""}
+        title="${esc(`참고 패널에서 보기 · ${it.title || ""}`)}"><code>@${esc(k)}</code><span class="muted">${esc((it.title || "").slice(0, 60))}</span>${warn}</button>`));
+    } else {
+      box.appendChild(el(`<div class="cite-row ${it ? "" : "missing"}" title="${esc(it ? it.title : "서재에 이 인용키를 가진 논문이 없어요")}">
+        <code>@${esc(k)}</code><div class="muted">${it ? esc((it.title || "").slice(0, 60)) : "⚠ 서재에 없는 키"}</div>${warn}</div>`));
+    }
   }
 }
 

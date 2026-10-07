@@ -17,7 +17,8 @@ import re
 import zipfile
 from dataclasses import dataclass
 
-CITE_RE = re.compile(r"\[(?=[^\[\]]*@)([^\[\]]{1,400})\]")
+# 앞에 \가 붙은 [는 인용 표시가 아님(마크다운 이스케이프 — 참고 패널이 넣은 PDF 글 속 [@…], refquote.js와 같은 규칙)
+CITE_RE = re.compile(r"(?<!\\)\[(?=[^\[\]]*@)([^\[\]]{1,400})\]")
 KEY_RE = re.compile(r"(-?)@([\w][\w:.#$%&\-+?<>~/]*)")
 BIB_MARKERS = ("[참고문헌]", "[References]", "[Bibliography]", "[REFERENCES]")
 LOCATOR_RE = re.compile(

@@ -59,8 +59,17 @@ WARNINGS = {
                         "설정에서 OpenAlex API 키를 넣으면 한도가 10배가 돼요.",
     "weak_citation_data": "이 논문 주변은 인용 정보가 적어 주제 유사도로 보강했어요.",
     "truncated": "참고문헌이 많아 앞의 300편만 비교했어요.",
+    "seeds_capped": "인용이 많아 처음 나온 20편만 바탕으로 했어요.",
 }
 WARNING_ORDER = tuple(WARNINGS)
+# 추천 응답에 내보내는 경고 (1C 명세 9.6절 — 그 밖 code는 추천에서 생기지 않거나 뜻이 없음)
+REC_WARNINGS = ("partial", "refs_partial", "citing_failed", "abstracts_failed", "stale_cache", "upstream_limited",
+                "weak_citation_data", "seeds_capped")
+# C 단계(씨앗을 인용한 논문 피인용 순 상위)를 받은 목록 — 마이그레이션 20261008000003. 그래프 · 추천 어느 쪽이 받아도
+# 함께 쓴다(행만 보고 추천에 쓰였는지 알 수 없게 — 사용자 결정 I-1). 씨앗의 cited_by_top은 "C · D 완료" 표시라
+# 추천(D를 받지 않음)은 쓰지 않는다. 그래프는 cited_by_top이 없으면 이 목록을 C로 다시 쓰고 D만 받는다.
+REC_CITED = "cited_by_top_c"
+REC_MAX_IDS = 200  # POST /api/graph/recommend 본문 paper_ids 최대 (9.4절)
 
 
 class GraphError(Exception):
@@ -173,6 +182,17 @@ def parse_request(body) -> tuple[int | None, Seed | None, int]:
     if out.empty():  # DOI만 있었는데 금지 글자라 버림
         raise BadSeed()
     return None, out, size
+
+
+def parse_recommend_request(body) -> list[int]:
+    """POST /api/graph/recommend 본문 → 서재 논문 id(중복은 하나로, 순서 유지). 그 밖 키는 무시, 형식 위반은 BadSeed"""
+    ids = body.get("paper_ids") if isinstance(body, dict) else None
+    if not isinstance(ids, list) or not 1 <= len(ids) <= REC_MAX_IDS:
+        raise BadSeed()
+    for x in ids:
+        if isinstance(x, bool) or not isinstance(x, int) or not 1 <= x <= INT64_MAX:
+            raise BadSeed()
+    return list(dict.fromkeys(ids))
 
 
 def seed_from_paper(p: dict) -> Seed:
@@ -430,12 +450,21 @@ class GraphBuilder:
         raise GraphError("upstream_unavailable" if upstream_failed else "seed_not_found")
 
     # ------------------------------------------------------------ 만들기
-    def build(self, seed_no: int, size: int) -> dict:
+    def gather(self, seed_no: int, say=None, s2: bool = True, rec: bool = False):
+        """A · B · C 단계 (그래프 · 1C 추천 공용): 씨앗 서지 → (S2 보강) → 참고문헌 · 관련 논문 → 씨앗을 인용한 논문.
+        (씨앗 번호, R, L, C, C를 캐시에서 읽었는지, C 전체 수). 기한 · 호출 상한을 넘은 뒤(stop)에는 외부를 부르지 않고
+        캐시로만. say = 진행 알림(없으면 끊김 확인만), rec = 추천(D를 받지 않음 — REC_CITED만으로 C를 캐시로 봄)."""
+        say = say or (lambda *a: self.src.check_cancel())
         seed = int(seed_no)
-        self.progress("seed", "씨앗 논문을 찾는 중", 0.05)
-        self._load([seed], ("references", "related", "cited_by_top"))
-        seed = self._seed_work(seed)  # 합쳐진 번호면 OpenAlex가 돌려준 번호(I-1)
-        self._s2_augment(seed)
+        say("seed", "씨앗 논문을 찾는 중", 0.05)
+        self._load([seed], ("references", "related", "cited_by_top", REC_CITED))
+        if rec:  # 다른 씨앗의 참고문헌으로 먼저 읽혔으면 _load가 건너뛰므로 피인용 목록은 따로 읽음
+            for key, e in self.store.edges([seed], ("cited_by_top", REC_CITED)).items():
+                self.links.setdefault(key, e)
+        if not self.stop:
+            seed = self._seed_work(seed)  # 합쳐진 번호면 OpenAlex가 돌려준 번호(I-1)
+        if s2:
+            self._s2_augment(seed)
 
         # A · B: 참고문헌(앞 300편) · 관련 논문(20편)
         ref_e = self.links.get((seed, "references"))
@@ -446,12 +475,16 @@ class GraphBuilder:
         R = [n for n in refs_all[:cg.MAX_SEED_REFS] if n != seed]
         L = [n for n in (rel_e["nos"] if rel_e else [])[:cg.MAX_RELATED] if n != seed]
         AB = list(dict.fromkeys(R + L))
-        self.progress("references", f"참고문헌 · 관련 논문 {len(AB)}편", 0.3)
+        say("references", f"참고문헌 · 관련 논문 {len(AB)}편", 0.3)
         self._ensure(AB, "refs_partial")
 
         # C: 씨앗을 인용한 논문(피인용 순 100편)
-        C, c_cached, c_total = self._citing(seed)
-        self.progress("citing", f"이 논문을 인용한 논문 {len(C)}편", 0.5)
+        C, c_cached, c_total = self._citing(seed, rec)
+        say("citing", f"이 논문을 인용한 논문 {len(C)}편", 0.5)
+        return seed, R, L, C, c_cached, c_total
+
+    def build(self, seed_no: int, size: int) -> dict:
+        seed, R, L, C, c_cached, c_total = self.gather(seed_no, self.progress)
 
         pool = cg.Pool(seed)
         self._add(pool, [seed], "seed")
@@ -571,12 +604,19 @@ class GraphBuilder:
 
     _c_fetched = False
 
-    def _citing(self, seed: int) -> tuple[list[int], bool, int]:
-        """(C 번호들, 캐시에서 왔는지, 전체 수)"""
+    def _citing(self, seed: int, rec: bool = False) -> tuple[list[int], bool, int]:
+        """(C 번호들, C · D가 캐시에 있는지, 전체 수). cited_by_top = C · D 완료, REC_CITED = C를 받음(그래프 · 추천 공통).
+        REC_CITED가 유효하면 C는 다시 받지 않는다 — 그래프는 D를 받고, 끝나면 cited_by_top을 쓴다. 새로 받은 C는 늘 남김"""
         e = self.links.get((seed, "cited_by_top"))
         if e and self._link_fresh(seed, "cited_by_top"):
             self._ensure(e["nos"], "citing_failed")
             return list(e["nos"]), True, e["total"]
+        c = self.links.get((seed, REC_CITED))
+        if c and self._link_fresh(seed, REC_CITED):
+            self._ensure(c["nos"], "citing_failed")
+            self._c_fetched = True  # 유효한 C
+            return list(c["nos"]), rec, c["total"]
+        e = e or c
         if self.stop:
             if e:
                 self.warnings.add("stale_cache")
@@ -596,9 +636,11 @@ class GraphBuilder:
                 return list(e["nos"]), False, e["total"]
             return [], False, 0
         self._absorb_many(rows, True)
+        C = [r["no"] for r in rows if r["no"] != seed][:cg.CITERS_TOP]
+        self._set_edge(seed, REC_CITED, C, total)  # 그래프 · 추천 같은 기록(I-1) — 정렬은 citecache.write_rows(F1)
         self._flush()
         self._c_fetched = True
-        return [r["no"] for r in rows if r["no"] != seed][:cg.CITERS_TOP], False, total
+        return C, False, total
 
     def _cocite(self, targets: list[int]) -> bool:
         if self.stop:
@@ -653,6 +695,10 @@ class GraphBuilder:
             want += [y for y, _ in cg.derivative_works(ix, nodes)]
         want = list(dict.fromkeys(want))
         self._load([x for x in prior_all if x not in self.rows], relations=())
+        self._abstracts(want, E_MAX_CALLS)
+
+    def _abstracts(self, want: list[int], max_calls: int) -> None:
+        """서지가 지났거나 초록이 없는 작품만 묶음 조회 최대 max_calls번 (그래프 E 단계 · 1C 추천 결과 공용)"""
         need = [x for x in want if not self._meta_fresh(x) or self.rows[x].get("title") and (
                 self.rows[x].get("abstract") is None or not fresh(self.rows[x].get("abstract_on"), TTL_ABSTRACT, self.today))]
         if not need:
@@ -661,7 +707,7 @@ class GraphBuilder:
             if any(x in self.rows for x in need):
                 self.warnings.add("stale_cache")
             return
-        calls = min(E_MAX_CALLS, self.src.budget_left())
+        calls = min(max_calls, self.src.budget_left())
         need = need[:calls * BATCH]
         failed = False
         for chunk in _chunks(need, BATCH):
@@ -699,9 +745,83 @@ class GraphBuilder:
         return {
             "seed": f"W{seed}", "size": size, "nodes": nodes, "edges": edges, "prior": prior, "derivative": deriv,
             "warnings": warnings,
-            "stats": {"candidates": len(pool.works), "list_calls": self.src.list_calls,
-                      "cache_hits": sum(1 for n in pool.works if n not in self.fetched),
-                      "elapsed_ms": int((time.monotonic() - self.t0) * 1000), "built_on": self.today.isoformat()},
+            "stats": self._stats(pool.works),
+        }
+
+    def _stats(self, works) -> dict:
+        """응답 stats (그래프 · 추천 공용 — 숫자 · 날짜만)"""
+        return {"candidates": len(works), "list_calls": self.src.list_calls,
+                "cache_hits": sum(1 for n in works if n not in self.fetched),
+                "elapsed_ms": int((time.monotonic() - self.t0) * 1000), "built_on": self.today.isoformat()}
+
+    # ------------------------------------------------------------ 1C 원고 인용 기반 추천 (명세 9.2 · 9.3 · 9.6절)
+    def recommend(self, seed_nos: list[int]) -> dict:
+        """씨앗(원고에 인용한 서재 논문의 OpenAlex 번호, 원고 순서, 최대 REC_MAX_SEEDS편)마다 A · B · C(캐시 우선, S2 보강 없음)
+        → D는 캐시만(store.citers) → citegraph.recommend → 결과 가운데 초록이 없는 것만 묶음 조회 1회.
+        예산 · 기한이 다 되면 남은 씨앗은 캐시에 있는 것만 쓴다(partial — 받은 것은 캐시에 남아 다시 계산하면 이어서 반영).
+        in_library · seeds_capped는 server.py가 요청한 사용자마다 붙인다."""
+        seeds = list(dict.fromkeys(int(s) for s in seed_nos))
+        got: dict[int, int] = {}  # 요청 번호 → 풀 번호(합쳐진 번호면 OpenAlex가 돌려준 번호)
+        pool = None
+        errors: set[str] = set()
+        for i, s in enumerate(seeds):
+            self.progress("seeds", f"인용 논문 정보를 모으는 중 ({i + 1}/{len(seeds)})", round(0.1 + 0.6 * i / len(seeds), 3))
+            if self.stop:
+                self._load([s])
+                if s not in self.rows:
+                    continue  # 처음 보는 씨앗은 다음 계산 때
+            try:
+                seed, R, L, C, _, _ = self.gather(s, s2=False, rec=True)
+            except GraphError as e:
+                errors.add(e.code)
+                continue
+            got[s] = seed
+            pool = pool or cg.Pool(seed)
+            self._add(pool, [seed], "seed")
+            self._add(pool, R, "reference")
+            self._add(pool, L, "related")
+            self._add(pool, C, "citing")
+        if pool is None:
+            if self.src.limited:
+                raise GraphError("upstream_limited")
+            if "upstream_unavailable" in errors:
+                raise GraphError("upstream_unavailable")
+            return self._rec_result([], {}, len(seeds), 0, None)
+        pnos = [got.get(s, s) for s in seeds]
+        back: dict[int, int] = {}  # 풀 번호 → 요청 번호(응답 seeds는 요청한 번호만)
+        for s, p in zip(seeds, pnos):
+            back.setdefault(p, s)
+        # 함께 인용: 캐시만(외부 호출 없음). 대상은 그래프 D 단계와 같이 씨앗 + 씨앗마다 예비 상위 49편
+        # (씨앗 하나면 그 씨앗 그래프와 같은 풀 — 결과가 그래프의 노드 순서와 같고, 초록도 그래프가 받아 둔 것)
+        ix0 = cg.index(pool)
+        targets = [t for c in dict.fromkeys(pool.canon(p) for p in pnos) if c in ix0.members
+                   for t in cg.prelim_targets(ix0, seed=c)]
+        D = self.store.citers(list(dict.fromkeys(pnos + targets)), self.today, cg.COCITE_PER_SORT)
+        self._load(D)
+        self._add(pool, D, "cocited")
+        ix = cg.index(pool)
+        canon = {pool.canon(p) for p in pnos}
+        used = sum(1 for c in canon if c in ix.members and (ix.refs.get(c) or ix.citers.get(c)))
+        if self.src.limited:
+            self.warnings.add("upstream_limited")
+            if not used:
+                raise GraphError("upstream_limited")
+        items = cg.recommend(ix, pnos, cg.REC_N)
+        self.progress("finish", "초록 받는 중", 0.85)
+        self._abstracts([it["no"] for it in items], cg.REC_ABSTRACT_CALLS)
+        self.progress("compute", "추천 계산", 0.95)
+        if items and sum(1 for it in items if it["kind"] == "related") * 2 > len(items):
+            self.warnings.add("weak_citation_data")
+        return self._rec_result(items, back, len(seeds), used, pool)
+
+    def _rec_result(self, items: list[dict], back: dict[int, int], total: int, used: int, pool: cg.Pool | None) -> dict:
+        out = [{"id": f"W{it['no']}", "rank": round(it["rank"], 4), "score": round(it["score"], 4), "linked": it["linked"],
+                "kind": it["kind"], "seeds": [f"W{back[x]}" for x in it["seeds"]], "paper": paper_view(self.rows[it["no"]])}
+               for it in items]
+        return {
+            "items": out, "seeds_total": total, "seeds_used": used,
+            "warnings": [{"code": c, "message": WARNINGS[c]} for c in WARNING_ORDER if c in self.warnings and c in REC_WARNINGS],
+            "stats": self._stats(pool.works if pool else {}),
         }
 
     def info(self) -> dict:

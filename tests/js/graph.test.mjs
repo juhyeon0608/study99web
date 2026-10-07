@@ -8,6 +8,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
+import { bare, templateExprs } from "./codecheck.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const STATIC = join(ROOT, "paperlab", "static");
@@ -203,45 +204,6 @@ test("fitTransform · zoomAt · nearestInDirection", () => {
 });
 
 // ---------------------------------------------------------------- AC-G51 · 31 코드 검사
-// 템플릿 문자열의 ${…} 식을 (안쪽 템플릿까지) 모두 뽑는다
-function templateExprs(src) {
-  const out = [];
-  for (let i = 0; i < src.length - 1; i++) {
-    if (src[i] === "$" && src[i + 1] === "{") {
-      let depth = 1;
-      let j = i + 2;
-      while (j < src.length && depth) {
-        if (src[j] === "{") depth++;
-        else if (src[j] === "}") depth--;
-        j++;
-      }
-      out.push(src.slice(i + 2, j - 1).trim());
-    }
-  }
-  return out;
-}
-
-// 식에서 안쪽 템플릿 문자열 · 따옴표 문자열 · esc(…) 호출을 지우고 남은 부분(= HTML에 그대로 들어가는 값)
-function bare(expr) {
-  let s = "";
-  for (let i = 0; i < expr.length; i++) {
-    if (expr[i] !== "`") { s += expr[i]; continue; }
-    let depth = 0;
-    i++;
-    for (; i < expr.length; i++) {
-      if (expr[i] === "\\") { i++; continue; }
-      if (expr[i] === "$" && expr[i + 1] === "{") { depth++; i++; continue; }
-      if (depth && expr[i] === "}") { depth--; continue; }
-      if (!depth && expr[i] === "`") break;
-    }
-    s += "``";
-  }
-  s = s.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, '""');
-  let prev;
-  do { prev = s; s = s.replace(/esc\([^()]*(?:\([^()]*\)[^()]*)*\)/g, "E"); } while (s !== prev);
-  return s.replace(/^[^?:`"]*\?/, ""); // 조건식 cond ? A : B 의 cond는 화면에 나가지 않음
-}
-
 test("graph.js: 제목 · 저자 · 초록 · 학술지는 esc()로만 HTML에 (AC-G51)", () => {
   const src = readFileSync(join(STATIC, "js", "graph.js"), "utf8");
   const risky = /\b(title|abstract|authors|venue|label|message|doi|sub|caption|url|text)\b/;

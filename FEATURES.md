@@ -504,6 +504,7 @@ AI 기능은 **설정 → AI**에 **본인의 Anthropic API 키**를 넣으면 �
 | `[참고 @a]` | 앞에 덧붙이는 말 |
 
 - 본문에 **`[@`를 치면 서재 논문이 자동완성**으로 뜹니다. 인용키·제목·저자·연도로 좁혀지고, **↑↓로 고르고 Enter/Tab**으로 넣습니다. 그냥 계속 쳐도 됩니다(Esc로 닫기).
+  고른 줄에서 **Ctrl+Enter**(macOS ⌘+Enter)나 줄 끝 **[보기]** 를 누르면 넣지 않고 그 논문을 **참고 패널**에 띄웁니다(아래 절 — 입력은 끊기지 않음).
 - **＋ 인용 넣기** 버튼은 검색 창을 엽니다. 체크해서 여러 편을 고르고, 쪽 번호를 넣을 수 있습니다.
 - 인용 표시는 Pandoc과 같은 문법이라 다른 도구와도 호환됩니다.
 
@@ -529,9 +530,44 @@ AI 기능은 **설정 → AI**에 **본인의 Anthropic API 키**를 넣으면 �
 
 ### 왼쪽 패널과 상태 표시
 - **개요**: 제목 목록. 누르면 편집 위치와 미리보기가 그곳으로 이동합니다.
-- **이 원고의 인용**: 쓰인 인용키와 논문 제목, 서재에 없는 키(⚠), 인용 정보가 빈 논문 경고
+- **이 원고의 인용**: 쓰인 인용키와 논문 제목, 서재에 없는 키(⚠), 인용 정보가 빈 논문 경고. 서재에 있는 논문 줄을 누르면 **참고 패널**에 그 논문이 열립니다(지금 열린 논문은 왼쪽 파란 줄).
 - 아래 상태 줄: **글자 수(공백 포함/제외)**, 단어 수, 인용 개수
 - **자동 저장**(입력을 멈추면 저장, Ctrl+S로 바로 저장). 원고는 클라우드에 저장되어 다른 기기에서 이어서 열 수 있습니다. 같은 원고를 두 기기(또는 두 탭)에서 동시에 고치면 **나중에 저장한 내용이 남습니다**.
+
+### 참고 패널 (논문을 옆에 띄워 놓고 쓰기)
+도구 막대의 **[참고]**(단축키 **Alt+R**)를 누르면 원고 옆(좁은 화면에서는 아래)에 참고 패널이 열립니다. 서재 논문의 PDF · 하이라이트 · 노트 · AI 요약 · 정보를 보면서, 고른 문장을 **원고 커서 자리에 인용과 함께** 넣을 수 있습니다.
+
+- **여는 곳**: [참고] 버튼 · Alt+R, 왼쪽 *이 원고의 인용*의 논문 줄, `[@` 자동완성의 **Ctrl+Enter** · **[보기]**.
+- **Alt+R**: 닫혀 있으면 열고, 열려 있는데 원고에 있으면 패널로 이동, 패널 안에서 누르면 닫고 원고로 돌아옵니다. 패널 안에서 **Esc**는 원고로 돌아가기(패널은 그대로).
+- **머리줄**: 패널 제목 자리의 **열린 논문** 고르기 상자(이 원고에서 최근 연 논문 최대 8편 + *다른 논문 찾기…*) · **[＋ 인용]**(`[@키]` 넣기) · ✕(닫기).
+- **탭** — PDF | 하이라이트·노트 | 요약 | 정보 | 추천
+
+| 탭 | 하는 일 |
+|---|---|
+| **PDF** | 읽기 화면과 같은 뷰어를 패널 폭에 맞춰 보여 줍니다(쪽 번호 · − · 맞춤 · ＋ · 하이라이트 색). 문장을 드래그하면 **[색 5개 · 인용으로 넣기 · 메모 · 복사]**. 색 · 메모는 하이라이트를 만들고(읽기 화면과 같은 하이라이트), **[인용으로 넣기]** 는 하이라이트 없이 원고에 직접 인용으로 넣습니다. 칠해진 하이라이트를 눌러도 [인용으로 넣기]가 있습니다. PDF가 없는 논문은 *인하대에서 보기* · *PDF 첨부*(첨부가 끝나면 패널에 PDF가 뜸). |
+| **하이라이트·노트** | 하이라이트마다 **[넣기]**(직접 인용) · **[메모 넣기]**(메모를 내 말로 — 따옴표 없이) · *p.N*(PDF 탭의 그 쪽으로). 아래는 **노트(읽기 전용)** — 키보드나 마우스로 고른 부분을 **[선택한 부분 넣기]**. 노트 고치기는 읽기 화면에서. |
+| **요약** | 이미 만든 AI 요약을 보여 줍니다(물어보기 · 다시 만들기 없음). 요약이 없으면 *아직 AI 요약이 없어요* + **[읽기 화면에서 열기]**(읽기 화면이 요약 탭으로 열림 — 원고는 자동으로 저장). |
+| **정보** | 제목 · 저자 · 학술지 · 연도 · DOI · 쪽 · 초록 · `@인용키` + **[인용 넣기]** · **[읽기 화면에서 열기]**. 인용 정보가 비어 있으면 경고와 *채우기*. |
+| **추천** | 원고에 인용한 논문들의 인용 관계로 고른 **참고할 만한 논문 20편**(아래). |
+
+- **원고에 넣는 모양** (넣으면 초점은 원고, 커서는 넣은 글 뒤 — 미리보기 보기라 편집 칸이 숨어 있으면 *원고에 넣었어요* 알림이 뜸)
+
+| 넣는 것 | 원고에 들어가는 글 |
+|---|---|
+| PDF 문장 · 하이라이트 [넣기] | 직접 인용 — 짧으면 본문 안에 따옴표로 묶고 `[@키, p. 12]`를 붙이고, 길면 인용 블록 `> … [@키, p. 12]`(APA 방식. 따옴표 모양 · 길이 기준은 [인용으로 넣기] · [넣기] 버튼의 설명에 나옴). 마크다운 특수 문자(`[ ] * _ < \` 등)는 글자 그대로 보이게 처리 |
+| 하이라이트 [메모 넣기] | `{메모} [@키, p. 12]` (따옴표 없음) |
+| 노트 [선택한 부분 넣기] | `{고른 글} [@키]` |
+| [＋ 인용] · [인용 넣기] | `[@키]` |
+
+- **쪽 번호**: 논문 정보의 *쪽*이 `345-360`처럼 범위이고 그 길이가 PDF 쪽 수와 같으면 **인쇄된 쪽**(PDF 3쪽 → `p. 347`, 두 쪽에 걸치면 `pp. 347–348`)으로, 아니면 **PDF 쪽**으로 넣습니다(그 논문에서 처음 넣을 때 *인쇄된 쪽 번호를 알 수 없어 PDF 쪽(n)으로 넣었어요* 안내). 어느 기준인지는 PDF 막대 끝 *인용 쪽: 인쇄 쪽(345–360)* / *인용 쪽: PDF 쪽*에 보입니다.
+- **추천 탭**: 원고에 인용한 서재 논문(OpenAlex 번호가 있는 것, 처음 나온 20편)을 바탕으로 인용 그래프와 같은 방식(서지 결합 · 공동 인용)으로 유사도를 **합산**해 20편을 고릅니다. 탭을 처음 열 때 · 원고 인용이 바뀐 뒤 열 때 계산하고(처음 보는 논문이 많으면 10~40초, 진행 · [취소]), 탭을 보는 동안 인용이 바뀌면 *원고의 인용이 바뀌었어요 [다시 계산]* 만 알립니다.
+  - 항목: 제목 · *첫 저자 외 · 연도 · 피인용* · *내 인용 n편과 연결 · 같은 참고문헌 / 함께 인용됨 / 주제가 비슷함(인용 근거 없음)* · *✓ 서재에 있음* · *원고에 인용함*. 누르면 정보 탭.
+  - 서재에 있으면 **[인용 넣기]**, 없으면 **[＋ 서재에 추가]** · **[추가하고 인용]**(추가한 뒤 받은 인용키로 `[@키]`) + 글자 링크 *인하대에서 보기* · *Google Scholar에서 보기*. 서재 밖 논문의 정보 탭에는 *PDF 포함 추가*도 있고, PDF · 하이라이트·노트 · 요약 탭은 *서재에 추가하면 볼 수 있어요*.
+  - 한 번에 다 보지 못하면 *한 번에 다 보지 못해 n편 중 m편만 반영했어요* — [다시 계산]하면 이어서 반영합니다. OpenAlex 번호가 없는 인용 논문은 빠지고(서재 상세의 *인용 그래프 보기*를 한 번 열면 번호가 채워짐), 국문 논문 위주면 결과가 적을 수 있습니다.
+  - 추천 결과는 **브라우저 메모리에만**(원고마다 마지막 1개) 두고 로그아웃하면 지웁니다. 서버는 누가 무엇을 추천받았는지 남기지 않습니다(12장).
+- **화면 배치**: 패널이 열리면 칸이 모자랄 때 **미리보기를 먼저 숨깁니다** — 1501px 이상은 *나란히*에서 편집 · 미리보기 · 참고 세 칸, 1500px 이하는 편집 · 참고(이때 [나란히]에 *참고 패널을 닫거나 화면을 넓히면 미리보기도 보여요*), 760px 이하는 위 편집 · 아래 참고. 미리보기 보기에서는 미리보기 · 참고.
+- **기억하는 것**: 패널 열림 · 마지막 탭(이 브라우저), 원고마다 최근 연 논문 목록(이 브라우저 — 서재 논문 id만). 패널에서 논문을 열어도 서재의 *읽는 중* · *최근 연 논문*은 바뀌지 않습니다.
+- 패널에서 하지 않는 것: AI 질문 · 요약 만들기 · 노트 고치기(읽기 화면에서), PDF 두 편 동시에 보기, 패널 폭 끌어서 바꾸기.
 
 ### AI 글쓰기 도우미 (✦ AI 도우미)
 글을 선택하거나(선택이 없으면 커서가 있는 문단) 메뉴를 고릅니다. 결과를 미리 보고 **바꾸기 / 고쳐서 넣기 / 복사 / 취소**합니다.
@@ -812,6 +848,9 @@ AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시됩니다.
 | 원고 편집 | `Ctrl+S` | 바로 저장 |
 | 원고 편집 | `Tab` | 들여쓰기(공백 2칸) |
 | 원고 · `[@` 자동완성 | `↑` `↓` · `Enter`/`Tab` · `Esc` | 고르기 · 넣기 · 닫기 |
+| 원고 · `[@` 자동완성 | `Ctrl+Enter` | 고른 논문을 참고 패널에서 보기(넣지 않음) |
+| 원고 화면 | `Alt+R` | 참고 패널 열기 · 열린 패널로 이동 · (패널 안에서) 닫고 원고로 |
+| 참고 패널 | `←` `→` · `Home` · `End` · `Esc` | 탭 이동 · 원고로 돌아가기 |
 | 인용 검색 창 | `↑` `↓` · `Enter` · `Ctrl+Space` | 고르기 · 넣기 · 여러 편 체크 |
 | 인용 그래프(노드) | `←` `→` `↑` `↓` · `Home` · `Enter`/`Space` · `Esc` | 그 방향 노드로 · 씨앗으로 · 고르기 · 강조 풀기 |
 | 인용 그래프 | `+` · `-` · `0` | 확대 · 축소 · 화면에 맞추기 |
@@ -920,6 +959,7 @@ study99web/
 │  └─ server-pc/      install · update · funnel · watchdog · uninstall · common(.ps1) · server.json(공개 주소 · 포트 · 기본 경로 · 작업 이름) · README.md(서버 PC 설치 안내서)
 ├─ supabase/migrations/  SQL 마이그레이션: 확장(PGroonga) · 앱 전용 역할 · 표 · RLS · 검색 색인 · 허용 목록 훅(Before User Created — 선택 기능, 기본 미연결)
 │                        · 20261008000002_citation_cache.sql(인용 그래프 공용 캐시 external_works · citation_edges, GIN 색인, 읽기 = 로그인 사용자 · 쓰기 = system_tx만)
+│                        · 20261008000003_citation_edges_top_c.sql(citation_edges 관계에 cited_by_top_c 추가 — 1C 추천)
 ├─ paperlab/
 │  ├─ serve.py        운영 서버 실행 (python -m paperlab.serve: cloud.env 검사 · 127.0.0.1:8080 · 프록시 헤더는 127.0.0.1만 신뢰 · 회전 로그, --check 설정 점검)
 │  ├─ __main__.py     개발 서버 (PAPERLAB_DEV=1, 테스트용 Supabase 프로젝트 · 가짜 저장소, 127.0.0.1)
@@ -933,8 +973,9 @@ study99web/
 │  ├─ admin.py        관리 명령: sync-allowlist · app-role --write-env · rotate-key · orphans · backup · pg-dump-check · latest-backup · mark-test-project · cache-stats · cache-prune
 │  ├─ pdf.py          PyMuPDF: 쪽별 텍스트 추출, DOI·arXiv·제목 인식
 │  ├─ sources.py      OpenAlex · arXiv · Semantic Scholar · Crossref (연락처 이메일은 Crossref에만), 인용 그래프용 OpenAlex 묶음 · cites 조회 · S2 참고문헌(호출 예산 · 기한 · 응답 검증)
-│  ├─ graph_build.py  인용 그래프 만들기: 씨앗 해석 · 입력 검증 → A~E 단계(캐시 우선) → 계산, 경고 · 오류 code, GraphGate(동시 2 · 대기 4 · 사용자당 1) · 같은 씨앗 합치기
-│  ├─ citegraph.py    인용 그래프 알고리즘(입출력 없음): 중복 합치기 · 서지 결합 + 공동 인용 유사도 · 노드 고르기 · 선 · 이전/이후 연구
+│  ├─ graph_build.py  인용 그래프 만들기: 씨앗 해석 · 입력 검증 → A~E 단계(캐시 우선, A~C = gather) → 계산, 경고 · 오류 code, GraphGate(동시 2 · 대기 4 · 사용자당 1) · 같은 씨앗 합치기,
+│  │                  원고 인용 기반 추천(recommend — 씨앗마다 gather + 함께 인용은 캐시만 + 결과 초록 1회)
+│  ├─ citegraph.py    인용 그래프 알고리즘(입출력 없음): 중복 합치기 · 서지 결합 + 공동 인용 유사도 · 노드 고르기 · 선 · 이전/이후 연구 · 여러 씨앗 유사도 합산 추천(recommend)
 │  ├─ citecache.py    공용 캐시 읽기(사용자 트랜잭션) · 쓰기(system_tx "citation cache write") · 유효 기간 · 정리
 │  ├─ citations.py    CSL-JSON 변환, 인용 정보 점검, BibTeX · RIS · CSL-JSON, 인용키
 │  ├─ csl_style.py    CSL 스타일 파일 정보
@@ -945,14 +986,16 @@ study99web/
 │  ├─ format_import.py 양식 파일(.docx · .dotx · .hwpx)에서 서식 읽기
 │  ├─ compose.py      워드·한글 문서의 [@인용키] → 서식 있는 인용 + 참고문헌
 │  └─ static/         화면 (HTML · CSS · ES 모듈 JS)
-│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state · extlinks · graph · graphmath
+│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state · extlinks · graph · graphmath · refpane · refquote
 │     │               (app: 로그인 게이트 · 계정 메뉴 · 폴더 트리 · 저장 공간 / auth: supabase-js 구글 로그인 · 세션 /
 │     │                api: Bearer 토큰 · 401 갱신 · 503 · 연결 지연 띠 / formats: 양식 관리 창 · 표지 정보 창 /
 │     │                extlinks: 인하대 openlink 프록시 · DOI · 학교 DB 검색 · Google Scholar 주소 만들기 — DOM · 다른 모듈에 기대지 않는 순수 모듈 /
-│     │                graph: 인용 그래프 화면 #/graph(SSE · SVG · 확대/이동 · 패널 · 목록 보기) / graphmath: 크기 · 연도 색 · 배치 · 정렬 등 순수 함수)
+│     │                graph: 인용 그래프 화면 #/graph(SSE · SVG · 확대/이동 · 패널 · 목록 보기) / graphmath: 크기 · 연도 색 · 배치 · 정렬 등 순수 함수 /
+│     │                refpane: 논문 쓰기 화면의 참고 패널(reader.js 임베드 모드 mountPdf · 추천 SSE · 넣기) / refquote: 넣는 인용 글 · 쪽 번호 · 이스케이프 ·
+│     │                인용 표시 해석(parseCitation — writing.js가 가져다 씀) · 직접 인용 모양 상수 QUOTE_STYLE 순수 함수)
 │     └─ vendor/      PDF.js · citeproc-js · CSL 스타일·로케일 · KaTeX · marked · DOMPurify · supabase-js · d3/(d3-force · d3-dispatch · d3-quadtree · d3-timer UMD — 그래프 화면에서만 불러옴)
-├─ docs/              specs/(doc-formats.md · phase1-cloud.md · inha-proxy.md · citation-graph.md · phase2-worker-electron.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md · inha-proxy-ui.md · citation-graph-ui.md)
-└─ tests/             pytest (DB 테스트는 테스트용 Supabase 프로젝트, golden/ = 기본 (A4) 내보내기 골든 파일, js/ = Node 단위 테스트(extlinks · graph),
+├─ docs/              specs/(doc-formats.md · phase1-cloud.md · inha-proxy.md · citation-graph.md · writing-reference-pane.md · phase2-worker-electron.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md · inha-proxy-ui.md · citation-graph-ui.md · writing-reference-pane-ui.md)
+└─ tests/             pytest (DB 테스트는 테스트용 Supabase 프로젝트, golden/ = 기본 (A4) 내보내기 골든 파일, js/ = Node 단위 테스트(extlinks · graph · refquote, codecheck.mjs = 화면 코드 검사 도우미),
                       fixtures/citegraph/ = 인용 그래프 가짜 OpenAlex · S2 세계)
 ```
 
@@ -990,7 +1033,7 @@ python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file)
 | 업로드 | `POST /api/uploads` `POST /api/uploads/{upload_id}/complete` |
 | PDF | `GET /api/papers/{id}/pdf-url` `POST /api/papers/{id}/pdf/upload` `POST /api/papers/{id}/pdf/complete` `POST /api/papers/{id}/fetch-pdf` `POST /api/papers/{id}/refresh` |
 | 인용 관계 | `GET /api/papers/{id}/related` `POST /api/related` `GET /api/search` |
-| 인용 그래프 | `POST /api/graph`(SSE) |
+| 인용 그래프 | `POST /api/graph`(SSE) `POST /api/graph/recommend`(SSE — 원고 인용 기반 추천) |
 | 노트·하이라이트 | `PUT /api/papers/{id}/note` `GET·POST /api/papers/{id}/annotations` `PATCH·DELETE /api/annotations/{id}` `GET /api/annotations/export/{id}` |
 | 폴더 | `GET·POST /api/folders` `PATCH·DELETE /api/folders/{id}` |
 | 컬렉션·태그 | `GET·POST /api/collections` `PATCH·DELETE /api/collections/{id}` `GET /api/tags` `PATCH·DELETE /api/tags/{id}` |
@@ -1008,6 +1051,12 @@ python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file)
 - 노드의 `paper`는 검색 결과와 같은 키(서재 추가 · 인용 · 인하대 · Scholar 버튼이 그대로 씀), 씨앗 노드의 `score`는 `null`. `warnings`는 `{code, message}` — code 목록은 명세 9.3절(화면은 code별 문구, 모르는 code면 `message`).
 - 스트림 전 오류: 400 `bad_seed` · 404(내 서재에 없는 `paper_id`) · 429 `graph_busy`(사용자당 1개) · 503 `graph_queue_full`(서버 전체 진행 2 · 대기 4).
 - 외부 호출: OpenAlex(사용자 키가 있으면 `api_key` 쿼리, `mailto` 없음), 씨앗 참고문헌이 없을 때만 Semantic Scholar 1회. 그래프 1회 OpenAlex 목록 호출 최대 12회, 45초 기한. 캐시가 유효하면 외부 호출 0회.
+- **원고 인용 기반 추천** `POST /api/graph/recommend` (자세한 계약: `docs/specs/writing-reference-pane.md` 9장) — 본문(최대 4KB) `{"paper_ids": [12, 34, 56]}`(원고에 인용한 서재 논문 id, 양의 정수 1~200개, 원고에 처음 나온 순서). 서버가 **사용자 권한(RLS)** 으로 읽어 `openalex_id`가 있는 것만 앞에서 20편 씨앗으로 쓰고, 내 서재에 없는 id는 조용히 뺍니다.
+  - 응답 `text/event-stream`: `progress`(`step`: `wait` · `seeds`(`(n/N)`) · `finish` · `compute`) … `{"type":"done","recommend":{items, seeds_total, seeds_used, warnings, stats}}` 또는 `error`(그래프와 같은 code). 항목 = `{id, rank, score, linked, kind, seeds, paper, in_library}` — `paper`는 그래프 노드와 같은 키, `seeds`는 요청한 씨앗 번호만, `in_library`는 요청한 사용자 서재의 id 또는 `null`.
+  - 경고 code: `partial` · `refs_partial` · `citing_failed` · `abstracts_failed` · `stale_cache` · `upstream_limited` · `weak_citation_data` · `seeds_capped`.
+  - 스트림 전 오류: 400 `bad_request`(형식 · 4KB · 개수) · 400 `no_seeds`(OpenAlex 번호가 있는 내 논문이 없음) · 429 `graph_busy` · 503 `graph_queue_full` — **게이트(사용자당 1 · 동시 2 · 대기 4)를 그래프와 함께** 씁니다.
+  - 외부 호출: 씨앗마다 그래프 A~C 단계(캐시 우선, S2 보강 없음), 함께 인용은 캐시만, 결과 초록 묶음 1회. 1회 OpenAlex 목록 호출 최대 12회 · 45초. 예산이 다 되면 캐시에 있는 씨앗만 쓰고(`partial`) 다시 요청하면 이어서 반영. 추천이 받은 피인용 목록은 공용 캐시 `citation_edges`의 `cited_by_top_c` 관계(C 단계만 끝남 — 마이그레이션 `20261008000003`)에 둡니다. 그래프의 `cited_by_top`은 함께 인용까지 끝났다는 표시라 추천이 쓰지 않고, 그래프는 `cited_by_top`이 없으면 `cited_by_top_c`를 피인용 목록으로 다시 쓰고 함께 인용만 받습니다.
+  - 조회 기록 없음: 결과 · 씨앗을 저장하지 않고, 완료 로그는 `{"event":"recommend","result","ms","list_calls","cache_hits","seeds","items","warnings","openalex_remaining"}`(숫자 · code만).
 - 공용 캐시 관리(관리자 연결 — 서버 PC 주간 점검): `python -m paperlab.admin cache-stats`(두 표 크기 · 행 수 · 가장 오래된 날짜 — 내용은 출력 안 함), `python -m paperlab.admin cache-prune [--max-mb 150]`(오래된 서지부터 지워 상한 아래로, 지운 것은 필요할 때 다시 받음).
 
 **요청 규칙**
@@ -1049,8 +1098,9 @@ pytest
   2. 테스트 DB에 테스트 프로젝트 표지(`public.paperlab_test_project`)가 없음 — 처음 한 번 `python -m paperlab.admin mark-test-project`로 붙입니다(운영과 같으면 거부, 프로젝트 ref를 직접 입력해 확인)
   3. 반대로 운영용 `paperlab.migrate` · 배포 스크립트는 표지가 있는 DB를 거부합니다
 - 파일 저장소는 가짜(메모리) 구현만 씁니다. 실제 R2 계약 테스트는 `PAPERLAB_R2_CONTRACT=1`일 때만, 존재하지 않는 임의 사용자 경로에서 돌고 지웁니다.
-- 인용 그래프: `tests/test_citegraph.py`(알고리즘 — DB · 네트워크 없음), `tests/test_graph_api.py`(가짜 OpenAlex · S2 응답으로 API · 캐시 재사용 · 로그 검사), `tests/test_rls.py`(공용 캐시 RLS · 권한 · 열 이름 검사), `tests/js/graph.test.mjs`(Node — `tests/test_graph_js.py`가 pytest 안에서 부름, Node가 없으면 건너뜀). 실제 OpenAlex · S2는 자동 테스트에서 부르지 않습니다.
+- 인용 그래프: `tests/test_citegraph.py`(알고리즘 — DB · 네트워크 없음), `tests/test_graph_api.py`(가짜 OpenAlex · S2 응답으로 API · 캐시 재사용 · 로그 검사), `tests/test_rls.py`(공용 캐시 RLS · 권한 · 열 이름 검사), `tests/js/graph.test.mjs`(Node — `tests/test_js_node.py`가 pytest 안에서 부름, Node가 없으면 건너뜀). 실제 OpenAlex · S2는 자동 테스트에서 부르지 않습니다.
+- 참고 패널(1C): 추천 알고리즘은 `tests/test_citegraph.py`(`recommend` — AC-R01~R05), 추천 API · 예산 · 게이트 · 로그는 `tests/test_graph_api.py`(AC-R10~R24), 넣기 형식 · 쪽 번호 · 이스케이프 · 띄어쓰기 · 코드 검사는 `tests/js/refquote.test.mjs`(`tests/test_js_node.py`가 pytest 안에서 부름).
 - 외부 학술 API와 AI 호출은 가짜 전송 계층으로 대체합니다.
-- 화면의 링크 주소 모듈(`static/js/extlinks.js`)은 Node 내장 테스트 `tests/js/extlinks.test.mjs`로 시험합니다. `pytest`가 `tests/test_extlinks_js.py`에서 함께 부르고, **Node.js 20.10 이상이 없으면 건너뜁니다**. 따로 돌리려면 저장소 루트에서 `node --test "tests/js/**/*.test.mjs"`(Node 22.7 이상, 따옴표 포함). 그보다 낮은 Node는 `node --experimental-detect-module --test tests/js/extlinks.test.mjs`(pytest 래퍼가 쓰는 방식).
+- 화면의 링크 주소 모듈(`static/js/extlinks.js`)은 Node 내장 테스트 `tests/js/extlinks.test.mjs`로 시험합니다. `pytest`가 `tests/test_js_node.py`에서 함께 부르고(Node 테스트 파일마다 하나씩 — extlinks · graph · refquote), **Node.js 20.10 이상이 없으면 건너뜁니다**. 따로 돌리려면 저장소 루트에서 `node --test "tests/js/**/*.test.mjs"`(Node 22.7 이상, 따옴표 포함). 그보다 낮은 Node는 `node --experimental-detect-module --test tests/js/extlinks.test.mjs`(pytest 래퍼가 쓰는 방식).
 - CLI 엔진 테스트(`tests/test_ai.py::test_cli_engine_with_fake_claude`)는 Windows에서도 가짜 CLI만 써서 돕니다(실제 claude CLI 호출을 막는 단언 포함). 전체를 `pytest`로 그대로 돌리면 됩니다.
 - CI(자동 테스트 서버)는 지금 두지 않습니다.

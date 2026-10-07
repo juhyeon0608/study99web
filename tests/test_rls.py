@@ -248,7 +248,8 @@ def test_shared_cache_rls_direct(project):
 
 
 def test_shared_cache_constraints(project):
-    """AC-G23(검사 제약): doi가 10.으로 시작하지 않음 · relation 목록 밖 · references 501개 · url이 http(s) 아님 → 거부"""
+    """AC-G23(검사 제약): doi가 10.으로 시작하지 않음 · relation 목록 밖 · references 501개 · url이 http(s) 아님 → 거부.
+    1C: relation 'cited_by_top_c'(C 단계만 끝난 피인용 목록)는 100개까지 됨"""
     no = 9_990_000_000 + uuid.uuid4().int % 9_000_000
     bad = [
         ("insert into paperlab.external_works (openalex_no, title, doi, meta_on) values (%s, 't', 'x10.1/a', current_date)", (no,)),
@@ -262,6 +263,8 @@ def test_shared_cache_constraints(project):
          "values (%s, 'related', array(select generate_series(1, 21))::bigint[], 21, current_date)", (no,)),
         ("insert into paperlab.citation_edges (work_no, relation, nos, total, source, fetched_on) "
          "values (%s, 'references', '{}', 0, 'kci', current_date)", (no,)),
+        ("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+         "values (%s, 'cited_by_top_c', array(select generate_series(1, 101))::bigint[], 101, current_date)", (no,)),
     ]
     with admin(project) as conn:
         for sql, params in bad:
@@ -271,6 +274,9 @@ def test_shared_cache_constraints(project):
         with conn.transaction():  # 경계값은 됨 (되돌림)
             conn.execute("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
                          "values (%s, 'references', array(select generate_series(1, 500))::bigint[], 812, current_date)", (no,))
+            # 1C 추천의 C만 끝난 피인용 목록(마이그레이션 20261008000003) — 100개까지
+            conn.execute("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+                         "values (%s, 'cited_by_top_c', array(select generate_series(1, 100))::bigint[], 340, current_date)", (no,))
             conn.execute("insert into paperlab.external_works (openalex_no, title, doi, meta_on) "
                          "values (%s, 't', '10.1234/x', current_date)", (no,))
             raise psycopg.Rollback()

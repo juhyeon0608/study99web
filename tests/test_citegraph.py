@@ -274,3 +274,102 @@ def test_performance_620_pool_size_80():
     took = time.perf_counter() - t
     print(f"AC-G08 pool={len(p.works)} size=80 nodes={len(lay.nodes)} edges={len(lay.edges)} took={took:.3f}s")
     assert len(lay.nodes) == 80 and took < 1.0
+
+
+# ================================================================ 1C 원고 인용 기반 추천 (docs/specs/writing-reference-pane.md 12장 A)
+def _parts(ix, seeds, w):
+    sims = [cg.similarity(ix, s, w) for s in seeds]
+    return sims, sum(s.weight for s in sims)
+
+
+def test_recommend_sum_and_order():
+    """AC-R01: score = 씨앗별 유사도 합(4자리), rank = 5·score + ln(1+피인용), rank 내림차순 · 같으면 번호, 최대 20편"""
+    ix = cg.index(_random_pool())
+    out = cg.recommend(ix, [1, 2])
+    assert 0 < len(out) <= cg.REC_N == 20
+    for r in out:
+        _, total = _parts(ix, [1, 2], r["no"])
+        assert round(r["score"], 4) == round(total, 4) and r["score"] > 0
+        cited = ix.pool.works[r["no"]]["cited_by_count"]
+        assert r["rank"] == pytest.approx(5.0 * r["score"] + math.log1p(cited))
+    keys = [(-r["rank"], r["no"]) for r in out]
+    assert keys == sorted(keys)
+    # 결과에 들지 못한 후보는 20번째보다 rank가 크지 않음
+    rest = [w for w in ix.members if w not in {1, 2} | {r["no"] for r in out}]
+    last = out[-1]["rank"]
+    for w in rest:
+        _, total = _parts(ix, [1, 2], w)
+        assert total == 0 or 5.0 * total + math.log1p(ix.pool.works[w]["cited_by_count"]) <= last + 1e-9
+    assert len(cg.recommend(ix, [1, 2], n=5)) == 5
+
+
+def test_recommend_excludes_seeds_merged_zero_and_empty():
+    """AC-R02: 씨앗 · 씨앗과 합쳐진 작품 · 점수 0 · 제목 빈 작품은 없음, 같은 제목 씨앗 둘은 하나로"""
+    refs = [100, 101, 102, 103]
+    seed = W(1, title="Seed Paper On Citation Graphs", refs=refs)
+    twin = W(6, title="SEED PAPER on citation-graphs", cited=999, refs=refs + [104])  # 씨앗과 같은 제목 → 씨앗에 합쳐짐
+    p = make_pool(seed, [W(2, refs=refs[:3]), W(3, refs=[900]), W(4, title="", refs=refs), twin,
+                         W(5, title="Other Seed With Long Title", refs=refs[1:]),
+                         W(7, title="other seed with long title!", refs=refs, cited=1)])  # 5와 같은 제목 → 7이 남음
+    ix = cg.index(p)
+    nos = [r["no"] for r in cg.recommend(ix, [1, 5, 7])]
+    assert 1 not in nos and 6 not in nos and 5 not in nos and 7 not in nos
+    assert 3 not in nos and 4 not in nos  # 점수 0 · 제목 빈 작품(풀에 없음)
+    assert nos == [2]
+    r = cg.recommend(ix, [1, 5, 7])[0]
+    assert r["linked"] == 2 and r["seeds"] == [5, 1]  # 5와 7은 같은 작품 → 한 번(처음 나온 번호), sim 큰 순
+    a, b = cg.recommend(ix, [6]), cg.recommend(ix, [1])  # 합쳐진 번호로 불러도 같은 씨앗, seeds는 받은 번호
+    assert [(r["no"], r["score"]) for r in a] == [(r["no"], r["score"]) for r in b] and a[0]["seeds"] == [6]
+    assert cg.recommend(ix, [999_999]) == []  # 풀에 없는 씨앗
+
+
+def test_recommend_explain_values():
+    """AC-R03: linked = sim > 0 씨앗 수, seeds = sim 큰 순 최대 3(같으면 번호), kind = 성분 합계가 가장 큰 것"""
+    ix = cg.index(_random_pool())
+    seeds = [1, 2, 3, 4, 5, 6]
+    out = cg.recommend(ix, seeds)
+    assert out and any(r["linked"] > 3 for r in out)
+    for r in out:
+        sims, _ = _parts(ix, seeds, r["no"])
+        pos = sorted(((s.weight, n) for s, n in zip(sims, seeds) if s.weight > 0), key=lambda t: (-t[0], t[1]))
+        assert r["linked"] == len(pos) and r["seeds"] == [n for _, n in pos[:3]]
+        parts = {"coupling": sum(0.6 * s.coupling for s in sims), "cocitation": sum(0.4 * s.cocitation for s in sims),
+                 "related": sum(0.25 * s.related for s in sims)}
+        assert parts[r["kind"]] == max(parts.values())
+    # 관련 논문 지목만 있는 후보 → related
+    p = make_pool(W(1, refs=[10], related=[3]), [W(2, refs=[20], related=[3]), W(3, refs=[30])])
+    r = {x["no"]: x for x in cg.recommend(cg.index(p), [1, 2])}
+    assert r[3]["kind"] == "related" and r[3]["linked"] == 2
+
+
+def test_recommend_single_seed_matches_rank_scores():
+    """AC-R04: 씨앗 하나면 1B rank_scores의 순서(점수 > 0)와 같음"""
+    ix = cg.index(_random_pool(seed=3))
+    ranks = cg.rank_scores(ix)
+    want = sorted((w for w in ranks if ranks[w][1] > 0), key=lambda w: (-ranks[w][0], w))[:cg.REC_N]
+    out = cg.recommend(ix, [1])
+    assert [r["no"] for r in out] == want
+    assert all(r["rank"] == pytest.approx(ranks[r["no"]][0]) and r["linked"] == 1 and r["seeds"] == [1] for r in out)
+
+
+def test_recommend_performance_20_seeds_8600_pool():
+    """AC-R05(개정 — 서버 계산 경로 전체): 씨앗 20편 · 풀 약 8,600편에서 cg.index 2회 + 씨앗마다 prelim_targets +
+    cg.recommend가 2초 안 (DB · 외부 입출력 제외, graph_build.recommend와 같은 순서 — 기준값을 출력)"""
+    rnd = random.Random(5)
+    universe = list(range(1_000_000, 1_012_000))
+    seeds = list(range(1, 21))
+    works = [W(s, refs=rnd.sample(universe, 300), related=rnd.sample(range(21, 8_600), 20)) for s in seeds]
+    for i in range(21, 8_621):
+        refs = rnd.sample(universe, rnd.randint(10, 60)) + rnd.sample(seeds, rnd.randint(0, 2))
+        works.append(W(i, refs=refs, related=rnd.sample(range(1, 8_600), 5), cited=rnd.randint(0, 50_000)))
+    p = make_pool(works[0], works[1:])
+    t = time.perf_counter()
+    ix0 = cg.index(p)  # 함께 인용 대상 고르기(graph_build.recommend의 ix0)
+    targets = [x for s in seeds for x in cg.prelim_targets(ix0, seed=s)]
+    t_pre = time.perf_counter() - t
+    ix = cg.index(p)  # D(캐시)를 넣은 뒤 다시 만드는 색인 자리
+    out = cg.recommend(ix, seeds)
+    took = time.perf_counter() - t
+    print(f"AC-R05 pool={len(p.works)} seeds={len(seeds)} targets={len(targets)} items={len(out)} "
+          f"prelim={t_pre:.3f}s total={took:.3f}s")
+    assert len(p.works) >= 8_600 and len(out) == cg.REC_N and took < 2.0

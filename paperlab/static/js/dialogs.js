@@ -9,7 +9,7 @@ import {
 } from "./ui.js";
 import { actions, refreshAll, refreshUsage, state } from "./state.js";
 
-const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
+export const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
 const ICON_ALERT = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5v5.5M12 16.5v.01"/></svg>`;
 const FOLDER_PATH = "M3.5 6.5A1.5 1.5 0 0 1 5 5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18z";
 // 폴더 아이콘 (none = "폴더 없음" 모양)
@@ -21,7 +21,7 @@ export const folderIcon = (none = false) =>
 export const ICON_EXT = `<svg class="ico ext-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>`;
 export const extMark = (note = "새 탭에서 열림") => `${ICON_EXT}<span class="sr-only">(${esc(note)})</span>`;
 export const EXT_MARK = extMark();
-const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
+export const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
 const ICON_LOCK = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></svg>`;
 const GUIDE_KEY = "paperlab.inhaGuideSeen";
 export const G5_NOTICE = `<div class="notice inha-after" data-tone="info">${ICON_INFO}<div>학교 사이트에서 PDF를 받았다면 <b>[PDF 첨부]</b>로 올려 주세요.</div></div>`;

@@ -7,6 +7,7 @@
 - 개정 2026-10-07: **사용자 결정 U-1 = ① 그래프를 계정에 기록하지 않음**, **팀장 결정 K-1~K-16 = 모두 기획팀 추천안으로 확정**(K-1 = d3-force + 의존 패키지 UMD를 그래프 화면에서만 불러 배치 계산, SVG 그리기는 직접). 본문의 "기획팀 추천(K-…)"은 이제 **팀장 결정**으로 읽습니다. 결정 기록은 14.4절
 - 개정 2026-10-07 (구현 반영 — 개발팀이 명세와 다르게 처리한 15개 항목, **팀장 승인**): ① D 단계 저장 · 계산 방식(8.3절) ② OpenAlex가 돌려주지 않는 번호는 제목 빈 행으로 30일(8.2절) ③ 이전 · 이후 연구에서 씨앗 제외(6.7절) ④ 제목 합치기는 정규화 제목 12자 이상(6.2절) ⑤ 예비 점수 0은 D 대상 제외 · 씨앗 `score` = null(6.5 · 9.3절) ⑥ E 단계에서 세 크기 모두 미리 받기(최대 2회, 7.3절) ⑦ 마이그레이션 `20261008000002_citation_cache.sql`(8.7절) ⑧ AC-G20 ③ 열 이름 규칙 ⑨ S2 404는 경고 없음 · 재시도는 연결 오류 · 429 · 5xx만 1회(7.5절) ⑩ OpenAlex 키는 `api_key` 쿼리(7.4절) ⑪ K-6 확대 — 사용자 이메일은 Crossref에만(7.4절) ⑫ 서재 씨앗의 형식이 틀린 칸은 버림(6.1 · 9.5절) ⑬ 시작되지 않은 대기 자리는 30초 뒤 비움(9.4절) ⑭ JS 래퍼 `tests/test_graph_js.py` 따로(12장) ⑮ `truncated`는 참고문헌 300편 초과 때(6.2 · 9.3절). 새 모듈 `paperlab/graph_build.py`(15장)
 - 개정 2026-10-07 (품질팀 문서 정합 — 팀장 요청): ⑫ 서재 씨앗의 칸이 모두 틀리면 400 `bad_seed`로 통일(6.1절), 합쳐진(merged) 씨앗 번호 처리(6.1절 6번 · 9.5절 · AC-G35a), S2 경로 = 퍼센트 인코딩 + `.`/`..` 조각 거부(9.5절 · AC-G35), 그래프 로그에 `result`(9.6절), 같은 씨앗 합치기 때 첫 요청자의 OpenAlex 키 사용(M-2 수용 — 9.4절), 수용 위험 M-9 · M-10(13장), 화면 메모리는 로그아웃 때 비움(M-5 — 8.1 · 8.6절)
+- 개정 2026-10-08 (1C 구현 반영 — 팀장 결정 Q-1): 공용 캐시 관계에 **`cited_by_top_c`**(C 단계 피인용 상위 목록 — 1C 추천이 쓰고, 사용자 결정 I-1에 따라 그래프도 씀) 추가. 7.6절 TTL 30일 · 8.3절 관계 표 · 상한 100 · 그래프의 재사용 규칙 · 8.4절 SQL · 8.7절 마이그레이션 `20261008000003_citation_edges_top_c.sql`. 결정 기록 14.4절
 - 표기: **확정** = 사용자 결정, **팀장 원칙** = 팀장이 이미 정한 원칙(PLAN · 1단계 명세), **기획팀 추천** = 팀장 결정 전 안(14.2절 `K-…` — 2026-10-07 모두 확정), **가정** = 기획팀 임시값(구현 · 실측으로 조정), **미정(사용자)** = 14.1절 `U-…`, **확인 필요** = 외부 서비스 사실을 공식 문서로 다 확인하지 못함(개발팀이 첫 작업 때 실측하고 이 문서를 고침).
 
 ---
@@ -255,6 +256,7 @@ Connected Papers 정의(16장): 이전 연구 = 그래프 논문들이 **공통�
 | 참고문헌 목록 | 180일 | 거의 안 바뀜(정정 정도) |
 | 관련 논문 목록 | 90일 | OpenAlex 알고리즘 갱신 |
 | 피인용 목록(C · D) | 30일 | 새 인용이 계속 생김 |
+| C 단계 피인용 목록(`cited_by_top_c` — 그래프 · 1C 추천이 씀, 8.3절) | 30일 | 피인용 목록과 같음 |
 | 초록 | 180일 | |
 | OpenAlex가 돌려주지 않은 번호(빈 행) | **30일** | 묶음 조회에서 응답에 없던 번호(병합 · 삭제된 작품 등)는 **제목이 빈 행**으로 남겨, 30일 동안 다시 묻지 않음(구현 반영 ②, 8.2절) |
 - 기간 계산은 **날짜 단위**(8.2절 `*_on date`). 지난 것은 "필요할 때" 다시 받음(미리 갱신하는 배치 작업 없음).
@@ -297,8 +299,8 @@ Connected Papers 정의(16장): 이전 연구 = 그래프 논문들이 **공통�
 | 열 | 형 | 비고 |
 |---|---|---|
 | `work_no` | bigint not null | 기준 작품의 OpenAlex 번호(`external_works` 행이 없을 수도 있음 — 외래 키 없음) |
-| `relation` | text not null | `check (relation in ('references','related','cited_by_top','cited_by_recent'))` |
-| `nos` | bigint[] not null | 상대 작품 번호 목록. `references` 최대 500, `related` 최대 20, `cited_by_*` 최대 100 (`cardinality` 검사 제약) |
+| `relation` | text not null | `check (relation in ('references','related','cited_by_top','cited_by_recent','cited_by_top_c'))` — `cited_by_top_c`는 1C에서 추가(8.7절 `…000003`) |
+| `nos` | bigint[] not null | 상대 작품 번호 목록. `references` 최대 500, `related` 최대 20, `cited_by_*`(`cited_by_top_c` 포함) 최대 100 (`cardinality` 검사 제약) |
 | `total` | integer not null | 출처가 알려 준 전체 수(예: 참고문헌 812편 중 500편 저장 → 812) |
 | `truncated` | boolean not null default false | |
 | `source` | text not null default `'openalex'` | `check (source in ('openalex','s2'))` — S2 보강으로 만든 참고문헌 목록은 `s2` |
@@ -306,6 +308,18 @@ Connected Papers 정의(16장): 이전 연구 = 그래프 논문들이 **공통�
 | PK | `(work_no, relation)` | |
 
 - `cited_by_*`는 "그 작품을 인용한 논문 상위 목록"(C 단계 · 씨앗일 때만 생김).
+
+| 관계 | 뜻 | 쓰는 곳 | 유효 기간 · 상한 |
+|---|---|---|---|
+| `references` | 참고문헌 목록(A · D 응답 작품) | 그래프 · 추천 | 180일 · 500 |
+| `related` | OpenAlex 관련 논문(B) | 그래프 · 추천 | 90일 · 20 |
+| `cited_by_top` | 씨앗을 인용한 논문 피인용 순 상위 — **C · D 모두 끝났다는 표시**를 겸함(아래) | 그래프가 씀, 그래프 · 추천이 읽음 | 30일 · 100 |
+| `cited_by_recent` | 검사 제약에만 있는 이름(지금 코드는 쓰지 않음) | — | 30일 · 100 |
+| **`cited_by_top_c`** (1C 추가) | 씨앗을 인용한 논문 피인용 순 상위 — **C 단계 목록**(D 완료 여부와 무관. 뜻은 "그래프나 추천이 이 작품의 C를 받았다"뿐) | **그래프 · 1C 추천 모두 C를 새로 받으면 씀**(사용자 결정 I-1 "흔적 구분 못 하게", 2026-10-08 — 개발팀 변경 중), 그래프 · 추천이 읽음. 추천은 D를 외부에서 받지 않으므로 `cited_by_top`은 쓰지 않음 | 30일 · 100 |
+
+- **`cited_by_top_c` 재사용 규칙**(팀장 결정 Q-1, 2026-10-08 — `graph_build.py` `_citing`):
+  - **그래프**: 씨앗의 `cited_by_top`이 유효하면 지금처럼 C · D 모두 캐시. `cited_by_top`이 없거나 지났고 **`cited_by_top_c`가 유효하면** 그 목록을 C로 다시 쓰고(C 외부 호출 없음) **D만 받음** → D가 끝나면 `cited_by_top`을 씀(C · D 완료 표시). 둘 다 유효하지 않으면 C를 새로 받고 **그 자리에서 `cited_by_top_c`에 씀**(I-1 — 추천과 같은 흔적), D가 끝나면 `cited_by_top`도 씀(외부 실패 · 기한이면 지난 `cited_by_top`, 없으면 지난 `cited_by_top_c`로 그리고 `stale_cache`).
+  - **추천**: `cited_by_top` 또는 `cited_by_top_c`가 유효하면 C는 캐시. 아니면 C를 받아 **`cited_by_top_c`에 씀**(`cited_by_top`은 쓰지 않음 — D를 받지 않았으므로).
 - **D 단계 저장 · 계산 (개정 — 구현 반영 ①, 팀장 승인)**:
   - 저장: D 단계(여러 작품 묶음 `cites:`) 결과는 **각 응답 작품의 `references` 행 + 서지로만** 남김(묶음 질의 · 그 결과 목록 자체는 저장하지 않음 — 질의 모양이 씨앗을 드러내므로).
   - 계산: 그래프를 계산할 때 D는 외부 응답을 그대로 쓰지 않고, **캐시에서 "D 대상 작품들을 `references`에 가진 작품"** 을 찾아 씀 — 피인용 많은 순 100편 ∪ 최신순 100편(`citation_edges.nos`의 **GIN 색인**, `relation = 'references'` 부분 색인 — 8.4절). 그래서 처음 만들 때와 캐시로 다시 만들 때 **같은 풀**이 나옴.
@@ -320,6 +334,11 @@ create table paperlab.external_works ( … 8.2절 … );
 create table paperlab.citation_edges ( … 8.3절 … );
 -- 캐시에서 "이 작품들을 인용한 작품" 찾기(D 단계 계산 — 8.3절, 구현 반영 ①)
 create index citation_edges_refs_gin on paperlab.citation_edges using gin (nos) where relation = 'references';
+
+-- 1C 추가(…000003 — 8.7절): 관계 검사 제약만 바꿈. 배열 상한은 위 cardinality 검사(그 밖 관계 100)가 그대로 적용
+alter table paperlab.citation_edges drop constraint citation_edges_relation_check;
+alter table paperlab.citation_edges add constraint citation_edges_relation_check
+    check (relation in ('references', 'related', 'cited_by_top', 'cited_by_recent', 'cited_by_top_c'));
 
 alter table paperlab.external_works enable row level security;
 alter table paperlab.external_works force row level security;
@@ -364,6 +383,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 
 ### 8.7 마이그레이션
 - 새 파일 **`supabase/migrations/20261008000002_citation_cache.sql`**(구현 반영 ⑦ — `20261008000001` 바로 뒤) 하나: 두 표 · 검사 제약 · 색인 · RLS · 권한(8.4절). 적용은 지금처럼 `python -m paperlab.migrate`(업데이트 스크립트가 자동).
+- **1C 추가 `supabase/migrations/20261008000003_citation_edges_top_c.sql`**(팀장 결정 Q-1, 2026-10-08): `citation_edges_relation_check`를 지우고 `cited_by_top_c`를 더한 같은 이름의 검사 제약으로 다시 만듦(8.4절). **검사 제약만** 바꿈 — 기존 행 · 색인 · RLS · 권한 · 배열 상한 검사는 그대로. 새 표 · 열 없음.
 - 1단계 명세 2장 "공용 표 = 5단계에서 같은 스키마에 `shared_` 접두어 또는 별도 스키마"는 PLAN 개정(1B 앞당김)과 K-4에 따라 **1B · 같은 스키마 · PLAN 이름**으로 바뀜(1단계 명세 문구 정리는 기획팀 후속 — 15장).
 - 5단계(OpenCitations · KCI)가 OpenAlex 번호 없는 작품을 넣을 때: `external_works`에 출처별 식별자 열 · 검사를 늘리고, `citation_edges`에 그 키 체계용 열을 추가하는 **새 마이그레이션**(5단계 명세).
 
@@ -583,7 +603,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 - **AC-G20** 카탈로그(1단계 AC-20 개정): `paperlab`의 모든 표 RLS + force. `external_works` · `citation_edges`는 `user_id` 요구에서 예외이되 ① `authenticated` 정책이 `select` 하나(`using (true)`) ② `authenticated`의 표 권한이 `SELECT`뿐(`has_table_privilege` — insert · update · delete 거짓) ③ 열 이름에 낱말 `user`(`users`) · `ip` · `session` · `email`이 없고 **`_by`로 끝나는 열 이름이 없음**(개정 — 구현 반영 ⑧: `cited_by_count`는 허용. 검사식 `(^|_)(user|users|ip|session|email)(_|$)|_by$`) ④ 시각 열은 모두 `date` 형. 그 밖 표는 지금 AC-20 그대로.
 - **AC-G21** DB 직접: `SET LOCAL ROLE authenticated` + B claims로 두 표 `select` 됨, `insert` · `update` · `delete` → 권한 오류. `anon`은 스키마 사용 권한 없음(지금 그대로). `system_tx`(service_role)로 쓰기 됨.
 - **AC-G22** 서버 코드 검사: 공용 캐시 표에 쓰는 SQL이 `system_tx(` 안에만 있고 이유 문자열이 고정 문자열 `"citation cache write"`(변수 · f-string 아님). `paperlab/` 안에 `api.openalex.org` · `api.semanticscholar.org` 말고 그래프 경로가 만드는 다른 호스트 없음.
-- **AC-G23** 마이그레이션: 빈 테스트 DB에 `paperlab.migrate` 두 번 → 두 번째 할 일 없음. 검사 제약: `doi`가 `10.`으로 시작하지 않는 값 · `relation` 목록 밖 · `references` 배열 501개 → 거부.
+- **AC-G23** 마이그레이션: 빈 테스트 DB에 `paperlab.migrate` 두 번 → 두 번째 할 일 없음. 검사 제약: `doi`가 `10.`으로 시작하지 않는 값 · `relation` 목록 밖 · `references` 배열 501개 → 거부. (1C 추가) `relation = 'cited_by_top_c'`는 배열 100개까지 들어가고 101개는 거부(`tests/test_rls.py` `test_shared_cache_constraints`).
 - **AC-G24** 서재 분리: A의 서재에만 P가 있을 때, A의 결과에서 P 노드 `in_library = <A의 id>`, **같은 씨앗을 동시에(합치기 경로로)** 요청한 B의 결과에서는 `null`. B가 `{"seed":{"paper_id": <A의 논문 id>}}` → 404.
 - **AC-G25** 서재 추가: 그래프 노드 `paper`로 `POST /api/papers` → 정상 추가, 같은 씨앗 다시 요청 시 그 노드 `in_library`가 새 id.
 
@@ -624,7 +644,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 - **픽스처**: `tests/fixtures/citegraph/`에 작은 가상 세계(작품 약 60편, 번호 `W100…`, 손으로 만든 참고문헌 · 인용 관계 — 실제 OpenAlex 데이터를 통째로 넣지 않음) + 경계 사례(중복 제목 · 빈 제목 · 국문처럼 참고문헌 없는 작품 · 1,000편 참고문헌). 성능 픽스처는 코드로 생성(AC-G08).
 - **시계 · 오늘 날짜 주입**: TTL(AC-G14) · 기한(AC-G16)용으로 `citegraph`/캐시 함수가 `today()` · 시계를 인자로 받게.
 - **실제 외부 API는 자동 테스트에서 부르지 않음**(네트워크 차단 단언 — 가짜 전송이 아닌 요청이 나가면 실패). [실환경] AC만 실제.
-- **JS**: `tests/js/graph.test.mjs`(Node 내장 `node --test`), pytest 래퍼는 **따로 `tests/test_graph_js.py`**(구현 반영 ⑭ — `tests/test_extlinks_js.py`와 같은 방식, 합치지 않음. Node가 없으면 건너뜀).
+- **JS**: `tests/js/graph.test.mjs`(Node 내장 `node --test`), pytest 래퍼는 **`tests/test_js_node.py` 하나**(JS 테스트 파일 이름으로 parametrize — 2026-10-08 개정. 처음 구현 반영 ⑭의 따로 둔 `test_graph_js.py`를 합침. Node가 없거나 20.10 미만이면 건너뜀).
 - **DB 테스트**는 1단계 규칙(`@pytest.mark.db`, 테스트 프로젝트, 품질팀 실행 시 건너뜀 0). 테스트가 넣은 공용 캐시 행은 **고유 번호 대역**(예: `W9000000000…`)을 쓰고 끝나면 지움(공용 표는 사용자 삭제로 연쇄 삭제되지 않음 — 정리 픽스처 필수).
 
 ## 13. 위험
@@ -636,6 +656,8 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 - **캐시가 늘면 같은 씨앗의 그래프가 조금 달라짐(구현 반영 ① — 수용)**: D 단계를 캐시의 "대상 작품을 인용한 작품"으로 계산하므로, 다른 그래프가 캐시에 넣은 인용 작품이 풀에 들어올 수 있음. 같은 캐시 상태에서는 결과가 같음(AC-G12). 대가로 처음 사용자와 두 번째 사용자가 같은 결과를 받고 외부 호출이 0회가 됨.
 - **후보 범위가 작음**: Connected Papers(약 5만 편 분석)보다 훨씬 작은 수백 편 → 공동 인용이 약함(6.3절). 실측(M-G03) 후 수치 조정.
 - **공용 캐시가 드러내는 것**: 캐시에 어떤 작품이 있는지 = "누군가 이 주변을 봤다"(누구인지는 없음). 사용자 결정(공용 캐시 허용)으로 수용. DB 직접 접근은 관리자뿐, 목록 API 없음.
+  - (1C 추가 — 품질팀 I-1, **해결**: 사용자 결정 "흔적 구분 못 하게", 2026-10-08) `cited_by_top_c`를 추천만 쓰면 그 행 = "이 작품이 누군가의 원고에 인용됐다" + 날짜가 되어, 사용자 3~5명이면 관리자가 누구인지 짐작하기 쉬움. 그래서 **그래프도 C를 받으면 `cited_by_top_c`를 씀**(8.3절) → 이 행은 "그래프나 추천이 이 작품의 C를 받았다"는 뜻만 남음(위 "누군가 이 주변을 봤다"와 같은 수준). 1C 명세 9.8절 6번 · 14장.
+  - (남는 신호 — 수용 위험, 팀장 결정 2026-10-08) "`cited_by_top_c`만 있고 `cited_by_top`은 없음" = "추천이 쓰였거나, 그래프가 D 전에 끊겼다"는 약한 신호(관리자만 봄). 막으려면 추천도 D를 받아야 해 씨앗마다 외부 호출이 2회 늘어 막지 않음. 30일이 지나도 행은 남음(캐시로 안 쓰일 뿐 — `cache-prune` · 다시 받기 때 정리). 사용자에게는 팀장이 마무리 보고에서 알림.
 - **DB 용량**: 그래프당 최대 약 0.7MB → 상한 150MB · 정리 명령(8.5절).
 - **외부 데이터 오염**: 이상한 응답(긴 제목 · 위험한 URL) → 응답 검증(9.5절), 화면 이스케이프.
 - **서버 PC 부하 · Funnel 긴 연결**: 동시 2개 · 대기 4개, ping, 탭 닫으면 중단.
@@ -685,6 +707,8 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 | K-2~K-16 | 14.2절 기획팀 추천안 그대로(SSE · 배열 인접 목록 · `paperlab` 스키마 PLAN 이름 · 사용자 OpenAlex 키 → 없으면 키 없이 · 기존 OpenAlex `mailto` 제거 · S2 조건부 1회 · 크기 40(20/40/80) · 6.9절 수치 · 7.6절 TTL 날짜 단위 · 동시 2/대기 4/사용자당 1 · 별도 화면 `#/graph` · 캐시 150MB 수동 정리 · OpenCitations 5단계 · 초록은 화면에 나온 작품만 · 국문 관련 논문 폴백) | 팀장 결정(추천안) |
 | GD-4 · GD-6(디자인) | 경고 `code` 목록 확정(9.3절 표): 신규 `s2_failed` · 경고용 `upstream_limited`. 화면은 code별 문구, 모르는 code면 서버 `message` | 팀장 요청 |
 | 문서 반영 | PLAN.md(머리말 · 2장 · 6장 1B · 10장 P16), phase1-cloud.md(2장 · 5.9절 · AC-20), 서버 PC 안내서 주간 점검(`cache-stats`) — 같은 날 반영. FEATURES.md는 구현 승인 뒤 | 팀장 지시 |
+| Q-1 (2026-10-08, 1C 구현 중) | 추천이 남기는 "C만 끝난 피인용 목록"은 **정식 관계 이름 `cited_by_top_c` + 마이그레이션 `…000003`**(검사 제약만 교체). 쓰지 않는 `cited_by_recent`를 이 뜻으로 재사용하지 않음. TTL 30일 · 상한 100, 그래프는 `cited_by_top`이 없을 때 이 목록을 C로 다시 쓰고 D만 받음(7.6 · 8.3 · 8.4 · 8.7절) | 팀장 결정 |
+| I-1 (2026-10-08, 품질팀 정보) | **흔적 구분 못 하게**: 그래프도 C를 새로 받으면 `cited_by_top_c`를 씀 → 이 행으로 그래프와 추천(원고 인용)을 구분할 수 없게(8.3절 · 13장) | 사용자 결정 |
 
 ## 15. 팀별 작업 (파일 단위 — 같은 파일을 동시에 고치지 않음)
 
@@ -711,7 +735,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 | `paperlab/static/js/library.js` | 상세 패널 [인용 그래프 보기] |
 | `paperlab/static/js/discover.js` | 결과 카드 [그래프] |
 | `paperlab/static/vendor/<라이브러리>/` · `vendor/THIRD_PARTY.md` | K-1 결과 파일 · 라이선스 · SHA-256 |
-| `tests/test_citegraph.py`(신규) · `tests/test_graph_api.py`(신규) · `tests/test_rls.py`(AC-20 → AC-G20 개정) · `tests/fixtures/citegraph/`(신규) · `tests/js/graph.test.mjs`(신규) · `tests/test_graph_js.py`(신규 — JS pytest 래퍼, 구현 반영 ⑭) | 11 · 12장 |
+| `tests/test_citegraph.py`(신규) · `tests/test_graph_api.py`(신규) · `tests/test_rls.py`(AC-20 → AC-G20 개정) · `tests/fixtures/citegraph/`(신규) · `tests/js/graph.test.mjs`(신규) · `tests/test_js_node.py`(JS pytest 래퍼 — 모든 `tests/js/*.test.mjs` 공용, 2026-10-08 합침) | 11 · 12장 |
 
 ### 기획팀 (팀장 결정 뒤)
 | 파일 | 작업 |

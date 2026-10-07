@@ -1368,3 +1368,59 @@ a.btn:hover { text-decoration: none; }
 
 /* 설정 창: API 키 안내 */
 .keys-note { margin-top: -4px; }
+
+/* ---------------- 논문 쓰기 참고 패널 (docs/design/writing-reference-pane-ui.md) ---------------- */
+/* 격자: 패널은 .writer-body의 네 번째 칸. 열림 = section.writer[data-ref="open"]
+   (보기 전환이 .writer의 className을 통째로 바꾸므로 클래스 대신 속성). 칸이 모자라면 미리보기를 먼저 숨김(명세 6장 · K-9) */
+.ref-pane { display: none; border-left: 0; }
+.writer[data-ref="open"] .ref-pane { display: flex; }
+.writer[data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr); }
+.writer[data-ref="open"].view-split .writer-body { grid-template-columns: 220px repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1500px) {
+  .writer[data-ref="open"].view-split .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr); }
+  .writer[data-ref="open"].view-split .writer-preview { display: none; }
+}
+@media (max-width: 1100px) {
+  .writer[data-ref="open"] .writer-body,
+  .writer[data-ref="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .writer[data-ref="open"] .writer-body,
+  .writer[data-ref="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* 패널 틀: 머리줄(열린 논문 고르기 · ＋ 인용 · 닫기) → 탭 → 내용 (.panel · .tabs · .panel-body 재사용) */
+.ref-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.ref-head .ref-pick { flex: 1; width: 0; height: 30px; font-weight: 600; text-overflow: ellipsis; }
+.ref-pane .tabs { overflow-x: auto; scrollbar-width: none; }
+.ref-pane .tabs button { flex: none; white-space: nowrap; }
+.ref-pane .tabs button[aria-disabled="true"] { opacity: .55; }
+.ref-pane .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ref-pane .panel-body { padding: 14px 16px 24px; }
+.ref-pane .empty { padding: 36px 12px; }
+.ref-pane .graph-notices { padding: 0 0 10px; }
+.ref-pane .graph-progress-card { width: 100%; box-shadow: none; }
+.ref-pane .ann-item .foot { flex-wrap: wrap; }
+
+/* PDF 탭: 읽기 화면 막대(.reader-bar)와 PDF 칸(.pdf-scroll)을 패널 크기로 */
+.ref-pdf { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface-3); }
+.ref-pdf .reader-bar { flex: none; flex-wrap: wrap; gap: 4px 6px; padding: 6px 10px; }
+.ref-pdf .pdf-scroll { padding: 18px 0 40px; }
+.ref-basis { margin-left: auto; font-size: 11.5px; color: var(--text-3); white-space: nowrap; }
+
+/* 하이라이트·노트 탭: 노트(읽기 전용) + [선택한 부분 넣기] */
+.ref-note { width: 100%; min-height: 160px; font-family: var(--mono); font-size: 13px; background: var(--surface-2); }
+.ref-note-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin-top: 6px; }
+
+/* 추천 탭: 1B 항목(.graph-items) 아래 동작 줄 */
+.ref-rec-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 7px; font-size: 12.5px; }
+
+/* 진입점: 도구 막대 [참고] · 왼쪽 "이 원고의 인용" 줄(버튼) · [@ 자동완성 [보기] */
+.writer-tools [data-ref-toggle][aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+button.cite-row { display: block; width: 100%; border: 0; color: inherit; text-align: left; cursor: pointer; }
+button.cite-row > span { display: block; }
+button.cite-row:hover { background: var(--accent-soft); }
+button.cite-row[aria-current="true"] { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.cs-item .cs-peek { flex: none; align-self: center; height: 20px; margin-left: 2px; padding: 0 7px; font-size: 11px; }
+@media (hover: hover) { .cs-item:not(.active):not(:hover) .cs-peek { visibility: hidden; } }

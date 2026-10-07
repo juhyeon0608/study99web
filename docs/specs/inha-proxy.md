@@ -297,7 +297,7 @@
 
 ### 13.1 자동 테스트 (품질팀 실행)
 
-**실행 방법(확정 — IK-2)**: `paperlab/static/js/extlinks.js`는 DOM · 다른 모듈에 기대지 않는 **순수 ES 모듈**로 만들고, `tests/js/extlinks.test.mjs`를 Node 내장 테스트 **`node --test "tests/js/**/*.test.mjs"`**(저장소 루트에서, 따옴표 포함 — Node 21 이상은 폴더 인자를 받지 않음)로 돌립니다. `tests/test_extlinks_js.py`가 pytest 안에서 같은 명령을 부르고, Node가 없으면 **건너뜀(skip)으로 표시**합니다(서버 PC Node v24.14 실측, 관리자 PC 버전은 확인 필요). 이렇게 하면 기존 `pytest` 한 번으로 함께 돕니다.
+**실행 방법(확정 — IK-2)**: `paperlab/static/js/extlinks.js`는 DOM · 다른 모듈에 기대지 않는 **순수 ES 모듈**로 만들고, `tests/js/extlinks.test.mjs`를 Node 내장 테스트 **`node --test "tests/js/**/*.test.mjs"`**(저장소 루트에서, 따옴표 포함 — Node 21 이상은 폴더 인자를 받지 않음)로 돌립니다. pytest 안에서는 **`tests/test_js_node.py`**(JS 테스트 파일 이름으로 parametrize — `test_js_node[extlinks]`, 2026-10-08 처음의 `tests/test_extlinks_js.py`를 합침)가 그 파일 하나를 `node --test`로 부르고, Node가 없거나 20.10 미만이면 **건너뜀(skip)으로 표시**합니다(서버 PC Node v24.14 실측, 관리자 PC 버전은 확인 필요). 이렇게 하면 기존 `pytest` 한 번으로 함께 돕니다.
 
 **AC-1 프록시 변환표** — `toInhaProxy(입력) === 기대값`
 
@@ -409,7 +409,7 @@
 - 화면에 학교 아이디 · 비밀번호 입력 칸이 없음(`type="password"` 새로 추가 0건).
 - 새로 넣은 외부 링크는 모두 `rel="noopener noreferrer"` 또는 `window.open(…, "noopener,noreferrer")`.
 
-**AC-8 기존 테스트**: `pytest` 전체 통과(새 테스트 포함, Node가 없으면 `test_extlinks_js`만 skip).
+**AC-8 기존 테스트**: `pytest` 전체 통과(새 테스트 포함, Node가 없으면 `test_js_node`만 skip).
 
 ### 13.2 수동 확인 (품질팀 · 사용자 — 로그인 필요 항목은 **사용자**가 직접)
 
@@ -494,7 +494,7 @@
 | 순서 | 팀 | 파일 | 할 일 |
 |---|---|---|---|
 | 1 | 개발팀 | `paperlab/static/js/extlinks.js` (새 파일) | 순수 모듈: `INHA` · `SCHOLAR_BASE` 상수, `normalizeQuery` · `toInhaProxy` · `inhaDoiUrl` · `paperProxyTarget` · `inhaSearchUrl` · `scholarUrl`(5 · 6 · 7 · 9장). DOM · 다른 모듈 import 없음 |
-| 1 | 개발팀 | `tests/js/extlinks.test.mjs` (새 파일) · `tests/test_extlinks_js.py` (새 파일) | AC-1~AC-6 표 그대로, AC-2 불변식, pytest 래퍼(Node 없으면 skip) |
+| 1 | 개발팀 | `tests/js/extlinks.test.mjs` (새 파일) · `tests/test_js_node.py` (pytest 래퍼 — 2026-10-08 `test_extlinks_js.py`를 합침) | AC-1~AC-6 표 그대로, AC-2 불변식, pytest 래퍼(Node 없으면 skip) |
 | 1 | 디자인팀 | `docs/design/inha-proxy-ui.md` (새 파일) | 8장 배치 · 버튼 모양 · 비활성 상태 · 안내 창 · 설정 "학교 연결" 구역 시안, 10장 문구 확정 |
 | 2 | 디자인팀 | `paperlab/static/css/app.css` | "학교 DB에서 찾기" 줄 · 안내 창 · 상세 패널 한 줄 안내 스타일 |
 | 2 | 개발팀 | `paperlab/static/js/dialogs.js` | `inhaGuideDialog()`(G-1, `localStorage`), 링크 열기 도우미 `openExternal(url)`(처음이면 안내 창 → 새 탭, `noopener,noreferrer`) |

@@ -37,7 +37,9 @@ from .citecache import PgStore
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
 from .db import Database, DBUnavailable, Library, NotFoundError, folder_name_problem
-from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, BadSeed, Flights, GraphBuilder, GraphError, GraphGate,
+from . import citegraph as cg
+from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, WARNINGS as GRAPH_WARNINGS, BadSeed, Flights, GraphBuilder,
+                          GraphError, GraphGate, parse_openalex_id, parse_recommend_request,
                           parse_request as parse_graph_request, seed_from_paper)
 from .manuscripts import TEMPLATES
 from .sources import GraphCancelled, GraphSources, SourceError, Sources, detect_identifier, merge
@@ -67,6 +69,8 @@ SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 KST = timezone(timedelta(hours=9))
 GRAPH_BODY_MAX = 4096  # 인용 그래프 요청 본문 (명세 9.1)
 BAD_SEED = {"detail": "이 논문으로는 그래프를 만들 수 없어요. DOI · arXiv 번호 · 제목 형식을 확인해 주세요.", "code": "bad_seed"}
+BAD_REC = {"detail": "추천 요청이 올바르지 않아요.", "code": "bad_request"}  # 1C 명세 9.4절
+NO_SEEDS = {"detail": "인용한 논문에 OpenAlex 번호가 없어 찾을 수 없어요.", "code": "no_seeds"}
 
 # 요청 id: 들어온 X-Request-Id가 이 모양이면 그대로, 아니면 새로 (로그 줄 끼워 넣기 방지)
 _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
@@ -885,16 +889,15 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     st.graph_wait_s = 20.0  # 대기 최대(초) — 넘으면 graph_queue_full
     st.graph_ping_s = 15.0  # SSE 주석 줄 간격(Funnel 긴 연결 유지)
 
-    def graph_flight(f, claims: dict, seed, size: int, oa_key: str, s2_key: str) -> None:
-        """그래프 하나를 스레드에서 만든다(같은 씨앗 · 크기 요청은 이 결과를 함께 받음). 오류는 code만 남긴다."""
+    def run_flight(f, claims: dict, oa_key: str, s2_key: str, work) -> None:
+        """그래프 · 추천 하나를 스레드에서 만든다(같은 키 요청은 이 결과를 함께 받음). work(builder, flight) → 결과.
+        오류는 code만 남긴다."""
         builder = None
         try:
             clock = st.graph_clock
             src = st.graph_sources_factory(oa_key, s2_key, clock=clock, deadline=clock() + DEADLINE_S, cancel=f.cancel)
             builder = GraphBuilder(PgStore(db, claims), src, st.graph_today(), progress=f.emit)
-            f.seed_no = builder.resolve(seed)
-            f.result = builder.build(f.seed_no, size)
-            f.seed_no = int(f.result["seed"][1:])  # 합쳐진 번호면 바뀐 번호(서재 논문 openalex_id 채우기에 씀)
+            f.result = work(builder, f)
         except GraphCancelled:
             f.error = "cancelled"
         except GraphError as e:
@@ -906,6 +909,14 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             if builder is not None:
                 f.info = dict(builder.info(), cache_hits=(f.result or {}).get("stats", {}).get("cache_hits", 0))
             st.graph_flights.finish(f)
+
+    def graph_work(seed, size: int):
+        def work(builder, f):
+            f.seed_no = builder.resolve(seed)
+            graph = builder.build(f.seed_no, size)
+            f.seed_no = int(graph["seed"][1:])  # 합쳐진 번호면 바뀐 번호(서재 논문 openalex_id 채우기에 씀)
+            return graph
+        return work
 
     def graph_for_user(claims: dict, graph: dict, paper: dict | None, seed, seed_no: int | None) -> None:
         """요청한 사용자 권한으로 서재 일치(in_library) · 서재 논문의 openalex_id 채우기/고치기.
@@ -924,14 +935,15 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 if not paper.get("openalex_id") or merged:
                     lib.update_paper(paper["id"], {"openalex_id": f"W{seed_no}"})
 
-    async def graph_events(request: Request, claims: dict, token: str, seed, size: int, paper, oa_key: str,
-                           s2_key: str):
+    async def gate_events(request: Request, claims: dict, token: str, key, work, oa_key: str, s2_key: str, finish,
+                          event: str, counts: dict):
+        """그래프 · 추천 공용 SSE (1C 명세 9.4절): 게이트 대기(wait) · 같은 키 합치기(Flights) · 15초 ping · 끊김 감지 ·
+        게이트 반납 · 완료 로그. finish(결과, flight) = 요청한 사용자 권한 마무리 → (done 이벤트, 로그 숫자)"""
         uid = claims["sub"]
         gate, flights = st.graph_gate, st.graph_flights
         started, flight, outcome = False, None, "error"
         t0 = time.monotonic()
         warn_codes: list[str] = []
-        nodes_n = 0
         claimed = gate.claim(uid, token)
         try:
             if not claimed:  # 자리가 오래 비어 있어 정리됨(거의 없음)
@@ -952,7 +964,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                     return
                 await asyncio.sleep(0.05)
             started = True
-            flight = flights.join((seed.key(), size), lambda f: graph_flight(f, claims, seed, size, oa_key, s2_key))
+            flight = flights.join(key, lambda f: run_flight(f, claims, oa_key, s2_key, work))
             idx, last_ping = 0, time.monotonic()
             while True:
                 evs, done = flight.read(idx)
@@ -973,12 +985,11 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 code = outcome if outcome in GRAPH_ERRORS else "internal"
                 yield _sse({"type": "error", "code": code, "error": GRAPH_ERRORS[code]})
                 return
-            graph = copy.deepcopy(flight.result)
-            await run_in_threadpool(graph_for_user, claims, graph, paper, seed, flight.seed_no)
-            warn_codes = [w["code"] for w in graph["warnings"]]
-            nodes_n = len(graph["nodes"])
+            result = copy.deepcopy(flight.result)
+            done_ev, counts = await run_in_threadpool(finish, result, flight)
+            warn_codes = [w["code"] for w in result["warnings"]]
             outcome = "done"
-            yield _sse({"type": "done", "graph": graph})
+            yield _sse(done_ev)
         except DBUnavailable:
             outcome = "db_unavailable"
             yield _sse({"type": "error", "code": "internal", "error": DB_UNAVAILABLE["detail"]})
@@ -991,30 +1002,38 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             if claimed:
                 gate.leave(uid, token, started)
             info = flight.info if flight is not None else {}
-            # 숫자 · code만 (씨앗 · 번호 · 제목 · 사용자 id 없음 — 9.6절)
-            log.info(json.dumps({"event": "graph", "result": outcome, "ms": int((time.monotonic() - t0) * 1000),
+            # 숫자 · code만 (씨앗 · 번호 · 제목 · 사용자 id 없음 — 1B 9.6절 · 1C 9.8절)
+            log.info(json.dumps({"event": event, "result": outcome, "ms": int((time.monotonic() - t0) * 1000),
                                  "list_calls": info.get("list_calls", 0), "cache_hits": info.get("cache_hits", 0),
-                                 "nodes": nodes_n, "warnings": warn_codes,
-                                 "openalex_remaining": info.get("openalex_remaining")}))
+                                 **counts, "warnings": warn_codes, "openalex_remaining": info.get("openalex_remaining")}))
+
+    async def small_json(request: Request):
+        """본문 JSON — Content-Length가 4KB를 넘으면 읽지 않고, 없거나 chunked여도 4KB 넘게는 읽지 않음(품질팀 M-4).
+        크거나 JSON이 아니면 ValueError"""
+        length = request.headers.get("content-length")
+        if length is not None and (not length.strip().isdigit() or int(length) > GRAPH_BODY_MAX):
+            raise ValueError("too large")
+        buf = bytearray()
+        async for chunk in request.stream():
+            buf.extend(chunk)
+            if len(buf) > GRAPH_BODY_MAX:
+                raise ValueError("too large")
+        try:
+            return json.loads(bytes(buf) or b"null")
+        except RecursionError:  # 4KB 안에서도 [[[… 처럼 깊게 겹친 본문(품질팀 F3)
+            raise ValueError("too deep") from None
+
+    def user_keys(lib, uid: str) -> tuple[str, str]:
+        s = load_user_settings(lib, st.box, uid)
+        return s.get("openalex_api_key") or "", s.get("semantic_scholar_api_key") or ""
 
     @app.post("/api/graph")
     async def graph(request: Request):
         claims = getattr(request.state, "claims", None)
         if not claims:
             raise HTTPException(401, AUTH_REQUIRED["detail"])
-        # 본문 크기: Content-Length가 4KB를 넘으면 읽지 않고 거부, 없거나 chunked여도 4KB 넘게는 읽지 않음(품질팀 M-4)
-        length = request.headers.get("content-length")
-        if length is not None and (not length.strip().isdigit() or int(length) > GRAPH_BODY_MAX):
-            return JSONResponse(BAD_SEED, status_code=400)
-        buf = bytearray()
-        async for chunk in request.stream():
-            buf.extend(chunk)
-            if len(buf) > GRAPH_BODY_MAX:
-                return JSONResponse(BAD_SEED, status_code=400)
-        raw = bytes(buf)
         try:
-            body = json.loads(raw or b"null")
-            paper_id, seed, size = parse_graph_request(body)
+            paper_id, seed, size = parse_graph_request(await small_json(request))
         except (ValueError, BadSeed):
             return JSONResponse(BAD_SEED, status_code=400)
         uid = claims["sub"]
@@ -1022,8 +1041,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         def prepare():
             with db.user_tx(claims) as lib:
                 paper = lib.get_paper(paper_id, detail=False) if paper_id else None
-                s = load_user_settings(lib, st.box, uid)
-                return paper, s.get("openalex_api_key") or "", s.get("semantic_scholar_api_key") or ""
+                return (paper, *user_keys(lib, uid))
 
         paper, oa_key, s2_key = await run_in_threadpool(prepare)
         if paper_id:
@@ -1038,7 +1056,62 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                                 status_code=429)
         if state == "full":
             return JSONResponse({"detail": GRAPH_ERRORS["graph_queue_full"], "code": "graph_queue_full"}, status_code=503)
-        return StreamingResponse(graph_events(request, claims, token, seed, size, paper, oa_key, s2_key),
+
+        def finish(g: dict, flight) -> tuple[dict, dict]:
+            graph_for_user(claims, g, paper, seed, flight.seed_no)
+            return {"type": "done", "graph": g}, {"nodes": len(g["nodes"])}
+
+        return StreamingResponse(gate_events(request, claims, token, (seed.key(), size), graph_work(seed, size), oa_key,
+                                             s2_key, finish, "graph", {"nodes": 0}),
+                                 media_type="text/event-stream", headers=SSE_HEADERS)
+
+    # ---------------------------------------- 1C 원고 인용 기반 추천 (docs/specs/writing-reference-pane.md 9장 — SSE)
+    # 씨앗은 본문의 서재 논문 id로만(경로 · 쿼리에 없음). 결과 · 씨앗은 어디에도 저장하지 않는다(9.8절).
+    @app.post("/api/graph/recommend")
+    async def graph_recommend(request: Request):
+        claims = getattr(request.state, "claims", None)
+        if not claims:
+            raise HTTPException(401, AUTH_REQUIRED["detail"])
+        try:
+            ids = parse_recommend_request(await small_json(request))
+        except (ValueError, BadSeed):
+            return JSONResponse(BAD_REC, status_code=400)
+        uid = claims["sub"]
+
+        def prepare():
+            with db.user_tx(claims) as lib:  # 내 서재(RLS)에 없는 id는 조용히 빠짐 — 있는지 알리지 않음
+                return (lib.openalex_ids(ids), *user_keys(lib, uid))
+
+        values, oa_key, s2_key = await run_in_threadpool(prepare)
+        nos: list[int] = []
+        for v in values:
+            try:
+                nos.append(parse_openalex_id(v))
+            except BadSeed:
+                continue
+        nos = list(dict.fromkeys(nos))
+        if not nos:
+            return JSONResponse(NO_SEEDS, status_code=400)
+        capped = len(nos) > cg.REC_MAX_SEEDS
+        nos = nos[:cg.REC_MAX_SEEDS]
+        state, token = st.graph_gate.enter(uid)
+        if state == "busy":
+            return JSONResponse({"detail": "다른 탭에서 그래프나 추천을 만드는 중이에요. 끝난 뒤 다시 눌러 주세요.",
+                                 "code": "graph_busy"}, status_code=429)
+        if state == "full":
+            return JSONResponse({"detail": GRAPH_ERRORS["graph_queue_full"], "code": "graph_queue_full"}, status_code=503)
+
+        def finish(rec: dict, flight) -> tuple[dict, dict]:
+            with db.user_tx(claims) as lib:  # 서재 일치는 요청한 사용자마다(합치기 경로에서도 따로)
+                for x, lid in zip(rec["items"], lib.match_library([x["paper"] for x in rec["items"]])):
+                    x["in_library"] = lid
+            if capped:
+                rec["warnings"].append({"code": "seeds_capped", "message": GRAPH_WARNINGS["seeds_capped"]})
+            return {"type": "done", "recommend": rec}, {"seeds": rec["seeds_total"], "items": len(rec["items"])}
+
+        return StreamingResponse(gate_events(request, claims, token, ("rec", tuple(sorted(nos))),
+                                             lambda b, f: b.recommend(nos), oa_key, s2_key, finish, "recommend",
+                                             {"seeds": len(nos), "items": 0}),
                                  media_type="text/event-stream", headers=SSE_HEADERS)
 
     @app.post("/api/cite-preview")

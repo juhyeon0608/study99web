@@ -277,6 +277,15 @@ class Library:
                                            (self.uid, ids))}
         return [i for i in dict.fromkeys(ids) if i in mine]
 
+    def openalex_ids(self, ids: Iterable[int]) -> list[str]:
+        """내 논문의 openalex_id (요청 순서 유지, 빈 값 · 남의 논문은 뺌 — 1C 추천 씨앗)"""
+        ids = [int(i) for i in ids]
+        if not ids:
+            return []
+        found = {r["id"]: r["openalex_id"] for r in self._all(
+            "select id, openalex_id from paperlab.papers where user_id = %s and id = any(%s)", (self.uid, ids))}
+        return [found[i] for i in dict.fromkeys(ids) if found.get(i)]
+
     def pdf_info(self, paper_id: int) -> dict | None:
         """저장소 키 등 내부 PDF 정보. 내 논문이 아니면 None"""
         return self._one("select id, pdf_key, pdf_sha256, pdf_size, title from paperlab.papers "

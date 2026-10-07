@@ -21,9 +21,11 @@ TTL_REFERENCES = 180
 TTL_RELATED = 90
 TTL_CITED = 30
 TTL_ABSTRACT = 180
-TTL = {"references": TTL_REFERENCES, "related": TTL_RELATED, "cited_by_top": TTL_CITED, "cited_by_recent": TTL_CITED}
-RELATIONS = ("references", "related", "cited_by_top", "cited_by_recent")
-EDGE_CAP = {"references": 500, "related": 20, "cited_by_top": 100, "cited_by_recent": 100}
+# cited_by_top_c = C 단계만 끝난 피인용 상위 목록(D 미완료 — 1C 추천이 씀, 마이그레이션 20261008000003)
+TTL = {"references": TTL_REFERENCES, "related": TTL_RELATED, "cited_by_top": TTL_CITED, "cited_by_recent": TTL_CITED,
+       "cited_by_top_c": TTL_CITED}
+RELATIONS = ("references", "related", "cited_by_top", "cited_by_recent", "cited_by_top_c")
+EDGE_CAP = {"references": 500, "related": 20, "cited_by_top": 100, "cited_by_recent": 100, "cited_by_top_c": 100}
 
 WORK_COLS = ("openalex_no", "doi", "arxiv_id", "title", "title_norm", "authors", "author_count", "year", "issued", "venue",
              "publisher", "volume", "issue", "pages", "item_type", "language", "url", "pdf_url", "is_oa",
@@ -152,11 +154,13 @@ def edge_params(e: dict, today: date) -> tuple:
 
 
 def write_rows(conn, works: list[dict], edges: list[dict], today: date) -> None:
+    """행 잠금 순서를 늘 같게(작품 = openalex_no 순, 관계 = (work_no, relation) 순) — 같은 작품들을 다른 순서로 쓰는
+    두 요청이 서로를 기다리는 교착을 막는다(품질팀 F1)"""
     with conn.cursor() as cur:
         if works:
-            cur.executemany(_UPSERT_WORK, [work_params(w, today) for w in works])
+            cur.executemany(_UPSERT_WORK, sorted((work_params(w, today) for w in works), key=lambda r: r[0]))
         if edges:
-            cur.executemany(_UPSERT_EDGE, [edge_params(e, today) for e in edges])
+            cur.executemany(_UPSERT_EDGE, sorted((edge_params(e, today) for e in edges), key=lambda r: (r[0], r[1])))
 
 
 class PgStore:

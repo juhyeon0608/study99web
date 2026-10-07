@@ -45,6 +45,10 @@ MIN_GRAPH = 3  # 씨앗 포함 이 수 미만이면 그래프 대신 빈 상태
 MIN_TITLE_MERGE = 12
 # 이전 연구 후보: 20번째와 같은 count까지(동률 포함) 서지를 받되 최대 이만큼
 PRIOR_FETCH_CAP = 60
+# 1C 원고 인용 기반 추천 (docs/specs/writing-reference-pane.md 9.3절 — 가정)
+REC_MAX_SEEDS = 20
+REC_N = 20
+REC_ABSTRACT_CALLS = 1
 
 _EMPTY: frozenset[int] = frozenset()
 
@@ -214,9 +218,9 @@ def similarity(ix: Index, a: int, b: int) -> Sim:
 
 
 # ------------------------------------------------------------------ 노드 고르기 (6.5절)
-def prelim_targets(ix: Index, n: int = COCITE_TARGETS) -> list[int]:
-    """D 단계(함께 인용) 대상: 씨앗과의 예비 유사도 상위 n편(0점은 뺌, 동률은 번호 오름차순)."""
-    seed = ix.pool.seed
+def prelim_targets(ix: Index, n: int = COCITE_TARGETS, seed: int | None = None) -> list[int]:
+    """D 단계(함께 인용) 대상: 씨앗(기본 = 풀의 씨앗)과의 예비 유사도 상위 n편(0점은 뺌, 동률은 번호 오름차순)."""
+    seed = ix.pool.seed if seed is None else seed
     scored = [(similarity(ix, seed, w).weight, w) for w in ix.members if w != seed]
     scored = [(s, w) for s, w in scored if s > 0]
     scored.sort(key=lambda t: (-t[0], t[1]))
@@ -334,6 +338,45 @@ def relations(ix: Index, w: int) -> list[str]:
 def weak_citation(edges: list[dict]) -> bool:
     """고른 노드의 선 가운데 related가 절반을 넘으면 참 (6.8절)"""
     return bool(edges) and sum(1 for e in edges if e["kind"] == "related") * 2 > len(edges)
+
+
+# ------------------------------------------------------------------ 원고 인용 기반 추천 (1C 명세 9.3절)
+def recommend(ix: Index, seeds: list[int], n: int = REC_N) -> list[dict]:
+    """씨앗 여러 편에 걸친 유사도 합으로 고른 후보 n편:
+    [{"no", "rank", "score", "linked", "kind", "seeds"}] — rank 내림차순(같으면 번호 오름차순).
+    total = Σ similarity(씨앗, w).weight, rank = W_RANK_SIM · total + ln(1 + 피인용) (6.5절 식에서 sim 자리에 합계).
+    seeds 항목은 받은 씨앗 번호 그대로(제목 합치기로 대표 번호가 바뀌어도 — 요청한 번호만 돌려줌)."""
+    canon = ix.pool.canon
+    first: dict[int, int] = {}  # 대표 번호 → 처음 나온 씨앗 번호 (같은 작품인 씨앗 둘은 하나로 셈)
+    for s in seeds:
+        c = canon(int(s))
+        if c in ix.members:
+            first.setdefault(c, int(s))
+    out = []
+    for w in ix.members:
+        if w in first:
+            continue
+        total = 0.0
+        parts = [0.0, 0.0, 0.0]  # 성분 합계: 0.6·coupling · 0.4·cocitation · related 부분
+        linked: list[tuple[float, int]] = []
+        for c, s in first.items():
+            sim = similarity(ix, c, w)
+            if sim.weight <= 0:
+                continue
+            total += sim.weight
+            parts[0] += W_COUPLING * sim.coupling
+            parts[1] += W_COCITATION * sim.cocitation
+            parts[2] += W_RELATED * sim.related
+            linked.append((sim.weight, s))
+        if total <= 0:
+            continue
+        cited = max(0, int(ix.pool.works[w].get("cited_by_count") or 0))
+        kind = max(zip(parts, ("coupling", "cocitation", "related")), key=lambda t: t[0])[1]
+        linked.sort(key=lambda t: (-t[0], t[1]))
+        out.append({"no": w, "rank": W_RANK_SIM * total + math.log1p(cited), "score": total, "linked": len(linked),
+                    "kind": kind, "seeds": [s for _, s in linked[:3]]})
+    out.sort(key=lambda r: (-r["rank"], r["no"]))
+    return out[:n]
 
 
 @dataclass

@@ -117,11 +117,12 @@ export function countFromMessage(msg) {
   return m ? `${m[1]}편` : "";
 }
 
-// 진행 단계 상태: 지금 단계 앞은 모두 done (캐시로 건너뛴 단계 포함). wait = 씨앗 단계에 머묾
-export function stepStates(step) {
-  const cur = step === "wait" ? 0 : Math.max(0, STEPS.indexOf(step));
+// 진행 단계 상태: 지금 단계 앞은 모두 done (캐시로 건너뛴 단계 포함). wait · 아직 없음 = 첫 단계에 머묾
+// steps = 단계 목록(기본 그래프 — 참고 패널 추천은 자기 목록)
+export function stepStates(step, steps = STEPS) {
+  const cur = step === "wait" ? 0 : Math.max(0, steps.indexOf(step));
   const out = {};
-  STEPS.forEach((s, i) => { out[s] = i < cur ? "done" : i === cur ? "now" : "todo"; });
+  steps.forEach((s, i) => { out[s] = i < cur ? "done" : i === cur ? "now" : "todo"; });
   return out;
 }
 

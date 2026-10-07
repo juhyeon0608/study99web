@@ -1,17 +1,21 @@
 // 읽기 화면: PDF 뷰어(PDF.js) + 하이라이트/메모 + AI 요약·질문 + 노트 + 인용
+// 임베드 모드(mountPdf — 논문 쓰기 화면의 참고 패널, docs/specs/writing-reference-pane.md 4.2절): 같은 전역 R을 쓴다.
+// 읽기 화면과 쓰기 화면은 동시에 열리지 않으므로(라우터가 closeReader) 한 번에 하나뿐. R.embed = 패널이 준 옵션.
 
 import { api, streamEvents } from "./api.js";
 import { listStyles, render, styleOptions } from "./cite.js";
 import { EXT_MARK, bindExtLink, citeDialog, editPaperDialog, issuesBox, settingsDialog, uploadPdfs } from "./dialogs.js";
 import { INHA, paperProxyTarget } from "./extlinks.js";
 import { exportAnnotations } from "./library.js";
+import { quoteRuleText } from "./refquote.js";
 import { onRefresh, state } from "./state.js";
 import {
-  $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, pickFiles, renderMarkdown, renderTex,
-  toast,
+  $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modalOpen, pickFiles, renderMarkdown,
+  renderTex, toast,
 } from "./ui.js";
 
 const COLORS = ["yellow", "green", "blue", "pink", "purple"];
+const COLOR_NAMES = { yellow: "노랑", green: "초록", blue: "파랑", pink: "분홍", purple: "보라" };
 const LEVELS = [["elementary", "초등"], ["middle", "중등"], ["high", "고등"], ["graduate", "대학원"]];
 
 let pdfjs = null;
@@ -50,7 +54,7 @@ async function loadPdfjs() {
 function prefs() {
   try { return JSON.parse(localStorage.getItem("paperlab.reader") || "{}"); } catch { return {}; }
 }
-function savePrefs(patch) {
+export function savePrefs(patch) {
   try { localStorage.setItem("paperlab.reader", JSON.stringify({ ...prefs(), ...patch })); } catch { /* 무시 */ }
 }
 
@@ -100,7 +104,7 @@ export async function openReader(main, pid, startPage = null) {
         <button class="icon-btn" data-zoom="-1" title="축소">−</button>
         <button class="btn sm ghost" data-fit title="폭 맞춤">맞춤</button>
         <button class="icon-btn" data-zoom="1" title="확대">＋</button>
-        <div class="hl-colors" title="하이라이트 색">${COLORS.map((c) => `<button class="hl-color ${c === R.color ? "active" : ""}" data-c="${c}"></button>`).join("")}</div>
+        ${colorsHtml()}
         <button class="icon-btn" data-panel title="오른쪽 패널 열고 닫기">◧</button>
       </div>
       <div class="pdf-scroll"><div class="pdf-pages"></div></div>
@@ -118,21 +122,12 @@ export async function openReader(main, pid, startPage = null) {
   R.pagesEl = $(".pdf-pages", view);
 
   $$("[data-tab]", view).forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
-  $$(".reader-bar .hl-color", view).forEach((b) => (b.onclick = () => {
-    R.color = b.dataset.c;
-    savePrefs({ color: R.color });
-    $$(".reader-bar .hl-color", view).forEach((x) => x.classList.toggle("active", x === b));
-  }));
-  $$("[data-zoom]", view).forEach((b) => (b.onclick = () => setScale(R.scale * (b.dataset.zoom === "1" ? 1.15 : 1 / 1.15), false)));
-  $("[data-fit]", view).onclick = () => setScale(fitScale(), true);
+  wireBar(view);
   $("[data-panel]", view).onclick = () => {
     const closed = view.classList.toggle("panel-closed");
     savePrefs({ panelClosed: closed });
     if (R.fit) setTimeout(() => setScale(fitScale(), true), 50);
   };
-  const pageInput = $("[data-page]", view);
-  pageInput.onkeydown = (e) => { if (e.key === "Enter") { goToPage(Number(pageInput.value)); pageInput.blur(); } };
-
   R.onKey = (e) => {
     if (document.querySelector(".modal-backdrop")) return;
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
@@ -149,6 +144,90 @@ export async function openReader(main, pid, startPage = null) {
   R.annotations = annotations;
   drawAllHighlights();
   if (R.tab === "highlights") showTab("highlights");
+}
+
+// 하이라이트 색 버튼 (읽기 화면 막대 · 참고 패널 막대 공용 — 색 이름 · 고른 색을 화면 읽기에도)
+function colorsHtml() {
+  return `<div class="hl-colors" role="group" aria-label="하이라이트 색" title="하이라이트 색">${COLORS.map((c) =>
+    `<button class="hl-color ${c === R.color ? "active" : ""}" data-c="${c}" aria-label="${COLOR_NAMES[c]}" aria-pressed="${c === R.color}"></button>`).join("")}</div>`;
+}
+
+function syncColors() {
+  $$(".reader-bar .hl-color", R.view).forEach((x) => {
+    x.classList.toggle("active", x.dataset.c === R.color);
+    x.setAttribute("aria-pressed", String(x.dataset.c === R.color));
+  });
+}
+
+// 막대: 색 · 확대/축소 · 맞춤 · 쪽 번호 (data 속성으로 찾음 — 읽기 화면 · 참고 패널 공용)
+function wireBar(view) {
+  $$(".reader-bar .hl-color", view).forEach((b) => (b.onclick = () => {
+    R.color = b.dataset.c;
+    savePrefs({ color: R.color });
+    syncColors();
+  }));
+  $$("[data-zoom]", view).forEach((b) => (b.onclick = () => setScale(R.scale * (b.dataset.zoom === "1" ? 1.15 : 1 / 1.15), false)));
+  $("[data-fit]", view).onclick = () => setScale(fitScale(), true);
+  const pageInput = $("[data-page]", view);
+  pageInput.onkeydown = (e) => { if (e.key === "Enter") { goToPage(Number(pageInput.value)); pageInput.blur(); } };
+}
+
+// ------------------------------------------------------------------- 임베드 모드 (참고 패널)
+// host에 작은 막대 + PDF 칸을 그리고 R을 만든 뒤 하이라이트를 받는다. PDF 파일은 embedPdf()를 처음 부를 때 받음.
+// 읽기 화면과 다른 점: /open을 부르지 않음(읽기 상태 그대로 — K-10), Esc로 서재에 가지 않음, [AI에게 묻기] 대신
+// [인용으로 넣기](opts.onQuote), 처음 배율은 맞춤.
+// opts = { onQuote({text, pages}), onGoto(page), onChange(), onAttached(paper), basis: {text, title} }
+export async function mountPdf(host, paper, opts = {}) {
+  teardown();
+  const p0 = prefs();
+  R = { pid: paper.id, paper, annotations: [], pages: [], scale: 1, fit: true, color: p0.color || "yellow",
+    level: p0.level || "high", embed: opts, quote: "" };
+  const me = R;
+  host.innerHTML = `<div class="reader-bar">
+      <div class="pageno"><input class="input" data-page value="1" aria-label="쪽 번호"> / <span data-total>…</span></div>
+      <button class="icon-btn" data-zoom="-1" title="축소" aria-label="축소">−</button>
+      <button class="btn sm ghost" data-fit title="폭 맞춤">맞춤</button>
+      <button class="icon-btn" data-zoom="1" title="확대" aria-label="확대">＋</button>
+      ${colorsHtml()}
+      ${opts.basis ? `<span class="ref-basis" title="${esc(opts.basis.title)}">${esc(opts.basis.text)}</span>` : ""}
+    </div>
+    <div class="pdf-scroll" tabindex="0" aria-label="PDF 원문"><div class="pdf-pages"></div></div>`;
+  R.view = host;
+  R.scroller = $(".pdf-scroll", host);
+  R.pagesEl = $(".pdf-pages", host);
+  wireBar(host);
+  R.onKey = (e) => { // 떠 있는 선택 상자 · 하이라이트 상자만 닫음(패널의 Esc는 refpane.js가)
+    if (e.key === "Escape" && !modalOpen() && document.querySelector(".sel-pop")) hidePopups();
+  };
+  document.addEventListener("keydown", R.onKey);
+  try {
+    const annotations = await api.get(`/api/papers/${paper.id}/annotations`);
+    if (R !== me) return false;
+    R.annotations = annotations;
+    drawAllHighlights();
+  } catch (e) {
+    if (R === me) errorToast(e);
+  }
+  return R === me;
+}
+
+// 임베드 모드: PDF를 아직 안 받았으면 받고, page가 있으면 그 쪽으로
+export function embedPdf(page = null) {
+  if (!R || !R.embed) return;
+  if (!R.pdfLoad) R.pdfLoad = loadPdf(page);
+  else if (page) R.pdfLoad.then(() => goToPage(page));
+}
+
+// 하이라이트를 만들거나 고치거나 지운 뒤: 읽기 화면은 하이라이트 탭을, 참고 패널은 자기 목록을 다시 그림
+function annsChanged() {
+  if (R.embed) { if (R.embed.onChange) R.embed.onChange(); }
+  else if (R.tab === "highlights") showTab("highlights");
+}
+
+// 쪽 이동(p.N): 참고 패널은 PDF 탭으로 바꾼 뒤(onGoto)
+function gotoPage(n) {
+  if (R.embed && R.embed.onGoto) R.embed.onGoto(n);
+  else goToPage(n);
 }
 
 // ------------------------------------------------------------------- PDF
@@ -182,6 +261,7 @@ onRefresh(async () => {
   try { p = await api.get(`/api/papers/${me.pid}`); } catch { return; }
   if (R !== me || !p.has_pdf) return;
   me.awaitingPdf = false;
+  if (me.embed) return me.embed.onAttached(p); // 참고 패널: 원고 화면은 그대로 두고 패널 PDF만 다시 띄움
   window.dispatchEvent(new HashChangeEvent("hashchange")); // 라우터가 같은 주소로 openReader를 다시 부름
 });
 
@@ -233,7 +313,8 @@ async function loadPdf(startPage) {
   });
   let lastW = R.scroller.clientWidth;
   R.resizeObserver = new ResizeObserver(() => {
-    if (R !== me || !R.fit || Math.abs(R.scroller.clientWidth - lastW) < 8) return;
+    // 다른 탭을 보는 동안 숨겨진 칸(폭 0)은 건너뜀 — 돌아와도 배율이 작아지지 않게(참고 패널)
+    if (R !== me || !R.fit || !R.scroller.clientWidth || Math.abs(R.scroller.clientWidth - lastW) < 8) return;
     lastW = R.scroller.clientWidth;
     setScale(fitScale(), true);
   });
@@ -487,8 +568,8 @@ function onMouseUp(e) {
     const groups = selectionRects(range);
     if (!groups.size) return;
     hidePopups();
-    const pop = el(`<div class="sel-pop">${COLORS.map((c) => `<button class="hl-color ${c === R.color ? "active" : ""}" data-c="${c}" title="하이라이트"></button>`).join("")}
-      <span class="sep"></span><button class="btn sm ghost" data-note>메모</button><button class="btn sm ghost" data-ask>AI에게 묻기</button><button class="btn sm ghost" data-copy>복사</button></div>`);
+    const pop = el(`<div class="sel-pop">${COLORS.map((c) => `<button class="hl-color ${c === R.color ? "active" : ""}" data-c="${c}" title="하이라이트" aria-label="${COLOR_NAMES[c]}${c === "purple" ? "로" : "으로"} 하이라이트"></button>`).join("")}
+      <span class="sep"></span>${R.embed ? `<button class="btn sm primary" data-quote title="${esc(quoteRuleText())}">인용으로 넣기</button>` : ""}<button class="btn sm ghost" data-note>메모</button>${R.embed ? "" : `<button class="btn sm ghost" data-ask>AI에게 묻기</button>`}<button class="btn sm ghost" data-copy>복사</button></div>`);
     const create = async (color, comment = "") => {
       hidePopups();
       sel.removeAllRanges();
@@ -499,12 +580,12 @@ function onMouseUp(e) {
           drawHighlight(a);
         } catch (err) { errorToast(err); }
       }
-      if (R.tab === "highlights") showTab("highlights");
+      annsChanged();
     };
     $$(".hl-color", pop).forEach((b) => (b.onclick = () => {
       R.color = b.dataset.c;
       savePrefs({ color: R.color });
-      $$(".reader-bar .hl-color", R.view).forEach((x) => x.classList.toggle("active", x.dataset.c === R.color));
+      syncColors();
       create(b.dataset.c);
     }));
     $("[data-note]", pop).onclick = () => {
@@ -517,11 +598,19 @@ function onMouseUp(e) {
       $("[data-s]", pop).onclick = () => create(R.color, ta.value.trim());
       ta.onkeydown = (ev) => { if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) create(R.color, ta.value.trim()); };
     };
-    $("[data-ask]", pop).onclick = () => {
-      hidePopups();
-      R.quote = text;
-      showTab("chat");
-    };
+    if (R.embed) {
+      $("[data-quote]", pop).onclick = () => {
+        hidePopups();
+        sel.removeAllRanges();
+        R.embed.onQuote({ text, pages: [...groups.keys()] });
+      };
+    } else {
+      $("[data-ask]", pop).onclick = () => {
+        hidePopups();
+        R.quote = text;
+        showTab("chat");
+      };
+    }
     $("[data-copy]", pop).onclick = () => { copyText(text); hidePopups(); };
     const rr = range.getBoundingClientRect();
     placePopup(pop, rr.left + rr.width / 2, rr.top);
@@ -531,8 +620,9 @@ function onMouseUp(e) {
 function annotationPopup(a, anchor) {
   hidePopups();
   const pop = el(`<div class="sel-pop ann-pop">
-    <div class="row">${COLORS.map((c) => `<button class="hl-color ${c === a.color ? "active" : ""}" data-c="${c}"></button>`).join("")}
-      <span class="spacer"></span><button class="btn sm ghost" data-ask>AI에게 묻기</button></div>
+    <div class="row">${COLORS.map((c) => `<button class="hl-color ${c === a.color ? "active" : ""}" data-c="${c}" aria-label="${COLOR_NAMES[c]}"></button>`).join("")}
+      <span class="spacer"></span>${R.embed ? `<button class="btn sm ghost" data-quote title="${esc(quoteRuleText())}">인용으로 넣기</button>`
+        : `<button class="btn sm ghost" data-ask>AI에게 묻기</button>`}</div>
     <div class="small muted" style="max-height:60px;overflow:hidden">“${esc(a.text.slice(0, 160))}${a.text.length > 160 ? "…" : ""}”</div>
     <textarea class="input" rows="3" placeholder="메모">${esc(a.comment)}</textarea>
     <div class="row"><button class="btn sm danger" data-del>삭제</button><span class="spacer"></span><button class="btn sm" data-copy>복사</button><button class="btn sm primary" data-save>저장</button></div></div>`);
@@ -540,7 +630,7 @@ function annotationPopup(a, anchor) {
     try {
       Object.assign(a, await api.patch(`/api/annotations/${a.id}`, patch));
       drawHighlight(a);
-      if (R.tab === "highlights") showTab("highlights");
+      annsChanged();
     } catch (e) { errorToast(e); }
   };
   $$(".hl-color", pop).forEach((b) => (b.onclick = () => {
@@ -549,7 +639,8 @@ function annotationPopup(a, anchor) {
   }));
   $("[data-save]", pop).onclick = () => { update({ comment: $("textarea", pop).value.trim() }); hidePopups(); };
   $("[data-copy]", pop).onclick = () => copyText(a.text);
-  $("[data-ask]", pop).onclick = () => { hidePopups(); R.quote = a.text; showTab("chat"); };
+  if (R.embed) $("[data-quote]", pop).onclick = () => { hidePopups(); R.embed.onQuote({ text: a.text, pages: [a.page] }); };
+  else $("[data-ask]", pop).onclick = () => { hidePopups(); R.quote = a.text; showTab("chat"); };
   $("[data-del]", pop).onclick = () => { hidePopups(); deleteAnnotation(a); };
   const r = anchor.getBoundingClientRect();
   placePopup(pop, r.left + r.width / 2, r.top);
@@ -560,7 +651,7 @@ async function deleteAnnotation(a) {
     await api.del(`/api/annotations/${a.id}`);
     R.annotations = R.annotations.filter((x) => x.id !== a.id);
     $$(`[data-ann="${a.id}"]`).forEach((n) => n.remove());
-    if (R.tab === "highlights") showTab("highlights");
+    annsChanged();
   } catch (e) { errorToast(e); }
 }
 
@@ -582,7 +673,7 @@ function pageLink(n) {
 }
 
 function bindPageLinks(root) {
-  $$("[data-goto]", root).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); goToPage(Number(b.dataset.goto)); }));
+  $$("[data-goto]", root).forEach((b) => (b.onclick = (e) => { e.stopPropagation(); gotoPage(Number(b.dataset.goto)); }));
 }
 
 // ------------------------------------------------------------- summary
@@ -703,7 +794,8 @@ function updateProgress(pid) {
   $("div", bar).style.width = `${pct || 0}%`;
 }
 
-function drawSummary(body, s) {
+// 요약 그리기 (읽기 화면 · 참고 패널 공용). ask: false면 [물어보기] · [다시 만들기] 없음(참고 패널 — 보여 주기만)
+export function drawSummary(body, s, { ask = true } = {}) {
   const d = s.data;
   const v = el(`<div>
     <div class="tldr"><b>한 줄 요약</b>${esc(d.tldr)}</div>
@@ -718,9 +810,9 @@ function drawSummary(body, s) {
     <div class="prose" data-overview></div>
     ${d.sections.length ? `<div class="section-title">섹션별 정리</div><div data-sections></div>` : ""}
     ${d.formulas.length ? `<div class="section-title">핵심 수식</div><div data-formulas></div>` : ""}
-    ${listBlock("기여", d.contributions)}${listBlock("한계", d.limitations)}${listBlock("생각해 볼 질문", d.questions, true)}
+    ${listBlock("기여", d.contributions)}${listBlock("한계", d.limitations)}${listBlock("생각해 볼 질문", d.questions, ask)}
     <div class="row small muted" style="margin-top:22px"><span>${esc(s.model)} · ${fmtDate(s.created_at)}</span><span class="spacer"></span>
-      <button class="btn sm" data-redo>다시 만들기</button></div></div>`);
+      ${ask ? `<button class="btn sm" data-redo>다시 만들기</button>` : ""}</div></div>`);
   const drawLevel = () => {
     $$(".level-pick button", v).forEach((b) => b.classList.toggle("active", b.dataset.lv === R.level));
     $("[data-overview]", v).innerHTML = renderMarkdown(d.overview[R.level] || "") || `<p class="muted">이 수준의 설명이 없어요</p>`;
@@ -760,9 +852,11 @@ function drawSummary(body, s) {
     bindPageLinks(fBox);
   }
   $$("[data-askq]", v).forEach((b) => (b.onclick = () => { R.prefill = b.dataset.askq; showTab("chat"); }));
-  $("[data-redo]", v).onclick = async () => {
-    if (await confirmDialog("요약을 다시 만들까요? 지금 요약은 새 결과로 바뀌어요.", { ok: "다시 만들기" })) startSummary();
-  };
+  if (ask) {
+    $("[data-redo]", v).onclick = async () => {
+      if (await confirmDialog("요약을 다시 만들까요? 지금 요약은 새 결과로 바뀌어요.", { ok: "다시 만들기" })) startSummary();
+    };
+  }
   body.appendChild(v);
 }
 
@@ -909,7 +1003,8 @@ function updateMessage(node, m) {
 }
 
 // ---------------------------------------------------------- highlights
-function highlightsTab(body) {
+// 하이라이트 목록 (읽기 화면 · 참고 패널 공용). onInsert(a, "quote" | "comment")가 있으면 [묻기] 대신 [넣기] · [메모 넣기]
+export function highlightsTab(body, { onInsert = null } = {}) {
   const anns = [...R.annotations].sort((a, b) => a.page - b.page || (a.rects[0]?.[1] || 0) - (b.rects[0]?.[1] || 0));
   const v = el(`<div><div class="row" style="margin-bottom:12px"><span class="small muted">${anns.length}개</span><span class="spacer"></span>
     <div class="seg" data-filter><button class="active" data-c="">전체</button>${COLORS.map((c) => `<button data-c="${c}"><span class="hl-color" data-c="${c}" style="display:inline-block;width:10px;height:10px;border:0"></span></button>`).join("")}</div>
@@ -927,10 +1022,15 @@ function highlightsTab(body) {
         <div class="q">${a.text ? esc(a.text) : '<span class="muted">(메모)</span>'}</div>
         ${a.comment ? `<div class="c">${esc(a.comment)}</div>` : ""}
         <div class="foot">${pageLink(a.page)}<span>${fmtDate(a.created_at)}</span><span class="spacer"></span>
-          <button class="btn sm ghost" data-edit>메모</button><button class="btn sm ghost" data-ask>묻기</button><button class="btn sm ghost danger" data-del>삭제</button></div></div>`);
-      $(".q", item).onclick = () => { goToPage(a.page); setTimeout(() => $$(`[data-ann="${a.id}"]`).forEach((n) => { n.classList.add("pulse"); setTimeout(() => n.classList.remove("pulse"), 3000); }), 400); };
+          ${onInsert ? `<button class="btn sm" data-insert title="${esc(quoteRuleText())}">넣기</button>${a.comment ? `<button class="btn sm ghost" data-insert-comment title="메모를 내 말로(따옴표 없이) 넣어요">메모 넣기</button>` : ""}` : ""}
+          <button class="btn sm ghost" data-edit>메모</button>${onInsert ? "" : `<button class="btn sm ghost" data-ask>묻기</button>`}<button class="btn sm ghost danger" data-del>삭제</button></div></div>`);
+      $(".q", item).onclick = () => { gotoPage(a.page); setTimeout(() => $$(`[data-ann="${a.id}"]`).forEach((n) => { n.classList.add("pulse"); setTimeout(() => n.classList.remove("pulse"), 3000); }), 400); };
       $("[data-del]", item).onclick = () => deleteAnnotation(a);
-      $("[data-ask]", item).onclick = () => { R.quote = a.text; showTab("chat"); };
+      if (onInsert) {
+        $("[data-insert]", item).onclick = () => onInsert(a, "quote");
+        const ic = $("[data-insert-comment]", item);
+        if (ic) ic.onclick = () => onInsert(a, "comment");
+      } else $("[data-ask]", item).onclick = () => { R.quote = a.text; showTab("chat"); };
       $("[data-edit]", item).onclick = () => {
         const ta = el(`<textarea class="input" rows="3" style="width:100%;margin-top:6px">${esc(a.comment)}</textarea>`);
         const c = $(".c", item);

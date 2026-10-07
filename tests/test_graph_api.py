@@ -233,6 +233,7 @@ def test_deadline_and_call_timeout(env):
     env.build(w.S)  # 씨앗 · 참고문헌은 캐시에 둠
     env.up.delay = {"list": 20.0}
     env.store.e.pop((w.S, "cited_by_top"))  # C · D를 다시 부르게
+    env.store.e.pop((w.S, graph_build.REC_CITED))  # C 목록도(I-1: 그래프도 남김 — 있으면 C를 다시 씀)
     for row in env.store.w.values():  # E(초록)도 다시 부르게
         row["abstract"] = None
     start = env.clock()
@@ -608,10 +609,10 @@ class GraphCloud:
 
         st.graph_sources_factory = factory
 
-    def stream(self, client, body):
+    def stream(self, client, body, path="/api/graph"):
         """SSE 이벤트 목록(주석 줄 제외)과 상태 코드"""
         events = []
-        with client.stream("POST", "/api/graph", json=body) as r:
+        with client.stream("POST", path, json=body) as r:
             if r.status_code != 200:
                 r.read()
                 return r.status_code, r.json()
@@ -871,3 +872,468 @@ def test_api_request_rules_without_db(local_client):
     assert r.status_code == 400 and r.json()["code"] == "bad_seed"
     assert local_client.post("/api/graph", content=b"{not json", headers={"Content-Type": "application/json"}).status_code == 400
     assert seen == []
+
+
+# ====================================================================== 1C 원고 인용 기반 추천 (docs/specs/writing-reference-pane.md 12장 B · C)
+REC_PATH = "/api/graph/recommend"
+REC_ITEM_KEYS = {"id", "rank", "score", "linked", "kind", "seeds", "paper"}
+REC_LOG_KEYS = {"event", "result", "ms", "list_calls", "cache_hits", "seeds", "items", "warnings", "openalex_remaining"}
+
+
+def rec(env, seeds, clear=True, **kw):
+    if clear:
+        env.up.clear()
+    env.events = []
+    return GraphBuilder(env.store, env.sources(**kw), DAY0, progress=env.events.append).recommend(seeds)
+
+
+def abstract_calls(up):
+    return [r for r in oa_requests(up, "list") if "abstract_inverted_index" in r["params"].get("select", "")]
+
+
+def rec_ids(r):
+    return [x["id"] for x in r["items"]]
+
+
+def test_recommend_builder_shape(env):
+    """AC-R10(빌더): 항목 모양 · 씨앗은 결과에 없음 · rank 순 · 진행 단계 seeds(n/N) → finish → compute"""
+    w = env.world
+    r = rec(env, [w.S, w.R[3], w.C[2]])
+    assert 0 < len(r["items"]) <= 20 and r["seeds_total"] == 3 and r["seeds_used"] == 3
+    seeds = {f"W{n}" for n in (w.S, w.R[3], w.C[2])}
+    for it in r["items"]:
+        assert set(it) == REC_ITEM_KEYS and it["id"] not in seeds
+        assert NORM_KEYS <= set(it["paper"]) and it["paper"]["openalex_id"] == it["id"]
+        assert len(it["paper"]["abstract"]) <= graph_build.ABSTRACT_OUT
+        assert 1 <= it["linked"] <= 3 and set(it["seeds"]) <= seeds and len(it["seeds"]) == min(3, it["linked"])
+        assert it["kind"] in ("coupling", "cocitation", "related") and it["score"] > 0
+    assert [x["rank"] for x in r["items"]] == sorted((x["rank"] for x in r["items"]), reverse=True)
+    assert f"W{w.EMPTY_TITLE}" not in rec_ids(r) and f"W{w.MISSING}" not in rec_ids(r)
+    steps = [e["step"] for e in env.events]
+    assert steps == ["seeds"] * 3 + ["finish", "compute"]
+    assert [e["message"][-5:] for e in env.events[:3]] == ["(1/3)", "(2/3)", "(3/3)"]
+    assert all(0 < e["progress"] < 1 for e in env.events)
+    assert set(r["stats"]) == {"candidates", "list_calls", "cache_hits", "elapsed_ms", "built_on"}
+    assert r["stats"]["list_calls"] == env.up.count("list") + env.up.count("search")
+    assert not [x for x in env.up.requests if x["kind"] == "s2"]  # S2 보강 없음
+    # 함께 인용(D)은 캐시만: 여러 대상을 묶은 cites: 조회가 없음
+    assert not [x for x in oa_requests(env.up, "list") if x["params"]["filter"].startswith("cites:") and "|" in x["params"]["filter"]]
+
+
+def test_recommend_budget_and_resume(env):
+    """AC-R11: 빈 캐시 1회 목록 · 검색 ≤ 12 · 초록 묶음 ≤ 1 · S2 0, 처음 보는 씨앗 10편 → partial · seeds_used < 10,
+    다시 하면 앞에서 받은 것은 다시 부르지 않고 이어서 반영, 몇 번 뒤 10편 모두"""
+    w = env.world
+    seeds = w.C[:10]
+    r = rec(env, seeds)
+    assert env.up.count("list") + env.up.count("search") <= 12 and len(abstract_calls(env.up)) <= 1
+    assert not [x for x in env.up.requests if x["kind"] == "s2"]
+    assert "partial" in codes(r) and r["seeds_used"] < r["seeds_total"] == 10 and r["items"]
+    seen = {(x["path"], x["params"].get("filter", "")) for x in env.up.requests
+            if x["kind"] == "single" or x["params"].get("filter", "").startswith("cites:")}
+    used = [r["seeds_used"]]
+    for _ in range(4):
+        r = rec(env, seeds)
+        assert env.up.count("list") + env.up.count("search") <= 12
+        again = {(x["path"], x["params"].get("filter", "")) for x in env.up.requests
+                 if x["kind"] == "single" or x["params"].get("filter", "").startswith("cites:")}
+        assert not again & seen  # 씨앗 서지 · 피인용 목록은 한 번만 받음
+        seen |= again
+        used.append(r["seeds_used"])
+        if r["seeds_used"] == 10:
+            break
+    assert used[1] > used[0] and used[-1] == 10 and "partial" not in codes(r)
+    r2 = rec(env, seeds)
+    assert env.up.count() == 0 and rec_ids(r2) == rec_ids(r)
+
+
+def test_recommend_cache_reuse_and_graph_marker(env):
+    """AC-R12(빌더): 같은 씨앗 두 번째는 외부 호출 0 · 같은 순서. 1B 그래프를 먼저 만든 씨앗 하나로 추천 → 호출 0.
+    추천은 C만(cited_by_top_c) 남기고 그래프의 C · D 완료 표시(cited_by_top)는 남기지 않음 → 그 뒤 그래프는 C를 다시 쓰고
+    D만 받음(결과는 추천 없이 만든 그래프와 같음)"""
+    w = env.world
+    r1 = rec(env, [w.S, w.C[2]])
+    r2 = rec(env, [w.S, w.C[2]])
+    assert env.up.count() == 0 and rec_ids(r1) == rec_ids(r2) and r1["items"]
+    assert (w.S, "cited_by_top") not in env.store.e and (w.S, graph_build.REC_CITED) in env.store.e
+    g1, _ = env.build(w.S)
+    d = [x for x in oa_requests(env.up, "list") if x["params"]["filter"].startswith("cites:") and "|" in x["params"]["filter"]]
+    assert len(d) == 2  # 함께 인용 두 정렬은 받음
+    assert not [x for x in oa_requests(env.up, "list") if x["params"]["filter"] == f"cites:W{w.S}"]  # C는 추천 것을 다시 씀
+    assert env.store.e[(w.S, "cited_by_top")]["nos"] == env.store.e[(w.S, graph_build.REC_CITED)]["nos"]  # C · D 완료 표시
+    g2, _ = env.build(w.S)
+    assert env.up.count() == 0 and ids(g2) == ids(g1)
+    e0 = Env()  # 추천 없이 만든 그래프와 같은 결과
+    assert ids(e0.build(e0.world.S)[0]) == ids(g1)
+    e2 = Env()
+    e2.build(e2.world.R[3])
+    r = rec(e2, [e2.world.R[3]])
+    assert e2.up.count() == 0 and r["items"] and r["seeds_used"] == 1
+
+
+def test_recommend_failures_and_limits(env):
+    """AC-R14: C 단계 500 → done + citing_failed. 하루 한도(429 · Remaining 0): 캐시로 계산하면 done + upstream_limited,
+    없으면 GraphError upstream_limited. 경고 code는 9.6절 목록 안 · 문구는 식별자 없는 한국어 문장"""
+    w = env.world
+    env.up.fail = lambda r: httpx.Response(500) if r["kind"] == "list" and r["params"].get("filter", "").startswith("cites:") \
+        else None
+    r = rec(env, [w.S, w.R[3]])
+    assert "citing_failed" in codes(r) and r["items"]
+    limited = lambda r: httpx.Response(429, headers={"X-RateLimit-Remaining": "0"})  # noqa: E731
+    env.up.fail = limited
+    r = rec(env, [w.S, w.R[3], w.C[7]])  # C7은 처음 봄 → 건너뜀
+    assert "upstream_limited" in codes(r) and r["items"] and r["seeds_used"] == 2
+    e2 = Env()
+    e2.up.fail = limited
+    with pytest.raises(GraphError) as ex:
+        rec(e2, [e2.world.S, e2.world.C[1]])
+    assert ex.value.code == "upstream_limited" and e2.up.count() == 1
+    e3 = Env()
+    e3.up.fail = lambda r: httpx.Response(500) if r["kind"] == "single" else None
+    with pytest.raises(GraphError) as ex:
+        rec(e3, [e3.world.S])
+    assert ex.value.code == "upstream_unavailable"
+    e4 = Env()
+    assert rec(e4, [e4.world.base + 99_999])["items"] == []  # 없는 번호: 빈 결과(오류 아님)
+    allowed = set(graph_build.REC_WARNINGS)
+    for code in allowed:
+        msg = graph_build.WARNINGS[code]
+        assert re.search(r"[가-힣]", msg) and not re.search(r"W\d|https?://|10\.\d{4}", msg), code
+    e5 = Env()  # 참고문헌 350편 씨앗: 그래프 전용 경고(truncated)는 추천에 내보내지 않음
+    assert set(codes(rec(e5, [e5.world.BIG]))) <= allowed
+
+
+def test_parse_recommend_request():
+    """AC-R15(단위): paper_ids = 양의 정수(int64) 1~200개, 중복은 하나로, 그 밖 키 무시"""
+    assert graph_build.parse_recommend_request({"paper_ids": [3, 1, 3, 2], "x": 1}) == [3, 1, 2]
+    assert graph_build.parse_recommend_request({"paper_ids": list(range(1, 201))}) == list(range(1, 201))
+    for body in ({}, {"paper_ids": []}, {"paper_ids": list(range(1, 202))}, {"paper_ids": ["12"]}, {"paper_ids": [-1]},
+                 {"paper_ids": [0]}, {"paper_ids": [2 ** 63]}, {"paper_ids": [True]}, {"paper_ids": [1.0]},
+                 {"paper_ids": "1"}, [1], None):
+        with pytest.raises(BadSeed):
+            graph_build.parse_recommend_request(body)
+
+
+def test_api_recommend_request_rules_without_db(local_client):
+    """AC-R15(API) · AC-R20: 인증 · X-PaperLab · Origin, 형식 위반 400 bad_request는 DB · 외부 호출 전에"""
+    from fastapi.testclient import TestClient
+    app = local_client.app
+    seen = []
+    app.state.graph_sources_factory = lambda *a, **kw: seen.append(1)
+    bare = TestClient(app)
+    assert bare.post(REC_PATH, json={"paper_ids": [1]}, headers={"X-PaperLab": "1"}).status_code == 401
+    assert local_client.post(REC_PATH, json={"paper_ids": [1]}, headers={"X-PaperLab": ""}).status_code == 403
+    assert local_client.post(REC_PATH, json={"paper_ids": [1]}, headers={"Origin": "https://evil.example"}).status_code == 403
+    bad = [{}, {"paper_ids": []}, {"paper_ids": list(range(1, 202))}, {"paper_ids": ["12"]}, {"paper_ids": [-1]},
+           {"paper_ids": [2 ** 63]}, {"paper_ids": [1], "pad": "x" * 5000}]
+    for body in bad:
+        r = local_client.post(REC_PATH, json=body)
+        assert r.status_code == 400 and r.json()["code"] == "bad_request", body
+        assert r.json()["detail"] == "추천 요청이 올바르지 않아요."
+    r = local_client.post(REC_PATH, content=b"{}", headers={"Content-Length": "999999", "Content-Type": "application/json"})
+    assert r.status_code == 400
+    chunks = (b'{"paper_ids": [1], "pad": "' + b"x" * 1000 for _ in range(10))
+    r = local_client.post(REC_PATH, content=chunks, headers={"Content-Type": "application/json"})
+    assert r.status_code == 400 and r.json()["code"] == "bad_request"
+    assert local_client.post(REC_PATH, content=b"{not json", headers={"Content-Type": "application/json"}).status_code == 400
+    assert seen == []
+
+
+def _lib_paper(client, w: World, no: int, with_oa: bool = True) -> int:
+    data = {"title": w.works[no]["title"], "year": w.works[no]["year"]}
+    if with_oa:
+        data["openalex_id"] = f"W{no}"
+    r = client.post("/api/papers", json=data)
+    assert r.status_code == 200, r.text
+    return r.json()["paper"]["id"]
+
+
+def _rec_done(events):
+    done = [e for e in events if e["type"] == "done"]
+    assert done, events[-3:]
+    return done[0]["recommend"]
+
+
+@pytest.mark.db
+def test_api_recommend_basic_cache_and_logs(gc, caplog):
+    """AC-R10 · 12 · 21 · 22 · 24(순차): 서재 논문 id 씨앗 → SSE progress … done, 번호 없는 논문은 빠짐,
+    서재 추가 뒤 in_library, 다른 사용자 같은 씨앗 → 외부 호출 0 · 같은 순서, 로그는 path와 숫자 · code만"""
+    caplog.set_level(logging.DEBUG)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    cloud, w = gc.cloud, gc.world
+    a, b = cloud.user(), cloud.user()
+    ca, cb = cloud.client(a), cloud.client(b)
+    seed_nos = (w.S, w.R[3], w.C[2])
+    s_ids = [_lib_paper(ca, w, n) for n in seed_nos]
+    n1 = _lib_paper(ca, w, w.C[30], with_oa=False)
+    status, events = gc.stream(ca, {"paper_ids": s_ids + [n1]}, REC_PATH)
+    assert status == 200 and any(e["type"] == "progress" for e in events)
+    r = _rec_done(events)
+    assert r["seeds_total"] == 3 and r["seeds_used"] <= 3 and 0 < len(r["items"]) <= 20
+    seeds = {f"W{n}" for n in seed_nos}
+    for it in r["items"]:
+        assert set(it) == REC_ITEM_KEYS | {"in_library"} and it["id"] not in seeds
+        assert NORM_KEYS <= set(it["paper"]) and it["in_library"] is None and set(it["seeds"]) <= seeds
+    assert set(r) == {"items", "seeds_total", "seeds_used", "warnings", "stats"}
+    top = r["items"][0]
+    p_new = ca.post("/api/papers", json=top["paper"]).json()["paper"]["id"]
+    gc.up.clear()
+    r_a = _rec_done(gc.stream(ca, {"paper_ids": s_ids}, REC_PATH)[1])
+    assert gc.up.count() == 0 and [x["in_library"] for x in r_a["items"] if x["id"] == top["id"]] == [p_new]
+    b_ids = [_lib_paper(cb, w, n) for n in seed_nos]
+    r_b = _rec_done(gc.stream(cb, {"paper_ids": b_ids}, REC_PATH)[1])
+    assert gc.up.count() == 0 and rec_ids(r_b) == rec_ids(r_a)
+    assert all(x["in_library"] is None for x in r_b["items"])
+    # 1B 그래프를 먼저 만든 씨앗 하나로 추천 → 외부 호출 0
+    _done(gc.stream(cb, {"seed": {"openalex_id": f"W{w.R[5]}"}, "size": 20})[1])
+    rid = _lib_paper(cb, w, w.R[5])
+    gc.up.clear()
+    assert _rec_done(gc.stream(cb, {"paper_ids": [rid]}, REC_PATH)[1])["items"] and gc.up.count() == 0
+    # 로그: 접근 로그는 path만, 추천 완료 로그는 숫자 · code만, 어디에도 작품 번호 · DOI · 제목 · 요청한 논문 id 없음
+    access = [json.loads(x.getMessage()) for x in caplog.records if x.name == "paperlab.access"]
+    assert any(x["path"] == REC_PATH for x in access) and all("?" not in x["path"] for x in access)
+    rlog = [json.loads(x.getMessage()) for x in caplog.records if x.name == "paperlab.server"
+            and x.getMessage().startswith('{"event": "recommend"')]
+    assert len(rlog) == 4 and all(set(x) == REC_LOG_KEYS and x["result"] == "done" for x in rlog)
+    assert rlog[0]["seeds"] == 3 and rlog[0]["items"] == len(r["items"]) and rlog[1]["list_calls"] == 0
+    text = caplog.text
+    secrets = {str(n) for n in w.works} | {w.works[n]["doi"] for n in w.works if w.works[n]["doi"]} | set(w.titles())
+    leaked = [s for s in secrets if s and s in text]
+    assert not leaked, leaked[:5]
+    asked = {str(i) for i in s_ids + b_ids + [n1, rid]}
+    for x in caplog.records:
+        if x.name == "paperlab.access":
+            assert not any(part in asked for part in json.loads(x.getMessage())["path"].split("/"))
+        if x.getMessage().startswith('{"event": "recommend"'):
+            body = json.loads(x.getMessage())
+            assert not {str(body["result"]), *map(str, body["warnings"])} & asked
+
+
+@pytest.mark.db
+def test_api_recommend_seed_cap_and_no_seeds(gc):
+    """AC-R13 · AC-R15(no_seeds): 번호 있는 논문 25편 → seeds_total 20 · seeds_capped · 앞 20편만 조회.
+    번호 없는 논문뿐 · 남의 id뿐 → 400 no_seeds(남의 id가 있다는 것을 알리지 않음)"""
+    cloud, w = gc.cloud, gc.world
+    ca, cb = cloud.client(cloud.user()), cloud.client(cloud.user())
+    ids = [_lib_paper(ca, w, n) for n in w.C[:25]]
+    r = _rec_done(gc.stream(ca, {"paper_ids": ids}, REC_PATH)[1])
+    assert r["seeds_total"] == 20 and "seeds_capped" in codes(r)
+    assert [x["message"] for x in r["warnings"] if x["code"] == "seeds_capped"] == ["인용이 많아 처음 나온 20편만 바탕으로 했어요."]
+    singles = {int(x["path"][len("/works/W"):]) for x in oa_requests(gc.up, "single")}
+    assert singles and singles <= set(w.C[:20])
+    nx = _lib_paper(ca, w, w.D[0], with_oa=False)
+    status, body = gc.stream(ca, {"paper_ids": [nx]}, REC_PATH)
+    assert status == 400 and body["code"] == "no_seeds"
+    s1, b1 = gc.stream(cb, {"paper_ids": ids[:3]}, REC_PATH)
+    s2, b2 = gc.stream(cb, {"paper_ids": [987_654_321_012]}, REC_PATH)
+    assert s1 == s2 == 400 and b1 == b2 and b1["code"] == "no_seeds"
+
+
+@pytest.mark.db
+def test_api_recommend_shares_graph_gate(gc):
+    """AC-R16: 그래프가 진행 중이면 같은 사용자의 추천 429 graph_busy, 반대도 같음.
+    서로 다른 사용자 7명이 그래프 · 추천을 섞어 동시에 → 2 진행 · 4 대기 · 1 503"""
+    cloud, w = gc.cloud, gc.world
+    st = cloud.app.state
+    ca = cloud.client(cloud.user())
+    rid = _lib_paper(ca, w, w.S)
+    results = {}
+
+    def go(name, client, body, path="/api/graph"):
+        results[name] = gc.stream(client, body, path)
+
+    gc.up.block = threading.Event()
+    t = threading.Thread(target=go, args=("g", ca, {"seed": {"openalex_id": f"W{w.S}"}}))
+    t.start()
+    _wait(lambda: gc.up.count() >= 1)
+    status, err = gc.stream(ca, {"paper_ids": [rid]}, REC_PATH)
+    assert status == 429 and err["code"] == "graph_busy" and "추천" in err["detail"]
+    gc.up.block.set()
+    t.join(60)
+    _done(results["g"][1])
+    gc.up.block = threading.Event()
+    rid2 = _lib_paper(ca, w, w.C[11])
+    t = threading.Thread(target=go, args=("r", ca, {"paper_ids": [rid2]}, REC_PATH))
+    t.start()
+    _wait(lambda: st.graph_gate.snapshot()["active"] == 1 and gc.up.count() >= 1)
+    status, err = gc.stream(ca, {"seed": {"openalex_id": f"W{w.K}"}})
+    assert status == 429 and err["code"] == "graph_busy"
+    gc.up.block.set()
+    t.join(60)
+    _rec_done(results["r"][1])
+
+    gc.up.block = threading.Event()
+    clients = [cloud.client(cloud.user()) for _ in range(7)]
+    jobs = []
+    for i, (c, no) in enumerate(zip(clients[:6], [w.S2SEED, w.C[31], w.BIG, w.D[5], w.L[0], w.C[32]])):
+        if i % 2:
+            jobs.append((f"u{i}", c, {"paper_ids": [_lib_paper(c, w, no)]}, REC_PATH))
+        else:
+            jobs.append((f"u{i}", c, {"seed": {"openalex_id": f"W{no}"}, "size": 20}, "/api/graph"))
+    rid7 = _lib_paper(clients[6], w, w.D[6])
+    threads = []
+    for i, job in enumerate(jobs):
+        t = threading.Thread(target=go, args=job)
+        t.start()
+        threads.append(t)
+        _wait(lambda i=i: st.graph_gate.snapshot()["users"] == i + 1)
+    _wait(lambda: st.graph_gate.snapshot()["active"] == 2 and st.graph_gate.snapshot()["queued"] == 4)
+    status, err = gc.stream(clients[6], {"paper_ids": [rid7]}, REC_PATH)
+    assert status == 503 and err["code"] == "graph_queue_full"
+    gc.up.block.set()
+    for t in threads:
+        t.join(90)
+    waits = [n for n, (_, evs) in results.items() if n.startswith("u") and any(e.get("step") == "wait" for e in evs)]
+    assert len(waits) == 4
+    assert all(any(e["type"] == "done" for e in evs) for n, (_, evs) in results.items() if n.startswith("u"))
+
+
+@pytest.mark.db
+def test_api_recommend_merged_flight_library_isolation(gc):
+    """AC-R24: 같은 씨앗을 동시에(합치기 경로) 요청한 A · B — 외부 호출은 한 번분, in_library는 각자,
+    B의 seeds에는 B가 보낸 번호만"""
+    cloud, w = gc.cloud, gc.world
+    ca, cb = cloud.client(cloud.user()), cloud.client(cloud.user())
+    seed_nos = (w.S, w.C[2])
+    probe = Env(gc.base)  # 같은 세계 · 같은 알고리즘(메모리 저장소)으로 결과 첫 항목을 미리 알아 둠
+    top = rec(probe, list(seed_nos))["items"][0]
+    a_ids = [_lib_paper(ca, w, n) for n in seed_nos]
+    b_ids = [_lib_paper(cb, w, n) for n in seed_nos]
+    p_a = _lib_paper(ca, w, int(top["id"][1:]))
+    results = {}
+
+    def go(name, client, ids_):
+        results[name] = gc.stream(client, {"paper_ids": ids_}, REC_PATH)
+
+    gc.up.block = threading.Event()
+    ta = threading.Thread(target=go, args=("A", ca, a_ids))
+    ta.start()
+    _wait(lambda: gc.up.count() >= 1)
+    tb = threading.Thread(target=go, args=("B", cb, b_ids))
+    tb.start()
+    _wait(lambda: cloud.app.state.graph_gate.snapshot()["users"] == 2)
+    gc.up.block.set()
+    ta.join(60)
+    tb.join(60)
+    ra, rb = _rec_done(results["A"][1]), _rec_done(results["B"][1])
+    assert rec_ids(ra) == rec_ids(rb) and top["id"] in rec_ids(ra)
+    keyed = [(x["path"], tuple(sorted(x["params"].items()))) for x in gc.up.requests]
+    assert len(keyed) == len(set(keyed))  # 같은 호출이 두 번 나가지 않음(한 번분)
+    assert [x["in_library"] for x in ra["items"] if x["id"] == top["id"]] == [p_a]
+    assert [x["in_library"] for x in rb["items"] if x["id"] == top["id"]] == [None]
+    mine = {f"W{n}" for n in seed_nos}
+    assert all(set(x["seeds"]) <= mine for x in rb["items"])
+
+
+# ====================================================================== 품질팀 1C 후속 (F1 · F3)
+class _Cur:
+    def __init__(self, log):
+        self.log = log
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def executemany(self, sql, rows):
+        self.log.append((sql, list(rows)))
+
+
+class _Conn:
+    def __init__(self):
+        self.log = []
+
+    def cursor(self):
+        return _Cur(self.log)
+
+
+def _cache_rows(nos):
+    works = [dict(graph_build.TOMBSTONE, no=n, title=f"Lock order test work {n}") for n in nos]
+    edges = [e for n in nos for e in ({"work_no": n, "relation": "related", "nos": [1, 2], "total": 2},
+                                      {"work_no": n, "relation": "references", "nos": [3], "total": 1})]
+    return works, edges
+
+
+def test_write_rows_sorted_order():
+    """F1: 공용 캐시 쓰기는 늘 같은 순서로 잠금 — 작품은 openalex_no 순, 관계는 (work_no, relation) 순"""
+    works, edges = _cache_rows([30, 10, 20])
+    conn = _Conn()
+    citecache.write_rows(conn, works[::-1], edges[::-1], DAY0)
+    (_, wrows), (_, erows) = conn.log
+    assert [r[0] for r in wrows] == [10, 20, 30]
+    assert [(r[0], r[1]) for r in erows] == [(10, "references"), (10, "related"), (20, "references"), (20, "related"),
+                                             (30, "references"), (30, "related")]
+
+
+@pytest.mark.parametrize("path", [REC_PATH, "/api/graph"])
+def test_deep_nested_body_is_400(local_client, path):
+    """F3: 4KB 안에서 깊게 겹친 JSON([[[…)도 500이 아니라 400 (DB · 외부 호출 전)"""
+    r = local_client.post(path, content=b"[" * 3000 + b"]" * 1000, headers={"Content-Type": "application/json"})
+    assert r.status_code == 400 and r.json()["code"] in ("bad_request", "bad_seed")
+
+
+@pytest.mark.db
+def test_cache_write_opposite_order_no_deadlock(project):
+    """F1: 같은 작품 300편 · 관계 600행을 반대 순서로 쓰는 두 트랜잭션을 동시에 5번 — 교착(DeadlockDetected) 없음"""
+    base = _band()
+    works, edges = _cache_rows([base + i for i in range(300)])
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def run(reverse: bool):
+        try:
+            with psycopg.connect(project.admin_db, prepare_threshold=None) as conn:
+                for _ in range(5):
+                    with conn.transaction():
+                        barrier.wait(30)
+                        citecache.write_rows(conn, works[::-1] if reverse else works, edges[::-1] if reverse else edges,
+                                             DAY0)
+        except BaseException as e:  # noqa: BLE001 - 스레드 밖에서 확인
+            errors.append(e)
+            barrier.abort()
+
+    threads = [threading.Thread(target=run, args=(rev,)) for rev in (False, True)]
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(120)
+        assert not errors, [type(e).__name__ for e in errors]
+        with psycopg.connect(project.admin_db, prepare_threshold=None) as conn:
+            n = conn.execute("select count(*) from paperlab.citation_edges where work_no between %s and %s",
+                             (base, base + 9_999)).fetchone()[0]
+        assert n == 600
+    finally:
+        _cleanup(project, base)
+
+
+def test_top_c_written_by_graph_and_recommend_alike(env):
+    """사용자 결정 I-1: cited_by_top_c는 그래프 · 추천 어느 쪽이 C를 받아도 같은 모양으로 남음(추천 흔적이 아님).
+    추천 → 그래프 · 그래프 → 추천 순서 모두 외부 호출 수가 각자 처음 만들 때와 같음(추가 호출 0)"""
+    w = env.world
+    g, _ = env.build(w.S)
+    top, top_c = env.store.e[(w.S, "cited_by_top")], env.store.e[(w.S, graph_build.REC_CITED)]
+    assert top_c["nos"] == top["nos"] and top_c["total"] == top["total"] and top_c["source"] == "openalex"
+    graph_first = env.up.count()
+    rec(env, [w.S])
+    assert env.up.count() == 0  # 그래프 → 추천: 추가 호출 0
+
+    e1 = Env()  # 추천 → 그래프
+    rec(e1, [e1.world.S])
+    rec_first = e1.up.count()
+    rec_c = dict(e1.store.e[(e1.world.S, graph_build.REC_CITED)])
+    g1, _ = e1.build(e1.world.S)
+    flt = [x["params"].get("filter", "") for x in oa_requests(e1.up)]
+    # 추천 뒤 그래프: C(cites:W씨앗)는 다시 받지 않고, 함께 인용(묶음 cites:) 2회 + 초록 묶음만
+    assert f"cites:W{e1.world.S}" not in flt and sum(1 for f in flt if f.startswith("cites:") and "|" in f) == 2
+    assert all(f.startswith("cites:") and "|" in f or "abstract_inverted_index" in x["params"].get("select", "")
+               for f, x in zip(flt, oa_requests(e1.up)))
+    e2 = Env()  # 비교: 추천 없이 그래프만 — 호출 수 같음
+    e2.build(e2.world.S)
+    assert e2.up.count() == graph_first and ids(g1) == ids(g)
+    assert e1.store.e[(e1.world.S, graph_build.REC_CITED)]["nos"] == rec_c["nos"]  # 같은 날 같은 C(모양이 같음)
+    assert {k: v for k, v in rec_c.items() if k != "fetched_on"} == {k: v for k, v in top_c.items() if k != "fetched_on"}
+    e3 = Env()  # 추천만: 호출 수는 처음 그대로(그래프가 남긴 행 유무와 무관)
+    rec(e3, [e3.world.S])
+    assert e3.up.count() == rec_first
