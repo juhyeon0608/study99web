@@ -282,6 +282,8 @@
 
 ## 12. 2단계 Electron 앱 연결 항목 (기록만 — 2단계 명세에 옮겨 적을 것)
 
+> **phase2 13.2.1절 · AC-86으로 옮김 (2026-10-07, 기획팀)** — [`phase2-worker-electron.md`](phase2-worker-electron.md) 13.2.1절 "외부 링크 열기": ① 시스템 브라우저(`shell.openExternal`), 앱 안 창에서는 열지 않음, 스킴은 http(s)만. 허용 호스트에 `*.openlink.inha.ac.kr` · `lib.inha.ac.kr` · `scholar.google.com` 포함, 목록 밖 http(s)도 시스템 브라우저로 엶(팀장 결정 K21 ①). 아래 표와 줄 번호(712~714행)는 옮기기 전 기록입니다.
+
 2단계 명세 13장(`phase2-worker-electron.md` 712~714행)은 앱 창의 새 창을 **R2 서명 주소 · GitHub Releases 허용 목록만** `shell.openExternal`로 열고 나머지는 거부합니다. 이대로면 앱에서 "인하대에서 보기" · Scholar 링크가 **열리지 않습니다.** 2단계에서 다음 중 하나를 정합니다(IK-6).
 
 | 안 | 내용 | 학교 로그인 상태 | 비밀번호 |
@@ -483,6 +485,10 @@
 | D-5 | 팀장(디자인 결정) | Scholar 상세 위치는 정보 탭 "바로가기" 줄 — 시안대로 | 8.2 · 시안 |
 | D-6 | 팀장(디자인 결정) | "학교 로그인" 위치는 설정 창 "학교 연결 (인하대)" 구역 — 시안대로(U-c로 이곳 **하나만**) | 8.5 · 시안 |
 
+### 15.4 후속 (배포 뒤)
+
+- **M-1 · M-15 결과에 따라 `dialogs.js`의 `SCHOOL_LOGIN_NOTE` · 안내 창(G-1) · `SCHOLAR_LIBRARY_NOTE` 문구를 완화할지 결정**(품질팀 조건부 승인 2026-10-07 — FEATURES.md는 이미 "돌아가도록 되어 있습니다" · "목록에 있으면 켜세요"로 완화함).
+
 ## 16. 팀별 작업 (파일 단위 — 같은 파일을 동시에 고치지 않음)
 
 | 순서 | 팀 | 파일 | 할 일 |
@@ -498,7 +504,7 @@
 | 3 | 개발팀 | 설정 창 파일(`dialogs.js` 또는 설정 창이 있는 파일 — 디자인 시안에 따름) | "학교 연결(인하대)" 구역: 학교 로그인 버튼 · 안내 다시 보기 · G-2 · G-6 |
 | 조건부 | 개발팀 | `paperlab/sources.py` · `paperlab/server.py` · `tests/test_sources.py` · `tests/test_server.py` | **M-2 실패 시에만** 6.3절 `doi_target` · `GET /api/links/doi-target` · 테스트(가짜 transport로 핸들 API 응답, DOI 검증 · 경로 인코딩 · `responseCode` ≠ 1 · URL 아닌 값 · http/https 아닌 값) |
 | 4 | 품질팀 | — | 13.1절 자동 · 13.2절 수동(사용자 항목은 사용자에게 요청), 결과 보고 |
-| 5 | 기획팀 | `FEATURES.md` · `README.md` · `docs/specs/phase2-worker-electron.md` | 승인 뒤(PLAN은 반영함 — IK-10): 사용 설명서에 "인하대에서 보기 · 학교 로그인 · Scholar" 사용법과 안내, 2단계 명세 13장 새 창 허용 목록에 12장 항목 연결 |
+| 5 | 기획팀 | `FEATURES.md` · `README.md` · `docs/specs/phase2-worker-electron.md` | **완료(2026-10-07)** — 승인 뒤(PLAN은 반영함 — IK-10): 사용 설명서에 "인하대에서 보기 · 학교 로그인 · Scholar" 사용법과 안내(FEATURES 3 · 4 · 5 · 10 · 12 · 14 · 15 · 16장, README 기능 1), 2단계 명세 13장 새 창 허용 목록에 12장 항목 연결(phase2 13.2.1절 · AC-86 · K21) |
 
 ## 17. 확인 근거 (2026-10-07, 기획팀 — 로그인 · 폼 제출 없이 GET만)
 
