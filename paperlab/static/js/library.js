@@ -2,11 +2,12 @@
 
 import { api, downloadBlob, qs, safeFilename } from "./api.js";
 import {
-  EXT_MARK, G5_NOTICE, SCHOLAR_LIBRARY_NOTE, addByIdentifierDialog, addPaper, bibliographyDialog, bindExtLink, citeDialog,
-  copySearchQuery, editPaperDialog, exportPapers, folderIcon, folderPath, importDialog, issuesBox, moveToFolderDialog,
-  openExternal, uploadPdfs,
+  EXT_MARK, G5_NOTICE, ICON_GRAPH, SCHOLAR_LIBRARY_NOTE, addByIdentifierDialog, addPaper, bibliographyDialog, bindExtLink,
+  citeDialog, copySearchQuery, editPaperDialog, exportPapers, folderIcon, folderPath, importDialog, issuesBox,
+  moveToFolderDialog, openExternal, uploadPdfs,
 } from "./dialogs.js";
 import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
+import { openGraph } from "./graph.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
 import {
   $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
@@ -506,8 +507,15 @@ function noteEditor(p) {
 
 function relatedView(p) {
   const v = el(`<div style="margin-top:12px">
+    <div class="graph-entry">
+      ${ICON_GRAPH}
+      <div class="graph-entry-text"><b>인용 그래프</b><span>주제가 가까운 논문 수십 편을 한 장의 그림으로 보여 줘요.</span></div>
+      <button type="button" class="btn sm primary" data-graph-open>인용 그래프 보기</button>
+    </div>
     <div class="seg"><button data-k="cited_by">이 논문을 인용한 논문</button><button data-k="references">참고문헌</button><button data-k="related">관련 논문</button></div>
     <div class="mini-list" style="margin-top:8px"></div></div>`);
+  // 씨앗 = 서재 논문 번호만 (서버가 내 권한으로 읽어 식별자를 찾음)
+  $("[data-graph-open]", v).onclick = () => openGraph({ paper_id: p.id }, { title: p.title || "" });
   const list = $(".mini-list", v);
   let seq = 0;
   const load = async (kind, page = 1) => {

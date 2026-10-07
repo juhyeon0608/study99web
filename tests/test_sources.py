@@ -96,6 +96,100 @@ def test_search_and_related_with_mock():
     assert refs["total"] == 2 and refs["items"][0]["openalex_id"] == "W1"
 
 
+def test_no_email_to_openalex_but_crossref_keeps_it():
+    """인용 그래프 명세 K-6: 기존 검색 · 조회의 OpenAlex 요청에도 사용자 이메일(mailto · User-Agent)을 보내지 않음.
+    Crossref는 그대로(mailto · User-Agent)."""
+    seen = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        if request.url.host == "api.crossref.org":
+            return httpx.Response(200, json={"message": {"items": [], "total-results": 0, "title": ["T"]}})
+        return httpx.Response(200, json={"meta": {"count": 1}, "results": [OPENALEX_WORK], **OPENALEX_WORK})
+
+    settings = {"contact_email": "me@example.com", "openalex_api_key": "k"}
+    s = sources.Sources(lambda k: settings.get(k, ""), transport=httpx.MockTransport(handler))
+    s.search("transformer")
+    s.related({"openalex_id": "W2963403868"}, "references")
+    s.lookup_doi("10.1/xyz")
+    oa = [r for r in seen if r.url.host == "api.openalex.org"]
+    cr = [r for r in seen if r.url.host == "api.crossref.org"]
+    assert oa and cr
+    for r in oa:
+        assert "mailto" not in r.url.params and "@" not in r.headers["user-agent"]
+        assert r.url.params.get("api_key") == "k"
+    assert all("me@example.com" in r.headers["user-agent"] for r in cr)
+    s.search("transformer", source="crossref")
+    assert seen[-1].url.params.get("mailto") == "me@example.com"
+
+
+def test_email_only_to_crossref_every_path():
+    """팀장 결정(K-6 확대): 연락처 이메일은 Crossref에만. arXiv · Semantic Scholar · PDF 받기 · OpenAlex의
+    User-Agent · 쿼리 어디에도 없고, User-Agent는 'PaperLab/<버전>'"""
+    from paperlab import __version__
+    email = "me@example.com"
+    seen = []
+
+    def handler(request: httpx.Request):
+        seen.append(request)
+        host = request.url.host
+        if host == "api.crossref.org":
+            return httpx.Response(200, json={"message": {"items": [], "total-results": 0, "title": ["T"]}})
+        if host == "export.arxiv.org":
+            return httpx.Response(200, text=ARXIV_FEED)
+        if host == "api.semanticscholar.org":
+            return httpx.Response(200, json={"data": [], "total": 0})
+        if host == "api.openalex.org":
+            return httpx.Response(200, json={"meta": {"count": 1}, "results": [OPENALEX_WORK], **OPENALEX_WORK})
+        return httpx.Response(200, content=b"%PDF-1.4 ok")
+
+    settings = {"contact_email": email}
+    s = sources.Sources(lambda k: settings.get(k, ""), transport=httpx.MockTransport(handler), resolver=_resolver)
+    s.search("graphs", source="arxiv")
+    s.lookup_arxiv("1706.03762")
+    s.search("graphs", source="semanticscholar")
+    s.search("graphs", source="openalex")
+    s.lookup_openalex("W2963403868")
+    assert s.download_pdf("https://example.org/a.pdf") == b"%PDF-1.4 ok"
+    s.search("graphs", source="crossref")
+    s.lookup_doi("10.1/xyz")
+    by_host: dict[str, list] = {}
+    for r in seen:
+        by_host.setdefault(r.headers.get("host", r.url.host).split(":")[0], []).append(r)
+    assert {"export.arxiv.org", "api.semanticscholar.org", "api.openalex.org", "example.org", "api.crossref.org"} <= set(by_host)
+    for host, reqs in by_host.items():
+        for r in reqs:
+            if host == "api.crossref.org":
+                assert email in r.headers["user-agent"], host
+            else:
+                assert r.headers["user-agent"] == f"PaperLab/{__version__}", host
+                assert email not in str(r.url) and "mailto" not in r.url.params, host
+    crossref_search = [r for r in by_host["api.crossref.org"] if r.url.path == "/works"]
+    assert crossref_search and crossref_search[0].url.params.get("mailto") == email
+
+
+def test_redirects_only_within_same_host():
+    """품질팀 M-8: Crossref(이메일이 붙는 요청) 등 조회는 다른 호스트로 가는 리디렉션을 따라가지 않음, 같은 호스트는 따라감"""
+    seen = []
+
+    def handler(request: httpx.Request):
+        seen.append(str(request.url))
+        if request.url.host == "api.crossref.org" and request.url.path == "/works/10.1/away":
+            return httpx.Response(302, headers={"Location": "https://evil.example/steal"})
+        if request.url.host == "api.crossref.org" and request.url.path == "/works/10.1/moved":
+            return httpx.Response(301, headers={"Location": "/works/10.1/here"})
+        if request.url.host == "api.crossref.org":
+            return httpx.Response(200, json={"message": {"title": ["Here"], "DOI": "10.1/here"}})
+        return httpx.Response(404)
+
+    s = sources.Sources(lambda k: {"contact_email": "me@example.com"}.get(k, ""), transport=httpx.MockTransport(handler))
+    with pytest.raises(sources.SourceError):
+        s._get_json(f"{sources.CROSSREF}/works/10.1/away")
+    assert not [u for u in seen if "evil.example" in u]
+    assert s._get_json(f"{sources.CROSSREF}/works/10.1/moved")["message"]["title"] == ["Here"]
+    assert seen[-1].endswith("/works/10.1/here")
+
+
 def test_rate_limit_message():
     s = _mock_sources(lambda r: httpx.Response(429))
     with pytest.raises(sources.SourceError, match="요청 한도"):

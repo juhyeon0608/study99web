@@ -1,9 +1,10 @@
 """사용자 분리 · RLS · 새 기능 (테스트 프로젝트). AC-05 · 06 · 11 · 12 · 12a · 14~22 · 31 · 39 · 41 · 44a · 44b · 45 · 47 ·
-48 · 50~52 · 56 · 57 · 72(2·3)."""
+48 · 50~52 · 56 · 57 · 72(2·3), 인용 그래프 공용 캐시 AC-G20 · 21 · 23 · 43(자동 부분)."""
 
 import base64
 import json
 import os
+import re
 import uuid
 
 import jwt
@@ -23,6 +24,7 @@ pytestmark = pytest.mark.db
 PERSONAL = ["profiles", "user_secrets", "folders", "papers", "collections", "paper_collections", "tags", "paper_tags",
             "annotations", "notes", "page_texts", "paper_search", "ai_summaries", "chat_sessions", "chat_messages",
             "manuscripts", "doc_formats", "user_styles"]
+SHARED = ("external_works", "citation_edges")  # 인용 그래프 공용 캐시 (citation-graph 명세 8.4 · AC-G20)
 
 
 def admin(project):
@@ -167,7 +169,7 @@ def test_app_role_cannot_read_without_set_role(cloud):
 
 
 def test_catalog_rls_everywhere(project):
-    """AC-20"""
+    """AC-20 → 인용 그래프 AC-G20 개정: 공용 캐시 표 2개는 user_id 요구에서 빼고 따로 검사"""
     with admin(project) as conn:
         rows = conn.execute(
             "select c.relname, c.relrowsecurity, c.relforcerowsecurity, "
@@ -177,12 +179,132 @@ def test_catalog_rls_everywhere(project):
             "from pg_class c join pg_namespace n on n.oid = c.relnamespace "
             "where n.nspname = 'paperlab' and c.relkind = 'r'").fetchall()
         anon_usage = conn.execute("select has_schema_privilege('anon', 'paperlab', 'usage')").fetchone()[0]
-    assert {r[0] for r in rows} >= set(PERSONAL) | {"allowed_emails", "schema_migrations"}
+        shared = {}
+        for t in SHARED:
+            pols = conn.execute("select polcmd, pg_get_expr(polqual, polrelid), polroles::regrole[]::text[], "
+                                "pg_get_expr(polwithcheck, polrelid) from pg_policy where polrelid = %s::regclass",
+                                (f"paperlab.{t}",)).fetchall()
+            privs = conn.execute("select has_table_privilege('authenticated', %(t)s, 'select'), "
+                                 "has_table_privilege('authenticated', %(t)s, 'insert'), "
+                                 "has_table_privilege('authenticated', %(t)s, 'update'), "
+                                 "has_table_privilege('authenticated', %(t)s, 'delete'), "
+                                 "has_table_privilege('authenticated', %(t)s, 'truncate'), "
+                                 "has_table_privilege('anon', %(t)s, 'select'), "
+                                 "has_table_privilege('service_role', %(t)s, 'insert')", {"t": f"paperlab.{t}"}).fetchone()
+            cols = conn.execute("select a.attname, format_type(a.atttypid, a.atttypmod) from pg_attribute a "
+                                "where a.attrelid = %s::regclass and a.attnum > 0 and not a.attisdropped",
+                                (f"paperlab.{t}",)).fetchall()
+            shared[t] = (pols, privs, cols)
+    assert {r[0] for r in rows} >= set(PERSONAL) | {"allowed_emails", "schema_migrations"} | set(SHARED)
     for name, rls, force, policies, has_uid in rows:
         assert rls and force, name
-        if name not in ("allowed_emails", "schema_migrations"):
+        if name not in ("allowed_emails", "schema_migrations") + SHARED:
             assert policies >= 1 and has_uid, name
     assert anon_usage is False
+    # 공용 캐시: ① 정책은 authenticated select using(true) 하나 ② authenticated 표 권한은 SELECT뿐
+    # ③ 사용자 · 요청을 담는 열 이름 없음(user · ip · session · email, …_by — cited_by_count는 공개 서지라 예외)
+    # ④ 시각 열은 모두 date
+    for t, (pols, privs, cols) in shared.items():
+        assert pols == [("r", "true", ["authenticated"], None)], (t, pols)
+        assert privs == (True, False, False, False, False, False, True), (t, privs)
+        for name, typ in cols:
+            assert not re.search(r"(^|_)(user|users|ip|session|email)(_|$)|_by$", name), (t, name)
+            assert "time" not in typ, (t, name, typ)
+        assert {typ for name, typ in cols if name.endswith("_on")} == {"date"}
+
+
+def test_shared_cache_rls_direct(project):
+    """AC-G21: authenticated(B claims)는 두 표 select만, insert · update · delete는 권한 오류. service_role은 쓰기 됨"""
+    no = 9_990_000_000 + uuid.uuid4().int % 9_000_000
+    try:
+        # 서버와 같은 앱 역할 연결로: system_tx = SET LOCAL ROLE service_role, 사용자 = authenticated
+        with psycopg.connect(project.app_db, autocommit=True, prepare_threshold=None) as conn:
+            with conn.transaction():
+                conn.execute("set local role service_role")
+                conn.execute("insert into paperlab.external_works (openalex_no, title, meta_on) values (%s, 'x', current_date)",
+                             (no,))
+                conn.execute("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+                             "values (%s, 'references', '{1,2}', 2, current_date)", (no,))
+            with conn.transaction():
+                conn.execute("set local role authenticated")
+                conn.execute("select set_config('request.jwt.claims', %s, true)", (_claims(str(uuid.uuid4())),))
+                assert conn.execute("select count(*) from paperlab.external_works where openalex_no = %s",
+                                    (no,)).fetchone()[0] == 1
+                assert conn.execute("select nos from paperlab.citation_edges where work_no = %s", (no,)).fetchone()[0] == [1, 2]
+                for sql in ("insert into paperlab.external_works (openalex_no, title, meta_on) values (%s + 1, 'y', current_date)",
+                            "update paperlab.external_works set title = 'z' where openalex_no = %s",
+                            "delete from paperlab.external_works where openalex_no = %s",
+                            "insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+                            "values (%s, 'related', '{}', 0, current_date)",
+                            "update paperlab.citation_edges set total = 9 where work_no = %s",
+                            "delete from paperlab.citation_edges where work_no = %s"):
+                    with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                        with conn.transaction():
+                            conn.execute(sql, (no,))
+    finally:
+        with admin(project) as conn:
+            conn.execute("delete from paperlab.citation_edges where work_no = %s", (no,))
+            conn.execute("delete from paperlab.external_works where openalex_no = %s", (no,))
+
+
+def test_shared_cache_constraints(project):
+    """AC-G23(검사 제약): doi가 10.으로 시작하지 않음 · relation 목록 밖 · references 501개 · url이 http(s) 아님 → 거부"""
+    no = 9_990_000_000 + uuid.uuid4().int % 9_000_000
+    bad = [
+        ("insert into paperlab.external_works (openalex_no, title, doi, meta_on) values (%s, 't', 'x10.1/a', current_date)", (no,)),
+        ("insert into paperlab.external_works (openalex_no, title, url, meta_on) values (%s, 't', 'javascript:x', current_date)", (no,)),
+        ("insert into paperlab.external_works (openalex_no, title, meta_on) values (0, 't', current_date)", None),
+        ("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+         "values (%s, 'cites', '{}', 0, current_date)", (no,)),
+        ("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+         "values (%s, 'references', array(select generate_series(1, 501))::bigint[], 501, current_date)", (no,)),
+        ("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+         "values (%s, 'related', array(select generate_series(1, 21))::bigint[], 21, current_date)", (no,)),
+        ("insert into paperlab.citation_edges (work_no, relation, nos, total, source, fetched_on) "
+         "values (%s, 'references', '{}', 0, 'kci', current_date)", (no,)),
+    ]
+    with admin(project) as conn:
+        for sql, params in bad:
+            with pytest.raises(psycopg.errors.CheckViolation):
+                with conn.transaction():
+                    conn.execute(sql, params)
+        with conn.transaction():  # 경계값은 됨 (되돌림)
+            conn.execute("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+                         "values (%s, 'references', array(select generate_series(1, 500))::bigint[], 812, current_date)", (no,))
+            conn.execute("insert into paperlab.external_works (openalex_no, title, doi, meta_on) "
+                         "values (%s, 't', '10.1234/x', current_date)", (no,))
+            raise psycopg.Rollback()
+
+
+def test_shared_cache_admin_commands(project):
+    """AC-G43(자동 부분): cache-stats는 숫자 · 날짜만, cache-prune은 서지를 받은 날이 오래된 것부터 지움"""
+    from paperlab.admin import cache_prune, cache_stats
+    base = 9_995_000_000 + (uuid.uuid4().int % 4_000) * 1_000
+    nos = [base + i for i in range(3)]
+    try:
+        with admin(project) as conn:
+            for i, no in enumerate(nos):
+                conn.execute("insert into paperlab.external_works (openalex_no, title, meta_on) values (%s, %s, %s)",
+                             (no, f"prune test {i}", f"1999-01-0{i + 1}"))
+                conn.execute("insert into paperlab.citation_edges (work_no, relation, nos, total, fetched_on) "
+                             "values (%s, 'references', '{1,2,3}', 3, '1999-01-01')", (no,))
+            oldest = conn.execute("select openalex_no from paperlab.external_works order by meta_on, openalex_no "
+                                  "limit 1").fetchone()[0]
+        s = cache_stats(project.admin_db)
+        assert set(s) == {"works", "edges", "works_bytes", "edges_bytes", "disk_bytes", "live_bytes", "oldest_meta_on",
+                          "oldest_fetched_on"}
+        assert s["works"] >= 3 and s["live_bytes"] > 0 and s["oldest_meta_on"] <= "1999-01-01"
+        assert all(isinstance(v, (int, str)) for v in s.values())
+        r = cache_prune(project.admin_db, (s["live_bytes"] - 1) / (1024 * 1024))
+        assert r["deleted_works"] == 1 and r["deleted_edges"] == 1 and r["live_after"] < r["live_before"]
+        with admin(project) as conn:
+            assert conn.execute("select count(*) from paperlab.external_works where openalex_no = %s",
+                                (oldest,)).fetchone()[0] == 0
+        assert cache_prune(project.admin_db, 10_000)["deleted_works"] == 0
+    finally:
+        with admin(project) as conn:
+            conn.execute("delete from paperlab.citation_edges where work_no = any(%s)", (nos,))
+            conn.execute("delete from paperlab.external_works where openalex_no = any(%s)", (nos,))
 
 
 def test_account_delete_cascades(ab, cloud):
@@ -231,9 +353,11 @@ def test_storage_usage_levels(cloud):
     """AC-44a"""
     u, v = cloud.user(), cloud.user()
     a, b = cloud.client(u), cloud.client(v)
-    sizes = [len(x) for x in (make_pdf(title="Usage Paper One Title", doi=""), make_pdf(title="Usage Paper Two Title", doi=""))]
-    cloud.upload(a, make_pdf(title="Usage Paper One Title", doi=""))
-    cloud.upload(a, make_pdf(title="Usage Paper Two Title", doi=""))
+    # 올린 그 PDF로 크기를 잰다 (make_pdf는 만든 시각에 따라 1~6바이트 달라질 수 있음 — 전체 실행에서 가끔 실패하던 원인)
+    pdfs = [make_pdf(title="Usage Paper One Title", doi=""), make_pdf(title="Usage Paper Two Title", doi="")]
+    sizes = [len(x) for x in pdfs]
+    for data in pdfs:
+        cloud.upload(a, data)
     cloud.storage.objects["backups/db/20261001.dump"] = b"x" * 1000  # 백업 Job이 올린 것처럼 (요청 기록 밖)
     cloud.app.state.backup_sizes.ttl = -1  # 5분 캐시 무시 (업로드 때 계산해 둔 값)
     us = a.get("/api/storage/usage").json()

@@ -14,7 +14,7 @@
 지금 PaperLab의 기능(검색 · 서재 · PDF 읽기 · 하이라이트 · 노트 · AI 요약 · 질문 · 인용 · 원고 · 양식 · 워드/한글 내보내기)을 **클라우드에서 계정별로 그대로** 쓰게 만듭니다.
 
 - **확정**: 사용자용 프로그램은 클라우드뿐입니다(로컬 실행 모드 없음). PC에는 2단계 CLI 워커 · 6단계 폴더 동기화만 둡니다.
-- **확정**: 사용자 3~5명, 서재는 완전히 각자. 공개 서지 · 인용 관계만 공용 캐시(5단계).
+- **확정**: 사용자 3~5명, 서재는 완전히 각자. 공개 서지 · 인용 관계만 공용 캐시(1B단계 — 개정 2026-10-07, 개정 전: 5단계).
 - **확정**: **서버 PC(상시 켜 둔 Windows PC, Python 직접 실행) + Tailscale Funnel**(사용자 결정 2026-10-07 — Cloud Run에서 변경) + Supabase 무료 플랜(운영 프로젝트 서울) + **Cloudflare R2**(PDF · DB 백업, 무료 10GB — 사용자 최종 결정 2026-10-07).
 - **확정(제약)**: 서버가 PC 한 대에서 돌므로 **서버 PC가 꺼지거나(전원 · 재부팅 · 인터넷 끊김) 서버 프로세스가 멈추면 모든 사용자가 PaperLab을 쓸 수 없습니다**. 데이터(DB · PDF · 백업)는 클라우드(Supabase · R2)에 있어 서버 PC가 고장 나도 남습니다(사용자에게 설명하고 받은 결정 — 18장 위험).
 - **팀장 결정**: Supabase Auth 구글 로그인 기본 + 이메일 보조, 허용 이메일 목록으로 가입 제한 · 모든 개인 표 `user_id` + RLS · 서버 경유 질의도 요청마다 사용자 권한으로 RLS 적용 · PDF 다운로드는 R2 서명 주소.
@@ -38,7 +38,7 @@
 
 ### 안 하는 것 (뒤 단계)
 - CLI 엔진 · 작업 큐(`jobs`) · 기기 토큰(`devices`) · 워커 — 2단계. 1단계 클라우드에서는 **CLI 엔진을 쓸 수 없습니다**(설정 화면에서 "2단계 PC 연결 후" 안내).
-- RAG(`chunks`, pgvector) · 인용 검증 — 3단계. 쉬운 설명 · 번역 — 4단계. 국내 DB · 인용 그래프 · 공용 캐시 표(`external_works` · `citation_edges`) — 5단계. 폴더 동기화(`sync_state`) — 6단계.
+- RAG(`chunks`, pgvector) · 인용 검증 — 3단계. 쉬운 설명 · 번역 — 4단계. 국내 DB — 5단계. **인용 그래프 · 공용 캐시 표(`external_works` · `citation_edges`) — 1B단계**(개정 2026-10-07: PLAN 단계 순서 변경, [1B 명세](citation-graph.md) 8장). 폴더 동기화(`sync_state`) — 6단계.
 - 서재 공유 · 협업 · 실시간 동시 편집(Supabase Realtime 미사용). 같은 원고를 두 기기에서 동시에 고치면 **나중 저장이 이김**(지금과 같음).
 - 계정 삭제 화면, 관리자 화면, 결제, 사용자 정의 도메인(Funnel 주소 `<PC이름>.<tailnet>.ts.net`만 — Funnel은 tailnet 도메인 이름만 지원, 13.2절), 다국어 화면.
 - 서버 이중화(서버 PC 두 대 · 자동 대체), 서버 PC 원격 장애 알림(19.4절 질문).
@@ -49,7 +49,7 @@
 |---|---|
 | 2 작업 큐 · 워커 | AI 호출을 `AIService` 한 곳에 모으고, 사용자별 설정 · 키를 요청마다 주입(전역 설정 없음). `user_secrets`는 `name`으로 늘릴 수 있는 행 구조 |
 | 3 RAG · 인용 검증 | `page_texts`를 쪽 단위로 유지(PGroonga 색인), `chat_sessions.scope` 열(1단계는 `paper`만), id는 `bigint`라 `chunks.paper_id` 외래 키가 단순 |
-| 5 공용 캐시 | 공용 표는 `user_id` 없는 별도 표로 추가만 하면 됨. 개인 표의 RLS 규칙과 섞이지 않게 **개인 표 = `paperlab` 스키마, 공용 표 = 5단계에서 같은 스키마에 `shared_` 접두어 또는 별도 스키마**(5단계 명세) |
+| 1B 공용 캐시 (개정 2026-10-07 — 5단계에서 앞당김) | 공용 표는 `user_id` 없는 별도 표로 추가만 하면 됨. **개정(1B 명세 K-4 — 팀장 결정)**: 공용 표도 **같은 `paperlab` 스키마에 PLAN 이름 그대로**(`external_works` · `citation_edges`, 접두어 · 별도 스키마 없음) — Data API 비노출이 그대로 적용. 개인 표 RLS 규칙과는 정책 · 권한으로 구분(읽기 = `authenticated` select만, 쓰기 = `system_tx`만 — [1B 명세](citation-graph.md) 8.4절). (개정 전: "5단계에서 같은 스키마에 `shared_` 접두어 또는 별도 스키마") |
 | 6 폴더 동기화 | `folders`에 같은 부모 아래 이름 중복 금지, 저장 키는 폴더와 무관(`paper_id` 기준) → 폴더를 옮겨도 파일 이동 없음 |
 
 ## 3. 지금 코드 (바뀌는 지점)
@@ -257,7 +257,7 @@ grant select, insert, update, delete on paperlab.<표> to authenticated;
 - `anon` 역할에는 아무 권한도 주지 않습니다. `grant usage on schema paperlab to authenticated;` 만.
 - 순번(identity) 사용 권한: `grant usage on all sequences in schema paperlab to authenticated;`
 - `user_secrets`도 사용자 역할로 읽기 가능(암호문뿐이라 키 없이는 무의미). 화면에는 암호문을 보내지 않습니다.
-- 새 개인 표를 만들 때 RLS를 빠뜨리지 않도록 **카탈로그 검사 테스트**(AC-20): `paperlab` 스키마의 모든 표가 `relrowsecurity = true`이고 정책이 1개 이상(시스템 표 `allowed_emails` · `schema_migrations`는 정책 0개 허용 목록).
+- 새 개인 표를 만들 때 RLS를 빠뜨리지 않도록 **카탈로그 검사 테스트**(AC-20): `paperlab` 스키마의 모든 표가 `relrowsecurity = true`이고 정책이 1개 이상(시스템 표 `allowed_emails` · `schema_migrations`는 정책 0개 허용 목록). **개정 2026-10-07(1B)**: 공용 캐시 표 `external_works` · `citation_edges`는 `user_id` 없이 `authenticated` 읽기 정책 하나만 둠 — 예외 목록에 넣고 별도 검사([1B 명세](citation-graph.md) 8.4절 · AC-G20).
 
 ### 5.7 전문 검색 (PGroonga)
 
@@ -303,7 +303,7 @@ grant select, insert, update, delete on paperlab.<표> to authenticated;
 
 ### 5.9 1단계에 만들지 않는 표
 
-`devices` · `jobs`(2), `chunks` · `manuscript_citations`(3), `explanations` · `translations`(4), `external_works` · `citation_edges`(5), `sync_state`(6). PLAN은 "미리 만들어도 됨"이지만, 열이 그 단계 명세에서 정해지므로 **그 단계의 마이그레이션 파일로 추가**합니다(빈 표를 미리 두면 RLS 검사 · 열 변경만 늘어남). 1단계 표는 이 표들이 외래 키로 붙을 수 있게 `papers (id, user_id)`, `folders (id, user_id)`, `collections (id, user_id)` 유일 제약을 둡니다.
+`devices` · `jobs`(2), `chunks` · `manuscript_citations`(3), `explanations` · `translations`(4), `external_works` · `citation_edges`(**1B** — 개정 2026-10-07, 열 · 권한은 [1B 명세](citation-graph.md) 8장), `sync_state`(6). PLAN은 "미리 만들어도 됨"이지만, 열이 그 단계 명세에서 정해지므로 **그 단계의 마이그레이션 파일로 추가**합니다(빈 표를 미리 두면 RLS 검사 · 열 변경만 늘어남). 1단계 표는 이 표들이 외래 키로 붙을 수 있게 `papers (id, user_id)`, `folders (id, user_id)`, `collections (id, user_id)` 유일 제약을 둡니다.
 
 ---
 
@@ -920,7 +920,7 @@ API는 지금과 같음: `GET /api/styles`(기본 스타일 + 내 스타일), `G
 - **AC-17** 교차 연결 금지: B가 `POST /api/papers/bulk {"ids":[B논문], "action":"add_collection", "value": A컬렉션}` → 오류(400 또는 404), DB에 행 없음. B가 `PATCH /api/papers/{B논문} {"folder_id": A폴더}` → 400.
 - **AC-18** 남의 업로드 완료 금지: A가 받은 `upload_id`로 B가 `POST /api/uploads/{upload_id}/complete` → 404(B의 `incoming/` 경로에 없음).
 - **AC-19** compose 토큰: A의 `compose/scan` 토큰으로 B가 `compose/apply` → 404.
-- **AC-20** 카탈로그 검사: `paperlab` 스키마의 모든 표가 RLS 켜짐 + `force`, 시스템 표(`allowed_emails`, `schema_migrations`)를 뺀 모든 표에 `authenticated` 대상 정책이 있고 `user_id` 열이 있음. `anon` 역할은 `paperlab` 스키마 사용 권한이 없음.
+- **AC-20** 카탈로그 검사: `paperlab` 스키마의 모든 표가 RLS 켜짐 + `force`, 시스템 표(`allowed_emails`, `schema_migrations`)와 **공용 캐시 표(`external_works`, `citation_edges` — 1B)** 를 뺀 모든 표에 `authenticated` 대상 정책이 있고 `user_id` 열이 있음. `anon` 역할은 `paperlab` 스키마 사용 권한이 없음. **(개정 2026-10-07 — 1B)** 공용 캐시 표는 대신 [1B 명세](citation-graph.md) **AC-G20**으로 검사: `authenticated` 정책이 `select` 하나뿐, `authenticated` 표 권한이 `SELECT`뿐, 열 이름에 낱말 `user` · `ip` · `session` · `email`이 없고 `_by`로 끝나는 이름 없음(`cited_by_count`는 허용), 시각 열은 모두 `date`.
 - **AC-21** **[실환경]** `paperlab` 스키마가 Data API에 노출되지 않음: 화면의 anon 키 + A의 토큰으로 `GET {SUPABASE_URL}/rest/v1/papers` (`Accept-Profile: paperlab`) → 오류(노출 안 된 스키마). (T4를 `public`으로 결정하면 대신 "B 토큰으로 A 행 0건")
 - **AC-22** 계정 삭제 연쇄(테스트 프로젝트, Auth admin API로 삭제): `auth.users`에서 A를 지우면 A의 모든 개인 행이 사라지고 B의 행은 그대로.
 

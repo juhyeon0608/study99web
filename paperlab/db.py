@@ -298,6 +298,34 @@ class Library:
             row = self._one(base + "p.title_norm = %s order by p.id limit 1", (self.uid, exclude_id, norm))
         return self._paper_view(row) if row else None
 
+    def match_library(self, items: list[dict]) -> list[int | None]:
+        """find_duplicate와 같은 규칙(DOI → arXiv → 정규화 제목 12자 이상)을 여러 편에 한 번에 — 질의 1번 (인용 그래프)"""
+        keys = [(normalize_doi(it.get("doi") or ""), (it.get("arxiv_id") or "").strip(), normalize_title(it.get("title") or ""))
+                for it in items]
+        dois = sorted({d for d, _, _ in keys if d})
+        arx = sorted({a for _, a, _ in keys if a})
+        norms = sorted({t for _, _, t in keys if len(t) >= 12})
+        if not (dois or arx or norms):
+            return [None] * len(items)
+        rows = self._all("select id, doi, arxiv_id, title_norm from paperlab.papers where user_id = %s and "
+                         "(doi = any(%s) or arxiv_id = any(%s) or title_norm = any(%s)) order by id",
+                         (self.uid, dois, arx, norms))
+        by_doi: dict[str, int] = {}
+        by_arx: dict[str, int] = {}
+        by_title: dict[str, int] = {}
+        for r in rows:
+            if r["doi"]:
+                by_doi.setdefault(r["doi"], r["id"])
+            if r["arxiv_id"]:
+                by_arx.setdefault(r["arxiv_id"], r["id"])
+            if r["title_norm"]:
+                by_title.setdefault(r["title_norm"], r["id"])
+        out: list[int | None] = []
+        for d, a, t in keys:
+            out.append((by_doi.get(d) if d else None) or (by_arx.get(a) if a else None)
+                       or (by_title.get(t) if len(t) >= 12 else None))
+        return out
+
     def _clean(self, data: dict) -> dict:
         out = {}
         for key in EDITABLE_FIELDS:

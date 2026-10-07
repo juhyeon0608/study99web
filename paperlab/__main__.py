@@ -67,6 +67,9 @@ def main(argv: list[str] | None = None) -> None:
     from .server import create_app
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
+    # 외부 요청 주소(그래프 씨앗 · 식별자가 쿼리에 들어감)가 로그에 남지 않게 — 운영 serve.py와 같게 (인용 그래프 8.6절)
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     from .storage import FakeStorage
 
     # 가짜 저장소를 같은 출처 경로(/_dev_storage)로 열어 브라우저 업로드 · PDF 보기가 된다

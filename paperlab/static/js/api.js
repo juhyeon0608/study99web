@@ -182,8 +182,13 @@ export async function streamEvents(url, body, onEvent, signal) {
   }, { long: true });
   if (!res.ok) {
     let msg = `오류 (${res.status})`;
-    try { msg = (await res.json()).detail || msg; } catch { /* 본문 없음 */ }
-    throw new ApiError(msg, { status: res.status });
+    let code = "";
+    try {
+      const b = await res.json();
+      msg = b.detail || msg;
+      code = b.code || "";
+    } catch { /* 본문 없음 */ }
+    throw new ApiError(msg, { status: res.status, code });
   }
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

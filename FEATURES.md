@@ -110,6 +110,7 @@ Google Scholar처럼 검색하고, 결과를 바로 서재에 담습니다.
 - **피인용 N** — 이 논문을 인용한 후속 연구 목록 (피인용 많은 순)
 - **참고문헌** — 이 논문이 인용한 논문 목록
 - **관련 논문** — 비슷한 주제의 논문
+- **그래프** — 이 논문과 주제가 가까운 논문들을 **인용 그래프**로 봄 (아래 *인용 그래프*)
 - **인하대에서 보기** — 학교(정석학술정보관)를 거쳐 원문 페이지를 새 탭으로 엶 (아래 *인하대에서 보기*)
 - 초록을 누르면 펼쳐집니다. 이미 서재에 있는 논문은 **✓ 서재에 있음 · 열기**로 표시됩니다.
 
@@ -156,6 +157,97 @@ PaperLab 사용자는 모두 인하대 구성원이라, 논문을 **인하대 �
 - **PaperLab은 학교 아이디 · 비밀번호를 묻지도, 저장하지도, 사용하지도 않습니다.** 로그인은 브라우저와 학교 사이에서만 이뤄지고, PaperLab 서버는 학교 사이트에 접속하지 않으며 어떤 논문 링크를 눌렀는지 기록하지 않습니다.
 - 구독 계약상 **논문을 한꺼번에 많이 받으면 학교 전체 접속이 막힐 수 있습니다.** 필요한 논문만 한 편씩 받아 주세요. PaperLab도 여러 편을 한꺼번에 열거나 PDF를 자동으로 받아 오지 않습니다.
 - 학교가 구독하지 않는 사이트면 학교 안내 · 오류 페이지나 출판사의 구매 화면이 뜰 수 있습니다.
+
+### 인용 그래프 (Connected Papers 방식)
+씨앗 논문 한 편에서 출발해 **주제가 가까운 논문 수십 편을 한 장의 그림**으로 보여 줍니다. 선은 "누가 누구를 인용했나"가 아니라 **얼마나 비슷한가**(같은 문헌을 함께 인용 · 다른 논문들에게 함께 인용됨)를 뜻하고, 비슷한 논문끼리 가까이 모입니다. 데이터는 **OpenAlex** 기준입니다.
+
+**여는 곳**
+
+| 어디에서 | 누를 것 |
+|---|---|
+| 서재 상세 패널 | **인용 관계** 탭 맨 위 *인용 그래프* 상자의 **[인용 그래프 보기]** |
+| 논문 찾기 결과 카드 | 아래 동작 줄의 **그래프** (OpenAlex · Semantic Scholar · arXiv · Crossref 어느 결과든) |
+| 그래프의 논문 정보 패널 | **[이 논문으로 새 그래프]** |
+
+- 화면 주소가 `#/graph/W…`(OpenAlex 번호)로 바뀝니다. 새로 고침하거나 이 주소를 다시 열면 같은 그래프를 다시 그립니다. **[← 돌아가기]** 로 들어온 화면(서재 · 논문 찾기 · 이전 그래프)으로 돌아갑니다. 사이드바 메뉴에는 없습니다.
+- 처음 보는 논문은 만드는 데 **10~30초** 걸릴 수 있습니다. 진행 카드에 단계(*씨앗 논문 찾기 → 참고문헌 · 관련 논문 모으기 → 이 논문을 인용한 논문 모으기 → 함께 인용된 논문 찾기 → 초록 · 이전 연구 정보 받기 → 유사도 계산*)가 보이고 **[취소]** 할 수 있습니다. 취소하거나 연결이 끊겨도 그동안 받은 정보는 저장돼 있어 다시 만들면 더 빠릅니다.
+- 한 사람이 다른 탭에서 동시에 그래프를 두 개 만들 수는 없습니다("이미 그래프를 만드는 중이에요").
+
+**화면 구성**
+- **위 줄**: [← 돌아가기] · *인용 그래프 · 씨앗 제목* · **논문 수 [20 | 40 | 80]**(기본 40) · **보기 [그래프 | 목록]** · **[범례]**
+- **가운데 그림**: 씨앗 논문은 가운데 테두리 고리로 표시됩니다.
+  - **원 크기** = 피인용 수(로그 척도), **색** = 출판 연도(밝은 테마는 진할수록, 어두운 테마는 밝을수록 최근 · 연도 없음은 회색)
+  - **선 굵기** = 비슷한 정도(함께 인용 · 같은 문헌 인용), **점선** = 주제만 비슷(인용 근거 없음 — OpenAlex 관련 논문으로 보강한 연결)
+  - **체크 배지** = 내 서재에 있음. 큰 원 몇 개에는 "첫 저자 성, 연도" 이름표가 붙고, 나머지는 마우스를 올리거나 키보드로 고르면 보입니다.
+  - 오른쪽 위 **＋ · － · 화면에 맞추기** 버튼, **범례**(✕로 닫기 — 열림 · 닫힘은 이 브라우저에 기억)
+  - 아래 줄: "후보 N편 중 M편 · OpenAlex 기준 · 날짜". 범례 아래 "후보 N편을 비교해 고른 그래프예요(전체 문헌을 다 본 것은 아니에요)."
+- **오른쪽 패널**: 탭 **[논문 정보 | 이전 연구 n | 이후 연구 n]**. 처음에는 씨앗 논문 정보. 화면이 좁으면(900px 이하) 패널이 그림 아래로 가고, 노드를 고르면 그림 위에 **"선택: … · 정보 보기 ↓"** 버튼이 나옵니다.
+- 노드에 마우스를 올리거나 키보드로 옮기면 그 논문과 **이웃 · 연결선만 진하게**, 나머지는 흐리게 됩니다.
+
+**논문 수 20 · 40 · 80**: 같은 후보에서 다시 고르므로 보통 바로 바뀝니다(외부에서 다시 받지 않음). 바꾸지 못하면 "논문 수를 바꾸지 못했어요. 이전 그래프를 그대로 보여 드려요."
+
+**논문 정보 탭 (노드를 클릭)**
+- 표시: 칩(*씨앗 논문* · *씨앗이 인용함* · *씨앗을 인용함* · *OpenAlex 관련 논문* · *함께 인용됨* · *✓ 서재에 있음*), 제목(원문 링크 — 새 탭), 저자(앞 3명 + "외 N명"), 학술지 · 연도, **피인용 N회**, **씨앗과**(예: "같은 참고문헌 9편", "함께 인용한 논문 4편", "주제가 비슷함(인용 근거 없음)", "직접 이어진 선은 없어요"), DOI, 초록(펼치기 · 접기)
+- 버튼:
+
+| 버튼 | 하는 일 |
+|---|---|
+| **＋ 서재에 추가** | 서재에 담기(검색 결과의 서재 추가와 같음). 이미 있으면 **✓ 서재에 있음 · 열기** |
+| **PDF 포함 추가** | 무료 PDF가 있을 때만 — PDF까지 받아 담기 |
+| **인용** | 인용 창(서재에 넣지 않아도 복사 가능) |
+| **인하대에서 보기** | 학교를 거쳐 원문 페이지를 새 탭으로(위 *인하대에서 보기*와 같은 규칙 · 처음 안내 창) — 열 주소가 있을 때만 |
+| **Google Scholar에서 보기** | 제목(없으면 DOI)으로 Scholar를 새 탭에서 검색 |
+| **이 논문으로 새 그래프** | 그 논문을 씨앗으로 새 그래프(씨앗 자신에게는 없음) |
+
+- 아래 **가장 가까운 논문**: 이 노드와 가장 굵게 이어진 논문 5편. 누르면 그 논문으로 이동합니다(키보드 · 화면 읽기 프로그램으로 그래프를 따라가는 길).
+
+**이전 연구 · 이후 연구 탭**
+- **이전 연구**: 그래프 논문들이 **공통으로 많이 인용한** 논문(이 분야의 기초 · 대표 문헌일 수 있음) — "그래프 논문 N편이 인용", 최대 20편.
+- **이후 연구**: 그래프 논문들을 **공통으로 많이 인용하는** 논문(최근 연구나 리뷰일 수 있음) — "그래프 논문 N편을 인용", 최대 20편.
+- 그래프 논문 2편 이상이 함께 인용한(또는 함께 인용된) 논문만 나오고, 씨앗 논문은 목록에 넣지 않습니다. 그래프 안에 있는 논문은 *그래프에 있음* 칩이 붙고 누르면 그 노드로 이동, 그래프 밖 논문은 누르면 논문 정보 탭에 같은 버튼과 함께 열립니다(**← 이전/이후 연구 목록**으로 돌아감).
+
+**목록 보기** (보기 → 목록): 그래프 논문을 표로 보여 줍니다 — **제목 · 연도 · 피인용 · 유사도(씨앗과) · 관계**. 열 이름을 눌러 정렬하고(기본 유사도 높은 순, 씨앗은 유사도 "—"), 제목을 누르면 오른쪽 패널에 그 논문 정보가 열립니다. 목록 보기에서는 범례 버튼이 꺼집니다.
+
+**키보드**
+
+| 어디서 | 키 | 동작 |
+|---|---|---|
+| 그림(노드에 포커스) | `←` `→` `↑` `↓` | 그 방향의 가장 가까운 노드로 이동 |
+| 그림 | `Home` | 씨앗 논문으로 |
+| 그림 | `Enter` · `Space` | 그 논문 고르기(논문 정보 탭) |
+| 그림 | `+` · `-` · `0` | 확대 · 축소 · 화면에 맞추기 |
+| 그림 | `Esc` | 강조 풀기 |
+| 오른쪽 탭 | `←` `→` · `Home` `End` | 탭 이동 |
+
+마우스: 빈 곳을 끌어 이동, 휠로 확대 · 축소, 터치는 두 손가락으로 확대.
+
+**알림 문구** (그래프 위)
+
+| 알림 | 뜻 |
+|---|---|
+| **일부 정보 없이 그렸어요.** 그래프가 덜 정확할 수 있어요. + 항목 | 아래 중 일부가 실패했지만 있는 정보로 그렸음: "시간이 오래 걸려 일부 단계를 건너뛰었어요." · "참고문헌 일부를 받지 못했어요." · "이 논문을 인용한 논문을 받지 못했어요." · "함께 인용된 논문을 받지 못했어요." · "일부 논문의 초록을 받지 못했어요." · "일부 정보가 오래됐을 수 있어요." · "Semantic Scholar가 응답하지 않아 참고문헌을 보강하지 못했어요." |
+| 이 논문 주변은 인용 정보가 적어 주제 유사도로 보강했어요. **점선**은 인용 근거 없이 주제만 비슷한 연결이에요. (국문 논문은 OpenAlex 인용 정보가 적은 편이에요.) | 국문 등 인용 정보가 적은 논문 — 점선 연결이 많음 |
+| 참고문헌이 많아 앞의 300편만 비교했어요. | 씨앗 참고문헌이 300편을 넘음 |
+| OpenAlex 하루 사용량을 다 써서 저장돼 있던 정보로만 그렸어요(한국 시간 오전 9시에 초기화). 설정에서 OpenAlex API 키를 넣으면 한도가 10배가 돼요. [설정 열기] | 하루 한도를 넘어 저장된 정보로만 그림 |
+
+알림은 ✕로 닫을 수 있습니다(이 그래프를 보는 동안만).
+
+**그래프를 그리지 못할 때**
+
+| 화면 | 뜻 · 할 일 |
+|---|---|
+| 이 논문을 OpenAlex에서 찾지 못했어요 | DOI가 있으면 더 정확합니다. 서재 논문이면 ⋯ → *정보 수정*에서 DOI를 넣고 다시. [Google Scholar에서 보기] |
+| 연결된 논문을 충분히 찾지 못했어요 | OpenAlex에 인용 정보가 적은 논문입니다. Scholar의 '인용' · '관련 학술자료'를 살펴보세요 |
+| OpenAlex 하루 사용량을 다 썼어요 | 한국 시간 오전 9시에 초기화. 설정에서 OpenAlex API 키(무료)를 넣으면 한도가 10배 |
+| OpenAlex에 연결할 수 없어요 · 그래프를 만들지 못했어요 | 잠시 후 **다시 시도** |
+| 이미 그래프를 만드는 중이에요 | 끝난 뒤 다시(다른 탭에서 만들고 있을 수 있음) |
+| 지금 그래프 요청이 많아요 | 여러 사람이 동시에 만들고 있음(서버 전체 2개씩). 잠시 후 다시 |
+| 이 논문으로는 그래프를 만들 수 없어요 | DOI · arXiv 번호 · 제목 형식을 알아보지 못함 |
+
+**공용 캐시와 개인정보**
+- 가져온 **공개 서지(제목 · 저자 · DOI · 연도 · 피인용 수 등)와 인용 관계**는 사용자끼리 같이 쓰는 **공용 캐시**에 저장됩니다. 그래서 다른 사람이 이미 본 논문 주변은 외부에서 다시 받지 않고 빠르게 그려집니다(서지 30일 · 참고문헌 180일 등 기간이 지나면 다시 받음).
+- **누가 어떤 논문으로 그래프를 만들었는지는 어디에도 남기지 않습니다**(공용 캐시에 사용자 정보 없음 · 날짜만 기록, 서버 로그에 씨앗 · 논문 번호 · 제목 없음). 만든 그래프도 계정에 저장하지 않고 매번 다시 그립니다(같은 탭에서 뒤로 가기용으로 최근 몇 개만 브라우저 메모리에 두고, 탭을 닫거나 **로그아웃하면 지워집니다** — 디스크에는 저장하지 않음).
+- 내 서재 · PDF · 메모는 공유되지 않습니다. *서재에 있음* 표시는 내 서재로만 계산합니다.
 
 ---
 
@@ -214,7 +306,7 @@ DOI, arXiv ID, 제목(띄어쓰기·기호 무시)이 같으면 같은 논문으
 - **인용 정보 점검**: 인용에 필요한 항목(학술지 이름·권·쪽·출판사 등)이 비어 있으면 경고하고, *채우기*(직접 수정)·*온라인에서 찾기*(자동 채움)를 제공합니다.
 - **정보 탭**: 초록, 키워드, DOI·arXiv 링크, **바로가기 — Google Scholar에서 보기**(논문 제목으로, 제목이 없으면 DOI로 Scholar를 새 탭에서 검색), 유형, 피인용 수, 쪽수, **인용 키**와 **[@인용키] 복사** 버튼
 - **노트 탭**: 논문별 마크다운 노트 (자동 저장, 미리보기, 수식 `$...$`)
-- **인용 관계 탭**: 이 논문을 인용한 논문 / 참고문헌 / 관련 논문 — 바로 서재에 추가 가능
+- **인용 관계 탭**: 맨 위 **[인용 그래프 보기]**(3장 *인용 그래프*), 이 논문을 인용한 논문 / 참고문헌 / 관련 논문 — 바로 서재에 추가 가능
 
 ### 폴더와 컬렉션
 논문을 정리하는 방법이 두 가지입니다.
@@ -618,8 +710,8 @@ AI 기능은 **설정 → AI**에 **본인의 Anthropic API 키**를 넣으면 �
 | 국문 문헌 먼저 | 저자-연도 스타일 참고문헌에서 국문 먼저 | 켬 |
 | 학술지 스타일 추가 | `.csl` 파일 추가·삭제 | |
 | 새 원고 기본 양식 | 새 원고에 처음 적용할 논문 양식(원고마다 편집 화면 위쪽에서 바꿀 수 있음). 옆 **양식 관리…** 로 양식 관리 창 열기 | 기본 (A4) |
-| 연락처 이메일 | OpenAlex·Crossref에 알려 더 안정적인 요청 한도를 받음 | (없음) |
-| OpenAlex · Semantic Scholar API 키 | 요청 한도를 늘림 (없어도 됨). API 키처럼 계정별로 암호화해 저장 | (없음) |
+| 연락처 이메일 | 안내: "Crossref에 이메일을 알려 주면 요청이 우선 처리돼요(OpenAlex에는 보내지 않아요)." — **Crossref에만** 보냅니다. OpenAlex · arXiv · Semantic Scholar · 주소에서 PDF 받기 · 인용 그래프에는 보내지 않습니다 | (없음) |
+| OpenAlex · Semantic Scholar API 키 | 요청 한도를 늘림 (없어도 됨). OpenAlex는 키가 있으면 하루 한도가 10배(검색 · 인용 그래프에 씀). API 키처럼 계정별로 암호화해 저장 | (없음) |
 | **학교 연결 (인하대)** | **[학교 로그인]** — 정석학술정보관 로그인 화면(`https://lib.inha.ac.kr/login`)을 새 탭으로 엶. 미리 로그인해 두고 싶을 때만 쓰면 됩니다(링크를 누르면 로그인이 필요할 때 자동으로 로그인 화면이 뜸). **[처음 안내 다시 보기]** — *인하대에서 보기* 안내 창을 다시 엶. 아래에 학교 로그인 안내와 Scholar 도서관 링크 팁이 있습니다(3장). 학교 아이디 · 비밀번호를 넣는 칸은 없습니다 | |
 | 계정 | 이름 · 이메일 · **로그아웃**, 저장 공간 사용량(전체 / 내 PDF) | |
 
@@ -693,7 +785,8 @@ AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시됩니다.
 
 ### 외부로 나가는 데이터
 - 저장: 서재·원고 등은 Supabase(서울 리전), PDF와 백업은 Cloudflare R2에 있습니다. 서버는 관리자의 **서버 PC**에서 돌고 Tailscale Funnel로 공개됩니다(서버 PC에는 사용자 데이터를 저장하지 않음 — 로그에는 계정 id · 요청 경로만, 토큰 · 키 · 본문 · 이메일은 남기지 않음).
-- 논문 검색: 검색어와 DOI 등 식별자 → OpenAlex·arXiv·Semantic Scholar·Crossref
+- 논문 검색: 검색어와 DOI 등 식별자 → OpenAlex·arXiv·Semantic Scholar·Crossref. **연락처 이메일은 Crossref에만** 보내고 OpenAlex · arXiv · Semantic Scholar · PDF 받기에는 보내지 않습니다. OpenAlex API 키를 넣었으면 OpenAlex 요청에 그 키가 붙습니다(OpenAlex 쪽에는 내 키 사용량으로 남음).
+- 인용 그래프: 씨앗 논문의 식별자(OpenAlex 번호 · DOI 등)와 주변 논문 번호 → OpenAlex(씨앗 참고문헌이 없을 때만 DOI → Semantic Scholar). 가져온 공개 서지 · 인용 관계는 사용자 공용 캐시(Supabase)에 저장되지만 **누가 조회했는지는 남기지 않습니다**(3장 *인용 그래프*).
 - AI 기능을 쓸 때만: 해당 논문의 PDF(또는 텍스트)·질문·원고 일부 → Anthropic(내 API 키로)
 - 학교 DB · 인하대에서 보기 · Google Scholar 바로가기를 누를 때만: 브라우저가 새 탭으로 그 사이트를 열면서 검색어 · 논문 제목 · DOI · 논문 주소가 그 사이트(인하대 openlink · RISS · DBpia · KISS · 출판사 · Google Scholar)로 갑니다. **PaperLab 서버를 거치지 않고**, 새 탭에는 PaperLab 주소가 넘어가지 않으며(`noopener noreferrer`), 학교 아이디 · 비밀번호는 PaperLab이 받거나 저장하지 않습니다. 학교 로그인 상태는 브라우저와 학교 사이에만 있습니다.
 - 그 밖의 서재·노트·원고는 위 저장 서비스 밖으로 보내지 않습니다.
@@ -720,6 +813,8 @@ AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시됩니다.
 | 원고 편집 | `Tab` | 들여쓰기(공백 2칸) |
 | 원고 · `[@` 자동완성 | `↑` `↓` · `Enter`/`Tab` · `Esc` | 고르기 · 넣기 · 닫기 |
 | 인용 검색 창 | `↑` `↓` · `Enter` · `Ctrl+Space` | 고르기 · 넣기 · 여러 편 체크 |
+| 인용 그래프(노드) | `←` `→` `↑` `↓` · `Home` · `Enter`/`Space` · `Esc` | 그 방향 노드로 · 씨앗으로 · 고르기 · 강조 풀기 |
+| 인용 그래프 | `+` · `-` · `0` | 확대 · 축소 · 화면에 맞추기 |
 
 (macOS에서는 `Ctrl` 대신 `Cmd`)
 
@@ -736,6 +831,7 @@ AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시됩니다.
 - **제목 문장형 변환**은 고유명사(예: Bayesian)도 소문자로 바꿀 수 있으니 확인이 필요합니다.
 - 스캔 PDF(글자 없는 이미지)는 전문 검색·AI 텍스트 모드가 제한됩니다(OCR 미지원).
 - 검색 결과는 Semantic Scholar 1,000건, OpenAlex 10,000건까지 넘겨 볼 수 있습니다(데이터베이스 제한).
+- **인용 그래프**는 OpenAlex의 인용 정보로 만들어서 **국문 논문은 연결이 적을 수 있습니다**(주제 유사도 점선으로 보강). Connected Papers처럼 수만 편이 아니라 **수백 편 후보**를 비교하므로 완전한 인용 목록이 아닌 탐색 도구로 쓰세요. 공용 캐시가 늘면 같은 씨앗의 그래프가 조금 달라질 수 있습니다. KCI · RISS 인용 정보, 그래프 저장 · 내보내기, 노드 끌어 옮기기는 없습니다.
 - **학교 연결은 인하대만** 됩니다(다른 학교를 고르는 설정 없음). **KISS 바로가기**는 아직 검색 결과가 아니라 첫 페이지를 열고 검색어를 복사합니다. RISS · DBpia · KISS를 PaperLab 안에서 검색하거나 결과를 가져오는 기능, 학교 사이트의 PDF를 자동으로 받아 서재에 붙이는 기능은 없습니다(받은 PDF는 *PDF 첨부*로 올림).
 - 서재는 계정마다 따로이며, 다른 사람과 **공유·협업하는 기능은 없습니다**. 같은 원고를 두 기기에서 동시에 고치면 나중에 저장한 내용이 남습니다(실시간 동시 편집 없음).
 
@@ -785,7 +881,8 @@ AI 상태(준비됨 / 무엇이 필요한지)가 설정 창에 표시됩니다.
 | "연결이 끊겨 요약이 멈췄어요. 다시 만들어 주세요." | 요약 중 연결이 끊겼습니다(탭 닫기 등). **요약 만들기**를 다시 누르세요 |
 | 워드·한글 문서에서 "파일이 너무 커요 (30MB 초과)" | 문서 안의 큰 그림을 줄이는 등 30MB 이하로 만들어 올리세요 |
 | "올린 문서를 찾을 수 없어요. 다시 올려 주세요." | 인용 넣기용으로 올린 문서는 서버에 잠시만 보관됩니다. 문서를 다시 올리세요 |
-| 검색 시 "요청 한도를 넘었어요" | 잠시 후 다시 시도하거나, 설정에 연락처 이메일·API 키 입력 |
+| 검색 시 "요청 한도를 넘었어요" | 잠시 후 다시 시도하거나, 설정에 API 키 입력(연락처 이메일은 Crossref에만 도움) |
+| 인용 그래프가 그려지지 않음 · 알림이 뜸 | 3장 *인용 그래프*의 "그래프를 그리지 못할 때" · "알림 문구" 표 |
 | AI 기능이 "설정에서 Anthropic API 키를 넣어주세요." | 설정 → AI에서 **본인의 Anthropic API 키**를 입력하세요(공용 키는 없음) |
 | "저장된 키를 읽지 못했어요. 키를 다시 입력해 주세요." | 설정 → AI에서 API 키를 다시 입력하세요 |
 | "PDF를 받을 수 없어요 / PDF가 아니에요" | 출판사 로그인이 필요한 PDF입니다. **인하대에서 보기**로 학교를 거쳐 열어 직접 받은 뒤 *PDF 첨부*(3장) |
@@ -822,6 +919,7 @@ study99web/
 ├─ deploy/            make-shortcut.ps1 · paperlab.ico · make_icon.py(바탕화면 바로가기) · r2-cors.json · README.md(사용자 준비 · 관리 명령 · 복원 절차)
 │  └─ server-pc/      install · update · funnel · watchdog · uninstall · common(.ps1) · server.json(공개 주소 · 포트 · 기본 경로 · 작업 이름) · README.md(서버 PC 설치 안내서)
 ├─ supabase/migrations/  SQL 마이그레이션: 확장(PGroonga) · 앱 전용 역할 · 표 · RLS · 검색 색인 · 허용 목록 훅(Before User Created — 선택 기능, 기본 미연결)
+│                        · 20261008000002_citation_cache.sql(인용 그래프 공용 캐시 external_works · citation_edges, GIN 색인, 읽기 = 로그인 사용자 · 쓰기 = system_tx만)
 ├─ paperlab/
 │  ├─ serve.py        운영 서버 실행 (python -m paperlab.serve: cloud.env 검사 · 127.0.0.1:8080 · 프록시 헤더는 127.0.0.1만 신뢰 · 회전 로그, --check 설정 점검)
 │  ├─ __main__.py     개발 서버 (PAPERLAB_DEV=1, 테스트용 Supabase 프로젝트 · 가짜 저장소, 127.0.0.1)
@@ -832,9 +930,12 @@ study99web/
 │  ├─ crypto.py       user_secrets 암호화(AES-256-GCM, key_id)
 │  ├─ config.py       서버 환경 변수 검사(값은 로그에 남기지 않음), 사용자별 설정(profiles.settings + user_secrets)
 │  ├─ migrate.py      SQL 마이그레이션 적용 (python -m paperlab.migrate)
-│  ├─ admin.py        관리 명령: sync-allowlist · app-role --write-env · rotate-key · orphans · backup · pg-dump-check · latest-backup · mark-test-project
+│  ├─ admin.py        관리 명령: sync-allowlist · app-role --write-env · rotate-key · orphans · backup · pg-dump-check · latest-backup · mark-test-project · cache-stats · cache-prune
 │  ├─ pdf.py          PyMuPDF: 쪽별 텍스트 추출, DOI·arXiv·제목 인식
-│  ├─ sources.py      OpenAlex · arXiv · Semantic Scholar · Crossref
+│  ├─ sources.py      OpenAlex · arXiv · Semantic Scholar · Crossref (연락처 이메일은 Crossref에만), 인용 그래프용 OpenAlex 묶음 · cites 조회 · S2 참고문헌(호출 예산 · 기한 · 응답 검증)
+│  ├─ graph_build.py  인용 그래프 만들기: 씨앗 해석 · 입력 검증 → A~E 단계(캐시 우선) → 계산, 경고 · 오류 code, GraphGate(동시 2 · 대기 4 · 사용자당 1) · 같은 씨앗 합치기
+│  ├─ citegraph.py    인용 그래프 알고리즘(입출력 없음): 중복 합치기 · 서지 결합 + 공동 인용 유사도 · 노드 고르기 · 선 · 이전/이후 연구
+│  ├─ citecache.py    공용 캐시 읽기(사용자 트랜잭션) · 쓰기(system_tx "citation cache write") · 유효 기간 · 정리
 │  ├─ citations.py    CSL-JSON 변환, 인용 정보 점검, BibTeX · RIS · CSL-JSON, 인용키
 │  ├─ csl_style.py    CSL 스타일 파일 정보
 │  ├─ ai.py           요약(구조화 출력) · Q&A(쪽 인용) · 글쓰기 도우미 — Anthropic API (CLI 엔진은 2단계 PC 워커에서만)
@@ -844,19 +945,21 @@ study99web/
 │  ├─ format_import.py 양식 파일(.docx · .dotx · .hwpx)에서 서식 읽기
 │  ├─ compose.py      워드·한글 문서의 [@인용키] → 서식 있는 인용 + 참고문헌
 │  └─ static/         화면 (HTML · CSS · ES 모듈 JS)
-│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state · extlinks
+│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state · extlinks · graph · graphmath
 │     │               (app: 로그인 게이트 · 계정 메뉴 · 폴더 트리 · 저장 공간 / auth: supabase-js 구글 로그인 · 세션 /
 │     │                api: Bearer 토큰 · 401 갱신 · 503 · 연결 지연 띠 / formats: 양식 관리 창 · 표지 정보 창 /
-│     │                extlinks: 인하대 openlink 프록시 · DOI · 학교 DB 검색 · Google Scholar 주소 만들기 — DOM · 다른 모듈에 기대지 않는 순수 모듈)
-│     └─ vendor/      PDF.js · citeproc-js · CSL 스타일·로케일 · KaTeX · marked · DOMPurify · supabase-js
-├─ docs/              specs/(doc-formats.md · phase1-cloud.md · inha-proxy.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md · inha-proxy-ui.md)
-└─ tests/             pytest (DB 테스트는 테스트용 Supabase 프로젝트, golden/ = 기본 (A4) 내보내기 골든 파일, js/ = Node 단위 테스트(extlinks))
+│     │                extlinks: 인하대 openlink 프록시 · DOI · 학교 DB 검색 · Google Scholar 주소 만들기 — DOM · 다른 모듈에 기대지 않는 순수 모듈 /
+│     │                graph: 인용 그래프 화면 #/graph(SSE · SVG · 확대/이동 · 패널 · 목록 보기) / graphmath: 크기 · 연도 색 · 배치 · 정렬 등 순수 함수)
+│     └─ vendor/      PDF.js · citeproc-js · CSL 스타일·로케일 · KaTeX · marked · DOMPurify · supabase-js · d3/(d3-force · d3-dispatch · d3-quadtree · d3-timer UMD — 그래프 화면에서만 불러옴)
+├─ docs/              specs/(doc-formats.md · phase1-cloud.md · inha-proxy.md · citation-graph.md · phase2-worker-electron.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md · inha-proxy-ui.md · citation-graph-ui.md)
+└─ tests/             pytest (DB 테스트는 테스트용 Supabase 프로젝트, golden/ = 기본 (A4) 내보내기 골든 파일, js/ = Node 단위 테스트(extlinks · graph),
+                      fixtures/citegraph/ = 인용 그래프 가짜 OpenAlex · S2 세계)
 ```
 
 ### 주요 기술
 - 백엔드: Python 3.10+(서버 PC는 3.12 가상환경), FastAPI, Uvicorn, psycopg 3 · psycopg-pool, PyJWT, cryptography, boto3(R2, S3 호환), PyMuPDF, httpx, anthropic SDK, python-docx, python-hwpx
 - 서버 · 클라우드: **서버 PC**(상시 켜 둔 Windows PC, Docker 없이 Python 직접 실행, 작업 스케줄러로 자동 시작 · 매일 04:00 KST 백업(14개 보관) · 5분 감시) + **Tailscale Funnel**(공개 고정 HTTPS 주소), Supabase(Auth · Postgres · PGroonga, 서울), Cloudflare R2(PDF · 백업)
-- 화면: 빌드 과정 없는 ES 모듈 JavaScript, PDF.js 4, citeproc-js 2.4, KaTeX, marked, DOMPurify, supabase-js 2
+- 화면: 빌드 과정 없는 ES 모듈 JavaScript, PDF.js 4, citeproc-js 2.4, KaTeX, marked, DOMPurify, supabase-js 2, d3-force 3(인용 그래프 배치 계산만 — 그리기는 SVG 직접)
 - 외부 라이브러리 버전·라이선스: `paperlab/static/vendor/THIRD_PARTY.md`
 
 ### 개발 서버
@@ -887,6 +990,7 @@ python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file)
 | 업로드 | `POST /api/uploads` `POST /api/uploads/{upload_id}/complete` |
 | PDF | `GET /api/papers/{id}/pdf-url` `POST /api/papers/{id}/pdf/upload` `POST /api/papers/{id}/pdf/complete` `POST /api/papers/{id}/fetch-pdf` `POST /api/papers/{id}/refresh` |
 | 인용 관계 | `GET /api/papers/{id}/related` `POST /api/related` `GET /api/search` |
+| 인용 그래프 | `POST /api/graph`(SSE) |
 | 노트·하이라이트 | `PUT /api/papers/{id}/note` `GET·POST /api/papers/{id}/annotations` `PATCH·DELETE /api/annotations/{id}` `GET /api/annotations/export/{id}` |
 | 폴더 | `GET·POST /api/folders` `PATCH·DELETE /api/folders/{id}` |
 | 컬렉션·태그 | `GET·POST /api/collections` `PATCH·DELETE /api/collections/{id}` `GET /api/tags` `PATCH·DELETE /api/tags/{id}` |
@@ -897,6 +1001,14 @@ python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file)
 | 워드·한글 | `POST /api/compose/scan` `POST /api/compose/apply` |
 
 인하대 openlink · 학교 DB · Google Scholar 링크(1A단계 — `docs/specs/inha-proxy.md`)는 **서버 API를 쓰지 않습니다.** 화면의 `static/js/extlinks.js`가 주소를 만들고(`toInhaProxy` · `inhaDoiUrl` · `paperProxyTarget` · `inhaSearchUrl` · `scholarUrl` · `normalizeQuery`, 상수 `INHA` · `SCHOLAR_BASE`) 브라우저가 새 탭으로 엽니다(`noopener noreferrer`). 서버와 화면 코드는 openlink · Scholar에 요청을 보내지 않습니다.
+
+**인용 그래프** (자세한 계약: `docs/specs/citation-graph.md` 9장)
+- `POST /api/graph` — 본문(최대 4KB) `{"seed": {"paper_id": 12}, "size": 40}` 또는 `{"seed": {"openalex_id"?, "doi"?, "arxiv_id"?, "title"?}, "size": 20|40|80}`. 씨앗은 **본문으로만** 받습니다(경로 · 쿼리에 넣지 않음 — 접근 로그에 씨앗이 남지 않게).
+- 응답은 `text/event-stream`: `{"type":"progress","step":"seed|wait|references|citing|cocitation|finish|compute","message","progress"}` … `{"type":"done","graph":{seed, size, nodes, edges, prior, derivative, warnings, stats}}` 또는 `{"type":"error","code":"seed_not_found|upstream_unavailable|upstream_limited|graph_queue_full|internal","error"}`. 15초마다 `: ping`.
+- 노드의 `paper`는 검색 결과와 같은 키(서재 추가 · 인용 · 인하대 · Scholar 버튼이 그대로 씀), 씨앗 노드의 `score`는 `null`. `warnings`는 `{code, message}` — code 목록은 명세 9.3절(화면은 code별 문구, 모르는 code면 `message`).
+- 스트림 전 오류: 400 `bad_seed` · 404(내 서재에 없는 `paper_id`) · 429 `graph_busy`(사용자당 1개) · 503 `graph_queue_full`(서버 전체 진행 2 · 대기 4).
+- 외부 호출: OpenAlex(사용자 키가 있으면 `api_key` 쿼리, `mailto` 없음), 씨앗 참고문헌이 없을 때만 Semantic Scholar 1회. 그래프 1회 OpenAlex 목록 호출 최대 12회, 45초 기한. 캐시가 유효하면 외부 호출 0회.
+- 공용 캐시 관리(관리자 연결 — 서버 PC 주간 점검): `python -m paperlab.admin cache-stats`(두 표 크기 · 행 수 · 가장 오래된 날짜 — 내용은 출력 안 함), `python -m paperlab.admin cache-prune [--max-mb 150]`(오래된 서지부터 지워 상한 아래로, 지운 것은 필요할 때 다시 받음).
 
 **요청 규칙**
 - 공개 주소를 뺀 모든 `/api/*`에 `Authorization: Bearer <Supabase access token>`이 필요합니다. 없거나 틀리면 **401** `{"detail": "로그인이 필요해요", "code": "auth_required"}`, 서버 허용 목록을 켠 경우(`PAPERLAB_ALLOWLIST`가 `off`가 아님) 목록 밖 계정이면 **403** `{"detail": "허용되지 않은 계정이에요", "code": "not_allowed"}`.
@@ -937,6 +1049,7 @@ pytest
   2. 테스트 DB에 테스트 프로젝트 표지(`public.paperlab_test_project`)가 없음 — 처음 한 번 `python -m paperlab.admin mark-test-project`로 붙입니다(운영과 같으면 거부, 프로젝트 ref를 직접 입력해 확인)
   3. 반대로 운영용 `paperlab.migrate` · 배포 스크립트는 표지가 있는 DB를 거부합니다
 - 파일 저장소는 가짜(메모리) 구현만 씁니다. 실제 R2 계약 테스트는 `PAPERLAB_R2_CONTRACT=1`일 때만, 존재하지 않는 임의 사용자 경로에서 돌고 지웁니다.
+- 인용 그래프: `tests/test_citegraph.py`(알고리즘 — DB · 네트워크 없음), `tests/test_graph_api.py`(가짜 OpenAlex · S2 응답으로 API · 캐시 재사용 · 로그 검사), `tests/test_rls.py`(공용 캐시 RLS · 권한 · 열 이름 검사), `tests/js/graph.test.mjs`(Node — `tests/test_graph_js.py`가 pytest 안에서 부름, Node가 없으면 건너뜀). 실제 OpenAlex · S2는 자동 테스트에서 부르지 않습니다.
 - 외부 학술 API와 AI 호출은 가짜 전송 계층으로 대체합니다.
 - 화면의 링크 주소 모듈(`static/js/extlinks.js`)은 Node 내장 테스트 `tests/js/extlinks.test.mjs`로 시험합니다. `pytest`가 `tests/test_extlinks_js.py`에서 함께 부르고, **Node.js 20.10 이상이 없으면 건너뜁니다**. 따로 돌리려면 저장소 루트에서 `node --test "tests/js/**/*.test.mjs"`(Node 22.7 이상, 따옴표 포함). 그보다 낮은 Node는 `node --experimental-detect-module --test tests/js/extlinks.test.mjs`(pytest 래퍼가 쓰는 방식).
 - CLI 엔진 테스트(`tests/test_ai.py::test_cli_engine_with_fake_claude`)는 Windows에서도 가짜 CLI만 써서 돕니다(실제 claude CLI 호출을 막는 단언 포함). 전체를 `pytest`로 그대로 돌리면 됩니다.

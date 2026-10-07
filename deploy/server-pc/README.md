@@ -264,7 +264,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 사용자 추가 · 빼기 | **[사용자]** Google Cloud 콘솔 → OAuth 동의 화면 → 테스트 사용자에서 추가 · 삭제(서버 재시작 필요 없음). 뺄 때는 Supabase 대시보드 Users에서 그 사용자도 삭제 |
 | 서버만 다시 시작 | `Stop-ScheduledTask "PaperLab Server"; Start-ScheduledTask "PaperLab Server"` |
 | 로그 보기 | `Get-Content D:\PaperLab\logs\server.log -Tail 50` (JSON 한 줄씩 — 토큰 · 키 · 본문은 원래 남지 않음) |
-| 주간 점검(주 1회) | `watchdog.log`의 WARN 줄, `Get-ScheduledTaskInfo "PaperLab Backup"`의 마지막 결과, `funnel.ps1 status`, **[사용자]** Google OAuth 동의 화면 게시 상태가 "테스트"인지 |
+| 주간 점검(주 1회) | `watchdog.log`의 WARN 줄, `Get-ScheduledTaskInfo "PaperLab Backup"`의 마지막 결과, `funnel.ps1 status`, `D:\PaperLab\study99web`에서 `.venv\Scripts\python -m paperlab.admin cache-stats`로 공용 캐시 크기 확인(크기 · 행 수만 나옴 — 150MB 넘으면 `cache-prune --max-mb 150`, [1B 명세](../../docs/specs/citation-graph.md) 8.5절), **[사용자]** Google OAuth 동의 화면 게시 상태가 "테스트"인지 |
 | (선택) 허용 목록 켜기 | `cloud.env`에 `PAPERLAB_ALLOWLIST=on` · `ALLOWED_EMAILS=…` → `sync-allowlist` → **[사용자]** Supabase Auth Hook "Before User Created"에 `paperlab.before_user_created` 연결 → `update.ps1 -RestartOnly` (명세 6.3절) |
 | 앱 역할 비밀번호 회전 | `.venv\Scripts\python -m paperlab.admin app-role --write-env`(`--if-missing` 없이 — 새 비밀번호, 값 출력 없음) → 곧바로 `update.ps1 -RestartOnly`. 백업 작업은 실행할 때마다 파일을 새로 읽으므로 할 일 없음 |
 | 암호화 키 회전 | 명세 8.3절 순서(서버 멈춤 → `cloud.env` 새 키 → `admin rotate-key` → 서버 시작) |

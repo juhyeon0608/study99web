@@ -12,14 +12,21 @@ Google Scholar는 공식 API가 없고 자동 수집을 금지하므로, 같은 
 from __future__ import annotations
 
 import ipaddress
+import json
+import logging
 import re
 import socket
+import threading
+import time
 import xml.etree.ElementTree as ET
 from typing import Callable
+from urllib.parse import quote
 
 import httpx
 
 from . import __version__
+
+log = logging.getLogger("paperlab.sources")
 
 OPENALEX = "https://api.openalex.org"
 ARXIV = "https://export.arxiv.org/api/query"
@@ -239,15 +246,25 @@ class Sources:
         # 사용자 주소로 PDF를 받을 때 쓰는 DNS 해석 (테스트에서 바꿔 넣음)
         self._resolver = resolver or _resolve_host
 
-    def _client(self) -> httpx.Client:
-        email = self.get_setting("contact_email") or ""
-        ua = f"PaperLab/{__version__}" + (f" (mailto:{email})" if email else "")
+    def _client(self, email: bool = False) -> httpx.Client:
+        # 사용자 연락처 이메일은 Crossref(polite pool)에만 보낸다. OpenAlex · arXiv · Semantic Scholar · PDF 받기(임의 서버)에는
+        # 보내지 않는다(인용 그래프 명세 K-6, 팀장 결정 2026-10-07)
+        email_addr = (self.get_setting("contact_email") or "") if email else ""
+        ua = f"PaperLab/{__version__}" + (f" (mailto:{email_addr})" if email_addr else "")
         return httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=True,
                             headers={"User-Agent": ua}, transport=self._transport)
 
     def _get_json(self, url: str, params: dict | None = None, headers: dict | None = None) -> dict:
+        host = url.split("/")[2]
+
+        def same_host_only(request: httpx.Request) -> None:
+            # 리디렉션은 같은 호스트 안에서만 따라간다 — 다른 호스트로 이메일(Crossref) · 키가 넘어가지 않게 (품질팀 M-8)
+            if request.url.host != host:
+                raise SourceError(f"{host} 오류 (다른 주소로 이동)")
+
         try:
-            with self._client() as c:
+            with self._client(email=url.startswith(CROSSREF)) as c:
+                c.event_hooks["request"] = [same_host_only]
                 r = c.get(url, params=params, headers=headers)
         except httpx.HTTPError as e:
             raise SourceError(f"{url.split('/')[2]}에 연결할 수 없어요: {e}") from e
@@ -260,10 +277,8 @@ class Sources:
         return r.json()
 
     def _openalex_params(self, params: dict) -> dict:
-        email = self.get_setting("contact_email")
+        # mailto는 보내지 않는다(OpenAlex가 무시 — 사용자 이메일만 밖으로 나감. 인용 그래프 명세 K-6)
         key = self.get_setting("openalex_api_key")
-        if email:
-            params["mailto"] = email
         if key:
             params["api_key"] = key
         return params
@@ -574,3 +589,413 @@ def merge(base: dict, extra: dict | None) -> dict:
     if extra.get("cited_by_count") is not None:
         out["cited_by_count"] = max(out.get("cited_by_count") or 0, extra["cited_by_count"])
     return out
+
+
+# =========================================================== 인용 그래프용 호출 (docs/specs/citation-graph.md 7 · 9.5장)
+# 고정 주소 두 곳(OPENALEX · S2)에만 요청한다. 사용자 이메일(mailto · User-Agent)은 보내지 않는다.
+# 리디렉션은 따라가지 않고(3xx = 실패), 응답은 10MB까지, 오류 문구 · 로그는 호스트 + 상태 코드만(주소 · 식별자 없음).
+OPENALEX_HOST = "api.openalex.org"
+S2_HOST = "api.semanticscholar.org"
+GRAPH_UA = f"PaperLab/{__version__}"
+GRAPH_MAX_BYTES = 10 * 1024 * 1024
+GRAPH_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
+RETRY_AFTER_MAX = 5.0
+OA_NO_MAX = 10 ** 12 - 1  # W 뒤 최대 12자리 (명세 9.5)
+_OA_WORK_RE = re.compile(r"^https://openalex\.org/W([0-9]+)$")
+# select 필드: 서지(norm_openalex가 쓰는 것) / + 참고문헌 · 관련 논문 / + 초록
+GRAPH_META_FIELDS = ("id", "doi", "display_name", "authorships", "publication_year", "publication_date", "language",
+                     "primary_location", "biblio", "locations", "best_oa_location", "cited_by_count", "type",
+                     "open_access", "referenced_works_count")
+GRAPH_LINK_FIELDS = ("referenced_works", "related_works")
+GRAPH_ABSTRACT_FIELDS = ("abstract_inverted_index",)
+MAX_AUTHORS_STORED = 20
+MAX_REFS_STORED = 500
+MAX_RELATED_STORED = 20
+
+
+class UpstreamError(SourceError):
+    """외부 호출 실패. 문구에는 호스트 · 상태만 (요청 주소 · 식별자를 넣지 않음)"""
+
+    def __init__(self, host: str, status: int | None = None, limited: bool = False, location: str = ""):
+        self.host, self.status, self.limited = host, status, limited
+        self.location = location  # 3xx의 Location (합쳐진 작품 번호 따라가기에만 씀 — 로그 · 문구에는 넣지 않음)
+        super().__init__(f"{host} 오류" + (f" ({status})" if status else ""))
+
+
+class GraphCancelled(Exception):
+    """그래프 요청이 끊김(탭 닫기 등)"""
+
+
+class GraphDeadline(Exception):
+    """그래프 하나 전체 기한(45초)을 넘김"""
+
+
+class GraphBudget(Exception):
+    """그래프 1회 목록 · 검색 호출 상한(12회)을 넘김"""
+
+
+class _TooLarge(Exception):
+    pass
+
+
+class RateLimiter:
+    """서버 전체 속도 제한: 요청 시작 간격을 1/rate초 이상으로 (스레드 안전)"""
+
+    def __init__(self, rate: float, clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep):
+        self.interval = 1.0 / rate if rate > 0 else 0.0
+        self.clock, self.sleep = clock, sleep
+        self._next = 0.0
+        self._lock = threading.Lock()
+
+    def acquire(self) -> None:
+        if not self.interval:
+            return
+        with self._lock:
+            now = self.clock()
+            at = max(now, self._next)
+            self._next = at + self.interval
+        if at > now:
+            self.sleep(at - now)
+
+
+OPENALEX_LIMITER = RateLimiter(10)  # 공식 초당 100보다 훨씬 낮게 (7.5절)
+S2_LIMITER = RateLimiter(1)
+
+
+def _text(v, n: int) -> str:
+    if not isinstance(v, str):
+        v = str(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else ""
+    return v.replace("\x00", "").strip()[:n]
+
+
+def _nonneg(v) -> int:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return 0
+    try:
+        n = int(v)
+    except (OverflowError, ValueError):
+        return 0
+    return n if 0 <= n <= 2_000_000_000 else 0
+
+
+def _http_url(v) -> str:
+    s = v.strip() if isinstance(v, str) else ""
+    return s[:2000] if re.match(r"https?://", s, re.I) else ""
+
+
+def oa_work_no(value) -> int | None:
+    """'https://openalex.org/W123' → 123. 다른 모양 · 범위 밖은 None"""
+    if not isinstance(value, str):
+        return None
+    m = _OA_WORK_RE.match(value)
+    if not m or len(m.group(1)) > 12:
+        return None
+    n = int(m.group(1))
+    return n if 0 < n <= OA_NO_MAX else None
+
+
+_MERGED_PATH_RE = re.compile(r"/works/W([1-9][0-9]{0,11})")
+
+
+def merged_work_no(location: str) -> int | None:
+    """3xx Location → 새 작품 번호. 같은 상수 호스트(https://api.openalex.org)의 /works/W<번호>만, 그 밖은 None"""
+    if not isinstance(location, str) or not location:
+        return None
+    try:
+        u = httpx.URL(OPENALEX).join(location.strip())
+    except (httpx.InvalidURL, ValueError, TypeError):
+        return None
+    if u.scheme != "https" or u.host != OPENALEX_HOST or u.port not in (None, 443) or u.userinfo:
+        return None
+    m = _MERGED_PATH_RE.fullmatch(u.path)
+    return int(m.group(1)) if m else None
+
+
+def _no_list(values, cap: int) -> list[int]:
+    if not isinstance(values, list):
+        return []
+    out: dict[int, None] = {}
+    for v in values:
+        n = oa_work_no(v)
+        if n:
+            out[n] = None
+    return list(out)[:cap]
+
+
+def graph_work(w, fields) -> dict | None:
+    """OpenAlex 작품 하나를 검사 · 정리해 캐시 행 모양으로 (명세 8.2 · 9.5). 이상한 작품은 None.
+
+    refs · related는 select에 넣었을 때만 목록(아니면 None — 받지 않음), abstract도 같음.
+    """
+    if not isinstance(w, dict):
+        return None
+    no = oa_work_no(w.get("id"))
+    if not no:
+        return None
+    try:
+        p = norm_openalex(w)
+    except (AttributeError, TypeError, ValueError, KeyError):
+        p = _empty("openalex")
+        p["title"] = w.get("display_name") if isinstance(w.get("display_name"), str) else ""
+    raw_doi = w.get("doi") if isinstance(w.get("doi"), str) else ""
+    doi = re.sub(r"^https?://(dx\.)?doi\.org/", "", raw_doi.strip(), flags=re.I).lower()[:300]
+    if not doi.startswith("10."):
+        doi = ""
+    authors = []
+    for a in (p.get("authors") or [])[:MAX_AUTHORS_STORED]:
+        if isinstance(a, dict):
+            authors.append({"given": _text(a.get("given"), 200), "family": _text(a.get("family"), 200)})
+    year = p.get("year")
+    year = year if isinstance(year, int) and not isinstance(year, bool) and 0 < year < 3000 else None
+    ships = w.get("authorships")
+    row = {
+        "no": no, "doi": doi, "arxiv_id": _text(p.get("arxiv_id"), 300), "title": _text(p.get("title"), 1000),
+        "authors": authors, "author_count": len(ships) if isinstance(ships, list) else len(authors), "year": year,
+        "issued": _text(p.get("issued"), 300), "venue": _text(p.get("venue"), 300),
+        "publisher": _text(p.get("publisher"), 300), "volume": _text(p.get("volume"), 300),
+        "issue": _text(p.get("issue"), 300), "pages": _text(p.get("pages"), 300),
+        "item_type": _text(p.get("item_type"), 300) or "article", "language": _text(p.get("language"), 300),
+        "url": _http_url(p.get("url")), "pdf_url": _http_url(p.get("pdf_url")), "is_oa": bool(p.get("is_oa")),
+        "cited_by_count": _nonneg(w.get("cited_by_count")), "reference_count": _nonneg(w.get("referenced_works_count")),
+        "refs": None, "refs_total": 0, "related": None, "abstract": None,
+    }
+    fields = set(fields)
+    if "referenced_works" in fields:
+        raw = w.get("referenced_works")
+        all_refs = _no_list(raw, 100_000)
+        row["refs"] = all_refs[:MAX_REFS_STORED]
+        row["refs_total"] = max(row["reference_count"], len(all_refs))
+        if not row["reference_count"]:
+            row["reference_count"] = len(all_refs)
+    if "related_works" in fields:
+        row["related"] = _no_list(w.get("related_works"), MAX_RELATED_STORED)
+    if "abstract_inverted_index" in fields:
+        inv = w.get("abstract_inverted_index")
+        try:
+            text = _openalex_abstract(inv) if isinstance(inv, dict) else ""
+        except (TypeError, AttributeError, ValueError):
+            text = ""
+        row["abstract"] = _text(text, 5000)
+    return row
+
+
+def _retry_after(headers) -> float:
+    v = (headers.get("retry-after") or "").strip()
+    try:
+        return max(0.0, min(RETRY_AFTER_MAX, float(v)))
+    except ValueError:
+        return 1.0
+
+
+class GraphSources:
+    """그래프 1회분 외부 호출. 호출 수 · 남은 예산 · 하루 한도 소진 상태를 기억한다.
+
+    openalex_key: 요청한 사용자의 OpenAlex 키(없으면 키 없이 — K-5), s2_key: 사용자의 S2 키.
+    clock · sleep · transport는 테스트에서 바꿔 넣는다. deadline = clock() 기준 기한(전체 45초), cancel = threading.Event.
+    """
+
+    def __init__(self, openalex_key: str = "", s2_key: str = "", *, transport: httpx.BaseTransport | None = None,
+                 clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
+                 oa_limiter: RateLimiter | None = None, s2_limiter: RateLimiter | None = None,
+                 max_list_calls: int = 12, deadline: float | None = None, cancel: threading.Event | None = None):
+        self.openalex_key = openalex_key or ""
+        self.s2_key = s2_key or ""
+        self._transport = transport
+        self.clock, self._sleep = clock, sleep
+        self.oa_limiter = oa_limiter or OPENALEX_LIMITER
+        self.s2_limiter = s2_limiter or S2_LIMITER
+        self.max_list_calls = max_list_calls
+        self.deadline = deadline
+        self.cancel = cancel
+        self.list_calls = 0
+        self.single_calls = 0
+        self.s2_calls = 0
+        self.limited = False  # OpenAlex 하루 한도 소진(429 + X-RateLimit-Remaining: 0)
+        self.remaining: int | None = None
+        self._lock = threading.Lock()
+
+    # ------------------------------------------------------------ 공통
+    def check_cancel(self) -> None:
+        if self.cancel is not None and self.cancel.is_set():
+            raise GraphCancelled()
+
+    def check(self) -> None:
+        self.check_cancel()
+        if self.deadline is not None and self.clock() >= self.deadline:
+            raise GraphDeadline()
+
+    def budget_left(self) -> int:
+        with self._lock:
+            return max(0, self.max_list_calls - self.list_calls)
+
+    def _log(self, host: str, status: int | None) -> None:
+        log.warning(json.dumps({"event": "upstream_error", "host": host, "status": status}))
+
+    def _fetch(self, url: str, params: dict, headers: dict) -> tuple[int, httpx.Headers, bytes]:
+        with httpx.Client(timeout=GRAPH_TIMEOUT, follow_redirects=False, headers={"User-Agent": GRAPH_UA},
+                          transport=self._transport) as c:
+            with c.stream("GET", url, params=params, headers=headers) as r:
+                if not 200 <= r.status_code < 300:
+                    return r.status_code, r.headers, b""
+                length = r.headers.get("content-length") or ""
+                if length.isdigit() and int(length) > GRAPH_MAX_BYTES:
+                    raise _TooLarge()
+                buf = bytearray()
+                for chunk in r.iter_bytes():
+                    buf.extend(chunk)
+                    if len(buf) > GRAPH_MAX_BYTES:
+                        raise _TooLarge()
+                return r.status_code, r.headers, bytes(buf)
+
+    def _send(self, base: str, host: str, path: str, params: dict, headers: dict, kind: str) -> dict:
+        limiter = self.s2_limiter if host == S2_HOST else self.oa_limiter
+        retried = False
+        while True:
+            self.check()
+            if host == OPENALEX_HOST and self.limited:
+                raise UpstreamError(host, 429, limited=True)
+            with self._lock:
+                if kind == "list":
+                    if self.list_calls >= self.max_list_calls:
+                        raise GraphBudget()
+                    self.list_calls += 1
+                elif kind == "single":
+                    self.single_calls += 1
+                else:
+                    self.s2_calls += 1
+            limiter.acquire()
+            self.check()
+            try:
+                status, hdrs, body = self._fetch(base + path, params, headers)
+            except (httpx.ConnectError, httpx.ConnectTimeout):  # 연결 오류만 한 번 더
+                self._log(host, None)
+                if not retried:
+                    retried = True
+                    self._sleep(1.0)
+                    continue
+                raise UpstreamError(host) from None
+            except (httpx.HTTPError, _TooLarge, httpx.InvalidURL):  # 읽기 시간 초과 · 크기 초과 등: 재시도 없음
+                self._log(host, None)
+                raise UpstreamError(host) from None
+            rem = (hdrs.get("x-ratelimit-remaining") or "").strip()
+            if host == OPENALEX_HOST and rem.isdigit():
+                self.remaining = int(rem)
+            if status == 429:
+                self._log(host, 429)
+                if rem == "0":  # 하루 예산 소진: 재시도하지 않음
+                    if host == OPENALEX_HOST:
+                        self.limited = True
+                    raise UpstreamError(host, 429, limited=host == OPENALEX_HOST)
+                if not retried:
+                    retried = True
+                    self._sleep(_retry_after(hdrs))
+                    continue
+                raise UpstreamError(host, 429)
+            if status >= 500:
+                self._log(host, status)
+                if not retried:
+                    retried = True
+                    self._sleep(1.0)
+                    continue
+                raise UpstreamError(host, status)
+            if not 200 <= status < 300:  # 3xx(리디렉션 따라가지 않음) · 4xx
+                self._log(host, status)
+                raise UpstreamError(host, status, location=hdrs.get("location") or "" if 300 <= status < 400 else "")
+            try:
+                data = json.loads(body)
+            except ValueError:
+                self._log(host, status)
+                raise UpstreamError(host, status) from None
+            if not isinstance(data, dict):
+                self._log(host, status)
+                raise UpstreamError(host, status)
+            return data
+
+    def _oa(self, path: str, params: dict, kind: str) -> dict:
+        params = dict(params)
+        if self.openalex_key:
+            params["api_key"] = self.openalex_key
+        return self._send(OPENALEX, OPENALEX_HOST, path, params, {}, kind)
+
+    @staticmethod
+    def _results(data: dict, fields) -> list[dict]:
+        raw = data.get("results")
+        out = []
+        for w in raw if isinstance(raw, list) else []:
+            row = graph_work(w, fields)
+            if row:
+                out.append(row)
+        return out
+
+    # ------------------------------------------------------------ OpenAlex
+    def work(self, no: int, fields) -> dict:
+        """단건 조회(무료). 없으면 UpstreamError(status=404).
+
+        OpenAlex에서 합쳐진 작품은 3xx로 새 번호를 알려 준다: Location이 같은 상수 호스트(api.openalex.org)의
+        /works/W<번호>일 때만 그 번호로 한 번 더 조회한다. 또 3xx이거나 모양이 다르면 404로 본다(품질팀 I-1).
+        돌려준 작품의 번호가 요청과 다를 수 있으므로 호출 쪽은 row["no"]를 씨앗으로 쓴다."""
+        no = int(no)
+        for attempt in range(2):
+            try:
+                data = self._oa(f"/works/W{no}", {"select": ",".join(fields)}, "single")
+            except UpstreamError as e:
+                if e.status and 300 <= e.status < 400:
+                    new = merged_work_no(e.location)
+                    if attempt == 0 and new and new != no:
+                        no = new
+                        continue
+                    raise UpstreamError(OPENALEX_HOST, 404) from None
+                raise
+            row = graph_work(data, fields)
+            if not row:
+                raise UpstreamError(OPENALEX_HOST, 404)
+            return row
+        raise UpstreamError(OPENALEX_HOST, 404)
+
+    def works(self, nos: list[int], fields) -> list[dict]:
+        """번호 묶음 조회(≤100, 목록 호출 1회)"""
+        nos = [int(n) for n in nos][:100]
+        if not nos:
+            return []
+        data = self._oa("/works", {"filter": "openalex:" + "|".join(f"W{n}" for n in nos), "per_page": 100,
+                                   "select": ",".join(fields)}, "list")
+        return self._results(data, fields)
+
+    def works_by_doi(self, dois: list[str], fields) -> list[dict]:
+        """DOI 묶음 조회(≤100, 목록 호출 1회). DOI는 이미 검사한 값만(| , 없음)"""
+        dois = [d for d in dois if d and "|" not in d and "," not in d][:100]
+        if not dois:
+            return []
+        data = self._oa("/works", {"filter": "doi:" + "|".join(f"https://doi.org/{d}" for d in dois), "per_page": 100,
+                                   "select": ",".join(fields)}, "list")
+        return self._results(data, fields)
+
+    def citing(self, nos: list[int], sort: str, fields) -> tuple[list[dict], int]:
+        """nos 중 하나라도 인용한 작품(cites: OR, ≤50값), 정렬 · 100편. (작품들, 전체 수)"""
+        nos = [int(n) for n in nos][:50]
+        data = self._oa("/works", {"filter": "cites:" + "|".join(f"W{n}" for n in nos), "sort": sort,
+                                   "per_page": 100, "select": ",".join(fields)}, "list")
+        meta = data.get("meta") if isinstance(data.get("meta"), dict) else {}
+        return self._results(data, fields), _nonneg(meta.get("count"))
+
+    def search_title(self, title: str, fields) -> list[dict]:
+        """제목 검색(비용이 큼 — 씨앗에 식별자가 없을 때만)"""
+        data = self._oa("/works", {"search": title, "per_page": 3, "select": ",".join(fields)}, "list")
+        return self._results(data, fields)
+
+    # ------------------------------------------------------------ Semantic Scholar
+    def s2_reference_dois(self, doi: str) -> list[str]:
+        """씨앗 DOI의 참고문헌 DOI 목록(S2 1회). 경로의 DOI는 인코딩('?' · '#' 무력화)"""
+        headers = {"x-api-key": self.s2_key} if self.s2_key else {}
+        if not doi or any(seg in (".", "..") for seg in doi.split("/")):  # 경로 조작 세그먼트는 보내지 않음(품질팀 M-6)
+            raise UpstreamError(S2_HOST, 400)
+        path = f"/paper/DOI:{quote(doi, safe='/')}/references"
+        data = self._send(S2, S2_HOST, path, {"fields": "externalIds", "limit": 1000}, headers, "s2")
+        out: dict[str, None] = {}
+        for item in data.get("data") if isinstance(data.get("data"), list) else []:
+            cited = item.get("citedPaper") if isinstance(item, dict) else None
+            ext = cited.get("externalIds") if isinstance(cited, dict) else None
+            d = ext.get("DOI") if isinstance(ext, dict) else None
+            if isinstance(d, str) and d.strip().lower().startswith("10."):
+                out[d.strip().lower()[:300]] = None
+        return list(out)

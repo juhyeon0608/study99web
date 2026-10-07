@@ -272,10 +272,12 @@ def test_migration_files_follow_naming():
 
 # ---------------------------------------------------------------- 정적 검사
 SYSTEM_TABLES = {"allowed_emails", "schema_migrations"}
+SHARED_TABLES = {"external_works", "citation_edges"}  # 인용 그래프 공용 캐시 (citation-graph 명세 8.4 · AC-G20)
 
 
 def test_every_table_has_rls_and_policy_in_same_file():
-    """AC-20 (정적): paperlab 표를 만드는 파일 안에 enable + force RLS, 개인 표는 authenticated 정책 · user_id 열"""
+    """AC-20 (정적): paperlab 표를 만드는 파일 안에 enable + force RLS, 개인 표는 authenticated 정책 · user_id 열.
+    공용 캐시 표(AC-G20)는 user_id 대신 select 정책 하나 · authenticated 쓰기 권한 없음"""
     from paperlab.migrate import BOOTSTRAP, MIGRATIONS_DIR
     sources = {p.name: p.read_text(encoding="utf-8") for p in MIGRATIONS_DIR.glob("*.sql")}
     sources["migrate.py BOOTSTRAP"] = BOOTSTRAP
@@ -286,6 +288,12 @@ def test_every_table_has_rls_and_policy_in_same_file():
             tables += 1
             assert f"alter table paperlab.{table} enable row level security;" in text, (name, table)
             assert f"alter table paperlab.{table} force row level security;" in text, (name, table)
+            if table in SHARED_TABLES:
+                assert f"create policy shared_read on paperlab.{table} for select to authenticated using (true);" in text
+                assert len(re.findall(rf"create policy \w+ on paperlab\.{table}\b", text)) == 1, (name, table)
+                assert not re.search(r"^\s+(user_id|\w*_by|ip|session\w*|\w*email\w*)\s", body, re.M), (name, table)
+                assert not re.search(rf"grant [^;]*(insert|update|delete)[^;]*paperlab\.{table}[^;]* to authenticated", text)
+                continue
             if table not in SYSTEM_TABLES:
                 assert re.search(rf"create policy own_rows on paperlab\.{table} for all to authenticated\s+"
                                  r"using \(\(select auth\.uid\(\)\) = user_id\) with check \(\(select auth\.uid\(\)\) = user_id\);",

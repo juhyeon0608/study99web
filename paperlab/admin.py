@@ -12,6 +12,9 @@ r"""관리 명령 (명세 6.3 · 8.3 · 7.4 · 13.3 · 10.2). 서버가 아니�
     python -m paperlab.admin pg-dump-check                  pg_dump 주 버전 ≥ DB 서버 주 버전(앱 역할 주소로 버전만)
     python -m paperlab.admin latest-backup [--max-hours 36] R2의 가장 최근 백업 날짜(감시 작업)
     python -m paperlab.admin mark-test-project              테스트 프로젝트 표지 붙이기                  reason=mark test project
+    python -m paperlab.admin cache-stats                    인용 그래프 공용 캐시 크기 · 행 수(내용은 출력 안 함)
+                                                                                                         reason=citation cache stats
+    python -m paperlab.admin cache-prune [--max-mb 150]     공용 캐시를 상한 아래로(오래된 서지부터)       reason=citation cache prune
 
 공통 인자: --env-file(기본 %USERPROFILE%\.paperlab\cloud.env), --log-file(회전 로그, 예: D:\PaperLab\logs\backup.log).
 관리자 연결은 cloud.env의 SUPABASE_DB_URL(관리자 postgres 주소), 백업 · 버전 확인은 SUPABASE_APP_DB_URL(앱 역할 주소)이다.
@@ -444,6 +447,53 @@ def mark_test_project(test_conninfo: str, test_url: str, prod_url: str = "", pro
     return ref
 
 
+# ---------------------------------------------------------------- 인용 그래프 공용 캐시 (citation-graph 명세 8.5절)
+_CACHE_LIVE = ("select (select coalesce(sum(pg_column_size(w.*)), 0) from paperlab.external_works w)"
+               " + (select coalesce(sum(pg_column_size(e.*)), 0) from paperlab.citation_edges e)")
+
+
+def cache_stats(conninfo: str) -> dict:
+    """두 표의 크기 · 행 수 · 가장 오래된 날짜만 (번호 · 제목 등 내용은 돌려주지 않음)"""
+    log.info("admin reason=citation cache stats")
+    with _connect(conninfo) as conn:
+        r = conn.execute(
+            "select (select count(*) from paperlab.external_works), (select count(*) from paperlab.citation_edges), "
+            "pg_total_relation_size('paperlab.external_works'), pg_total_relation_size('paperlab.citation_edges'), "
+            "(select min(meta_on) from paperlab.external_works), (select min(fetched_on) from paperlab.citation_edges), "
+            f"({_CACHE_LIVE})").fetchone()
+    return {"works": int(r[0]), "edges": int(r[1]), "works_bytes": int(r[2]), "edges_bytes": int(r[3]),
+            "disk_bytes": int(r[2]) + int(r[3]), "live_bytes": int(r[6]),
+            "oldest_meta_on": r[4].isoformat() if r[4] else "", "oldest_fetched_on": r[5].isoformat() if r[5] else ""}
+
+
+def cache_prune(conninfo: str, max_mb: float) -> dict:
+    """살아 있는 행 크기(pg_column_size 합)가 max_mb 아래가 될 때까지 서지를 받은 날(meta_on)이 오래된 작품부터,
+    그 작품의 citation_edges 행과 함께 지운다. 지운 공간은 자동 정리(autovacuum)가 다시 쓴다.
+    지워도 다음에 필요하면 다시 받으므로 데이터 손실은 아니다."""
+    if max_mb < 0:
+        raise AdminError("--max-mb 는 0 이상이어야 해요")
+    limit = int(max_mb * 1024 * 1024)
+    log.info("admin reason=citation cache prune")
+    with _connect(conninfo) as conn, conn.transaction():
+        live = int(conn.execute(_CACHE_LIVE).fetchone()[0])
+        if live <= limit:
+            return {"deleted_works": 0, "deleted_edges": 0, "live_before": live, "live_after": live}
+        rows = conn.execute(
+            "select w.openalex_no, pg_column_size(w.*) + coalesce((select sum(pg_column_size(e.*)) "
+            "from paperlab.citation_edges e where e.work_no = w.openalex_no), 0) "
+            "from paperlab.external_works w order by w.meta_on, w.openalex_no").fetchall()
+        excess, picked = live - limit, []
+        for no, size in rows:
+            if excess <= 0:
+                break
+            picked.append(no)
+            excess -= int(size)
+        n_edges = conn.execute("delete from paperlab.citation_edges where work_no = any(%s)", (picked,)).rowcount
+        n_works = conn.execute("delete from paperlab.external_works where openalex_no = any(%s)", (picked,)).rowcount
+        after = int(conn.execute(_CACHE_LIVE).fetchone()[0])
+    return {"deleted_works": n_works, "deleted_edges": n_edges, "live_before": live, "live_after": after}
+
+
 def refuse_test_project(conninfo: str) -> None:
     """운영용 관리 명령: 테스트 표지가 있는 DB면 거부 (운영 보호 장치 3번)"""
     with _connect(conninfo) as conn:
@@ -498,6 +548,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("latest-backup", help="R2의 가장 최근 백업 날짜 (감시 작업용)")
     p.add_argument("--max-hours", type=float, default=36.0)
     sub.add_parser("mark-test-project")
+    sub.add_parser("cache-stats", help="인용 그래프 공용 캐시 크기 · 행 수 · 가장 오래된 날짜")
+    p = sub.add_parser("cache-prune", help="공용 캐시를 상한 아래로 (오래된 서지부터)")
+    p.add_argument("--max-mb", type=float, default=150.0)
     args = ap.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):  # 작업 스케줄러 · 파이프(cp949 등)에서 글자 때문에 죽지 않게
         try:
@@ -580,6 +633,16 @@ def main(argv: list[str] | None = None) -> int:
             say(f"고아 PDF {len(res['orphans'])}개 ({res['orphan_bytes']} 바이트), 삭제 {res['deleted']}개")
             say(f"R2 users/ 합계 {res['storage_bytes']} 바이트, DB 합계 {res['db_bytes']} 바이트, "
                 f"incoming/ {res['incoming_count']}개")
+        elif args.cmd == "cache-stats":
+            s = cache_stats(admin_db)
+            say(f"공용 캐시: 서지 {s['works']}행 · 관계 {s['edges']}행, 디스크 {s['disk_bytes'] / 1048576:.1f}MB "
+                f"(살아 있는 행 {s['live_bytes'] / 1048576:.1f}MB), 가장 오래된 서지 {s['oldest_meta_on'] or '-'}, "
+                f"가장 오래된 관계 {s['oldest_fetched_on'] or '-'}")
+        elif args.cmd == "cache-prune":
+            r = cache_prune(admin_db, args.max_mb)
+            say(f"공용 캐시 정리: 서지 {r['deleted_works']}행 · 관계 {r['deleted_edges']}행 지움, "
+                f"살아 있는 행 {r['live_before'] / 1048576:.1f}MB → {r['live_after'] / 1048576:.1f}MB "
+                f"(상한 {args.max_mb:g}MB)")
     except (AdminError, ConfigError) as e:
         print(f"실패: {e}", file=sys.stderr)
         log.error("실패: %s", redact(str(e)))

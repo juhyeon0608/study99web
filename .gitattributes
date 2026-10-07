@@ -4,3 +4,5 @@
 tests/golden/*.xml -text
 tests/golden/*.json -text
 *.ps1 text eol=crlf
+# 인용 그래프 d3 파일은 SRI(sha384)로 불러오므로 줄 끝을 바꾸지 않음 (vendor/THIRD_PARTY.md 해시와 같아야 함)
+paperlab/static/vendor/d3/* -text

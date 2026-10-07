@@ -3,6 +3,7 @@
 import { api, qs } from "./api.js";
 import { EXT_MARK, addPaper, bindExtLink, citeDialog, copySearchQuery, extMark, openExternal } from "./dialogs.js";
 import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
+import { openGraph, seedFromResult } from "./graph.js";
 import { state } from "./state.js";
 import { $, $$, authorsShort, el, esc, fmtNum, safeUrl } from "./ui.js";
 
@@ -234,6 +235,7 @@ function resultCard(it) {
       ${it.cited_by_count != null ? `<button class="link" data-g="cited_by">피인용 ${fmtNum(it.cited_by_count)}</button>` : ""}
       <button class="link" data-g="references">참고문헌</button>
       <button class="link" data-g="related">관련 논문</button>
+      <button class="link" data-graph-open title="이 논문과 주제가 가까운 논문들을 그래프로 봐요">그래프</button>
       ${safeUrl(it.pdf_url) ? `<a href="${esc(safeUrl(it.pdf_url))}" target="_blank" rel="noopener">[PDF] ${esc(host)}</a>` : ""}
       ${inha ? `<a class="ext-link" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${INHA_OPEN_TITLE}">${esc(INHA.buttons.view)}${EXT_MARK}</a>` : ""}
     </div></div>`);
@@ -274,5 +276,7 @@ function resultCard(it) {
   drawLib();
   $("[data-cite]", card).onclick = () => citeDialog(it);
   $$("[data-g]", card).forEach((b) => (b.onclick = () => loadGraph(it, b.dataset.g)));
+  // 씨앗 = 결과의 식별자 묶음(openalex_id · doi · arxiv_id · title)만 요청 본문으로
+  $("[data-graph-open]", card).onclick = () => openGraph(seedFromResult(it), { title: it.title || "" });
   return card;
 }

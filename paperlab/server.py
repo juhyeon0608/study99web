@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -17,6 +18,7 @@ import re
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 from urllib.parse import quote
@@ -31,11 +33,14 @@ from . import __version__, citations, compose, csl_style, doc_formats, format_im
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, AIError, AIService, PaperContext
 from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
+from .citecache import PgStore
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
 from .db import Database, DBUnavailable, Library, NotFoundError, folder_name_problem
+from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, BadSeed, Flights, GraphBuilder, GraphError, GraphGate,
+                          parse_request as parse_graph_request, seed_from_paper)
 from .manuscripts import TEMPLATES
-from .sources import SourceError, Sources, detect_identifier, merge
+from .sources import GraphCancelled, GraphSources, SourceError, Sources, detect_identifier, merge
 from .storage import (MAX_PDF_BYTES, BackupSizeCache, FakeStorage, NotFound, Storage, StorageError, StorageKeyError,
                       UserStorage, create_storage, is_upload_id, new_upload_id)
 
@@ -59,6 +64,9 @@ STYLE_MAX = 2 * 1024 * 1024
 WARN_LEVEL, FULL_LEVEL = 0.80, 0.95
 HEALTH_DB_TIMEOUT = 4.0  # /api/health?deep=1 의 DB 연결 대기 · 문 실행 제한(초)
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+KST = timezone(timedelta(hours=9))
+GRAPH_BODY_MAX = 4096  # 인용 그래프 요청 본문 (명세 9.1)
+BAD_SEED = {"detail": "이 논문으로는 그래프를 만들 수 없어요. DOI · arXiv 번호 · 제목 형식을 확인해 주세요.", "code": "bad_seed"}
 
 # 요청 id: 들어온 X-Request-Id가 이 모양이면 그대로, 아니면 새로 (로그 줄 끼워 넣기 방지)
 _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
@@ -861,6 +869,172 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             raise HTTPException(404, str(e)) from e
         res["items"] = mark_library(ctx, res["items"])
         return res
+
+    # ---------------------------------------- 인용 그래프 (docs/specs/citation-graph.md 9장 — SSE)
+    # 진행 중 표(사용자 잠금 · 같은 씨앗 합치기)는 메모리에만 두고 끝나면 지운다(AC-G33). 씨앗은 본문으로만 받는다.
+    st.graph_gate = GraphGate(running=2, waiting=4)
+    st.graph_flights = Flights()
+    st.graph_sources_factory = lambda oa_key, s2_key, **kw: GraphSources(oa_key, s2_key, **kw)
+    st.graph_today = lambda: datetime.now(KST).date()
+    st.graph_clock = time.monotonic
+    st.graph_wait_s = 20.0  # 대기 최대(초) — 넘으면 graph_queue_full
+    st.graph_ping_s = 15.0  # SSE 주석 줄 간격(Funnel 긴 연결 유지)
+
+    def graph_flight(f, claims: dict, seed, size: int, oa_key: str, s2_key: str) -> None:
+        """그래프 하나를 스레드에서 만든다(같은 씨앗 · 크기 요청은 이 결과를 함께 받음). 오류는 code만 남긴다."""
+        builder = None
+        try:
+            clock = st.graph_clock
+            src = st.graph_sources_factory(oa_key, s2_key, clock=clock, deadline=clock() + DEADLINE_S, cancel=f.cancel)
+            builder = GraphBuilder(PgStore(db, claims), src, st.graph_today(), progress=f.emit)
+            f.seed_no = builder.resolve(seed)
+            f.result = builder.build(f.seed_no, size)
+            f.seed_no = int(f.result["seed"][1:])  # 합쳐진 번호면 바뀐 번호(서재 논문 openalex_id 채우기에 씀)
+        except GraphCancelled:
+            f.error = "cancelled"
+        except GraphError as e:
+            f.error = e.code
+        except Exception as e:  # noqa: BLE001 - 내용(주소 · 식별자가 섞일 수 있음)은 남기지 않고 종류만
+            log.warning(json.dumps({"event": "graph_internal", "type": type(e).__name__}))
+            f.error = "internal"
+        finally:
+            if builder is not None:
+                f.info = dict(builder.info(), cache_hits=(f.result or {}).get("stats", {}).get("cache_hits", 0))
+            st.graph_flights.finish(f)
+
+    def graph_for_user(claims: dict, graph: dict, paper: dict | None, seed, seed_no: int | None) -> None:
+        """요청한 사용자 권한으로 서재 일치(in_library) · 서재 논문의 openalex_id 채우기/고치기.
+        고치기는 비어 있었거나, 그 논문의 openalex_id로 씨앗을 정했는데 OpenAlex가 다른 번호(합쳐짐)를 돌려준 경우만(품질팀 N-1)"""
+        with db.user_tx(claims) as lib:
+            groups = [graph["nodes"], graph["prior"], graph["derivative"]]
+            ids = lib.match_library([x["paper"] for g in groups for x in g])
+            i = 0
+            for g in groups:
+                for x in g:
+                    x["in_library"] = ids[i]
+                    i += 1
+            if paper and seed_no:
+                # seed.no는 서재 논문의 openalex_id(형식이 맞을 때)에서 온 값 — 그 값으로 정한 씨앗이 바뀌었을 때만 고친다
+                merged = bool(seed is not None and seed.no and seed.no != seed_no)
+                if not paper.get("openalex_id") or merged:
+                    lib.update_paper(paper["id"], {"openalex_id": f"W{seed_no}"})
+
+    async def graph_events(request: Request, claims: dict, token: str, seed, size: int, paper, oa_key: str,
+                           s2_key: str):
+        uid = claims["sub"]
+        gate, flights = st.graph_gate, st.graph_flights
+        started, flight, outcome = False, None, "error"
+        t0 = time.monotonic()
+        warn_codes: list[str] = []
+        nodes_n = 0
+        claimed = gate.claim(uid, token)
+        try:
+            if not claimed:  # 자리가 오래 비어 있어 정리됨(거의 없음)
+                yield _sse({"type": "error", "code": "internal", "error": GRAPH_ERRORS["internal"]})
+                return
+            waited_from, announced = time.monotonic(), False
+            while not gate.try_start():
+                if not announced:
+                    announced = True
+                    yield _sse({"type": "progress", "step": "wait", "message": "다른 그래프가 끝나기를 기다리는 중",
+                                "progress": 0.05})
+                if await request.is_disconnected():
+                    outcome = "cancelled"
+                    return
+                if time.monotonic() - waited_from > st.graph_wait_s:
+                    outcome = "graph_queue_full"
+                    yield _sse({"type": "error", "code": "graph_queue_full", "error": GRAPH_ERRORS["graph_queue_full"]})
+                    return
+                await asyncio.sleep(0.05)
+            started = True
+            flight = flights.join((seed.key(), size), lambda f: graph_flight(f, claims, seed, size, oa_key, s2_key))
+            idx, last_ping = 0, time.monotonic()
+            while True:
+                evs, done = flight.read(idx)
+                idx += len(evs)
+                for ev in evs:
+                    yield _sse(ev)
+                if done:
+                    break
+                if await request.is_disconnected():
+                    outcome = "cancelled"
+                    return
+                if time.monotonic() - last_ping >= st.graph_ping_s:
+                    last_ping = time.monotonic()
+                    yield ": ping\n\n"
+                await asyncio.sleep(0.05)
+            if flight.error or flight.result is None:
+                outcome = flight.error or "internal"
+                code = outcome if outcome in GRAPH_ERRORS else "internal"
+                yield _sse({"type": "error", "code": code, "error": GRAPH_ERRORS[code]})
+                return
+            graph = copy.deepcopy(flight.result)
+            await run_in_threadpool(graph_for_user, claims, graph, paper, seed, flight.seed_no)
+            warn_codes = [w["code"] for w in graph["warnings"]]
+            nodes_n = len(graph["nodes"])
+            outcome = "done"
+            yield _sse({"type": "done", "graph": graph})
+        except DBUnavailable:
+            outcome = "db_unavailable"
+            yield _sse({"type": "error", "code": "internal", "error": DB_UNAVAILABLE["detail"]})
+        except (asyncio.CancelledError, GeneratorExit):
+            outcome = "cancelled"
+            raise
+        finally:
+            if flight is not None:
+                flights.leave(flight)
+            if claimed:
+                gate.leave(uid, token, started)
+            info = flight.info if flight is not None else {}
+            # 숫자 · code만 (씨앗 · 번호 · 제목 · 사용자 id 없음 — 9.6절)
+            log.info(json.dumps({"event": "graph", "result": outcome, "ms": int((time.monotonic() - t0) * 1000),
+                                 "list_calls": info.get("list_calls", 0), "cache_hits": info.get("cache_hits", 0),
+                                 "nodes": nodes_n, "warnings": warn_codes,
+                                 "openalex_remaining": info.get("openalex_remaining")}))
+
+    @app.post("/api/graph")
+    async def graph(request: Request):
+        claims = getattr(request.state, "claims", None)
+        if not claims:
+            raise HTTPException(401, AUTH_REQUIRED["detail"])
+        # 본문 크기: Content-Length가 4KB를 넘으면 읽지 않고 거부, 없거나 chunked여도 4KB 넘게는 읽지 않음(품질팀 M-4)
+        length = request.headers.get("content-length")
+        if length is not None and (not length.strip().isdigit() or int(length) > GRAPH_BODY_MAX):
+            return JSONResponse(BAD_SEED, status_code=400)
+        buf = bytearray()
+        async for chunk in request.stream():
+            buf.extend(chunk)
+            if len(buf) > GRAPH_BODY_MAX:
+                return JSONResponse(BAD_SEED, status_code=400)
+        raw = bytes(buf)
+        try:
+            body = json.loads(raw or b"null")
+            paper_id, seed, size = parse_graph_request(body)
+        except (ValueError, BadSeed):
+            return JSONResponse(BAD_SEED, status_code=400)
+        uid = claims["sub"]
+
+        def prepare():
+            with db.user_tx(claims) as lib:
+                paper = lib.get_paper(paper_id, detail=False) if paper_id else None
+                s = load_user_settings(lib, st.box, uid)
+                return paper, s.get("openalex_api_key") or "", s.get("semantic_scholar_api_key") or ""
+
+        paper, oa_key, s2_key = await run_in_threadpool(prepare)
+        if paper_id:
+            if not paper:
+                return JSONResponse({"detail": "논문을 찾을 수 없어요"}, status_code=404)
+            seed = seed_from_paper(paper)
+            if seed.empty():
+                return JSONResponse(BAD_SEED, status_code=400)
+        state, token = st.graph_gate.enter(uid)
+        if state == "busy":
+            return JSONResponse({"detail": "그래프를 만드는 중이에요. 끝난 뒤 다시 눌러 주세요.", "code": "graph_busy"},
+                                status_code=429)
+        if state == "full":
+            return JSONResponse({"detail": GRAPH_ERRORS["graph_queue_full"], "code": "graph_queue_full"}, status_code=503)
+        return StreamingResponse(graph_events(request, claims, token, seed, size, paper, oa_key, s2_key),
+                                 media_type="text/event-stream", headers=SSE_HEADERS)
 
     @app.post("/api/cite-preview")
     def cite_preview(data: dict = Body(...)):

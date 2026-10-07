@@ -1,5 +1,5 @@
 // 진입점: 로그인 게이트(시작 · 로그인 · 허용 안 됨 · 멈춤), 계정 메뉴, 사이드바(필터 · 폴더 · 컬렉션 · 태그 · 저장 공간),
-// 화면 전환(#/library, #/discover, #/read/:id, #/write)
+// 화면 전환(#/library, #/discover, #/read/:id, #/write, #/graph · #/graph/W…)
 
 import { ApiError, api, setApiHooks, setApiLive } from "./api.js";
 import { hasAuthCode, initAuth, sessionUser, signInWithGoogle, signOut, startSession, takeRedirectError } from "./auth.js";
@@ -7,6 +7,7 @@ import {
   cancelUploads, folderIcon, folderPickDialog, folderSubtree, settingsDialog, uploadPdfs, uploadsRunning, usageInfo,
 } from "./dialogs.js";
 import { renderDiscover } from "./discover.js";
+import { closeGraph, renderGraph, resetGraphMemory } from "./graph.js";
 import { flushLibrary, loadPapers, renderLibrary } from "./library.js";
 import { closeReader, flushReader, openReader, stopSummaries, summariesRunning } from "./reader.js";
 import { closeWriter, composeDialog, flushWriter, openManuscript, renderWriteList, unsavedDraft } from "./writing.js";
@@ -204,6 +205,7 @@ async function boot({ retry = false } = {}) {
 }
 
 async function enterApp(me) {
+  resetGraphMemory(); // 만료 뒤 다른 계정으로 로그인한 경우에도 이전 그래프를 쓰지 않음
   const user = await sessionUser();
   const meta = (user && user.user_metadata) || {};
   state.user = {
@@ -378,6 +380,7 @@ actions.logout = logout;
 function clearApp() {
   closeReader();
   closeWriter();
+  resetGraphMemory(); // 다음 사용자에게 이전 계정의 그래프(서재 표시)가 남지 않게
   resetState();
   main.innerHTML = "";
   for (const id of ["#collection-tree", "#folder-tree", "#tag-list"]) $(id).innerHTML = "";
@@ -767,6 +770,15 @@ async function route() {
     return openReader(main, Number(m[1]), m[2] ? Number(m[2]) : null);
   }
   closeReader();
+  if (/^#\/graph(\/|$)/.test(hash)) {
+    // 인용 그래프: 읽기 화면처럼 사이드바를 숨기고 전체 폭 (디자인 GD-1). 사이드바 메뉴 항목은 없음(K-12)
+    closeWriter();
+    state.view = "graph";
+    app.classList.add("reading");
+    renderSidebar();
+    return renderGraph(main);
+  }
+  closeGraph();
   const w = hash.match(/^#\/write(?:\/(\d+))?/);
   if (w) {
     state.view = "write";
@@ -795,7 +807,7 @@ let dragDepth = 0;
 const isFileDrag = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
 const signedIn = () => document.body.dataset.auth === "in";
 window.addEventListener("dragenter", (e) => {
-  if (!signedIn() || !isFileDrag(e) || state.view === "reader" || /^#\/write\/\d/.test(location.hash)) return;
+  if (!signedIn() || !isFileDrag(e) || state.view === "reader" || state.view === "graph" || /^#\/write\/\d/.test(location.hash)) return;
   dragDepth++;
   $("#drop-overlay div").textContent = state.view === "write" ? "워드·한글 문서를 놓으면 인용을 넣어 드려요" : "PDF를 놓으면 서재에 추가돼요";
   $("#drop-overlay").classList.remove("hidden");
@@ -807,7 +819,7 @@ window.addEventListener("drop", (e) => {
   e.preventDefault();
   dragDepth = 0;
   $("#drop-overlay").classList.add("hidden");
-  if (!signedIn() || state.view === "reader") return;
+  if (!signedIn() || state.view === "reader" || state.view === "graph") return;
   const files = [...e.dataTransfer.files];
   if (state.view === "write") {
     const doc = files.find((f) => /\.(docx|hwpx)$/i.test(f.name));

@@ -27,6 +27,8 @@ const GUIDE_KEY = "paperlab.inhaGuideSeen";
 export const G5_NOTICE = `<div class="notice inha-after" data-tone="info">${ICON_INFO}<div>학교 사이트에서 PDF를 받았다면 <b>[PDF 첨부]</b>로 올려 주세요.</div></div>`;
 export const SCHOOL_LOGIN_NOTE = "‘인하대에서 보기’를 누르면 학교 로그인이 필요할 때 자동으로 로그인 화면이 뜨고, 로그인하면 보려던 페이지로 돌아가요. 미리 로그인해 두고 싶으면 [학교 로그인]을 누르세요. 로그인은 학교 화면에서 직접 하고, PaperLab은 학교 계정을 저장하거나 사용하지 않아요. 학교 로그인이 끝나면 다시 로그인 화면이 떠요.";
 export const SCHOLAR_LIBRARY_NOTE = "Google Scholar: 설정 → 도서관 링크에서 ‘인하대학교’를 켜면 검색 결과에 학교 구독 원문 링크가 함께 나와요.";
+// 인용 그래프 아이콘 (docs/design/citation-graph-ui.md 1.2절) — 진입 상자 · [이 논문으로 새 그래프]
+export const ICON_GRAPH = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="6" r="2"/><circle cx="15" cy="17" r="3"/><path d="M7.7 8.9 13 14.8M8.5 6.8l7.5-.6M17.5 7.9l-1.7 6.2"/></svg>`;
 
 // 이 브라우저에서 안내 창을 "다시 보지 않기" 했는지 (저장소를 못 쓰면 매번 안내)
 function guideSeen() {
@@ -278,12 +280,15 @@ export async function settingsDialog() {
     </div>
 
     <div class="section-title">논문 검색 데이터베이스</div>
-    <div class="field"><label>연락처 이메일 (선택)</label><input class="input" name="contact_email" value="${esc(s.contact_email)}" placeholder="you@example.com">
-      <div class="hint">OpenAlex·Crossref에 이메일을 알려주면 더 안정적인 요청 한도를 받아요.</div></div>
+    <div class="field"><label for="set-contact-email">연락처 이메일 (선택)</label><input class="input" id="set-contact-email" name="contact_email" value="${esc(s.contact_email)}" placeholder="you@example.com" aria-describedby="set-contact-hint">
+      <div class="hint" id="set-contact-hint">Crossref에 이메일을 알려 주면 요청이 우선 처리돼요(OpenAlex에는 보내지 않아요).</div></div>
     <div class="grid-2">
-      <div class="field"><label>OpenAlex API 키 (선택)</label><input class="input" type="password" name="openalex_api_key" placeholder="${s.openalex_api_key_set ? "저장됨" : "없어도 돼요"}"></div>
-      <div class="field"><label>Semantic Scholar API 키 (선택)</label><input class="input" type="password" name="semantic_scholar_api_key" placeholder="${s.semantic_scholar_api_key_set ? "저장됨" : "없어도 돼요"}"></div>
+      <div class="field"><label for="set-oa-key">OpenAlex API 키 (선택)</label><input class="input" type="password" id="set-oa-key" name="openalex_api_key" placeholder="${s.openalex_api_key_set ? "저장됨" : "없어도 돼요"}" aria-describedby="set-oa-key-hint set-keys-note">
+        <div class="hint" id="set-oa-key-hint">무료 키를 넣으면 하루 사용 한도가 10배가 돼요.</div></div>
+      <div class="field"><label for="set-s2-key">Semantic Scholar API 키 (선택)</label><input class="input" type="password" id="set-s2-key" name="semantic_scholar_api_key" placeholder="${s.semantic_scholar_api_key_set ? "저장됨" : "없어도 돼요"}" aria-describedby="set-s2-key-hint set-keys-note">
+        <div class="hint" id="set-s2-key-hint">키가 있으면 요청이 덜 막혀요.</div></div>
     </div>
+    <div class="field keys-note"><div class="hint" id="set-keys-note">키는 검색과 인용 그래프에 쓰여요. 키 없이 쓰면 하루 한도가 작아 그래프를 만들지 못할 때가 있어요. 키로 받은 공개 서지 정보(제목 · 저자 · 인용 관계)도 모든 사용자가 함께 쓰는 저장소에 들어가고, OpenAlex · Semantic Scholar 쪽에는 키 주인의 사용량으로 기록돼요. PaperLab은 누가 어떤 논문을 조회했는지 남기지 않아요.</div></div>
 
     <div class="section-title" id="set-school-title">학교 연결 (${esc(INHA.label)})</div>
     <div class="field" role="group" aria-labelledby="set-school-title">
