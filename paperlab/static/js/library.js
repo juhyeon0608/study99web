@@ -2,9 +2,11 @@
 
 import { api, downloadBlob, qs, safeFilename } from "./api.js";
 import {
-  addByIdentifierDialog, addPaper, bibliographyDialog, citeDialog, editPaperDialog, exportPapers, folderIcon, folderPath,
-  importDialog, issuesBox, moveToFolderDialog, uploadPdfs,
+  EXT_MARK, G5_NOTICE, SCHOLAR_LIBRARY_NOTE, addByIdentifierDialog, addPaper, bibliographyDialog, bindExtLink, citeDialog,
+  copySearchQuery, editPaperDialog, exportPapers, folderIcon, folderPath, importDialog, issuesBox, moveToFolderDialog,
+  openExternal, uploadPdfs,
 } from "./dialogs.js";
+import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
 import {
   $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
@@ -16,6 +18,9 @@ let detailTab = "info";
 let relatedKind = "cited_by";
 let noteSaver = null;
 let detailToken = 0;
+
+const INHA_OPEN_TITLE = `${INHA.proxyName}(정석학술정보관)로 원문 페이지를 열어요`;
+const TITLE_SEARCH_DBS = [["riss", "RISS"], ["dbpia", "DBpia"], ["kiss", "KISS"]];
 
 const SORTS = [["added", "추가한 순"], ["opened", "최근 연 순"], ["year", "연도 (최신)"], ["title", "제목"], ["first_author", "제1저자"], ["cited", "피인용 많은 순"]];
 
@@ -303,7 +308,14 @@ async function renderDetail() {
   body.classList.remove("no-detail");
   const ids = (p.doi ? `<dt>DOI</dt><dd><a href="https://doi.org/${esc(p.doi)}" target="_blank" rel="noopener">${esc(p.doi)}</a></dd>` : "")
     + (p.arxiv_id ? `<dt>arXiv</dt><dd><a href="https://arxiv.org/abs/${esc(p.arxiv_id)}" target="_blank" rel="noopener">${esc(p.arxiv_id)}</a></dd>` : "")
-    + (safeUrl(p.url) && !p.doi ? `<dt>링크</dt><dd><a href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\//, "").slice(0, 50))}</a></dd>` : "");
+    + (safeUrl(p.url) && !p.doi ? `<dt>링크</dt><dd><a href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\//, "").slice(0, 50))}</a></dd>` : "")
+    + scholarRow(p);
+  // 학교 프록시로 열 주소(없으면 숨김), 대상이 없을 때 제목으로 학교 DB 검색 (시안 5장)
+  const inha = paperProxyTarget(p);
+  const titleQ = normalizeQuery(p.title);
+  const inhaBtn = p.has_pdf ? "" : inha
+    ? `<a class="btn" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${INHA_OPEN_TITLE}">${esc(INHA.buttons.view)}${EXT_MARK}</a>`
+    : titleQ ? `<span class="menu-wrap"><button class="btn" data-inha-title-search aria-haspopup="menu" aria-expanded="false">학교 DB에서 제목 검색 ▾</button></span>` : "";
   const venueBits = [p.venue, p.volume && `${p.volume}권`, p.issue && `${p.issue}호`, p.pages && `${p.pages}쪽`].filter(Boolean).join(", ");
   panel.innerHTML = "";
   const inner = el(`<div class="detail-inner">
@@ -314,10 +326,11 @@ async function renderDetail() {
     <div class="authors">${esc((p.authors || []).map(authorName).join(", ") || "저자 미상")}</div>
     <div class="venue-line">${esc([venueBits, p.year].filter(Boolean).join(" · "))}</div>
     <div class="actions">
-      ${p.has_pdf ? `<button class="btn primary" data-read>읽기 · AI 요약</button>` : `<button class="btn primary" data-fetch>PDF 받기</button><button class="btn" data-attach>PDF 첨부</button>`}
+      ${p.has_pdf ? `<button class="btn primary" data-read>읽기 · AI 요약</button>` : `<button class="btn primary" data-fetch>PDF 받기</button>${inhaBtn}<button class="btn" data-attach>PDF 첨부</button>`}
       <button class="btn" data-cite>인용</button>
       <span class="menu-wrap"><button class="btn" data-more>⋯</button></span>
     </div>
+    <div class="inha-after-slot" data-inha-after role="status"></div>
     <div data-issues></div>
     <div class="row" style="gap:14px;flex-wrap:wrap">
       <div class="seg" data-status>${Object.entries(state.meta.statuses).map(([k, v]) => `<button data-v="${k}" class="${p.status === k ? "active" : ""}">${v}</button>`).join("")}</div>
@@ -357,15 +370,34 @@ async function renderDetail() {
   };
   const attach = $("[data-attach]", inner);
   if (attach) attach.onclick = () => attachPdf(p.id, false);
+  // G-5: 실제로 새 탭을 연 뒤 한 줄 안내 — 패널을 다시 그릴 때까지 (D-1)
+  const showAfter = () => { $("[data-inha-after]", inner).innerHTML = G5_NOTICE; };
+  const inhaLink = $("[data-inha-open]", inner);
+  if (inhaLink) bindExtLink(inhaLink, { onOpen: showAfter });
+  const titleSearch = $("[data-inha-title-search]", inner);
+  if (titleSearch) titleSearch.onclick = (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    btn.setAttribute("aria-expanded", "true");
+    popupMenu(btn, TITLE_SEARCH_DBS.map(([db, name]) => ({
+      label: name,
+      sub: inhaSearchTakesQuery(db) ? "새 탭" : "새 탭 · 제목 복사",
+      action: () => openExternal(inhaSearchUrl(db, titleQ), {
+        returnFocus: btn, before: inhaSearchTakesQuery(db) ? null : () => copySearchQuery(titleQ),
+      }),
+    })), { left: true, focus: e.detail === 0, onClose: () => btn.setAttribute("aria-expanded", "false") });
+  };
   $("[data-cite]", inner).onclick = () => citeDialog(p.id);
-  $("[data-more]", inner).onclick = (e) => {
+  const moreBtn = $("[data-more]", inner);
+  moreBtn.onclick = (e) => {
     e.stopPropagation();
     popupMenu(e.currentTarget, [
       { label: "정보 수정", action: () => editPaperDialog(p) },
       { label: "폴더로 이동…", action: () => moveToFolderDialog([p.id], p.folder_id ?? null) },
       { label: "온라인 정보로 채우기", sub: "DOI·arXiv·제목", action: () => fillOnline(p) },
       ...(p.has_pdf ? [{ label: "PDF 바꾸기", action: () => attachPdf(p.id, true) },
-        { label: "PDF 파일 열기", action: () => openPdfFile(p.id) }] : []),
+        { label: "PDF 파일 열기", action: () => openPdfFile(p.id) },
+        ...(inha ? [{ label: INHA.buttons.view, sub: "새 탭", action: () => openExternal(inha, { returnFocus: moreBtn }) }] : [])] : []),
       { label: "하이라이트·노트 내보내기 (.md)", action: () => exportAnnotations(p.id, p.title) },
       "-",
       { label: "삭제", danger: true, action: () => deletePapers([p.id]) },
@@ -418,6 +450,13 @@ async function renderDetail() {
   };
   $$(".tabs button", inner).forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
   showTab(detailTab);
+}
+
+// 정보 탭 "바로가기" 줄: Google Scholar (질의 = 제목, 제목이 비면 DOI — IK-3). 둘 다 없으면 줄을 뺌
+function scholarRow(p) {
+  const url = scholarUrl(p.title) || scholarUrl(p.doi);
+  return url ? `<dt>바로가기</dt><dd><a class="ext-link" href="${esc(url)}" target="_blank" rel="noopener noreferrer" data-scholar-open
+    title="${esc(SCHOLAR_LIBRARY_NOTE)}">${esc(INHA.buttons.scholar)}${EXT_MARK}</a></dd>` : "";
 }
 
 function infoView(p, ids) {

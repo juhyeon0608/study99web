@@ -1,7 +1,8 @@
 // 논문 찾기: OpenAlex · arXiv · Semantic Scholar · Crossref 통합 검색 (Google Scholar 방식)
 
 import { api, qs } from "./api.js";
-import { addPaper, citeDialog } from "./dialogs.js";
+import { EXT_MARK, addPaper, bindExtLink, citeDialog, copySearchQuery, extMark, openExternal } from "./dialogs.js";
+import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
 import { state } from "./state.js";
 import { $, $$, authorsShort, el, esc, fmtNum, safeUrl } from "./ui.js";
 
@@ -12,6 +13,16 @@ const SOURCES = [
   ["crossref", "Crossref", "DOI 등록 출판물"],
 ];
 const SORT_LABEL = { relevance: "관련도순", cited: "피인용순", date: "최신순" };
+// "학교 DB에서 찾기" 줄 (docs/design/inha-proxy-ui.md 3장). 툴팁은 켜졌을 때 것, 꺼지면 "검색어를 입력하세요"
+const SCHOOL_DBS = [
+  ["riss", "RISS", `검색어로 RISS를 열어요 (${INHA.proxyName})`],
+  ["dbpia", "DBpia", `검색어로 DBpia를 열어요 (${INHA.proxyName})`],
+  ["kiss", "KISS", `검색어로 KISS를 열어요 (${INHA.proxyName})`],
+];
+const KISS_COPY_TITLE = "KISS 첫 페이지를 열고 검색어를 복사해요";
+const SCHOLAR_TITLE = "검색어로 Google Scholar를 열어요. Scholar 설정 → 도서관 링크에서 ‘인하대학교’를 켜면 학교 구독 원문 링크가 함께 나와요.";
+const EMPTY_QUERY = "검색어를 입력하세요";
+const INHA_OPEN_TITLE = `${INHA.proxyName}(정석학술정보관)로 원문 페이지를 열어요`;
 
 const ds = {
   q: "", source: "openalex", yearFrom: "", yearTo: "", sort: "relevance", oa: false, page: 1,
@@ -39,6 +50,7 @@ export function renderDiscover(main) {
         <label class="check" style="margin-left:6px"><input type="checkbox" name="oa" ${ds.oa ? "checked" : ""}> 무료 PDF 있는 논문만</label>
         <span class="muted small" data-srcdesc style="margin-left:auto"></span>
       </div>
+      ${schoolBar()}
     </div>
     <div class="discover-results"></div></section>`);
   main.appendChild(view);
@@ -65,8 +77,59 @@ export function renderDiscover(main) {
   }));
   $("[name=oa]", view).onchange = () => { if (ds.q) submit(); };
   for (const n of ["yf", "yt"]) $(`[name=${n}]`, view).onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); submit(); } };
+  wireSchoolBar(view);
   draw();
   if (!ds.q) setTimeout(() => $("[name=q]", view).focus(), 30);
+}
+
+// 학교 DB 버튼에 질의가 들어가지 않으면(KISS 임시안) 첫 페이지를 열고 검색어를 복사한다
+function schoolTitle(db, title) {
+  return inhaSearchTakesQuery(db) ? title : KISS_COPY_TITLE;
+}
+
+function schoolBar() {
+  return `<div class="school-bar" data-school-bar role="group" aria-labelledby="school-bar-label">
+    <span class="school-bar-label" id="school-bar-label">${esc(INHA.buttons.searchDb)}</span>
+    <div class="school-links">
+      ${SCHOOL_DBS.map(([db, name, title]) => `<button type="button" class="btn sm" data-inha-search="${db}" title="${esc(schoolTitle(db, title))}">${esc(name)}${inhaSearchTakesQuery(db) ? EXT_MARK : extMark("새 탭에서 열림 · 검색어를 복사해요")}</button>`).join("")}
+      <span class="school-sep" aria-hidden="true"></span>
+      <button type="button" class="btn sm" data-scholar-search title="${esc(SCHOLAR_TITLE)}">Google Scholar${EXT_MARK}</button>
+    </div>
+    <span class="school-hint hidden" id="school-hint" data-school-hint>${EMPTY_QUERY}</span>
+  </div>`;
+}
+
+// 검색창의 지금 입력값(검색 버튼을 누르기 전 값도)으로 버튼을 켜고 끈다. 누르면 그 순간의 값으로 연다
+function wireSchoolBar(view) {
+  const input = $("[name=q]", view);
+  const bar = $("[data-school-bar]", view);
+  const buttons = $$("[data-inha-search], [data-scholar-search]", bar);
+  const sync = () => {
+    const empty = !normalizeQuery(input.value);
+    for (const b of buttons) {
+      b.disabled = empty;
+      if (empty) b.setAttribute("aria-disabled", "true"); else b.removeAttribute("aria-disabled");
+      const db = b.dataset.inhaSearch;
+      b.title = empty ? EMPTY_QUERY : db ? schoolTitle(db, SCHOOL_DBS.find((d) => d[0] === db)[2]) : SCHOLAR_TITLE;
+    }
+    $("[data-school-hint]", bar).classList.toggle("hidden", !empty);
+  };
+  input.addEventListener("input", sync);
+  sync();
+  for (const b of $$("[data-inha-search]", bar)) {
+    b.onclick = () => {
+      const db = b.dataset.inhaSearch;
+      const q = normalizeQuery(input.value);
+      const url = inhaSearchUrl(db, q);
+      if (!url) return sync();
+      openExternal(url, { returnFocus: b, before: inhaSearchTakesQuery(db) ? null : () => copySearchQuery(q) });
+    };
+  }
+  $("[data-scholar-search]", bar).onclick = (e) => {
+    const url = scholarUrl(input.value);
+    if (!url) return sync();
+    openExternal(url, { guide: false, returnFocus: e.currentTarget });
+  };
 }
 
 async function search() {
@@ -158,6 +221,7 @@ function pager(page, total, go) {
 
 function resultCard(it) {
   const venue = [it.venue, it.year].filter(Boolean).join(", ");
+  const inha = paperProxyTarget(it); // 학교 프록시로 열 주소 — 없으면 링크를 그리지 않음
   const host = it.pdf_url ? (() => { try { return new URL(it.pdf_url).hostname.replace(/^www\./, ""); } catch { return "PDF"; } })() : "";
   const card = el(`<div class="result">
     <div class="r-title">${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener">${esc(it.title)}</a>` : esc(it.title)}</div>
@@ -171,7 +235,10 @@ function resultCard(it) {
       <button class="link" data-g="references">참고문헌</button>
       <button class="link" data-g="related">관련 논문</button>
       ${safeUrl(it.pdf_url) ? `<a href="${esc(safeUrl(it.pdf_url))}" target="_blank" rel="noopener">[PDF] ${esc(host)}</a>` : ""}
+      ${inha ? `<a class="ext-link" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${INHA_OPEN_TITLE}">${esc(INHA.buttons.view)}${EXT_MARK}</a>` : ""}
     </div></div>`);
+  const inhaLink = $("[data-inha-open]", card);
+  if (inhaLink) bindExtLink(inhaLink);
   const abs = $(".r-abs", card);
   if (abs) abs.onclick = () => abs.classList.toggle("clamp");
   const lib = $("[data-lib]", card);

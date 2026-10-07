@@ -2,11 +2,13 @@
 
 import { api, streamEvents } from "./api.js";
 import { listStyles, render, styleOptions } from "./cite.js";
-import { citeDialog, editPaperDialog, issuesBox, settingsDialog } from "./dialogs.js";
+import { EXT_MARK, bindExtLink, citeDialog, editPaperDialog, issuesBox, settingsDialog, uploadPdfs } from "./dialogs.js";
+import { INHA, paperProxyTarget } from "./extlinks.js";
 import { exportAnnotations } from "./library.js";
-import { state } from "./state.js";
+import { onRefresh, state } from "./state.js";
 import {
-  $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, renderMarkdown, renderTex, toast,
+  $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, pickFiles, renderMarkdown, renderTex,
+  toast,
 } from "./ui.js";
 
 const COLORS = ["yellow", "green", "blue", "pink", "purple"];
@@ -150,12 +152,42 @@ export async function openReader(main, pid, startPage = null) {
 }
 
 // ------------------------------------------------------------------- PDF
+// PDF 없는 논문: [인하대에서 보기](대상 있을 때) · [PDF 첨부] (docs/design/inha-proxy-ui.md 6장)
+function drawPdfMissing() {
+  const target = paperProxyTarget(R.paper);
+  R.pagesEl.innerHTML = `<div class="empty pdf-missing">
+    <h3>PDF가 없어요</h3>
+    <p>${target ? "인하대에서 논문을 열어 PDF를 받은 뒤 [PDF 첨부]로 올려 주세요."
+      : "PDF 파일이 있으면 [PDF 첨부]로 올려 주세요. 무료 PDF는 서재 상세 패널의 [PDF 받기]로 찾을 수 있어요."}</p>
+    <div class="empty-actions">
+      ${target ? `<a class="btn primary" href="${esc(target)}" target="_blank" rel="noopener noreferrer" data-inha-open>${esc(INHA.buttons.view)}${EXT_MARK}</a>` : ""}
+      <button type="button" class="btn${target ? "" : " primary"}" data-attach>PDF 첨부</button>
+    </div></div>`;
+  const link = $("[data-inha-open]", R.pagesEl);
+  if (link) bindExtLink(link);
+  const me = R;
+  $("[data-attach]", R.pagesEl).onclick = async () => {
+    const [file] = await pickFiles({ accept: ".pdf,application/pdf" });
+    if (!file || R !== me) return;
+    me.awaitingPdf = true; // 올리기가 끝나면(refreshAll) 다시 불러 PDF를 표시
+    uploadPdfs([file], { attachTo: me.pid });
+  };
+}
+
+// 첨부가 끝나 서재 데이터가 새로 고쳐지면, 그 논문에 PDF가 생겼는지 보고 읽기 화면을 다시 연다
+onRefresh(async () => {
+  const me = R;
+  if (!me || !me.awaitingPdf) return;
+  let p;
+  try { p = await api.get(`/api/papers/${me.pid}`); } catch { return; }
+  if (R !== me || !p.has_pdf) return;
+  me.awaitingPdf = false;
+  window.dispatchEvent(new HashChangeEvent("hashchange")); // 라우터가 같은 주소로 openReader를 다시 부름
+});
+
 async function loadPdf(startPage) {
   const me = R;
-  if (!R.paper.has_pdf) {
-    R.pagesEl.innerHTML = `<div class="empty"><h3>PDF가 없어요</h3><p>서재 상세 패널에서 PDF를 받거나 첨부해 주세요.</p></div>`;
-    return;
-  }
+  if (!R.paper.has_pdf) return drawPdfMissing();
   R.pagesEl.innerHTML = `<div class="empty"><span class="spinner"></span></div>`;
   try {
     const lib = await loadPdfjs();

@@ -2,6 +2,7 @@
 
 import { api, downloadBlob } from "./api.js";
 import { forgetStyle, listStyles, render, sentenceCase, styleOptions } from "./cite.js";
+import { INHA } from "./extlinks.js";
 import { formatManagerDialog, formatOptions, listFormats } from "./formats.js";
 import {
   $, $$, authorsShort, avatarEl, confirmDialog, copyText, el, errorToast, esc, fmtBytes, modal, pickFiles, promptDialog, toast,
@@ -14,6 +15,92 @@ const FOLDER_PATH = "M3.5 6.5A1.5 1.5 0 0 1 5 5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1
 // 폴더 아이콘 (none = "폴더 없음" 모양)
 export const folderIcon = (none = false) =>
   `<svg class="ico folder-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="${FOLDER_PATH}${none ? "M9.5 13.5h5" : ""}"/></svg>`;
+
+// ------------------------------------------------- 학교 링크 · 새 탭 (docs/design/inha-proxy-ui.md 0~2 · 8장)
+// 주소는 extlinks.js 함수의 반환값만 넣는다. 새 탭은 항상 noopener · noreferrer (S-6)
+export const ICON_EXT = `<svg class="ico ext-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>`;
+export const extMark = (note = "새 탭에서 열림") => `${ICON_EXT}<span class="sr-only">(${esc(note)})</span>`;
+export const EXT_MARK = extMark();
+const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
+const ICON_LOCK = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></svg>`;
+const GUIDE_KEY = "paperlab.inhaGuideSeen";
+export const G5_NOTICE = `<div class="notice inha-after" data-tone="info">${ICON_INFO}<div>학교 사이트에서 PDF를 받았다면 <b>[PDF 첨부]</b>로 올려 주세요.</div></div>`;
+export const SCHOOL_LOGIN_NOTE = "‘인하대에서 보기’를 누르면 학교 로그인이 필요할 때 자동으로 로그인 화면이 뜨고, 로그인하면 보려던 페이지로 돌아가요. 미리 로그인해 두고 싶으면 [학교 로그인]을 누르세요. 로그인은 학교 화면에서 직접 하고, PaperLab은 학교 계정을 저장하거나 사용하지 않아요. 학교 로그인이 끝나면 다시 로그인 화면이 떠요.";
+export const SCHOLAR_LIBRARY_NOTE = "Google Scholar: 설정 → 도서관 링크에서 ‘인하대학교’를 켜면 검색 결과에 학교 구독 원문 링크가 함께 나와요.";
+
+// 이 브라우저에서 안내 창을 "다시 보지 않기" 했는지 (저장소를 못 쓰면 매번 안내)
+function guideSeen() {
+  try { return localStorage.getItem(GUIDE_KEY) === "1"; } catch { return false; }
+}
+function setGuideSeen(on) {
+  try { if (on) localStorage.setItem(GUIDE_KEY, "1"); else localStorage.removeItem(GUIDE_KEY); } catch { /* 저장 못 함 — 다음에 다시 뜸 */ }
+}
+
+const openTab = (url) => window.open(url, "_blank", "noopener,noreferrer");
+
+// 처음 쓸 때 안내 창(G-1). onGo가 있으면 [계속 열기]의 클릭 안에서 바로 부른다(팝업 차단 회피), 없으면 보기 전용
+export function inhaGuideDialog({ onGo = null, returnFocus = null } = {}) {
+  const body = el(`<div class="inha-guide">
+    <div class="notice" data-tone="info">${ICON_LOCK}<div><b>PaperLab은 학교 아이디·비밀번호를 저장하거나 사용하지 않아요.</b> 로그인은 이 브라우저와 학교 사이에서만 이뤄져요.</div></div>
+    <ol class="inha-guide-list">
+      <li>학교에 로그인하지 않았으면 <b>학교 로그인 화면이 자동으로 떠요.</b> <b>정석학술정보관 계정으로 학교 화면에서 직접</b> 로그인하면 <b>보려던 페이지로 돌아가요.</b></li>
+      <li>시간이 지나거나 브라우저를 닫아 학교 로그인이 끝나면 다음에 열 때 <b>다시 로그인 화면이 떠요.</b></li>
+      <li>받은 PDF는 서재의 논문 상세에서 <b>[PDF 첨부]</b>로 올려 주세요.</li>
+      <li>학교가 구독하지 않는 사이트면 학교 안내·오류 페이지나 출판사의 구매 화면이 뜰 수 있어요.</li>
+    </ol>
+    <div class="notice" data-tone="warn">${ICON_WARN}<div>구독 계약상 <b>논문을 한꺼번에 많이 받으면 학교 전체 접속이 막힐 수 있어요.</b> 필요한 논문만 한 편씩 받아 주세요.</div></div>
+  </div>`);
+  const foot = el(`<div style="display:contents">
+    <div class="left"><label class="check"><input type="checkbox" data-guide-skip ${!onGo && guideSeen() ? "checked" : ""}> 다시 보지 않기</label></div>
+    ${onGo ? `<button class="btn" data-no>취소</button><button class="btn primary" data-guide-go>계속 열기${EXT_MARK}</button>`
+      : `<button class="btn primary" data-no>닫기</button>`}
+  </div>`);
+  const skip = $("[data-guide-skip]", foot);
+  // 다시 보지 않기: 창이 어떻게 닫히든 체크 상태를 저장 (D-2)
+  const m = modal({ title: "인하대 정석학술정보관으로 열어요", body, foot, onClose: () => {
+    setGuideSeen(skip.checked);
+    // 바깥 클릭(mousedown)으로 닫히면 그 기본 동작이 포커스를 옮기므로, 그 뒤에 돌려준다
+    if (returnFocus) setTimeout(() => { if (returnFocus.isConnected) returnFocus.focus(); }, 0);
+  } });
+  $(".modal", m.el).classList.add("inha-guide-modal");
+  $("[data-no]", foot).onclick = () => m.close();
+  const go = $("[data-guide-go]", foot);
+  if (go) go.onclick = () => { onGo(); m.close(); };
+  setTimeout(() => (go || $("[data-no]", foot)).focus(), 40);
+  return m;
+}
+
+// 새 탭으로 열기. guide: 처음이면 안내 창을 먼저(학교 링크), before: 열기 직전 동기 동작(KISS 복사), onOpen: 실제로 연 뒤
+export function openExternal(url, { guide = true, before = null, onOpen = null, returnFocus = null } = {}) {
+  if (!url) return;
+  const run = () => { if (before) before(); openTab(url); if (onOpen) onOpen(); };
+  if (!guide || guideSeen()) return run();
+  inhaGuideDialog({ onGo: run, returnFocus });
+}
+
+// <a href target=_blank rel="noopener noreferrer"> 학교 링크: 처음이면 막고 안내 창, 이미 봤으면 브라우저 기본 동작.
+// 가운데 클릭 · Ctrl/⌘/Shift+클릭은 안내 창 없이 브라우저 기본 동작 (D-3). Alt+클릭은 보통 클릭처럼 안내 창
+export function bindExtLink(a, { guide = true, onOpen = null } = {}) {
+  a.addEventListener("click", (e) => {
+    if (e.button !== 0 || e.ctrlKey || e.shiftKey || e.metaKey || !guide || guideSeen()) {
+      if (!e.altKey && onOpen) onOpen();
+      return;
+    }
+    e.preventDefault();
+    inhaGuideDialog({ onGo: () => { openTab(a.href); if (onOpen) onOpen(); }, returnFocus: a });
+  });
+  a.addEventListener("auxclick", (e) => { if (e.button === 1 && onOpen) onOpen(); });
+  return a;
+}
+
+// KISS 임시안(G-4): 기다리지 않고 복사를 시작만 한다(바로 이어서 새 탭을 연다). 토스트는 결과 하나만
+export function copySearchQuery(q) {
+  const done = (ok) => toast(ok ? "검색어를 복사했어요. KISS 검색창에 붙여 넣으세요."
+    : "검색어를 복사하지 못했어요. KISS 검색창에 직접 입력해 주세요.", "", { duration: 8000 });
+  let p;
+  try { p = navigator.clipboard.writeText(q); } catch (e) { p = Promise.reject(e); }
+  p.then(() => done(true), () => done(false));
+}
 
 // ------------------------------------------------------------ 저장 공간 (D14)
 // 비율은 내림(79.6%를 80%로 보이면서 level은 ok인 어긋남을 막음), 색 · 문구는 서버 level을 따른다
@@ -198,6 +285,18 @@ export async function settingsDialog() {
       <div class="field"><label>Semantic Scholar API 키 (선택)</label><input class="input" type="password" name="semantic_scholar_api_key" placeholder="${s.semantic_scholar_api_key_set ? "저장됨" : "없어도 돼요"}"></div>
     </div>
 
+    <div class="section-title" id="set-school-title">학교 연결 (${esc(INHA.label)})</div>
+    <div class="field" role="group" aria-labelledby="set-school-title">
+      <div class="row school-conn">
+        <a class="btn sm" href="${esc(INHA.loginUrl)}" target="_blank" rel="noopener noreferrer" data-inha-login aria-describedby="set-school-g2">${esc(INHA.buttons.login)}${EXT_MARK}</a>
+        <button type="button" class="btn sm ghost" data-inha-guide>처음 안내 다시 보기</button>
+      </div>
+      <div class="school-conn-notes">
+        <div class="hint is-strong" id="set-school-g2">${esc(SCHOOL_LOGIN_NOTE)}</div>
+        <div class="hint">${esc(SCHOLAR_LIBRARY_NOTE)}</div>
+      </div>
+    </div>
+
     <div class="section-title">계정</div>
     <div class="account-card">
       <span data-avatar></span>
@@ -207,6 +306,8 @@ export async function settingsDialog() {
     <div data-usage-slot><div class="status-line"><span class="spinner"></span> 저장 공간 사용량을 불러오는 중…</div></div>
   </form>`);
   $("[data-avatar]", body).replaceWith(avatarEl(user, true));
+  bindExtLink($("[data-inha-login]", body));
+  $("[data-inha-guide]", body).onclick = (e) => inhaGuideDialog({ returnFocus: e.currentTarget });
   // 저장된 ai_engine이 cli여도 1단계는 API만 보여 주고, 저장하면 api가 된다 (명세 8.1)
   const engine = "api";
   const drawCustom = (list) => {
