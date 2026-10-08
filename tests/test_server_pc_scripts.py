@@ -74,8 +74,10 @@ def test_public_url_in_one_place():
     cors = json.loads((ROOT / "deploy" / "r2-cors.json").read_text(encoding="utf-8"))
     assert cors[0]["AllowedOrigins"] == [cfg["public_url"]]  # 127.0.0.1 개발 출처 없음 (승인자 L4)
     hits = []
-    for base in ("paperlab", "deploy", "tests", "supabase"):
+    for base in ("paperlab", "deploy", "tests", "supabase", "desktop"):  # desktop: AC-84 · AC-88 (h) — 빌드가 server.json 에서 읽음
         for f in (ROOT / base).rglob("*"):
+            if {"node_modules", "dist"} & set(f.relative_to(ROOT).parts):  # 설치 패키지 · 빌드 결과물(커밋 안 함)
+                continue
             if f.is_file() and f.suffix in (".py", ".ps1", ".json", ".js", ".html", ".sql", ".toml", ".md"):
                 if host in f.read_text(encoding="utf-8", errors="replace"):
                     hits.append(f.relative_to(ROOT).as_posix())
@@ -555,3 +557,357 @@ def test_funnel_and_uninstall_dry_run():
     assert p.returncode == 0 and "[DRY] Funnel 끄기" in p.stdout, p.stdout + p.stderr
     assert scheduled_paperlab_tasks() == tasks_before
     assert re.search(r"cloud\.env", p.stdout)  # 비밀 파일은 지우지 않는다고 알림
+
+
+# ====================================================================== 2b — update.ps1 데스크톱 앱 빌드 단계 (AC-88, 명세 13.7.1)
+# 가짜 npm · node(.cmd → 파이썬)를 PATH 앞에 두고 스크립트 임시 사본의 common.ps1 끝에 서버 쪽 가짜 함수(파이썬 명령 · 작업 재시작 ·
+# 상태 확인)를 덧붙인다. 실제 npm · electron-builder · 작업 스케줄러 · DB 에는 닿지 않는다.
+_FAKE_NPM = r'''
+import hashlib, base64, json, os, sys, time
+from pathlib import Path
+args = sys.argv[1:]
+with open(os.environ["FAKE_NPM_LOG"], "a", encoding="utf-8") as f:
+    f.write(json.dumps({"args": args, "cwd": os.getcwd(), "at": time.time(),
+                        "env": {k: os.environ.get(k) for k in ("npm_config_cache", "ELECTRON_CACHE", "ELECTRON_BUILDER_CACHE")}}) + "\n")
+if args[:1] == ["-v"]:
+    print("11.0.0"); sys.exit(0)
+if args[:1] == ["ci"]:
+    print("added 300 packages"); sys.exit(int(os.environ.get("FAKE_NPM_CI_EXIT", "0")))
+if args[:2] == ["run", "dist"]:
+    if os.environ.get("FAKE_NPM_SLEEP"):
+        time.sleep(float(os.environ["FAKE_NPM_SLEEP"]))
+    code = int(os.environ.get("FAKE_NPM_DIST_EXIT", "0"))
+    if code:
+        print("electron-builder failed"); sys.exit(code)
+    version = json.loads(Path("package.json").read_text(encoding="utf-8"))["version"]
+    dist = Path("dist"); dist.mkdir(exist_ok=True)
+    exe = dist / f"PaperLab-Setup-{version}.exe"
+    exe.write_bytes(("installer " + version).encode() * 5000)
+    (dist / f"{exe.name}.blockmap").write_bytes(b"blockmap " + version.encode())
+    sha = base64.b64encode(hashlib.sha512(exe.read_bytes()).digest()).decode()
+    if os.environ.get("FAKE_NPM_BAD_SHA"):
+        sha = base64.b64encode(hashlib.sha512(b"other").digest()).decode()
+    (dist / "latest.yml").write_text(f"version: {version}\nfiles:\n  - url: {exe.name}\n    sha512: {sha}\n    size: {exe.stat().st_size}\n"
+                                     f"path: {exe.name}\nsha512: {sha}\nreleaseDate: '2026-10-08T00:00:00.000Z'\n", encoding="utf-8")
+    print("PaperLab 서버 주소(server.json): https://pl.example · 업데이트 주소: https://pl.example/downloads/")
+    sys.exit(0)
+sys.exit(9)
+'''
+
+_BUILD_STUB = (
+    "\r\nfunction Invoke-PLNative {{\r\n"
+    "  param([Parameter(Mandatory = $true)][string]$FilePath, [string[]]$Arguments = @(), [string]$WorkingDirectory)\r\n"
+    "  Add-Content -LiteralPath '{calls}' -Value ($Arguments -join ' ') -Encoding UTF8\r\n"
+    "  return 0\r\n}}\r\n"
+    "function Restart-PLServerTask {{\r\n"
+    "  param([string]$TaskName, [int]$Port, [string]$LogFile, [switch]$DryRun)\r\n"
+    "  Add-Content -LiteralPath '{calls}' -Value ('restart ' + $TaskName) -Encoding UTF8\r\n}}\r\n"
+    "function Wait-PLHealth {{\r\n"
+    "  param([int]$Port, [switch]$Deep, [int]$TimeoutSec, [string]$Commit)\r\n"
+    "  if ($env:PL_HEALTH_FAIL -eq '1') {{ return $null }}\r\n"
+    "  return [pscustomobject]@{{ ok = $true; commit = $Commit }}\r\n}}\r\n"
+    "function Test-PLIsAdmin {{ return $false }}\r\n")
+
+
+@pytest.fixture
+def build_env(tmp_path, monkeypatch):
+    """가짜 npm · node 를 PATH 앞에, 스크립트 사본(서버 쪽 가짜 함수), releases · cache · logs 폴더"""
+    fake = tmp_path / "fakebin"
+    fake.mkdir()
+    (fake / "fake_npm.py").write_text(_FAKE_NPM, encoding="utf-8")
+    # 배치 파일은 OEM 코드 페이지로 읽혀 한글 경로가 깨짐 → 저장소 밖(가상환경이 아닌) 파이썬 경로를 씀(표준 라이브러리만 필요)
+    py = Path(sys.base_prefix) / "python.exe"
+    py = py if py.exists() and str(py).isascii() else Path(sys.executable)
+    (fake / "npm.cmd").write_text(f'@"{py}" "{fake / "fake_npm.py"}" %*\r\n', encoding="ascii")
+    (fake / "node.cmd").write_text("@echo %FAKE_NODE_VERSION%\r\n", encoding="ascii")
+    monkeypatch.setenv("PATH", f"{fake}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("FAKE_NODE_VERSION", "v24.14.0")
+    monkeypatch.setenv("FAKE_NPM_LOG", str(tmp_path / "npm.log"))
+    monkeypatch.delenv("PAPERLAB_RELEASES_DIR", raising=False)
+    for k in ("FAKE_NPM_CI_EXIT", "FAKE_NPM_DIST_EXIT", "FAKE_NPM_SLEEP", "FAKE_NPM_BAD_SHA", "PL_HEALTH_FAIL"):
+        monkeypatch.delenv(k, raising=False)
+    copy = tmp_path / "scripts"
+    shutil.copytree(SERVER_PC, copy)
+    calls = tmp_path / "calls.txt"
+    with open(copy / "common.ps1", "ab") as f:
+        f.write(_BUILD_STUB.format(calls=calls).encode("utf-8"))
+    dirs = {k: tmp_path / k for k in ("releases", "cache", "logs")}
+    return {"scripts": copy, "calls": calls, "npm_log": tmp_path / "npm.log", **dirs}
+
+
+def _desktop_repo(tmp_path, change: str) -> Path:
+    """origin: desktop/package.json 0.2.0 → 다음 커밋(change): bump(desktop 바뀜 + 0.2.1) · same(desktop 바뀜, 버전 그대로) · none(desktop 밖만)"""
+    origin, app = tmp_path / "origin", tmp_path / "app"
+    _git("init", "-q", "-b", "main", str(origin), cwd=tmp_path)
+    for k, v in (("user.email", "t@example.com"), ("user.name", "t")):
+        _git("config", k, v, cwd=origin)
+    (origin / "desktop").mkdir()
+    (origin / "desktop" / "package.json").write_text('{"name": "x", "version": "0.2.0"}\n', encoding="utf-8")
+    (origin / "desktop" / "a.js").write_text("1\n", encoding="utf-8")
+    (origin / "a.txt").write_text("1\n", encoding="utf-8")
+    (origin / ".gitignore").write_text("dist/\nnode_modules/\n", encoding="utf-8")  # 저장소 .gitignore 와 같게(빌드 결과물)
+    _git("add", ".", cwd=origin)
+    _git("commit", "-qm", "one", cwd=origin)
+    _git("clone", "-q", str(origin), str(app), cwd=tmp_path)
+    if change in ("bump", "same"):
+        (origin / "desktop" / "a.js").write_text("2\n", encoding="utf-8")
+    if change == "bump":
+        (origin / "desktop" / "package.json").write_text('{"name": "x", "version": "0.2.1"}\n', encoding="utf-8")
+    if change == "none":
+        (origin / "a.txt").write_text("2\n", encoding="utf-8")
+    _git("commit", "-qam", "two", cwd=origin)
+    _git("fetch", "-q", cwd=app)
+    return app
+
+
+def _run_update(env, app, *extra):
+    return ps(env["scripts"] / "update.ps1", "-Yes", "-AppDir", str(app), "-Branch", "main", "-LogDir", str(env["logs"]),
+              "-TimeoutSec", "5", "-ReleasesDir", str(env["releases"]), "-CacheDir", str(env["cache"]), *extra, timeout=240)
+
+
+def _seed_release(releases: Path, *versions: str) -> dict:
+    """이전에 내보낸 설치 파일들 + latest.yml(마지막 버전) → {이름: sha256}"""
+    releases.mkdir(parents=True, exist_ok=True)
+    for v in versions:
+        (releases / f"PaperLab-Setup-{v}.exe").write_bytes(f"old {v}".encode())
+        (releases / f"PaperLab-Setup-{v}.exe.blockmap").write_bytes(f"bm {v}".encode())
+    (releases / "latest.yml").write_text(f"version: {versions[-1]}\n", encoding="utf-8")
+    return _hashes(releases)
+
+
+def _hashes(folder: Path) -> dict:
+    import hashlib
+    return {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(folder.iterdir()) if p.is_file()}
+
+
+def _npm_calls(env) -> list[dict]:
+    p = env["npm_log"]
+    return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()] if p.exists() else []
+
+
+def test_build_success_moves_files_and_writes_release_json(tmp_path, build_env):
+    """AC-88 (a): desktop/ 변경 + 새 버전 → 서버 반영 · 상태 확인 뒤 npm ci → npm run dist, releases 에 네 파일,
+    release.json sha256 = 실제 파일, 캐시 변수는 -CacheDir 아래, .staging 없음, 종료 코드 0"""
+    import hashlib
+    app = _desktop_repo(tmp_path, "bump")
+    p = _run_update(build_env, app)
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out
+    rel = build_env["releases"]
+    exe = rel / "PaperLab-Setup-0.2.1.exe"
+    assert exe.exists() and (rel / "PaperLab-Setup-0.2.1.exe.blockmap").exists() and not (rel / ".staging").exists()
+    info = json.loads((rel / "release.json").read_text(encoding="utf-8"))
+    assert info["version"] == "0.2.1" and info["file"] == exe.name and info["size"] == exe.stat().st_size
+    assert info["sha256"] == hashlib.sha256(exe.read_bytes()).hexdigest() and len(info["commit"]) == 7
+    assert "version: 0.2.1" in (rel / "latest.yml").read_text(encoding="utf-8")
+    calls = _npm_calls(build_env)
+    assert [c["args"] for c in calls if c["args"] != ["-v"]] == [["ci"], ["run", "dist"]]
+    assert all(Path(c["cwd"]) == app / "desktop" for c in calls if c["args"] != ["-v"])
+    assert calls[-1]["env"] == {"npm_config_cache": str(build_env["cache"] / "npm"), "ELECTRON_CACHE": str(build_env["cache"] / "electron"),
+                                "ELECTRON_BUILDER_CACHE": str(build_env["cache"] / "electron-builder")}
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert log.index("업데이트 성공") < log.index("데스크톱 앱 빌드 시작") < log.index("데스크톱 앱 빌드 성공")  # 서버 확인 뒤
+    assert f"sha256 {info['sha256']}" in log and "빌드 로그 확인: PaperLab 서버 주소" in log
+    assert "[WARN]" not in log
+    builds = list(build_env["logs"].glob("desktop-build-*.log"))
+    assert len(builds) == 1 and "> npm ci" in builds[0].read_text(encoding="utf-8-sig")
+    assert "restart PaperLab Server" in build_env["calls"].read_text(encoding="utf-8-sig")
+
+
+def test_build_moves_latest_yml_last():
+    """AC-88 (a): 옮기는 순서 .exe → .blockmap → release.json → latest.yml(마지막), latest.yml 은 교체(File.Replace)"""
+    text = (SERVER_PC / "common.ps1").read_text(encoding="utf-8-sig")
+    assert "foreach ($f in @($exeName, \"$exeName.blockmap\", 'release.json', 'latest.yml'))" in text
+    assert "[IO.File]::Replace($Source, $Destination, [NullString]::Value)" in text
+
+
+@pytest.mark.parametrize("failure", ["dist_exit", "ci_exit", "timeout", "bad_sha", "move_fail"])
+def test_build_failure_keeps_previous_release(tmp_path, build_env, monkeypatch, failure):
+    """AC-88 (b): 빌드 실패 · 시간 초과 · latest.yml sha512 불일치 → WARN, 이전 파일 그대로(해시 같음), .staging 없음, 종료 코드 0"""
+    app = _desktop_repo(tmp_path, "bump")
+    before = _seed_release(build_env["releases"], "0.1.9", "0.2.0")
+    extra = ()
+    if failure == "dist_exit":
+        monkeypatch.setenv("FAKE_NPM_DIST_EXIT", "1")
+    elif failure == "ci_exit":
+        monkeypatch.setenv("FAKE_NPM_CI_EXIT", "1")
+    elif failure == "timeout":
+        monkeypatch.setenv("FAKE_NPM_SLEEP", "60")
+        extra = ("-BuildTimeoutSec", "4")
+    elif failure == "bad_sha":
+        monkeypatch.setenv("FAKE_NPM_BAD_SHA", "1")
+    else:  # latest.yml 교체가 실패(읽기 전용) → 이번에 옮긴 새 버전 파일을 지우고 release.json 을 되돌림
+        (build_env["releases"] / "release.json").write_text('{"version": "0.2.0"}', encoding="utf-8")
+        before = _hashes(build_env["releases"])
+        os.chmod(build_env["releases"] / "latest.yml", 0o444)
+    p = _run_update(build_env, app, *extra)
+    os.chmod(build_env["releases"] / "latest.yml", 0o666)
+    out = p.stdout + p.stderr
+    assert p.returncode == 0, out
+    assert _hashes(build_env["releases"]) == before
+    assert not (build_env["releases"] / ".staging").exists()
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert "업데이트 성공" in log and "[WARN] 데스크톱 앱 빌드 실패(" in log and "이전 설치 파일을 그대로 둬요" in log
+    assert "desktop-build-" in log
+    reason = {"dist_exit": "npm run dist — 종료 코드 1", "ci_exit": "npm ci — 종료 코드 1", "timeout": "시간 초과(4 초)",
+              "bad_sha": "sha512 가 실제 파일과 다름", "move_fail": "데스크톱 앱 빌드 실패(옮기기"}[failure]
+    assert reason in log, log
+
+
+def test_build_skipped_when_version_unchanged(tmp_path, build_env):
+    """AC-88 (c): desktop/ 이 바뀌었는데 버전이 이미 releases 에 있으면 빌드하지 않고 WARN"""
+    app = _desktop_repo(tmp_path, "same")
+    before = _seed_release(build_env["releases"], "0.2.0")
+    p = _run_update(build_env, app)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert "[WARN] 데스크톱 앱이 바뀌었지만 버전이 같아 빌드하지 않았어요 — desktop/package.json 버전을 올려 주세요" in log
+    assert not [c for c in _npm_calls(build_env) if c["args"] != ["-v"]]
+    assert _hashes(build_env["releases"]) == before
+
+
+def test_build_not_run_without_desktop_change(tmp_path, build_env):
+    """AC-88 (d): desktop/ 이 바뀌지 않으면 빌드하지 않음(WARN 없음)"""
+    app = _desktop_repo(tmp_path, "none")
+    p = _run_update(build_env, app)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert "업데이트 성공" in log and "데스크톱" not in log and "[WARN]" not in log
+    assert not _npm_calls(build_env) and not build_env["releases"].exists()
+
+
+@pytest.mark.parametrize("case", ["health_fail", "ref", "restart_only"])
+def test_build_not_run_on_rollback_ref_or_restart(tmp_path, build_env, monkeypatch, case):
+    """AC-88 (e): 상태 확인 실패로 되돌린 경우 · -Ref · -RestartOnly → 빌드하지 않음"""
+    app = _desktop_repo(tmp_path, "bump")
+    if case == "health_fail":
+        monkeypatch.setenv("PL_HEALTH_FAIL", "1")
+        p = _run_update(build_env, app)
+        assert p.returncode == 1
+    elif case == "ref":
+        target = subprocess.run(["git", "rev-parse", "origin/main"], cwd=app, capture_output=True, text=True).stdout.strip()
+        p = _run_update(build_env, app, "-Ref", target)
+        assert p.returncode == 0, p.stdout + p.stderr
+        log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+        assert "-Ref 로 커밋을 맞춘 경우라 데스크톱 앱은 빌드하지 않아요" in log
+    else:
+        p = ps(build_env["scripts"] / "update.ps1", "-RestartOnly", "-BuildDesktop", "-AppDir", str(app), "-LogDir", str(build_env["logs"]),
+               "-TimeoutSec", "5", "-ReleasesDir", str(build_env["releases"]), "-CacheDir", str(build_env["cache"]))
+        assert p.returncode == 0, p.stdout + p.stderr
+    assert not _npm_calls(build_env) and not build_env["releases"].exists()
+
+
+def test_build_skipped_when_node_too_old(tmp_path, build_env, monkeypatch):
+    """AC-88 (f): node 주 버전이 22 미만이면 빌드 단계만 WARN, 서버 업데이트는 성공(종료 코드 0)"""
+    monkeypatch.setenv("FAKE_NODE_VERSION", "v20.11.0")
+    app = _desktop_repo(tmp_path, "bump")
+    p = _run_update(build_env, app)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert "업데이트 성공" in log and "[WARN] Node.js 22 이상 · npm 이 없어 데스크톱 앱 빌드를 건너뛰어요 (node v20.11.0, npm 11.0.0)" in log
+    assert not [c for c in _npm_calls(build_env) if c["args"] != ["-v"]]
+
+
+def test_build_keeps_three_versions(tmp_path, build_env):
+    """AC-88 (g): 4번째 버전을 넣으면 가장 오래된 버전의 .exe · .blockmap 이 지워지고 3개만 남음"""
+    app = _desktop_repo(tmp_path, "bump")
+    _seed_release(build_env["releases"], "0.1.10", "0.1.2", "0.2.0")
+    p = _run_update(build_env, app)
+    assert p.returncode == 0, p.stdout + p.stderr
+    names = sorted(x.name for x in build_env["releases"].iterdir())
+    assert names == ["PaperLab-Setup-0.1.10.exe", "PaperLab-Setup-0.1.10.exe.blockmap", "PaperLab-Setup-0.2.0.exe",
+                     "PaperLab-Setup-0.2.0.exe.blockmap", "PaperLab-Setup-0.2.1.exe", "PaperLab-Setup-0.2.1.exe.blockmap",
+                     "latest.yml", "release.json"]  # 0.1.2 < 0.1.10 (숫자 비교)
+
+
+def test_build_desktop_switch_without_new_commit(tmp_path, build_env):
+    """-BuildDesktop: 새 커밋이 없어도(처음 배포 · 지난 실패 뒤) 빌드, 이미 있는 버전이면 WARN"""
+    app = _desktop_repo(tmp_path, "none")
+    _git("merge", "-q", "--ff-only", "origin/main", cwd=app)
+    p = _run_update(build_env, app, "-BuildDesktop")
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (build_env["releases"] / "PaperLab-Setup-0.2.0.exe").exists()
+    p = _run_update(build_env, app, "-BuildDesktop")
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert p.returncode == 0 and "[WARN] 버전 0.2.0 설치 파일이 이미 있어 빌드하지 않았어요" in log
+
+
+def test_build_dry_run_changes_nothing(tmp_path, build_env):
+    app = _desktop_repo(tmp_path, "bump")
+    p = ps(build_env["scripts"] / "update.ps1", "-DryRun", "-Yes", "-AppDir", str(app), "-Branch", "main", "-LogDir", str(build_env["logs"]),
+           "-ReleasesDir", str(build_env["releases"]), "-CacheDir", str(build_env["cache"]))
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert "[DRY] 데스크톱 앱 빌드: node · npm 확인(22 이상) → desktop\\ 에서 npm ci → npm run dist" in p.stdout
+    assert not _npm_calls(build_env) and not build_env["releases"].exists() and not build_env["logs"].exists()
+
+
+def test_releases_dir_rule_matches_server(tmp_path, fake_env):
+    """서버(downloads.py)와 같은 규칙: 프로세스 환경 변수 → cloud.env 의 같은 키 → 기본값(같은 상수). cloud.env 다른 값은 출력하지 않음"""
+    from paperlab.downloads import DEFAULT_RELEASES_DIR
+    text = (SERVER_PC / "common.ps1").read_text(encoding="utf-8-sig")
+    assert f"$script:PLDefaultReleasesDir = '{DEFAULT_RELEASES_DIR}'" in text
+    snippet = "Write-Output ('dir=' + (Get-PLReleasesDir -EnvFile $env:PL_ENV))"
+    p = ps_common(snippet, PL_ENV=str(fake_env), PAPERLAB_RELEASES_DIR="")
+    assert f"dir={DEFAULT_RELEASES_DIR}" in p.stdout, p.stdout + p.stderr
+    with open(fake_env, "a", encoding="utf-8") as f:
+        f.write('PAPERLAB_RELEASES_DIR="E:\\PL\\rel"\n')
+    p = ps_common(snippet, PL_ENV=str(fake_env), PAPERLAB_RELEASES_DIR="")
+    assert "dir=E:\\PL\\rel" in p.stdout, p.stdout + p.stderr
+    p = ps_common(snippet, PL_ENV=str(fake_env), PAPERLAB_RELEASES_DIR="F:\\x")
+    assert "dir=F:\\x" in p.stdout
+    for secret in ("anon-SECRET-value", "r2-SECRET-value", "fakeref"):
+        assert secret not in p.stdout + p.stderr
+
+
+def test_no_github_publish_or_token_in_repo():
+    """AC-88 (h): 저장소(문서 제외)에 GH_TOKEN · provider github 가 없음"""
+    hits = []
+    for base in ("paperlab", "deploy", "tests", "desktop"):
+        for f in (ROOT / base).rglob("*"):
+            if {"node_modules", "dist"} & set(f.relative_to(ROOT).parts) or not f.is_file() or f.suffix not in (".py", ".ps1", ".js", ".json", ".yml"):
+                continue
+            if f.name == "test_server_pc_scripts.py":
+                continue
+            t = f.read_text(encoding="utf-8", errors="replace")
+            if "GH_TOKEN" in t or re.search(r"provider['\"]?\s*:\s*['\"]github", t):
+                hits.append(f.relative_to(ROOT).as_posix())
+    assert hits == []
+
+
+def test_build_skipped_when_version_not_higher(tmp_path, build_env):
+    """품질팀 F2: 새 버전이 releases 의 가장 높은 버전 이하이면 빌드하지 않고 WARN(파일 그대로 · latest.yml 그대로)"""
+    app = _desktop_repo(tmp_path, "bump")  # 0.2.1
+    before = _seed_release(build_env["releases"], "0.3.0", "0.4.0", "0.5.0")
+    p = _run_update(build_env, app)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert "[WARN] 데스크톱 앱 버전 0.2.1 이 이미 내보낸 가장 높은 버전 0.5.0 이하라 빌드하지 않았어요" in log
+    assert not [c for c in _npm_calls(build_env) if c["args"] != ["-v"]]
+    assert _hashes(build_env["releases"]) == before
+
+
+def test_retention_never_removes_current_latest(tmp_path):
+    """품질팀 F2: 옛 파일 정리는 최근 3개 버전만 남기되, 지금 latest.yml 이 가리키는 버전은 몇 번째든 지우지 않음"""
+    rel = tmp_path / "rel"
+    _seed_release(rel, "0.1.1", "0.1.2", "0.1.3", "0.1.0")  # latest.yml → 0.1.0 (가장 낮음)
+    p = ps_common("Remove-PLOldReleases -ReleasesDir $env:PL_REL -Keep 3", PL_REL=str(rel))
+    assert p.returncode == 0, p.stdout + p.stderr
+    assert (rel / "PaperLab-Setup-0.1.0.exe").exists() and (rel / "PaperLab-Setup-0.1.0.exe.blockmap").exists()
+    assert "latest.yml 이 가리키는 버전이라 지우지 않음" in p.stdout
+    (rel / "latest.yml").write_text("version: 0.1.3\n", encoding="utf-8")
+    ps_common("Remove-PLOldReleases -ReleasesDir $env:PL_REL -Keep 3", PL_REL=str(rel))
+    assert sorted(x.name for x in rel.glob("*.exe")) == ["PaperLab-Setup-0.1.1.exe", "PaperLab-Setup-0.1.2.exe", "PaperLab-Setup-0.1.3.exe"]
+
+
+def test_build_malformed_package_json_is_warn_only(tmp_path, build_env):
+    """품질팀 F4: desktop/package.json 이 JSON 이 아니어도 서버 반영은 성공(종료 코드 0), 빌드만 WARN"""
+    app = _desktop_repo(tmp_path, "bump")
+    origin = tmp_path / "origin"
+    (origin / "desktop" / "package.json").write_text('{"name": "x", "version": "0.2.2",,}\n', encoding="utf-8")
+    _git("commit", "-qam", "three", cwd=origin)
+    _git("fetch", "-q", cwd=app)
+    p = _run_update(build_env, app)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert "업데이트 성공" in log and "[WARN] 데스크톱 앱 빌드 건너뜀: desktop\\package.json 을 읽지 못했어요" in log
+    assert not [c for c in _npm_calls(build_env) if c["args"] != ["-v"]]

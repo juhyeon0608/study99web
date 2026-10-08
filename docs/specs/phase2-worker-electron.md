@@ -8,6 +8,7 @@
 - **개정 2026-10-08 (사용자 결정 — 2단계를 2a · 2b로 나눔)**: 세션 사용량을 줄이고, 2a를 먼저 반영해 브라우저에서 OpenAI · Google 키를 바로 쓸 수 있게 하려는 것입니다. **2a = 서버 · 웹**(작업 큐, 기기 연결 · 워커 API, API 우선 · CLI 폴백 라우팅, API 키 3종, 설정 화면 "AI 엔진" · "연결된 PC", PC 앱 받기 화면과 `/downloads` 경로, 작업 목록). **2b = Electron 앱, PC 워커(CLI 실행), 서버 PC 빌드 단계(`update.ps1`), 실제 PC 실측**. 명세 본문(1~16 · 18~20 · 22장)은 바꾸지 않고, **17장 수용 기준마다 `[2a]` · `[2b]` 표시**(둘 다 걸치면 `[2a+2b]`와 나눠 적음)와 **21장 작업 목록을 2a · 2b로 나눔**. 2a만 반영된 동안 CLI 작업은 **워커가 없으면 대기**합니다(9.2절 "경로가 비면 400" 규칙과 대기 기한 6.6절은 그대로 — 21.0절 "2a만 반영된 동안의 동작" 참고). 화면 문구는 [디자인 문서](../design/phase2-worker-electron-ui.md)를 따릅니다. 2a 완료 뒤 2b를 시작하며 2b에서 2a 항목을 다시 돌려 회귀를 확인합니다(AC-95 · 96).
 - **개정 2026-10-08 (2a 개발 완료 — 팀장이 승인한 구현 차이 반영)**: 코드(`paperlab/jobs.py` · `worker_api.py` · `api_runner.py` · `downloads.py` · `ai.py` · `config.py` · `server.py`, 마이그레이션 `20261009000001_devices_jobs.sql`)를 읽고 실제 값과 맞춰 고침. ① 설치 파일 폴더 환경 변수 `PAPERLAB_RELEASES_DIR`(13.7.1절 · K14' · 21장) ② 작업 보기에 `route` · `route_index` · `question` · `result`(7장) ③ `jobs.leased_at`과 서버 쪽 절대 기한(5.3 · 6.3 · 11.5절) ④ CLI 대기 기한을 작업 만들 때 정하고 CLI 칸 폴백 때 다시 셈(6.6절) ⑤ 오류 코드 `bad_input`(9.6절) ⑥ 대화 · 글쓰기 SSE 작업 리스 660초 고정 — **사실만 기록, 영향은 품질팀 검증 중**(6.3절) ⑦ 연결 코드 알파벳 31자(8.2 · 12.1절 · AC-16) ⑧ `/downloads/` ETag 304 · `.exe` Range 요청 횟수(13.7.1절 · AC-87) ⑨ Gemini는 `responseMimeType`만(9.5절) ⑩ K19 확정(9.4절 · 20.2절) ⑪ 2b가 맞출 워커 계약(8장 · 13.3절)을 구현 기준으로 정리.
 - **개정 2026-10-08 (2a 품질 수정 반영 — 코드를 읽어 사실 확인한 뒤 고침)**: ① `jobs.interactive` 열(SSE에서 시작한 대화 · 글쓰기 작업) — 리스가 지나면 다시 실행하지 않고 `cancelled` · `interrupted`로 끝냄, 폴백으로 다음 칸에 가면 표시가 풀림, SSE는 0.05초마다 끊김 확인(5.3 · 6.1 · 6.3 · 9.3 · 15.2절 — 6.3절의 "660초 리스 영향 미정"을 이 결정으로 바꿈) ② `jobs.result_key` 열은 2b 대비로 2a 마이그레이션에 이미 있음(2 · 5.3 · 21.0절) ③ `/downloads` 한도: Range 요청은 시간당 횟수에 넣지 않음, 전체 `GET`은 같은 IP 시간당 10회, 127.0.0.1(XFF 없음)이면 전체 시간당 60회(13.7.1절 · AC-87 · 19장 — 수용 위험 1줄) ④ 연결 코드 한도 2개(IP별 분당 10 · 전체 분당 60, 127.0.0.1이면 전체만 — 8.2절) ⑤ 해지 · 다른 PC 재대기 때 `cancel_requested`면 `cancelled`(6.1 · 12.4절) ⑥ 하트비트 `id`가 bool이거나 범위 밖이면 400, 진행 중 작업을 돌려주는 retry는 200(7.1 · 8.5절) ⑦ 폴백 때 해지된 기기의 CLI 칸은 건너뜀(9.2절 예외) ⑧ 수용 위험: interactive 스트림이 660초를 넘기면 답 없이 끝날 수 있음(14 · 19장).
+- **개정 2026-10-08 (2b 개발 완료 — 팀장이 승인한 구현 차이 반영, `desktop/` 코드와 `deploy/server-pc/common.ps1` · `update.ps1`을 읽어 사실 확인한 뒤 고침)**: ① preload는 `preload/preload.js` 하나(출처에 따라 `paperlabDesktop` 또는 `paperlabLocal`), 경계는 main의 IPC 출처 검사(13.1 · 13.3절) ② 13.2.1절 7번 "요청한 프레임을 아는 방법"은 **대안으로 해결**(20.3절) ③ 서버 주소는 `deploy/server-pc/server.json`의 `public_url`을 빌드 때 `extraMetadata.paperlabServer`로 넣음 — `desktop/app-config.json` 없음(13.5 · 21장) ④ 설정 파일 `electron-builder.config.js`를 `--config`로 지정, `update.ps1`은 `npm run dist`를 부르고 빌드 함수는 `common.ps1`, `install.ps1`은 바뀌지 않음, releases 폴더 결정 순서(13.7.1절 "2b 확인 필요"는 **해결**) ⑤ 모델을 대체해 실행해도 결과 글에 문구를 붙이지 않음(11.6절) ⑥ codex · gemini 시스템 프롬프트는 stdin 앞에 붙임(11.4절) ⑦ gemini 로그인 판정(11.4 · 11.8절) ⑧ claude 2.1.259 미만 처리(11.7절) ⑨ 일시 중지 중 claim · bye(8.4 · 8.7절) ⑩ 연결 전 엔진 탐지(11.7절) ⑪ 401이면 토큰 삭제(12.4절) ⑫ 딥링크 콜백 전달(13.4절) ⑬ Fuses(13.2절) ⑭ 개발 실행 데이터 폴더 · 트레이 알림 · 임시 아이콘(13.1 · 13.5절) ⑮ OneDrive 폴더 EPERM(14장). 바뀐 곳: 8.4 · 8.7 · 11.4 · 11.6~11.8 · 12.4 · 13.1~13.7.1 · 14 · 20.3 · 21장.
 - 앞 단계: [1단계 명세](phase1-cloud.md) (인증 · RLS · 서버 구조 · 요약 SSE 9.3절 · 19장 결정)
 - 표기: **확정** = 사용자 결정(PLAN 2장), **팀장 결정** = 팀장이 정함(사용자 이견 시 변경), **기획팀 추천** = 선택지 중 기획팀 안(팀장 결정 전 — 20.2절 질문 번호 `K…`), **가정** = 기획팀이 임시로 정한 값, **미정** = 사용자 확인 필요(20.1절 질문 번호 `U…`), **확인 필요** = 외부 사실을 공식 문서로 다 확인하지 못함(개발팀이 첫 작업 때 확인하고 이 문서를 고침)
 - 비밀값: 이 문서는 변수 **이름만** 씁니다. 기기 토큰 · API 키 · 배포 주소는 어떤 문서 · 코드 · 로그 · 커밋에도 쓰지 않습니다(1단계 AC-69와 같은 원칙).
@@ -49,7 +50,7 @@ PLAN 2단계 완료 기준(그대로 수용 기준에 들어감 — 17장): 키 
 | 뒤 단계 | 2단계에서 해 두는 것 |
 |---|---|
 | 3 RAG · 인용 검증 | `jobs.kind`는 문자열(검사 제약에 종류를 추가하는 마이그레이션만 필요), 작업 결과 반영 함수를 종류별 등록표로 |
-| 4 전체 번역(쪽 단위 병렬) | `jobs.parent_id`(묶음 작업), 같은 사용자의 여러 작업을 여러 PC가 나눠 잡을 수 있는 구조, 큰 결과는 R2 키로 보고하는 자리 — `jobs.result_key text null` 열을 **2a 마이그레이션에 미리 넣어 둠**(2b · 4단계가 마이그레이션을 다시 건드리지 않게). 2단계 코드는 이 열을 읽지도 쓰지도 않아 늘 null |
+| 4 전체 번역(쪽 단위 병렬) | `jobs.parent_id`(묶음 작업), 같은 사용자의 여러 작업을 여러 PC가 나눠 잡을 수 있는 구조, 큰 결과는 R2 키로 보고하는 자리 — `jobs.result_key text null` 열을 **2a 마이그레이션에 미리 넣어 둠**(2b · 4단계가 마이그레이션을 다시 건드리지 않게). **예약 열** — 2b 워커도 쓰지 않음(큰 결과는 4단계), 2단계 코드는 이 열을 읽지도 쓰지도 않아 늘 null |
 | 4 codex 이미지 | 엔진 목록 · CLI 실행기가 codex를 이미 다룸, 결과 파일은 R2 서명 PUT 주소로 올리는 확장 자리 |
 | 6 폴더 동기화 | Electron 앱 구조에 "기능 모듈" 자리(워커 · 동기화), 기기 토큰을 동기화도 같이 씀, `devices`에 기능 광고(`features`) 열 |
 
@@ -445,7 +446,7 @@ returning j.*;
 
 요청 `{"free": {"claude": 2, "codex": 0}, "paused": false}`
 - `free`: 엔진 이름(`claude` · `codex` · `gemini`)별 빈 자리, 값은 **정수 0~8**(불리언 아님). 모르는 엔진 이름 · 범위 밖 · 정수 아님 → 400 `{"code":"bad_request"}`. 본문을 생략하면 빈 객체로 봄. 서버는 `free`가 1 이상이면서 그 기기가 **`logged_in: true`로 광고한** 엔진의 작업만 잡아 줌.
-- `paused: true`면 아무것도 잡지 않고 `200 {"job": null, "next_poll_s": 60}`. (`paused` 값은 기기 행에도 저장.)
+- `paused: true`면 아무것도 잡지 않고 `200 {"job": null, "next_poll_s": 60}`. (`paused` 값은 기기 행에도 저장.) **워커(2b 구현)는 일시 중지 중에도 `claim {"free": {}, "paused": true}`를 서버가 준 간격(60초)마다 보냅니다** — 쉬는 중이어도 `last_seen_at`이 갱신돼 화면에서 "꺼짐"이 아니라 "일시 중지"로 보이게 하기 위함. 연결이 안 된(토큰 없음) 동안에는 서버 요청을 하지 않음.
 - 잡을 것이 없으면 `200 {"job": null, "next_poll_s": 5 | 60}`(10장 적응형 간격 — 그 사용자에게 `queued`/`running` CLI 작업이 있거나 화면 요청이 최근 10분 안이면 5, 아니면 60).
 - 있으면 **`200 {"job": {...}, "next_poll_s": 0}`**(구현 확인: 잡은 직후는 0 — 빈 자리가 남았으면 곧바로 다시 잡기. 개정 전 예시의 5는 틀림):
 ```json
@@ -489,7 +490,7 @@ returning j.*;
 
 ### 8.7 `POST /api/worker/bye`
 
-앱 종료 · 일시 중지 때 `{"paused": true|false}` — `last_seen_at`을 비워 즉시 "꺼짐"으로 보이게(선택, 실패해도 무시). 응답 `{"ok": true}`. 본문을 생략해도 됨(`paused`는 `true`일 때만 참). 서버 메모리의 그 기기 빈 자리 기록도 지움(`waiting_reason` 판정용).
+**앱을 끌 때(워커 정지)만** 보냅니다(2b 구현 — 일시 중지 때는 보내지 않고 위 8.4절의 `claim {paused:true}`를 60초마다 보냄. 정지 요청에 `bye`가 실패해도 무시). 본문 `{"paused": true|false}`(그 시점의 일시 중지 설정) — `last_seen_at`을 비워 즉시 "꺼짐"으로 보이게(선택, 실패해도 무시). 응답 `{"ok": true}`. 본문을 생략해도 됨(`paused`는 `true`일 때만 참). 서버 메모리의 그 기기 빈 자리 기록도 지움(`waiting_reason` 판정용).
 
 ---
 
@@ -654,9 +655,10 @@ returning j.*;
 |---|---|---|---|
 | claude | `claude -p --output-format json --no-session-persistence --tools "" --setting-sources "" --strict-mcp-config --permission-prompts none --system-prompt-file <tmp> [--model <별칭>] [--json-schema <스키마 JSON>]` — 대화 · 글쓰기에서 중간 글을 보낼 때는 `--output-format stream-json --verbose --include-partial-messages` | JSON `result`(텍스트) · `structured_output`(스키마 썼을 때) · `is_error` · `total_cost_usd` · `session_id`. 종료 코드 0 = 성공. "실행 중 실패(예: 로그인 없음)는 stdout의 result로 나옴"(공식 문서) | `claude auth status` — 로그인 시 종료 코드 0, 아니면 1, JSON `authMethod`(공식 문서 확인) |
 | codex | `codex exec --skip-git-repo-check --ephemeral --sandbox read-only --color never -o <tmp출력> [--output-schema <tmp스키마>] [-m <모델>] -`(마지막 `-` = stdin에서 프롬프트) | `-o` 파일의 마지막 메시지(1st My paper 실측: 이 파일을 최종 결과로 우선) | `codex login status` — 자격 증명이 있으면 0(공식 문서 확인) |
-| gemini | `gemini -p "<짧은 고정 지시>" --output-format json [-m <모델>]`, 본문은 stdin | JSON `response` · `stats` · `error`. 종료 코드 0 성공 · 1 일반/API 오류 · 42 입력 오류 · 53 턴 한도(공식 문서 확인) | 전용 상태 명령 **확인 필요** → 실패 문구로 판정(11.8절) |
+| gemini | `gemini -p "<짧은 고정 지시>" --output-format json [-m <모델>]`, 본문은 stdin | JSON `response` · `stats` · `error`. 종료 코드 0 성공 · 1 일반/API 오류 · 42 입력 오류 · 53 턴 한도(공식 문서 확인) | 전용 상태 명령이 없음 → **구현(2b)**: 사용자 폴더의 **`.gemini\oauth_creds.json` 또는 `.gemini\google_accounts.json` 파일이 있으면 로그인된 것**으로 봄(`USERPROFILE`). 파일이 있어도 실행이 인증 실패 문구(11.8절)로 끝나면 `cli_not_logged_in` |
 
 공통:
+- **시스템 프롬프트 전달(2b 구현)**: claude는 `--system-prompt-file`(임시 파일)로 보냅니다. **codex · gemini에는 시스템 프롬프트 플래그가 없어서**, 시스템 프롬프트를 **stdin 맨 앞에 붙입니다**(`<instructions>…</instructions>` 뒤에 빈 줄, 그 뒤에 프롬프트). **gemini의 `-p`는 늘 같은 고정 지시**("표준 입력으로 받은 지시와 자료를 따라 답만 출력하세요.")이고 본문은 모두 stdin입니다(11.3절 — 사용자 글을 인자로 넘기지 않음).
 - **`--bare`는 쓰지 않습니다**: 공식 문서상 bare 모드는 "구독 로그인을 쓰지 않고 `ANTHROPIC_API_KEY`만" 씀 → CLI = 각자 구독(확정 취지)과 어긋남.
 - **도구 끔 · 빈 작업 폴더**: claude `--tools ""`, codex `--sandbox read-only`, gemini는 비대화형에서 승인이 필요한 도구를 실행하지 않는지 **확인 필요**(안 되면 승인 모드 플래그로 막음). 논문 본문에 "이 명령을 실행하라" 같은 글이 있어도 PC에서 아무것도 실행되지 않게 하기 위함(AC-59).
 - **작업 폴더(cwd)**: 작업마다 `%LOCALAPPDATA%\PaperLab\work\<job id>\`(빈 폴더)를 만들고 끝나면 지움. 1st My paper 실측: cwd가 git 저장소면 claude가 저장소 상태를 프롬프트에 섞어 엉뚱한 답을 냄. 사용자 이름에 한글이 있어도 동작해야 함(AC-61).
@@ -678,11 +680,13 @@ returning j.*;
 - 해결(추천): **CLI에는 API 모델 id를 넘기지 않습니다.** 엔진별 CLI 모델 설정 `cli_models`(9.4절):
   - claude: `default`(기본 — `--model`을 붙이지 않음 = 그 계정의 기본 모델) · `opus` · `sonnet` · `haiku` 중 선택 → 별칭만 넘김.
   - codex · gemini: `default`(붙이지 않음)만 2단계 제공, 직접 입력은 뒤 단계.
-- 그래도 모델 오류(`model_not_found` 계열 문구 · 공식 문서의 "There's an issue with the selected model")가 나면 워커가 **`--model` 없이 한 번 다시** 실행하고, 결과에 "선택한 CLI 모델을 쓸 수 없어 기본 모델로 실행했어요"를 붙입니다(`stats.model_fallback: true`).
+- 그래도 모델 오류(`model_not_found` 계열 문구 · 공식 문서의 "There's an issue with the selected model")가 나면 워커가 **`--model` 없이 한 번 다시** 실행하고 `stats.model_fallback: true`로 보고합니다. **결과 글에는 아무 문구도 붙이지 않습니다**(2b 결정, 팀장 승인 2026-10-08 — 요약은 JSON이라 문구를 붙이면 깨지고, 대화 · 글쓰기 글에 안내가 섞이면 그대로 원고에 들어갈 수 있음; 개정 전 "…기본 모델로 실행했어요"를 붙이는 안은 폐기). 대체 실행 사실은 **`stats.model_fallback`에만** 남깁니다(서버는 `stats`를 읽지 않으므로 — 8.6절 — 지금 화면에는 보이지 않음). **미확인**: 요청한 "로그에도 남김"은 워커 로그에 아직 없음(`worker.log`의 "작업 결과" 줄에는 `outcome` · `error_code` · 시간 · 종료 코드만) — 개발팀에 한 줄 추가를 요청할지 팀장 결정 필요(보고서 질문).
 
 ### 11.7 엔진 광고 · 탐지
 
 - 워커 시작 · 30분마다 · 로그인 실패 직후에: 실행 파일 찾기(11.2절) → `--version`(30초 제한) → 로그인 확인(11.4절 표) → `hello`로 보고(8.3절). 탐지는 프로세스를 띄우므로 결과를 캐시(1st My paper `probe_cached` 120초와 같은 취지).
+- **연결 전에도 탐지합니다**(2b 구현): 기기를 연결하기 전에도 워커가 시작하면 바로 엔진을 찾고 로그인을 확인해 "이 PC 상태" 창에 설치 · 로그인 상태를 보입니다(서버 요청은 연결된 뒤에만). **끈 엔진은 실행하지 않고 실행 파일이 있는지만 확인**합니다(화면의 켜기 체크를 쓸 수 있게 — 설치됨 · 끔으로 표시).
+- **claude 최소 버전**: 탐지한 claude가 **2.1.259 미만**(`--permission-prompts` 없음 — 22장)이면 `hello`에 **`logged_in: false`로 광고**해 서버가 작업을 보내지 않게 하고, 앱 화면에는 **"업데이트 필요"**(이 PC 상태의 엔진 칩 "! 업데이트 필요" + "claude 2.1.259 이상이 필요해요")로 보입니다. 버전을 읽지 못하면 막지 않음(실패하면 `cli_exit`). 다른 엔진의 최소 버전 표는 아직 없음(20.3절).
 - 사용자가 앱에서 엔진별로 **끄기**(이 PC에서 codex 작업 안 받기)를 할 수 있고, 끈 엔진은 광고하지 않습니다.
 - `--version`이 되는데 로그인이 안 됐으면 `logged_in: false`로 광고 → 서버는 잡기에서 빼고, 화면 "연결된 PC"에 "codex: 로그인 필요" 표시(16장 S4).
 
@@ -691,7 +695,7 @@ returning j.*;
 | `error_code` | 판정 | 처리 |
 |---|---|---|
 | `cli_not_found` | 실행 파일 없음 | 이 PC를 `excluded_devices`에 → **다른 PC가 잡게** `queued`. 광고 다시 |
-| `cli_not_logged_in` | claude 결과 `is_error` + 실패 뒤 `claude auth status` ≠ 0, codex `login status` ≠ 0, gemini 인증 실패 문구(**확인 필요**) | 위와 같음(다른 PC) + 그 엔진 `logged_in: false` 광고 |
+| `cli_not_logged_in` | claude 결과 `is_error` + 실패 뒤 `claude auth status` ≠ 0, codex `login status` ≠ 0, gemini는 `.gemini\oauth_creds.json` · `google_accounts.json`이 없거나 인증 실패 문구(11.4절 — 실제 문구는 개발 PC 실측 필요) | 위와 같음(다른 PC) + 그 엔진 `logged_in: false` 광고 |
 | `cli_usage_limit` | 구독 사용 한도(결과 문구 · `rate_limit` 계열) | **다음 경로 칸으로 폴백**(없으면 실패 — "이 계정의 CLI 사용 한도에 걸렸어요") |
 | `cli_model` | 11.6절 재시도 뒤에도 모델 오류 | 실패 |
 | `cli_timeout` | 시간 제한 초과 | 실패(재시도 안 함 — 같은 입력이면 또 걸릴 가능성) |
@@ -731,6 +735,7 @@ returning j.*;
 
 - 설정 "연결된 PC" → [연결 해지] → 확인 창("이 PC는 더 이상 작업을 받지 않아요. 실행 중인 작업은 다른 PC로 넘어가요.") → `DELETE /api/devices/{id}`. 그 PC가 실행 중이던 작업은 바로 `queued`로 돌아가(다른 PC가 이어받음) 응답의 `requeued_jobs`로 세지만, **이미 취소를 요청한(`cancel_requested`) 작업은 다시 대기하지 않고 `cancelled`로 끝나며 `requeued_jobs`에 들어가지 않음**(2a 품질 수정).
 - 그 PC 워커는 다음 요청에서 401 `device_revoked` → 실행 중 프로세스를 끄고 토큰 파일을 지우고, 앱에 "이 PC 연결이 해지됐어요 — [다시 연결]"(AC-15).
+- **401 `device_auth_required`도 같은 처리**(2b 구현): 토큰 형식 · 해시가 맞지 않거나(예: 서버에서 기기 행이 지워짐) 없는 기기면 워커는 실행 중 프로세스를 끄고(결과는 올리지 않음) **토큰 파일(`device.bin`)을 지우고** 연결 안 됨 상태로 돌아갑니다(`device_revoked`일 때만 "해지됐어요" 알림 · 안내). 어떤 401이든 토큰을 계속 쥐고 재시도하지 않음.
 - 앱 제거(언인스톨)는 서버 기기 행을 지우지 못함 → 설치 안내 · 설정 화면에 "PC를 더 이상 쓰지 않으면 여기서 해지해 주세요".
 
 ---
@@ -742,28 +747,39 @@ returning j.*;
 ```
 desktop/                        (같은 저장소 study99web — 기획팀 추천 K11)
   package.json                  앱 이름 · 버전(SemVer — 배포의 기준) · 의존성. package-lock.json 커밋(npm ci)
-  electron-builder.config.js    NSIS · protocols · fuses · publish: generic — url은 deploy/server-pc/server.json의
-                                public_url + "/downloads/"를 빌드 때 읽음(주소 한 곳 원칙 — 1단계 S10 · AC-69)
+  electron-builder.config.js    NSIS · protocols · fuses · publish: generic — deploy/server-pc/server.json의
+                                public_url을 빌드 때 읽어 extraMetadata.paperlabServer(앱 package.json)와
+                                publish url(= public_url + "/downloads/")에 넣음(주소 한 곳 원칙 — 1단계 S10 · AC-69).
+                                `--config electron-builder.config.js`로 지정(package.json의 pack · dist 스크립트)
   main/
-    main.js                     생명주기 · 단일 인스턴스 잠금 · 창 · 트레이 · 자동 시작 · 프로토콜 처리
-    window.js                   앱 창(클라우드 화면) BrowserWindow · 탐색 제한 · 새 창 처리 · 권한
+    main.js                     생명주기 · 단일 인스턴스 잠금 · 앱 창 · 이 PC 상태 창 · 트레이 · 자동 시작 · 딥 링크 · 워커 띄우기 · 기기 연결
+    window.js                   앱 창(클라우드 화면) BrowserWindow · 탐색 제한 · 새 창 처리 · 권한 · app:// 처리기
+    links.js                    외부 링크 판정 · 개수 제한(13.2.1절, 순수 함수 — AC-86)
+    config.js                   서버 주소 읽기(배포본은 package.json의 paperlabServer, 개발 실행은 환경 변수 `PAPERLAB_SERVER_URL`이 반드시 있어야 하고 `127.0.0.1` · `localhost` · `[::1]`만 받음. 없거나 운영 주소면 오류 창을 띄우고 시작하지 않으며 server.json으로 넘어가지 않음. `PAPERLAB_NO_DETECT=1`이면 CLI 탐지를 하지 않음)
     auth-bridge.js              시스템 브라우저 구글 로그인 ↔ paperlab:// 콜백(13.4절)
     updater.js                  electron-updater(13.7절)
     ipc.js                      preload 요청 처리(보낸 프레임 출처 검사)
-    store.js                    서버 주소 · 기기 토큰(safeStorage) · 앱 설정
-    log.js                      로그 파일 · 회전(13.8절)
+    store.js                    기기 토큰(safeStorage) · 앱 설정
+  lib/
+    log.js  redact.js           로그 파일 · 회전(13.8절) · 비밀값 지우기 (main · worker 공용)
   worker/                       utilityProcess 에서 도는 워커(11장)
-    worker.js  api-client.js  cli-runner.js  resolve-exe.js  engines.js
+    entry.js  worker.js  api-client.js  cli-runner.js  resolve-exe.js  engines.js
   preload/
-    cloud-preload.js            클라우드 화면용 — 최소 API만(13.3절)
-    local-preload.js            앱 자체 화면용(첫 실행 · 이 PC 상태)
+    preload.js                  하나뿐 — 페이지 출처에 따라 `paperlabDesktop`(서버 출처 http(s), 13.3절) 또는
+                                `paperlabLocal`(app://, 첫 실행 · 이 PC 상태 · 연결 불가 화면)을 내보냄. 이 분기는 편의일 뿐이고
+                                **실제 경계는 main(ipc.js)이 모든 IPC 처리기에서 보낸 프레임의 출처를 다시 검사하는 것**(13.2절 IPC)
   ui/                           앱 자체 화면(app:// 사용자 정의 프로토콜로 — file:// 안 씀)
-    setup.html  status.html  offline.html  *.js   (코드로 연결은 status.html 안 구역 — PD-7, pair.html 없음)
-    app.css                     빌드 때 paperlab/static/css/app.css를 복사(PD-5 — 손으로 고른 사본을 두지 않음)
+    setup.html  status.html  offline.html  *.js   theme.js   (코드로 연결은 status.html 안 구역 — PD-7, pair.html 없음)
+    app.css                     빌드 때(scripts/copy-css.js) paperlab/static/css/app.css를 복사(PD-5 — 손으로 고른 사본을 두지 않음, .gitignore 대상)
     local.css                   로컬 화면 전용 몇 줄만
-  build/icon.ico                디자인팀(1단계 deploy/paperlab.ico와 같은 모양)
+  scripts/copy-css.js           app.css 복사
+  scripts/make_icons.py         아이콘 그리기(아래 "아이콘")
+  build/icon.ico  tray-{idle,running,paused,error}.ico
   test/*.test.js                node:test + 가짜 CLI(17장 F)
 ```
+
+- **아이콘은 임시 그림입니다**(개발팀이 `scripts/make_icons.py`로 그림 — 디자인팀 확인 대기. 디자인 확인 뒤 `build/*.ico`만 바꾸면 됨).
+- **데이터 폴더**: 설치본은 `%APPDATA%\PaperLab`(로그 · 설정 · `device.bin`), 작업 폴더 `%LOCALAPPDATA%\PaperLab\work`. **개발 실행(`npm start`)은 `PaperLab-dev`**로 따로 써서 설치본의 데이터와 섞이지 않고, 자동 시작 · 업데이트 확인도 하지 않음.
 
 - 언어: **빌드 없는 JavaScript**(지금 화면과 같은 방식, TypeScript 안 씀 — 가정). 의존성은 `electron` · `electron-builder`(개발) · `electron-updater`로 최소(로그는 자체 구현 또는 `electron-log` — 개발팀 재량).
 - Electron 버전: 빌드 시점의 **최신 안정판**으로 고정하고 릴리스 때 올림(보안 체크리스트 16번 "현재 버전 사용").
@@ -785,7 +801,8 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | 권한 요청 | `setPermissionRequestHandler`: 클립보드 쓰기(`clipboard-sanitized-write` — 인용 복사)만 허용, 나머지(카메라 · 마이크 · 위치 · 알림 등) 거부 |
 | 다운로드 | 기본 저장 대화상자(하이라이트 내보내기 · 워드/한글 내보내기 Blob 다운로드) |
 | IPC | 모든 `ipcMain` 처리기가 **보낸 프레임의 출처**를 검사(체크리스트 17번): 클라우드 preload 채널은 서버 출처의 최상위 프레임만, 로컬 preload 채널은 `app://`만 |
-| Fuses | `runAsNode` · `enableNodeCliInspectArguments` · `enableNodeOptionsEnvironmentVariable` 끄기(체크리스트 19번 — 개발팀이 `@electron/fuses`로 빌드 때 설정) |
+| Fuses | **구현(2b, `electron-builder.config.js`의 `electronFuses` — 빌드 때 설정)**: 끔 — `RunAsNode` · `NodeOptions` 환경 변수 · `--inspect` 계열 인자(`enableNodeCliInspectArguments`) · `grantFileProtocolExtraPrivileges`. 켬 — `OnlyLoadAppFromAsar` · `CookieEncryption`. **ASAR 무결성 검사(`EnableEmbeddedAsarIntegrityValidation`)는 설정하지 않아 끔(Electron 기본값)** — 서명 없는 설치본에서 시작이 실패할 위험이 있고 아직 시험하지 않았기 때문(**확인 전** — 켜려면 AC-70 실환경에서 시작 · 업데이트가 되는지 먼저 확인) |
+| 탐색 · 하위 프레임 | 위 "탐색 제한"에 더해 `will-frame-navigate`로 **다른 출처 iframe을 막음**(13.2.1절 7번). 첫 실행 · 이 PC 상태 · 연결 불가 화면(`app://ui`)의 CSP는 `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'none'; …` |
 | CSP | 서버가 CSP를 아직 안 보냄(1단계 범위 밖) — Electron 개발 콘솔 경고 허용. 로컬 화면(`app://`)에는 엄격한 CSP를 둠 |
 | 개발자 도구 | 배포본에서는 메뉴에서 숨김(단축키로는 열림 — 문제 조사용, 가정) |
 
@@ -818,7 +835,11 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 
 5. **위 목록 밖의 http(s) 호스트**(서재 정보 탭 "링크" 줄의 출판사 주소, 논문 찾기 결과의 제목 · [PDF] 링크처럼 호스트를 미리 알 수 없는 논문 주소)도 **시스템 브라우저로 엽니다**(**팀장 결정 K21 ①, 2026-10-07** — AC-73 "화면 안의 외부 링크는 시스템 브라우저로"를 지키기 위함). 결국 주소에 대한 판정은 **스킴(2번)과 해석 가능 여부(1번)** 로 정해지고(그 위에 요청한 곳 · 개수 조건 7 · 8번), 위 표는 반드시 열려야 하는 대표 호스트(AC-86 확인 대상)입니다. 이 결정과 상관없이 **앱 창 자체는 서버 출처 밖으로 이동하지 않고**(탐색 제한), **앱 안에 새 창을 만들지 않습니다**(새 창 처리기는 늘 `deny`).
 6. 허용되면 `shell.openExternal(url)`(정규화한 `href`)을 부르고, 새 창 처리기는 그대로 `{ action: "deny" }`를 돌려줍니다. 거부되면 아무 창도 열지 않고 `main.log`에 "외부 링크 거부"와 **거부 이유(스킴 · 출처 · 개수) · 스킴만** 남깁니다(주소 전체 · 질의는 로그에 남기지 않음 — 검색어 · 논문 제목이 들어 있음, 13.8절).
-7. **요청한 곳 검사**: 새 창 · 외부 열기 요청(새 창 처리기 · `will-navigate` · `will-redirect`)은 **설정된 서버 출처(`https://kimjuhyeon.tailac17f6.ts.net`)의 최상위 프레임**에서 온 것만 처리합니다. 하위 프레임(iframe)이나 다른 출처 문서에서 온 요청은 URL과 상관없이 거부합니다(13.2절 IPC 출처 검사와 같은 원칙). 요청한 프레임을 처리기에서 어떻게 알아내는지는 확인 필요(20.3절).
+7. **요청한 곳 검사**: 새 창 · 외부 열기 요청(새 창 처리기 · `will-navigate` · `will-redirect`)은 **설정된 서버 출처(`https://kimjuhyeon.tailac17f6.ts.net`)의 최상위 프레임**에서 온 것만 처리합니다. 하위 프레임(iframe)이나 다른 출처 문서에서 온 요청은 URL과 상관없이 거부합니다(13.2절 IPC 출처 검사와 같은 원칙). **요청한 프레임을 알아내는 방법 — 해결(2b 구현, 팀장 승인 2026-10-08)**: Electron의 `setWindowOpenHandler`에 넘어오는 정보(`HandlerDetails`)에는 **요청한 프레임이 없습니다**. 그래서 처리기를 이렇게 나눕니다.
+   - **새 창 처리기**: 앱 창 안에 **하위 프레임이 하나라도 있으면**(`framesInSubtree`가 최상위 프레임 하나보다 많으면) 요청을 **거부**합니다. 최상위 프레임만 있을 때는 최상위 프레임(서버 출처)에서 온 것으로 보고 규칙대로 판정합니다. 늘 `{ action: "deny" }`를 돌려주는 것은 그대로.
+   - **다른 출처 iframe 자체를 막음**: `will-frame-navigate`에서 하위 프레임이 서버 출처(또는 `about:blank` · `about:srcdoc`) 밖으로 이동하려 하면 `preventDefault`. 그래서 앱 창에는 **다른 출처 문서가 하위 프레임으로 존재할 수 없습니다**(위 거부 조건이 서버 출처 하위 프레임에만 해당).
+   - **`will-navigate` · `will-redirect`**: 이벤트의 **`initiator`**(요청한 프레임)로 출처 · 최상위 여부를 판정합니다(`will-redirect`는 최상위 프레임의 리다이렉트만 다루고, `initiator`가 없으면 최상위 프레임으로 봄 — 하위 프레임의 이동은 위 `will-frame-navigate`가 맡음). 서버 출처로 가는 이동은 그대로 두고, 그 밖은 막은 뒤 13.2.1절 규칙으로 시스템 브라우저에 엶.
+   - 판정 자체(`decideExternal` — 스킴 · 출처 · 최상위 · 개수)는 순수 함수라 AC-86 (a2)로 단위 시험합니다. 실제 프레임 구성(하위 프레임이 있을 때 거부)은 AC-86 (b)에서 수동 확인.
 8. **개수 제한**: 외부 열기는 **짧은 시간 안 개수를 제한**합니다 — 기본 **10초에 5개**(가정 — 상수 한 곳). 넘는 요청은 열지 않고 거부합니다(브라우저의 팝업 차단 같은 장치가 `shell.openExternal`에는 없으므로, 화면이 잘못되거나 탈취돼도 시스템 브라우저 창을 마구 열지 못하게). 제한 판정은 시계를 주입받는 순수 함수로 만들어 단위 테스트합니다.
 
 - 변환 함수(`toInhaProxy` 등)의 출력 검사(inha-proxy 5.2절 8단계 · AC-2)는 화면에서 이미 하므로, 이 규칙은 그 위에 한 겹 더 두는 **앱 쪽 방어**입니다(화면이 바뀌거나 다른 링크가 섞여도 위험한 스킴이 OS로 넘어가지 않게).
@@ -826,7 +847,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 
 ### 13.3 클라우드 화면에 내주는 API (`window.paperlabDesktop`)
 
-`contextBridge`로 **아래만** 노출합니다(체크리스트 20번 "Electron API를 노출하지 않음").
+`contextBridge`로 **아래만** 노출합니다(체크리스트 20번 "Electron API를 노출하지 않음"). preload는 `preload/preload.js` 하나이며, **서버 출처(http · https) 페이지에서만** `paperlabDesktop`을 내보내고 `app://` 페이지에는 별도 `paperlabLocal`(첫 실행 · 이 PC 상태 · 연결 불가 화면용 — `state` · `action` · `onState`)을 내보냅니다. 어느 쪽이든 **실제 경계는 main(`ipc.js`)의 IPC 출처 검사**입니다(클라우드 채널 `pl:*`은 서버 출처의 최상위 프레임만, 로컬 채널 `local:*`은 `app://ui`의 최상위 프레임만 — 맞지 않으면 거부하고 로그).
 
 | 함수 | 하는 일 | 돌려주는 값 |
 |---|---|---|
@@ -834,7 +855,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | `pair(code)` | 12.2절 ① | `{ok, deviceName}` 또는 `{ok:false, error}` |
 | `nudge()` | 작업을 만들었으니 즉시 잡기(10.2절) | 없음 |
 | `startGoogleLogin(authorizeUrl)` | 13.4절 — main이 **URL이 `{SUPABASE_URL}/auth/v1/authorize`로 시작하는지 검사** 후 시스템 브라우저로 엶 | `{ok}` |
-| `onAuthCallback(fn)` | `paperlab://auth-callback?code=…`를 받으면 `fn(code)` | 구독 해제 함수 |
+| `onAuthCallback(fn)` | `paperlab://auth-callback?code=…`를 받으면 `fn(code, error)` — 성공이면 `error`는 빈 문자열, 실패 · 취소면 `code`가 빈 문자열이고 `error`에 이유(최대 80자). 2a 화면(`app.js`)이 이 두 인자 모양으로 부름 | 구독 해제 함수 |
 | `openStatusWindow()` | 앱의 "이 PC 상태" 창 열기 | 없음 |
 
 화면(`static/js/*`)은 `window.paperlabDesktop`이 있을 때만 이 기능을 씁니다(브라우저에서는 없음 — 그대로 동작).
@@ -844,7 +865,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 - `pair(code)`: 인자는 `POST /api/devices/pair-codes`가 준 문자열 **그대로**(`"K7QF-2M9X"` — 대시 포함, 서버가 정규화하므로 앱이 고치지 않아도 됨). 반환(Promise): 성공 `{ok: true, deviceName}`, 실패 `{ok: false, error: "<화면에 그대로 보일 문구>"}`. 화면은 `!r || !r.ok`이면 `r.error`(없으면 "잠시 후 다시 시도해 주세요.")를 알림에 씀. **성공 직후 `info()`가 `paired: true`와 새 `deviceId`를 돌려줘야 함**(화면이 다시 부름).
 - `openStatusWindow()`: 인자 없음, 반환값은 쓰지 않음. 계정 메뉴의 "이 PC 상태" 항목이 호출.
 - 세 함수 모두 토큰을 반환하지 않음(AC-74).
-- 2a 화면은 `nudge()` · `startGoogleLogin()` · `onAuthCallback()`을 **아직 부르지 않음**(코드 검색 0건) — 10.2절 로컬 신호와 13.4절 로그인 흐름은 2b에서 화면 코드(`app.js` · `auth.js`)에 더해야 함(21.0절 2b 표).
+- 2a 화면은 `nudge()` · `startGoogleLogin()` · `onAuthCallback()`을 **아직 부르지 않음**(코드 검색 0건) — 10.2절 로컬 신호와 13.4절 로그인 흐름은 2b에서 화면 코드(`app.js` · `auth.js`)에 더해야 함(21.0절 2b 표). (2b 개발 뒤 확인 2026-10-08: `app.js` · `jobs.js`가 이 함수들을 부름 — `onAuthCallback` · `startGoogleLogin` · `nudge`.)
 
 ### 13.4 앱 창에서의 구글 로그인 (P12 — 기획팀 추천 K10)
 
@@ -857,6 +878,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | ③ 앱 창 안에서 구글 로그인 | 1단계 Edge `--app` 바로가기처럼 | Electron에서는 Google이 막음 — **채택 불가** |
 
 - 로그인 기다리는 동안 앱 창에 "브라우저에서 로그인을 마쳐 주세요 — [브라우저 다시 열기] [취소]"(16장 E5).
+- **콜백 전달(2b 구현)**: `paperlab://auth-callback?...`를 받으면(`second-instance`의 명령줄 · 처음 실행 인자) main은 `code`(모양 검사 `^[A-Za-z0-9._~-]{8,512}$`) 또는 `error`만 꺼내 **이 앱이 `startGoogleLogin`으로 로그인을 시작한 뒤 15분(`LOGIN_WAIT_MS`) 안에 들어온 콜백만** 앱 창이 서버 화면을 다 받은 뒤 화면에 넘깁니다(받는 때 화면이 로딩 중이면 `did-finish-load`에서 다시). 콜백을 한 번 받으면 대기를 끝냅니다. 그 밖의 콜백(처음 실행할 때 인자로 들어온 것 포함)은 무시하고 로그만 남깁니다. main은 그 창이 이미 로그인했는지 판단하지 않고, **이미 로그인된 화면은 콜백을 무시합니다**(화면 쪽 `app.js`가 로그인 상태면 건너뜀). PKCE 검증자는 처음 로그인을 시작한 화면의 저장소에만 있으므로, 다른 앱이 같은 스킴으로 코드를 보내도 교환되지 않습니다.
 - 1단계 AC-69(Edge `--app` 창 안 로그인)는 웹 바로가기 쪽 기준으로 그대로 둡니다.
 
 ### 13.5 트레이 · 자동 시작 · 백그라운드
@@ -870,7 +892,8 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | 자동 시작 | **켬**(기본) — Windows 로그인 때 트레이로만 시작(`app.setLoginItemSettings({openAtLogin:true, args:["--hidden"]})`). 앱 설정에서 끌 수 있음 |
 | 절전 | 작업 실행 중에만 `powerSaveBlocker.start('prevent-app-suspension')`, 끝나면 해제 |
 | 단일 실행 | `requestSingleInstanceLock()` — 두 번째 실행은 첫 창을 앞으로(워커 중복 방지 · 딥 링크 수신) |
-| 서버 주소 | **확정 U6: 설치 파일에 넣기** — `https://kimjuhyeon.tailac17f6.ts.net`. 저장소의 주소 설정 한 곳(1단계 S10 — 예: `desktop/app-config.json`)에서 빌드 때 읽어 앱에 넣음. 첫 실행에 주소 입력 화면 **없음**. 앱 설정에 주소 바꾸기 칸도 두지 않음(가정 — 주소가 바뀌면 새 릴리스. 1단계 13.2절 "이름을 바꾸지 않음"). 개발 빌드(`npm start`)만 환경 변수 `PAPERLAB_SERVER_URL`로 덮어쓸 수 있음(배포본에서는 무시 — 가정) |
+| 트레이 알림 | 트레이 풍선은 `tray.displayBalloon`으로 띄움(Windows 알림 센터 API 아님). 앱 창이 숨었을 때만(설정에서 끌 수 있음), 첫 숨김 안내 · 업데이트 준비됨 · 연결 해지는 늘 |
+| 서버 주소 | **확정 U6: 설치 파일에 넣기** — `https://kimjuhyeon.tailac17f6.ts.net`. 저장소의 주소 설정 한 곳(1단계 S10 — **`deploy/server-pc/server.json`의 `public_url`**, 별도 `desktop/app-config.json`은 **없음**)에서 빌드 때 `electron-builder.config.js`가 읽어 앱 `package.json`의 `paperlabServer`(`extraMetadata`)로 넣음. 앱은 `https:` 출처가 아니면 시작하지 않음(오류 상자 후 종료). 첫 실행에 주소 입력 화면 **없음**. 앱 설정에 주소 바꾸기 칸도 두지 않음(가정 — 주소가 바뀌면 새 릴리스. 1단계 13.2절 "이름을 바꾸지 않음"). 개발 빌드(`npm start`)만 환경 변수 `PAPERLAB_SERVER_URL`로 덮어쓸 수 있음(배포본에서는 무시 — 가정) |
 
 ### 13.6 앱 자체 화면 (로컬, `app://`)
 
@@ -905,7 +928,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 ```
 관리자: 승인 · 푸시된 커밋 → 서버 PC update.ps1 (1단계 13.8절 1~8단계: git 반영 · 마이그레이션 · 서버 재시작 · 상태 확인)
    └ 9(신규). 서버 상태 확인이 성공했고 "데스크톱 빌드 조건"이 맞으면 → Electron 설치 파일 빌드
-        npm ci → electron-builder --win nsis --publish never  (desktop/ 에서, 결과는 desktop/dist/)
+        npm ci → npm run dist  (= electron-builder --config electron-builder.config.js --win nsis --publish never, desktop/ 에서, 결과는 desktop/dist/)
         → D:\PaperLab\releases\ 에 옮김: .exe → .exe.blockmap → release.json → latest.yml (마지막)
    └ 빌드 실패 = WARN 기록 · 이전 설치 파일 그대로 · update.ps1 종료 코드는 서버 결과대로(성공이면 0)
 PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\PaperLab\releases 의 파일
@@ -919,7 +942,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | 버전을 안 올린 변경 | `desktop/`이 바뀌었는데 버전이 이미 `releases`에 있으면 **빌드하지 않고 WARN** "데스크톱 앱이 바뀌었지만 버전이 같아 빌드하지 않았어요 — desktop/package.json 버전을 올려 주세요". 같은 버전 이름으로 다른 내용을 내보내지 않음(파일 이름 = 버전, 캐시 · sha512 일관성) |
 | 언제 하지 않음 | 서버 상태 확인 실패로 되돌린 경우, `-Ref`로 옛 커밋에 맞춘 경우, `-RestartOnly`. 서버를 되돌려도 `releases`는 지우지 않음(앱은 다운그레이드하지 않음) |
 | 순서 | **서버 재시작 · 상태 확인이 끝난 뒤**(빌드가 서버 반영을 늦추거나 막지 않게). 빌드 중에도 서버는 새 코드로 돎 |
-| 실행 | `desktop/`에서 `npm ci`(잠금 파일대로 — 공급망) → `npx electron-builder --win nsis --publish never`. 시간 제한 **20분**(가정). 캐시는 D:로: `ELECTRON_CACHE` · `ELECTRON_BUILDER_CACHE` = `D:\PaperLab\cache\…`(C: 여유 15GB — 1단계 9.1절, 스크립트 안에서만 설정하는 도구용 변수 — 앱 · 서버 환경 변수 아님). `node_modules` · `dist`는 `.gitignore`(작업 폴더 "고친 파일" 검사에 걸리지 않음) |
+| 실행 | `desktop/`에서 `npm ci`(잠금 파일대로 — 공급망) → **`npm run dist`**(`package.json`의 스크립트: `electron-builder --config electron-builder.config.js --win nsis --publish never`). 설정 파일 이름이 기본(`electron-builder.yml` 등)이 아니라 `electron-builder.config.js`이므로 **`--config`로 지정**. `update.ps1`은 이 두 명령(고정 문자열)만 부르며, **빌드 함수(`Invoke-PLDesktopBuild` · `Get-PLReleasesDir` 등)는 `common.ps1`에 있고 `update.ps1`은 그것을 부름**. 시간 제한 **20분**(`-BuildTimeoutSec`, 기본 1200초 — 가정). 캐시는 D:로: `ELECTRON_CACHE` · `ELECTRON_BUILDER_CACHE` = `D:\PaperLab\cache\…`(C: 여유 15GB — 1단계 9.1절, 스크립트 안에서만 설정하는 도구용 변수 — 앱 · 서버 환경 변수 아님). `node_modules` · `dist`는 `.gitignore`(작업 폴더 "고친 파일" 검사에 걸리지 않음) |
 | 옮기기 | `desktop/dist/`에서 `releases\.staging\`로 복사 → 확인(`latest.yml`의 파일 이름 · 크기 · sha512가 실제 `.exe`와 맞는지 스크립트가 다시 계산) → `.exe` · `.blockmap` 먼저, **`latest.yml`을 마지막에 이름 바꾸기로 교체**(앱이 새 `latest.yml`을 보는 순간 그 `.exe`가 이미 있게). 실패하면 `.staging`만 지움 |
 | `release.json` | 스크립트가 함께 씀: `{version, file, size, sha256, built_at, commit}` — 처음 설치 링크 · SHA-256 표시용(아래 API). `/downloads/`로는 내주지 않음 |
 | 보관 | `releases`에 **최근 3개 버전**의 `.exe` · `.blockmap`(차등 받기는 **옛 버전 blockmap**도 받으므로 남김), `latest.yml`은 하나. 넘으면 오래된 것부터 지움(팀장 결정 K24) |
@@ -929,7 +952,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 
 **서버 PC 준비 — Node.js LTS (사용자 · 관리자 작업, 안내서에 추가)**
 - 서버 PC 실측 Node **v24.14**(1단계 9.1절) — Node 24는 LTS 계열. `node -v` · `npm -v`로 확인만 하면 됨. 없거나 LTS가 아니면 nodejs.org의 **LTS Windows 설치 파일(.msi)** 로 설치(기본 옵션, "필요한 도구 자동 설치"는 끔 — electron-builder NSIS 빌드에 C++ 도구 불필요 — 가정, AC-89에서 확인).
-- `install.ps1` · `update.ps1`은 빌드 전에 `node` · `npm`이 PATH에 있고 주 버전이 **22 이상**(가정)인지 검사 → 아니면 빌드 단계만 WARN 후 건너뜀(서버 설치 · 업데이트는 계속).
+- **`update.ps1`**(빌드 함수는 `common.ps1`)이 빌드 전에 `node` · `npm`이 PATH에 있고 주 버전이 **22 이상**(가정)인지 검사 → 아니면 빌드 단계만 WARN 후 건너뜀(서버 업데이트는 계속). **`install.ps1`은 2b에서 바뀌지 않았습니다**(개정 전 "install.ps1도 검사 · 폴더 만들기"는 하지 않음) — `releases` · `cache` · 로그 폴더는 빌드 함수가 처음 빌드 때 만들고(`D:\PaperLab` 아래라 권한은 상속), 처음 배포는 `update.ps1 -BuildDesktop`.
 - 첫 빌드는 Electron · NSIS 바이너리를 인터넷에서 받음(서버 PC 인터넷 필요, 수백 MB — 캐시 뒤에는 다시 받지 않음).
 
 **서버 경로 `/downloads/` (개발팀 — `paperlab/server.py` 또는 새 모듈)**
@@ -939,7 +962,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | 허용 파일 이름 | 정규식 **`^latest\.yml$`** 또는 **`^PaperLab-Setup-\d{1,4}\.\d{1,4}\.\d{1,4}\.exe(\.blockmap)?$`** 만(electron-builder `artifactName`을 `PaperLab-Setup-${version}.${ext}`로 고정). 정규식 통과 뒤에도 `releases` 폴더 기준으로 경로를 풀어 **부모가 그 폴더인지** 다시 확인(`..` · `%2e%2e` · 역슬래시 · 드라이브 문자 · 대체 데이터 스트림 `:` · 심볼릭 링크 밖 차단), 파일이 없으면 404. `.staging` · `release.json` · 로그는 이름 규칙상 나갈 수 없음 |
 | 응답 | `FileResponse`(스트리밍 — 메모리에 다 올리지 않음). `Content-Type`: `.yml` = `text/yaml; charset=utf-8`, `.exe` = `application/octet-stream`, `.blockmap` = `application/octet-stream`. `Content-Disposition: attachment; filename=…`(`.exe`). `X-Content-Type-Options: nosniff`(1단계 공통) |
 | Range | electron-updater 차등 받기는 `.exe`에 **Range 요청**(여러 범위 포함)을 씀. 서버는 Starlette `FileResponse`의 Range 처리를 그대로 씀. **2a**: `tests/test_downloads.py::test_range_requests`가 단일 범위(206 · `Content-Range`)와 다중 범위(206 · `multipart/byteranges`)를 단언함(작성됨 — 품질팀 실행 결과는 따로). **차등 업데이트가 실제로 되는지(electron-updater가 보내는 Range 모양 · 횟수, 안 될 때 전체 받기로 넘어가는지) 실측은 2b**(AC-71). |
-| 설치 파일 폴더(팀장 승인 2026-10-08 — K14' 개정) | **환경 변수 `PAPERLAB_RELEASES_DIR`**(서버 PC `cloud.env` 또는 프로세스 환경 변수 — 둘 다 있으면 프로세스 환경 변수가 우선). 비밀 아님, 값은 폴더 경로 하나. **없거나 공백이면 기본 `D:\PaperLab\releases`**. 서버(`paperlab/serve.py`)가 시작할 때 `cloud.env`를 합쳐 읽고 `downloads.releases_dir()`로 정함. 값 형식 · 폴더 존재는 시작 때 검사하지 않음(`serve --check`의 변수 검사 대상 아님) — 폴더나 파일이 없으면 `/downloads/*`가 404, `GET /api/desktop/release`가 404 `{"code":"not_ready"}`. 서버는 이 폴더를 읽기만 함. **확인 필요(2b)**: `update.ps1`이 같은 폴더에 쓰도록 같은 값을 읽는지 — 지금 13.7.1절 본문은 `D:\PaperLab\releases`로 적혀 있음 |
+| 설치 파일 폴더(팀장 승인 2026-10-08 — K14' 개정) | **환경 변수 `PAPERLAB_RELEASES_DIR`**(서버 PC `cloud.env` 또는 프로세스 환경 변수 — 둘 다 있으면 프로세스 환경 변수가 우선). 비밀 아님, 값은 폴더 경로 하나. **없거나 공백이면 기본 `D:\PaperLab\releases`**. 서버(`paperlab/serve.py`)가 시작할 때 `cloud.env`를 합쳐 읽고 `downloads.releases_dir()`로 정함. 값 형식 · 폴더 존재는 시작 때 검사하지 않음(`serve --check`의 변수 검사 대상 아님) — 폴더나 파일이 없으면 `/downloads/*`가 404, `GET /api/desktop/release`가 404 `{"code":"not_ready"}`. 서버는 이 폴더를 읽기만 함. **2b 확인 — 해결(2026-10-08, `common.ps1` `Get-PLReleasesDir` 확인)**: `update.ps1`이 쓰는 폴더도 같은 규칙으로 정합니다 — ① **프로세스 환경 변수 `PAPERLAB_RELEASES_DIR`**(공백만이면 무시) → ② **`cloud.env`의 같은 키**(그 한 줄만 읽고 다른 값은 읽지 않음, 따옴표 허용, `-EnvFile`로 위치 지정 가능) → ③ **`D:\PaperLab\releases`**. 이 기본값은 서버 `downloads.py`의 `DEFAULT_RELEASES_DIR`와 같아야 하며 테스트가 확인합니다. 이 문서 본문의 `D:\PaperLab\releases`는 ③의 기본값을 뜻합니다 |
 | Cache-Control | `latest.yml` = **`no-cache`**(매번 서버에 확인 — 새 버전을 바로 보게, ETag · Last-Modified로 304 가능). 버전이 이름에 든 `.exe` · `.blockmap` = **`public, max-age=31536000, immutable`**(같은 이름은 내용이 바뀌지 않음 — 위 "버전을 안 올린 변경" 규칙이 보장). `/api/*`의 `no-store` 규칙은 그대로(이 경로는 `/api/` 밖). **`latest.yml`의 304는 서버가 직접 처리**(구현 확인 2026-10-08): 응답에 `ETag` · `Last-Modified`가 있고, 요청 `If-None-Match`가 현재 `ETag` 문자열과 **정확히 같을 때만** `304`(본문 없음, 헤더는 `ETag` · `Cache-Control: no-cache`). 값 목록(`a, b`) · 약한 표시(`W/`) · `If-Modified-Since`는 해석하지 않음(다르면 그냥 200으로 전체 응답). `.exe` · `.blockmap`에는 304 처리가 없음(불변 캐시 헤더만) |
 | 인증 · 요청 규칙 | **로그인 없이 받음**(K22 — 아래 보안 검토). Host 검사(1단계 6.5절)는 그대로 적용. `GET` · `HEAD`만(그 밖 405). `X-PaperLab` 헤더 불필요(쓰기 아님) |
 | 남용 방지 | `.exe` 동시 전송 **서버 전체 3개**(넘으면 503 + `Retry-After: 60`), 같은 IP(`X-Forwarded-For` — 1단계 AC-75 실측 결과에 따름) `.exe` **전체 `GET` 시간당 10회**(넘으면 429 `{"code":"rate_limited"}` + `Retry-After: 600`). `latest.yml` · `.blockmap`은 작아 제한 없음(가정). **세는 방식(2a 품질 수정 2026-10-08 — 품질팀 M3로 개정 전 "Range도 1회씩 셈"을 바꿈)**: **`Range` 헤더가 있는 요청은 시간당 횟수에 넣지 않고 동시 전송 3개 제한만 적용**합니다(electron-updater 차등 받기 · 이어 받기가 한 번의 업데이트에서 여러 조각을 요청해도 시간당 한도를 쓰지 않게). `Range` 헤더가 **없는 전체 `GET`**만 같은 IP 기준 시간당 10회로 셉니다. **주소가 `127.0.0.1`(`::1` 포함)이고 `X-Forwarded-For`가 없으면** IP별로 나눌 수 없으므로 전체를 하나로 묶어 **전체 시간당 60회**로 셉니다. `HEAD`는 세지도 않고 동시 전송 자리도 차지하지 않음. 횟수 검사를 **먼저** 하고 그 다음 동시 전송 수를 검사하므로 전체 `GET`이 503을 받아도 시간당 횟수에는 들어감. **수용 위험(19장)**: `Range: bytes=0-`처럼 헤더만 붙이면 전체 파일을 시간당 횟수 제한 없이 받을 수 있음 — 동시 3개 제한은 그대로 걸리므로 대역폭을 독점하지는 못하며, **2b 운영 접근 로그에서 지켜봄**(남용이 보이면 Range 요청도 시작 위치별로 세거나 기기 토큰 요구(③)를 재검토) |
@@ -996,7 +1019,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | 단계 | 누가 · 어디서 | 내용 |
 |---|---|---|
 | 1 | 개발팀 · 개발 PC | `desktop/package.json` 버전 올림(SemVer, 예: `0.2.0`). **앱을 바꾸면 반드시 올림**(같은 버전은 서버 PC가 다시 빌드하지 않음 — 13.7.1절) |
-| 2 | 품질팀 · 개발 PC | `npm test`(워커 · 가짜 CLI) + 서버 테스트 + 17장 수동 항목. 설치 · 앱 동작 확인은 **개발 PC에서 직접 빌드한 설치 파일**(`npx electron-builder --win nsis --publish never`)로 — 다른 Windows 사용자 계정에 설치(AC-70 · 72~82) |
+| 2 | 품질팀 · 개발 PC | `npm test`(워커 · 가짜 CLI) + 서버 테스트 + 17장 수동 항목. 설치 · 앱 동작 확인은 **개발 PC에서 직접 빌드한 설치 파일**(`npm run dist` — 폴더만 만들어 보려면 `npm run pack`)로 — 다른 Windows 사용자 계정에 설치(AC-70 · 72~82). **주의(개발 PC)**: 저장소가 **OneDrive 폴더 안**에 있으면 electron-builder가 `EPERM`으로 실패합니다(개발팀 보고 — 팀장 확인). OneDrive 밖 폴더에서 빌드하세요. **서버 PC 경로(`D:\PaperLab\…`)에는 해당 없음** |
 | 3 | 승인자 → 관리자 | 승인 뒤 커밋 · 푸시(빌드 결과물 `desktop/dist/`는 커밋하지 않음) |
 | 4 | 관리자 · 서버 PC | `update.ps1`(1단계 13.8절) — 서버 반영 · 상태 확인이 끝나면 **설치 파일을 빌드해 `D:\PaperLab\releases`에 둠**(13.7.1절). `latest.yml`이 바뀌는 순간부터 설치된 앱들이 업데이트를 받음(**게시 단계가 따로 없음** — 승인 · 푸시가 곧 배포 승인) |
 | 5 | 관리자 · 품질팀 | `update.log`에 빌드 성공(버전 · sha256) 확인 → 업데이트 확인(AC-71 · 88 · 89). 빌드 WARN이면 원인을 고쳐 **버전을 올린 커밋**으로 다시 반영하거나 `update.ps1 -BuildDesktop` |
@@ -1186,7 +1209,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 - **AC-85** [2b] **[수동] (신규 — 서버 꺼짐)** 서버 PC의 Funnel을 끄거나(`funnel.ps1 off`) 서버를 멈춘 상태로 앱을 열면 E9 "서버에 연결할 수 없어요" 화면, 다시 켜면 30초 안에 자동으로 앱 창이 열리고 워커가 다시 claim.
 - **AC-86** [2b] **[Node + 수동] (신규 — 1A 외부 링크, 13.2.1절)** (a) [Node] `isExternalAllowed`: `https://www-dbpia-co-kr-ssl.openlink.inha.ac.kr/x` · `https://lib.inha.ac.kr/login` · `https://scholar.google.com/scholar?q=a` · `https://doi-org-ssl.openlink.inha.ac.kr/10.1109/CVPR.2016.90` · 목록 밖 `https://www.example-publisher.com/article/1` · `http://ieeexplore.ieee.org/document/7780459/` → 허용(K21 ①). `file:///C:/Windows/System32/calc.exe` · `javascript:alert(1)` · `data:text/html,x` · `blob:https://kimjuhyeon.tailac17f6.ts.net/x` · `mailto:a@b.c` · `smb://host/share` · `ms-settings:` · `ftp://x.org/` · 빈 값 · 해석 안 되는 문자열 → **모두 거부**. (a2) [Node] 요청한 곳 · 개수 제한(13.2.1절 7 · 8번): 서버 출처 최상위 프레임에서 온 허용 주소 → 허용, 같은 주소라도 하위 프레임 또는 다른 출처(`https://example.com`)에서 온 요청 → 거부. 주입한 시계로 10초 안에 6번째 요청 → 거부, 첫 요청에서 10초가 지난 뒤 → 다시 허용. (b) [수동] 앱 창에서 논문 찾기 결과 카드 · 서재 상세 패널 · 읽기 화면(PDF 없는 논문)의 "인하대에서 보기", 논문 찾기 [RISS] [DBpia] [KISS] [Google Scholar], 정보 탭 "Google Scholar에서 보기", 설정 창 [학교 로그인]을 하나씩 누름(처음 안내 창이 뜨면 [계속 열기]) → 각각 **기본 브라우저**에 열리고, 앱 안에 새 창이 생기지 않으며 앱 창은 PaperLab 화면에 그대로 있음. 학교에 로그인한 뒤에도 앱 쪽 파티션(`persist:paperlab`)의 쿠키에 `inha.ac.kr` 쿠키가 없음(개발자 도구 Application 탭).
 - **AC-87** [2a] **(신규 — U10, `/downloads/`)** 자동(pytest, 임시 `releases` 폴더 주입): `latest.yml` · `PaperLab-Setup-0.2.0.exe` · `.exe.blockmap`을 두면 토큰 없이 `GET` 200(`HEAD`도 200 · 같은 `Content-Length`). `GET /downloads/` · `/downloads` → 404(목록 없음). 이름 `release.json` · `.staging/latest.yml` · `../cloud.env` · `..%2f..%2fcloud.env` · `%2e%2e/x` · `..\\x` · `C:%5cWindows%5cwin.ini` · `latest.yml::$DATA` · `PaperLab-Setup-0.2.0.exe.bak` · `PaperLab-Setup-1.exe` · 대소문자 다른 `LATEST.YML` · 폴더 밖을 가리키는 심볼릭 링크(만들 수 있으면) → 모두 404이고 폴더 밖 파일 내용이 응답에 없음. `POST` · `PUT` · `DELETE` → 405. `Cache-Control`: `latest.yml` = `no-cache`, `.exe` · `.blockmap` = `public, max-age=31536000, immutable`, 응답에 `X-Content-Type-Options: nosniff`. `Range: bytes=0-99` → 206 · 100바이트, `Range: bytes=0-9,20-29` → 206(다중 범위 — 안 되면 결과를 보고하고 팀장에게, 13.7.1절). `.exe` 동시 4번째 → 503 · `Retry-After`, 같은 IP 시간당 11번째 → 429(시계 주입, `Retry-After: 600`). (개정 2026-10-08) `latest.yml`을 받은 `ETag` 값 그대로 `If-None-Match`에 넣어 다시 `GET` → 304(본문 없음, `ETag` · `Cache-Control: no-cache` 헤더), 다른 값 → 200. **`Range` 요청은 시간당 횟수에 들어가지 않음**(`Range: bytes=0-99`로 11번 이상 받아도 429가 안 나오고, 그 뒤 `Range` 없는 전체 `GET`은 여전히 10회까지 200 · 11번째 429. 동시 4번째 `Range` 요청은 503, `HEAD`는 세지 않음). **주소 127.0.0.1 · `X-Forwarded-For` 없음이면 전체 `GET` 시간당 60회**(61번째 429 — 시계 주입), `X-Forwarded-For`가 서로 다른 두 IP는 각자 10회씩. 설치 파일 폴더는 환경 변수 `PAPERLAB_RELEASES_DIR`로 주입(없으면 기본 `D:\PaperLab\releases` — 시험은 임시 폴더를 이 변수 또는 `create_app(releases=…)`로 줌). `GET /api/desktop/release`: 토큰 없음 401, 로그인하면 `release.json` 내용(`url`이 `/downloads/`로 시작), 파일 없으면 404. 1단계 AC-01의 공개 예외 목록에 `/downloads/*`만 추가됨(다른 경로는 여전히 401).
-- **AC-88** [2b] **(신규 — U10, `update.ps1` 빌드 단계)** 자동(가짜 `npm` · `npx`로 PowerShell 스크립트 시험 — 지금 `tests/test_server_pc_scripts.py` 방식): (a) `desktop/` 변경 + 새 버전 → 빌드 호출, `releases`에 `.exe` · `.blockmap` · `release.json` · `latest.yml`, `latest.yml`이 **마지막에** 바뀜(파일 시각 · 호출 순서 기록), `release.json`의 `sha256`이 실제 파일과 같음. (b) 가짜 빌드 실패(종료 코드 1) · 시간 초과 · `latest.yml` sha512와 실제 파일 불일치 → `update.log`에 `WARN` · `releases`의 이전 파일 그대로(해시 같음) · `.staging` 없음 · **스크립트 종료 코드 0**(서버 반영 성공일 때). (c) `desktop/` 변경 + 버전 그대로 → 빌드 안 함 + WARN 문구. (d) `desktop/` 변경 없음 → 빌드 안 함(WARN 없음). (e) 서버 상태 확인 실패로 되돌린 경우 · `-Ref` · `-RestartOnly` → 빌드 안 함. (f) `node`가 없거나 주 버전 22 미만 → 빌드 단계만 WARN, 서버 업데이트는 성공. (g) 4번째 버전을 넣으면 가장 오래된 버전의 `.exe` · `.blockmap`이 지워지고 3개만 남음. (h) 코드 검사: electron-builder 설정의 `publish`가 `generic`이고 `url`이 `server.json`의 `public_url` + `/downloads/`에서 오며 `https://`로 시작, 저장소 어디에도 `GH_TOKEN` · `provider: "github"`가 없음(문서 제외), 공개 주소 한 곳 검사(1단계 AC-69)가 `desktop/`까지 통과.
+- **AC-88** [2b] **(신규 — U10, `update.ps1` 빌드 단계)** 자동(가짜 `npm`으로 PowerShell 스크립트 시험 — `update.ps1`은 `npm ci` · `npm run dist`만 부름, 지금 `tests/test_server_pc_scripts.py` 방식): (a) `desktop/` 변경 + 새 버전 → 빌드 호출, `releases`에 `.exe` · `.blockmap` · `release.json` · `latest.yml`, `latest.yml`이 **마지막에** 바뀜(파일 시각 · 호출 순서 기록), `release.json`의 `sha256`이 실제 파일과 같음. (b) 가짜 빌드 실패(종료 코드 1) · 시간 초과 · `latest.yml` sha512와 실제 파일 불일치 → `update.log`에 `WARN` · `releases`의 이전 파일 그대로(해시 같음) · `.staging` 없음 · **스크립트 종료 코드 0**(서버 반영 성공일 때). (c) `desktop/` 변경 + 버전 그대로 → 빌드 안 함 + WARN 문구. (d) `desktop/` 변경 없음 → 빌드 안 함(WARN 없음). (e) 서버 상태 확인 실패로 되돌린 경우 · `-Ref` · `-RestartOnly` → 빌드 안 함. (f) `node`가 없거나 주 버전 22 미만 → 빌드 단계만 WARN, 서버 업데이트는 성공. (g) 4번째 버전을 넣으면 가장 오래된 버전의 `.exe` · `.blockmap`이 지워지고 3개만 남음. (h) 코드 검사: electron-builder 설정의 `publish`가 `generic`이고 `url`이 `server.json`의 `public_url` + `/downloads/`에서 오며 `https://`로 시작, 저장소 어디에도 `GH_TOKEN` · `provider: "github"`가 없음(문서 제외), 공개 주소 한 곳 검사(1단계 AC-69)가 `desktop/`까지 통과.
 - **AC-89** [2b] **[실환경] (신규 — U10, 서버 PC 빌드)** 서버 PC에서 `node -v`(LTS 주 버전 기록) → `update.ps1 -BuildDesktop`이 성공해 `D:\PaperLab\releases`에 세 파일이 생기고 `update.log`에 버전 · sha256, 빌드 시간 기록. 다른 망(휴대폰 데이터)에서 `https://kimjuhyeon.tailac17f6.ts.net/downloads/latest.yml` 200 · `/downloads/` 404. `icacls D:\PaperLab\releases`가 1단계 AC-58 (5)와 같음. Electron · NSIS 캐시가 D:에 있음.
 
 ### H. 화면 [수동]
@@ -1330,7 +1353,10 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | (U10) Starlette `FileResponse`의 Range · 다중 범위 응답(설치본 1.7.0), 안 될 때 electron-updater가 전체 받기로 넘어가는지 | 2a: 자동 시험 작성됨(`test_range_requests` — 품질팀 실행 확인 대기, AC-87). **electron-updater 차등 받기 실측 · 전체 받기 전환 · `.exe` 요청 횟수는 2b 미확인**(Range는 시간당 횟수에서 빠졌으므로 한도와의 충돌은 없어짐 — 2b는 접근 로그에서 Range 남용 여부만 봄) → AC-71 |
 | (U10) 서버 PC에서 electron-builder NSIS 빌드에 추가 도구(C++ 빌드 도구 등)가 필요 없는지, 첫 빌드 다운로드 크기 · 시간 | 미확인 → AC-89 |
 | 서명 없는 NSIS 업데이트 설치 때 SmartScreen · UAC 동작, 백신 오탐 | 미확인 → AC-71 |
-| gemini CLI: stdin + `-p` 결합 방식, 인증 실패 표시, 비대화형 도구 실행 정책, 모델 플래그 | 일부 확인(출력 형식 · 종료 코드) |
+| gemini CLI: stdin + `-p` 결합 방식, 인증 실패 표시, 비대화형 도구 실행 정책, 모델 플래그 | 일부 확인(출력 형식 · 종료 코드). 2b 구현: 고정 `-p` 지시 + stdin 본문, 로그인은 `.gemini` 인증 파일 유무로 판정(11.4절) — **실제 gemini로 실측은 미확인**(AC-81 확장) |
+| (2b) ASAR 무결성 fuse를 켜도 서명 없는 설치본이 시작 · 업데이트되는지 | **미확인** — 지금은 끔(13.2절 Fuses). 켜려면 AC-70 · 71 실환경에서 먼저 시험 |
+| (2b) 개발 PC가 OneDrive 폴더 안일 때 electron-builder `EPERM` | 개발팀 보고(14장) — 서버 PC 경로에는 해당 없음, 서버 PC 빌드는 AC-89에서 확인 |
+| (2b) 워커 로그에 `model_fallback` 기록 | **구현됨** — `stats`에 담기고(11.6절) `worker.log`에 한 줄 남김 |
 | codex `exec`의 `-a`(승인) 플래그를 exec에서 쓰는지, `-` stdin 동작 | 문서상 `-`로 stdin 확인, 실측 필요 |
 | claude 첫 호출 웜업 문제가 지금 버전에도 있는지 | 미확인 |
 | ~~Cloud Run 무료 범위 · Cloud Tasks OIDC~~ | **해당 없음**(서버 PC 전환) |
@@ -1340,7 +1366,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | Funnel을 거친 워커 요청: `X-Forwarded-For`로 IP 구분이 되는지(8.2절 속도 제한), 장시간 연결 | 미확인(1단계 AC-75 · 78) |
 | 엔진별 최소 버전 표(사용자 PC CLI — 11.4절 플래그 동작). ~~서버 PC claude 업데이트~~는 Q-S3로 해당 없음 | 미확인 |
 | (1A 연결) `window.open(url, "_blank", "noopener,noreferrer")` · `<a target="_blank" rel="noopener noreferrer">`도 `setWindowOpenHandler`로 들어와 `url`을 받는지(13.2.1절) | 미확인 — 공식 문서(window-open)에 noopener 경우가 따로 적혀 있지 않음. 개발팀이 AC-86으로 실측 |
-| (1A 연결) 새 창 처리기 · `will-navigate` · `will-redirect`에서 **요청한 프레임**(최상위 여부 · 출처)을 알아내는 방법(13.2.1절 7번) | 미확인 — 개발팀이 사용하는 Electron 버전의 API 문서로 확인. 알 수 없으면 대안과 함께 팀장에게 보고 |
+| (1A 연결) 새 창 처리기 · `will-navigate` · `will-redirect`에서 **요청한 프레임**(최상위 여부 · 출처)을 알아내는 방법(13.2.1절 7번) | **해결(2b, 2026-10-08)** — `setWindowOpenHandler`에는 프레임 정보가 없어 하위 프레임이 있으면 거부 + 다른 출처 iframe은 `will-frame-navigate`로 막고, `will-navigate` · `will-redirect`는 `initiator`로 판정(13.2.1절 7번). 실제 프레임 구성에서의 동작은 AC-86 (b) 수동 확인 |
 
 ## 21. 작업 분담 (파일 단위)
 
@@ -1360,7 +1386,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 
 | 구분 | 파일 | 2a에서 하는 일 |
 |---|---|---|
-| 개발 | `supabase/migrations/2026100900000x_devices_jobs.sql` | 5장 표 3개 전부(`devices` · `device_pair_codes` · `jobs` — 2b가 마이그레이션을 다시 건드리지 않게 `devices.features`와 **`jobs.result_key text null`(2b · 4단계 대비 자리 — 2단계 코드는 쓰지 않음)** 까지). 2a 품질 수정으로 **`jobs.interactive boolean not null default false`**(SSE 대화 · 글쓰기 표시, 5.3 · 6.3절)도 이 파일에 있음 — 두 열은 `create table` 뒤 별도 `alter table … add column if not exists` 문장이라, 열이 없던 테스트 DB에도 그 두 문장만 다시 실행하면 안전 |
+| 개발 | `supabase/migrations/2026100900000x_devices_jobs.sql` | 5장 표 3개 전부(`devices` · `device_pair_codes` · `jobs` — 2b가 마이그레이션을 다시 건드리지 않게 `devices.features`와 **`jobs.result_key text null`(4단계 대비 예약 열 — 2a · 2b 코드 모두 쓰지 않음)** 까지). 2a 품질 수정으로 **`jobs.interactive boolean not null default false`**(SSE 대화 · 글쓰기 표시, 5.3 · 6.3절)도 이 파일에 있음 — 두 열은 `create table` 뒤 별도 `alter table … add column if not exists` 문장이라, 열이 없던 테스트 DB에도 그 두 문장만 다시 실행하면 안전 |
 | 개발 | `paperlab/db.py` · `jobs.py` · `worker_api.py` · `api_runner.py` · `api_engines.py` · `serve.py` · `ai.py` · `config.py` | 5 · 6 · 8 · 9 · 15장 전부: 작업 큐 · 기기 연결 · 워커 API(`/api/worker/*`) · API 우선 → CLI 폴백 라우팅 · API 키 3종(Anthropic · OpenAI · Google) · 서버 프로세스 안 API 실행기 · `ai.py`의 `_run_cli` 삭제와 CLI 요청 만들기 · 결과 해석 함수 · 모델 별칭 매핑 값 |
 | 개발 | `paperlab/server.py`(또는 `paperlab/downloads.py`) | 7장 사용자 API, 요약 → 작업, 대화 · 글쓰기 폴백 이벤트, 미들웨어 `/api/worker/*` 분기, **`/downloads/` 내려주기 · `GET /api/desktop/release`**(13.7.1절 서버 쪽 — 임시 `releases` 폴더로 AC-87) |
 | 개발 | `paperlab/static/js/api.js` · `app.js` · `state.js` · `reader.js` · `writing.js` · `dialogs.js` · `index.html` · `jobs.js`(신규) | S1~S10(16장): "AI 엔진" 구역 · 작업별 엔진 · API 키 3종 · 연결된 PC(코드 만들기 · 목록 · 이름 · 해지) · **PC 앱 받기 창** · 작업 목록 · 요약 진행 · 대화 · 글쓰기의 PC 실행 문구 |
@@ -1374,10 +1400,10 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 
 | 구분 | 파일 | 2b에서 하는 일 |
 |---|---|---|
-| 개발 | `desktop/` 전체(신규 — `build/icon.ico` 제외) · `desktop/electron-builder.config.js` · `desktop/app-config.json` | 13 · 11장: 앱 창 · 워커(CLI 실행기) · 트레이 · 자동 시작 · 보안 설정 · 구글 로그인(시스템 브라우저) · 서버 연결 불가 화면(E9) · NSIS · 자동 업데이트 설정 · 서버 주소 내장(U6) · `test/` [Node] |
+| 개발 | `desktop/` 전체(신규 — `build/icon.ico` 제외) · `desktop/electron-builder.config.js`(서버 주소는 `server.json`에서 — `app-config.json` 없음) | 13 · 11장: 앱 창 · 워커(CLI 실행기) · 트레이 · 자동 시작 · 보안 설정 · 구글 로그인(시스템 브라우저) · 서버 연결 불가 화면(E9) · NSIS · 자동 업데이트 설정 · 서버 주소 내장(U6) · `test/` [Node] |
 | 개발 | `desktop/main/window.js` · `desktop/test/external-links.test.js` | 13.2.1절 외부 링크 규칙, AC-86 (a) · (a2) |
-| 개발 | `deploy/server-pc/update.ps1` · `install.ps1` | 13.7.1절 빌드 단계 · Node 검사 · `releases` · `cache` 폴더(지금 진행 중인 update.ps1 작업과 순서를 맞춤). **서버가 읽는 폴더는 `PAPERLAB_RELEASES_DIR`(기본 `D:\PaperLab\releases`)이므로 `update.ps1`이 쓰는 폴더와 같은 값을 쓰는지 2b 시작 때 확인**(13.7.1절 "설치 파일 폴더") |
-| 개발 | `tests/test_server_pc_scripts.py` | AC-88(가짜 `npm` · `npx`) |
+| 개발 | `deploy/server-pc/update.ps1` · `common.ps1` (`install.ps1`은 **바뀌지 않음**) | 13.7.1절 빌드 단계(`update.ps1`이 `npm ci` · `npm run dist`를 부름) · Node 검사 · `releases` · `cache` 폴더(빌드 함수가 만듦) — 빌드 함수는 `common.ps1`. **완료**: `update.ps1`이 쓰는 폴더는 서버와 같은 규칙(프로세스 환경 → `cloud.env` → `D:\PaperLab\releases`)으로 정함(13.7.1절 "설치 파일 폴더") |
+| 개발 | `tests/test_server_pc_scripts.py` | AC-88(가짜 `npm` — `update.ps1`은 `npm ci` · `npm run dist`만 부름) |
 | 개발 | `paperlab/static/js/auth.js` · `app.js` | 앱 창이면 13.4절 ① 로그인 흐름, `window.paperlabDesktop` 감지, S5의 앱 창 [이 PC 연결] 버튼, S11 앱 창 표시 — 2a 화면에 **더하는** 부분만 |
 | 디자인 | `desktop/ui/*.css` · `desktop/build/icon.ico` · 트레이 아이콘 4종 · 스크린샷(AC-70 뒤) | E1~E9 |
 | 기획 | `desktop/README.md`(E8) · `deploy/server-pc/README.md` | 설치 안내 · Node.js LTS · 빌드 WARN 대처(개발팀 update.ps1 작업이 끝난 뒤) |
@@ -1400,7 +1426,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | `paperlab/config.py` | `ai_routing` · `cli_models` · `api_models` · 새 비밀 키 `openai_api_key` · `google_api_key`(U2) · `ai_engine` 무시. `redact`에 `sk-` · `AIza` 키 패턴. **새 환경 변수 없음**(K14' — 설치 파일 폴더 변수 `PAPERLAB_RELEASES_DIR`은 `downloads.py` · `serve.py`가 읽음, 아래 `downloads.py` 줄) |
 | `paperlab/server.py` | 7장 사용자 API, 요약 → 작업(`ApiRunner`에 넣기), 대화 · 글쓰기 폴백 이벤트, 미들웨어에 `/api/worker/*` 분기(`/internal/*` 없음) |
 | ~~`deploy/deploy.ps1`~~ | **지워짐**(1단계 20.1절) — 2단계 서버 쪽 추가 설정 없음 |
-| `desktop/app-config.json`(또는 1단계 S10의 한 곳) | 서버 주소(U6), 빌드가 읽어 앱에 넣음 |
+| ~~`desktop/app-config.json`~~ | **만들지 않음** — 서버 주소(U6)는 1단계 S10의 한 곳 `deploy/server-pc/server.json`의 `public_url`을 빌드가 읽어 `extraMetadata.paperlabServer`로 앱에 넣음(13.5절) |
 | `tests/test_jobs.py` · `tests/test_worker_api.py` · `tests/test_routing.py` · `tests/test_devices.py` · `tests/test_api_runner.py`(K2' — AC-40~44) · `tests/test_api_engines.py`(U2 — 가짜 OpenAI · Google 서버, AC-45~48) (신규), `tests/test_ai.py` · `tests/test_server.py` · `tests/conftest.py` | 17장 A~E · I, 가짜 워커(httpx), 동시 잡기 시험 |
 | `paperlab/static/js/api.js` · `app.js` · `state.js` · `reader.js` · `writing.js` · `dialogs.js` · `index.html` | S1~S11 로직(디자인팀 클래스 이름 사용), 작업 폴링, `window.paperlabDesktop` 감지 · 로그인 분기(auth.js) |
 | `paperlab/static/js/auth.js` | 앱 창이면 13.4절 ① 흐름 |
@@ -1408,8 +1434,8 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 | `desktop/` 전체 (신규 — `build/icon.ico` 제외) | 13장 앱 · 11장 워커 · `package.json`(electron-builder · NSIS · publish · protocols · fuses) · 서버 주소 내장(U6) · 서버 연결 불가 화면(E9) · `test/` [Node] AC |
 | `desktop/electron-builder.config.js` (신규, U10) | NSIS · `artifactName: PaperLab-Setup-${version}.${ext}` · `publish: generic`(url = `server.json` `public_url` + `/downloads/`) · protocols · fuses. `package-lock.json` 커밋 |
 | `paperlab/server.py`(또는 새 모듈 `paperlab/downloads.py`) (U10) | `GET` · `HEAD /downloads/{name}`(허용 이름 · 폴더 재확인 · 목록 없음 · Cache-Control · Range · 동시 3 · IP별 시간당 10), 보안 미들웨어 공개 예외에 `/downloads/` 추가, `GET /api/desktop/release`(13.7.1절). `releases` 폴더 경로는 **환경 변수 `PAPERLAB_RELEASES_DIR`(`cloud.env` · 프로세스 환경 변수), 기본값 `D:\PaperLab\releases`**(팀장 승인 2026-10-08 — K14' 개정으로 새 환경 변수 1개. 테스트는 `create_app(releases=…)`로 주입). `latest.yml` 304(ETag) 직접 처리 · `.exe` **Range 요청은 시간당 횟수에 넣지 않고 동시 전송 제한만**, 전체 GET은 IP별 시간당 10회(127.0.0.1 · XFF 없음이면 전체 60회)(13.7.1절) |
-| `deploy/server-pc/update.ps1` · `install.ps1` (U10) | 13.7.1절 빌드 단계(조건 · 순서 · `.staging` · `latest.yml` 마지막 · `release.json` · 보관 3개 · WARN · 종료 코드 · `-BuildDesktop`), Node 검사, `D:\PaperLab\releases` · `cache` 폴더 만들기(권한 상속). **지금 진행 중인 update.ps1 작업과 순서를 맞춤** |
-| `tests/test_downloads.py` (신규) · `tests/test_server_pc_scripts.py` (U10) | AC-87 · AC-88(가짜 `npm` · `npx`) |
+| `deploy/server-pc/update.ps1` · `common.ps1` (U10; `install.ps1`은 바뀌지 않음) | 13.7.1절 빌드 단계(조건 · 순서 · `.staging` · `latest.yml` 마지막 · `release.json` · 보관 3개 · WARN · 종료 코드 · `-BuildDesktop`), Node 검사, `releases` · `cache` 폴더 만들기(권한 상속) — 빌드 함수는 `common.ps1`, `update.ps1`이 부름 |
+| `tests/test_downloads.py` (신규) · `tests/test_server_pc_scripts.py` (U10) | AC-87 · AC-88(가짜 `npm`) |
 | `desktop/main/window.js`(또는 판정 함수를 뺀 모듈) · `desktop/test/external-links.test.js` | 13.2.1절 외부 링크 규칙(`isExternalAllowed` · 요청한 곳 검사 · 개수 제한 · 새 창 처리기 · 탐색 제한), AC-86 (a) · (a2). 화면 코드(`paperlab/static/js/*`)는 1A 링크 때문에 바꾸지 않음 |
 
 ### 디자인팀

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PaperLab — 이 PC 상태</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="app.css" />
+  <link rel="stylesheet" href="local.css" />
+</head>
+<body>
+  <!-- E4 이 PC 상태 (+ E6 코드로 연결 · E7 업데이트 · 11.8 알림 상자) — 디자인 11.6 -->
+  <main class="local-page">
+    <h1 class="local-head" tabindex="-1" data-head><svg class="gate-mark" viewBox="0 0 32 32" aria-hidden="true"><rect class="gm-bg" width="32" height="32" rx="8" fill="#1e3a8a"/><path d="M10 8h9l5 5v11a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z" fill="#fff"/><path class="gm-line" d="M12 17h8M12 21h6" stroke="#1e3a8a" stroke-width="2" stroke-linecap="round" fill="none"/></svg>이 PC 상태</h1>
+    <div data-banner></div>
+
+    <div class="section-title" id="sec-connect">연결</div>
+    <div data-connect></div>
+    <div data-pair-flash></div>
+
+    <div class="section-title" id="sec-running">실행 중인 작업</div>
+    <ul class="item-list" data-running aria-labelledby="sec-running"></ul>
+
+    <div class="section-title" id="sec-engines">이 PC에서 쓸 AI 도구</div>
+    <div class="field">
+      <label for="total-slots">한 번에 실행할 작업 수 (전체)</label>
+      <select class="input" id="total-slots" data-total>
+        <option value="1">1</option><option value="2">2 (기본)</option><option value="3">3</option><option value="4">4</option>
+      </select>
+      <p class="hint">사무용 PC는 2를 권해요. 바꾸면 바로 적용돼요.</p>
+    </div>
+    <ul class="item-list" data-engines aria-labelledby="sec-engines"></ul>
+    <div class="row"><span class="small muted grow" data-probed></span><button type="button" class="btn sm" data-recheck>다시 확인</button></div>
+
+    <div class="section-title">앱</div>
+    <div data-update></div>
+    <label class="check"><input type="checkbox" data-autostart /> Windows에 로그인하면 자동으로 시작 (트레이로)</label>
+    <label class="check"><input type="checkbox" data-notify /> 창이 숨어 있을 때 작업 완료 · 실패 알림 보이기</label>
+    <div class="row local-foot"><button type="button" class="btn sm" data-logs>로그 폴더 열기</button><span class="grow"></span><span class="small muted" data-version></span></div>
+  </main>
+  <script src="status.js"></script>
+</body>
+</html>

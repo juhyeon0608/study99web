@@ -2,7 +2,7 @@
 // 화면 전환(#/library, #/discover, #/read/:id, #/write, #/graph · #/graph/W…)
 
 import { ApiError, api, setApiHooks, setApiLive } from "./api.js";
-import { hasAuthCode, initAuth, sessionUser, signInWithGoogle, signOut, startSession, takeRedirectError } from "./auth.js";
+import { exchangeCode, googleAuthUrl, hasAuthCode, initAuth, sessionUser, signInWithGoogle, signOut, startSession, takeRedirectError } from "./auth.js";
 import {
   cancelUploads, folderIcon, folderPickDialog, folderSubtree, maskEmail, settingsDialog, uploadPdfs, uploadsRunning, usageInfo,
 } from "./dialogs.js";
@@ -164,6 +164,7 @@ async function boot({ retry = false } = {}) {
   try {
     const cfg = await loadPublicConfig();
     initAuth(cfg);
+    authInitDone();
     // 개발 서버에서만: 테스트 프로젝트 이메일 로그인 칸 (운영 public-config에는 이 값이 없고 모듈도 404)
     if (cfg.dev_email_login) {
       import("./dev-login.js").then((m) => m.mountDevLogin(gate, () => boot({ retry: true })))
@@ -253,6 +254,7 @@ function resetGoogleButtons() {
 async function startGoogle(btn, selectAccount) {
   setNotice($("[data-gate-error]", gate), "");
   if (navigator.onLine === false) return showLogin({ error: OFFLINE });
+  if (window.paperlabDesktop) return startDesktopLogin(btn, selectAccount);
   setBusy(btn, true);
   try { if (location.hash) sessionStorage.setItem(RETURN_HASH_KEY, location.hash); } catch { /* 무시 */ }
   try {
@@ -267,6 +269,54 @@ async function startGoogle(btn, selectAccount) {
       showLogin({ error: navigator.onLine === false ? OFFLINE : LOGIN_FAILED });
     }
   }, 15000);
+}
+
+// PaperLab PC 앱 창 (2단계 명세 13.4 ① · 디자인 11.3 E5): 시스템 브라우저에서 로그인 → paperlab:// 로 돌아온 code 를 세션으로
+let authInitDone;
+const authInitialized = new Promise((r) => { authInitDone = r; });
+let desktopWait = null; // { selectAccount, timer }
+const DESKTOP_WAIT_MS = 10 * 60 * 1000;
+
+function endDesktopWait() {
+  if (desktopWait) clearTimeout(desktopWait.timer);
+  desktopWait = null;
+}
+
+async function startDesktopLogin(btn, selectAccount) {
+  if (btn) setBusy(btn, true);
+  let ok = false;
+  try {
+    try { if (location.hash) sessionStorage.setItem(RETURN_HASH_KEY, location.hash); } catch { /* 무시 */ }
+    const r = await window.paperlabDesktop.startGoogleLogin(await googleAuthUrl({ selectAccount }));
+    ok = !!(r && r.ok);
+  } catch (e) {
+    console.error(e);
+  }
+  if (!ok) { endDesktopWait(); return showLogin({ error: "브라우저를 열지 못했어요. 다시 시도해 주세요." }); }
+  resetGoogleButtons();
+  endDesktopWait();
+  desktopWait = { selectAccount, timer: setTimeout(() => { desktopWait = null; showLogin({ note: "로그인 시간이 지났어요. 다시 시도해 주세요." }); }, DESKTOP_WAIT_MS) };
+  showGate("desktop-wait");
+  setTimeout(() => $(".gate-title", pane("desktop-wait")).focus(), 0);
+}
+
+if (window.paperlabDesktop) {
+  $("[data-desktop-reopen]", gate).onclick = () => startDesktopLogin(null, desktopWait ? desktopWait.selectAccount : false);
+  $("[data-desktop-cancel]", gate).onclick = () => { endDesktopWait(); showLogin({ note: "로그인을 취소했어요." }); };
+  window.paperlabDesktop.onAuthCallback(async (code, error) => {
+    if (document.body.dataset.auth === "in") return; // 이미 로그인한 창은 무시
+    endDesktopWait();
+    if (!code) return showLogin(error === "access_denied" ? { note: "로그인을 취소했어요." } : { error: LOGIN_FAILED });
+    bootScreen("로그인하는 중…");
+    try {
+      await authInitialized;
+      await exchangeCode(code);
+    } catch (e) {
+      console.error(e);
+      return showLogin({ error: LOGIN_FAILED });
+    }
+    boot({ retry: true });
+  });
 }
 
 $("[data-google]", gate).onclick = (e) => startGoogle(e.currentTarget, false);

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PaperLab</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="app.css" />
+  <link rel="stylesheet" href="local.css" />
+</head>
+<body data-auth="out">
+  <!-- E2 첫 실행 (디자인 11.2) — 서버 주소는 보이지 않음(U6) -->
+  <div class="gate" data-gate="local">
+    <section class="gate-card" aria-labelledby="setup-title">
+      <div class="gate-brand"><svg class="gate-mark" viewBox="0 0 32 32" aria-hidden="true"><rect class="gm-bg" width="32" height="32" rx="8" fill="#1e3a8a"/><path d="M10 8h9l5 5v11a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2z" fill="#fff"/><path class="gm-line" d="M12 17h8M12 21h6" stroke="#1e3a8a" stroke-width="2" stroke-linecap="round" fill="none"/></svg><span class="gate-name">PaperLab</span></div>
+      <div class="gate-pane" data-pane="local">
+        <h1 class="gate-title" id="setup-title" tabindex="-1">PaperLab에 오신 걸 환영해요</h1>
+        <p class="gate-text">서재 화면과, 이 PC의 AI 도구(claude · codex · gemini)로 작업을 실행하는 기능이 함께 들어 있어요.</p>
+        <ul class="gate-text local-list">
+          <li>창을 닫아도 화면 오른쪽 아래 트레이에서 계속 실행돼요.</li>
+          <li>이 PC를 연결하면 API 키 없이도 PC의 AI 도구로 요약 · 대화를 할 수 있어요.</li>
+        </ul>
+        <label class="check"><input type="checkbox" data-autostart checked /> Windows에 로그인하면 자동으로 시작</label>
+        <div class="status-line" role="status" data-server><span class="spinner" aria-hidden="true"></span><span>서버를 확인하는 중…</span></div>
+        <div class="gate-actions"><button type="button" class="btn primary" data-start disabled>시작</button></div>
+      </div>
+    </section>
+  </div>
+  <script src="setup.js"></script>
+</body>
+</html>

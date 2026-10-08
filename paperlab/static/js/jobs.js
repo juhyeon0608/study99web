@@ -122,6 +122,7 @@ export function stepsHtml(job) {
 // ------------------------------------------------------------------ 진행 따라가기 (명세 7.1 — K3 폴링)
 // 탭이 보이면 1.5초, 숨으면 10초. 끝 상태가 되면 멈춘다. stop()을 돌려준다
 export function watchJob(id, onUpdate, { first = null } = {}) {
+  nudgeDesktop(first);
   let stopped = false;
   let timer = null;
   const tick = async () => {
@@ -143,7 +144,14 @@ export function watchJob(id, onUpdate, { first = null } = {}) {
 }
 
 export const cancelJob = (id) => api.post(`/api/jobs/${id}/cancel`);
-export const retryJob = (id) => api.post(`/api/jobs/${id}/retry`);
+export const retryJob = (id) => api.post(`/api/jobs/${id}/retry`).then((r) => { nudgeDesktop(r && r.job); return r; });
+
+// PC 앱 창에서 PC 실행 작업을 만들었으면 같은 PC의 작업 받기를 바로 깨운다 (명세 10.2 로컬 신호 — 브라우저에서는 없음)
+export function nudgeDesktop(job) {
+  const dk = window.paperlabDesktop;
+  if (!dk || !job || job.runner !== "cli" || job.status !== "queued") return;
+  try { dk.nudge(); } catch { /* 앱 쪽 오류는 무시 — 폴링이 곧 잡음 */ }
+}
 const openSettings = () => import("./dialogs.js").then((m) => m.settingsDialog({ focus: "pc" }));
 
 // 대화 · 글쓰기의 한 줄 상태 (`.status-line[data-job-line]`) — 같은 글이면 다시 넣지 않는다(화면 읽기 중복 방지)

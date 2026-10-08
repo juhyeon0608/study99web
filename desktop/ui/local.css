@@ -1,0 +1,9 @@
+/* 로컬 화면(app://) 전용 몇 줄 (디자인 PD-5 — 나머지는 빌드 때 복사한 app.css 그대로) */
+.gate[data-gate="local"] .gate-pane[data-pane="local"] { display: flex; }
+.local-list { margin: 0; padding-left: 18px; text-align: left; }
+.local-page .item-card .item-meta .btn { margin-left: 4px; }
+.local-page select.input.sm { width: auto; height: 28px; padding: 0 6px; }
+.local-page .row.end { justify-content: flex-end; }
+.local-page [data-update-line] { margin-bottom: 8px; }
+.local-foot { margin-top: 12px; }
+.local-head:focus { outline: none; }

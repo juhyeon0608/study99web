@@ -103,6 +103,21 @@ export async function signInWithGoogle({ selectAccount = false } = {}) {
   if (error) throw error;
 }
 
+// PaperLab PC 앱 창: 앱 안에서는 구글 로그인을 하지 않는다(구글이 막음) — 인증 주소만 받아 시스템 브라우저로 넘기고,
+// 돌아온 paperlab://auth-callback?code= 를 이 창에서 세션으로 바꾼다. PKCE 검증자는 이 창 저장소에 있다 (2단계 명세 13.4 ①)
+export async function googleAuthUrl({ selectAccount = false } = {}) {
+  const options = { redirectTo: "paperlab://auth-callback", skipBrowserRedirect: true };
+  if (selectAccount) options.queryParams = { prompt: "select_account" };
+  const { data, error } = await client.auth.signInWithOAuth({ provider: "google", options });
+  if (error) throw error;
+  return data.url;
+}
+
+export async function exchangeCode(code) {
+  const { error } = await client.auth.exchangeCodeForSession(code);
+  if (error) throw error;
+}
+
 // 개발 서버 전용(public-config.dev_email_login): 테스트 프로젝트 이메일 · 비밀번호 로그인. 운영에서는 부르지 않는다
 export async function signInWithPassword(email, password) {
   const { error } = await client.auth.signInWithPassword({ email, password });

@@ -89,6 +89,7 @@ Get-PSDrive C, D | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB
 | Git | `git --version` | 2.53 | `winget install -e --id Git.Git` |
 | pg_dump 17 | `pg_dump --version` | `17.10` (`C:\Users\USER\tools\pgsql\bin`) | PATH에 없으면 `cloud.env`에 `PAPERLAB_PG_DUMP=<pg_dump.exe 전체 경로>` 줄을 **[사용자]** 가 추가(명세 S9). 주 버전은 운영 DB 이상이어야 함 — 설치 스크립트가 비교 |
 | Tailscale | 4.4절 | 1.102.4, `Running` | U-1 |
+| Node.js LTS · npm (PC 앱 설치 파일 빌드 — 2단계 13.7.1절) | `node -v` · `npm -v` | `v24.14` (주 버전 **22 이상**) | **[사용자]** 동의 후 nodejs.org의 LTS Windows 설치 파일(.msi, 기본 옵션 · "필요한 도구 자동 설치"는 끔). 없거나 22 미만이면 `update.ps1`이 **빌드 단계만 WARN으로 건너뛰고** 서버 업데이트는 그대로 함 |
 
 winget 패키지 이름은 설치 직전에 `winget search` 로 한 번 더 확인합니다(**확인 필요**).
 
@@ -263,6 +264,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 새 버전 반영 | 팀장이 승인 · 푸시를 알리면 `powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1` (아래 "업데이트 동작"). 먼저 `-DryRun`으로 반영할 커밋을 볼 수 있음(**`git fetch`만 함** — 원격 추적 브랜치 · `FETCH_HEAD` · 객체 · 태그 갱신, 작업 폴더 · HEAD · 브랜치 · 서버 · 로그는 그대로. 미리 fetch할 필요 없음), `-Yes`는 확인 질문 생략 |
 | 특정 커밋으로 되돌리기 | `update.ps1 -Ref <커밋>` — 옛 커밋으로 갈 때는 마이그레이션을 하지 않음(DB 마이그레이션은 되돌리지 않음) |
 | `cloud.env`를 고친 뒤 | `update.ps1 -RestartOnly` (코드는 그대로, 서버만 다시 시작 → 상태 확인) |
+| PC 앱 설치 파일 처음 만들기 · 지난 빌드 실패 뒤 다시 | `update.ps1 -BuildDesktop` — 새 커밋이 없어도 8번 빌드만 함(그 버전 파일이 이미 `releases`에 있으면 WARN만). 결과는 `update.log`의 "데스크톱 앱 빌드 성공: 버전 … · sha256 …" |
 | 사용자 추가 · 빼기 | **[사용자]** Google Cloud 콘솔 → OAuth 동의 화면 → 테스트 사용자에서 추가 · 삭제(서버 재시작 필요 없음). 뺄 때는 Supabase 대시보드 Users에서 그 사용자도 삭제 |
 | 서버만 다시 시작 | `Stop-ScheduledTask "PaperLab Server"; Start-ScheduledTask "PaperLab Server"` |
 | 로그 보기 | `Get-Content D:\PaperLab\logs\server.log -Tail 50` (JSON 한 줄씩 — 토큰 · 키 · 본문은 원래 남지 않음) |
@@ -284,6 +286,8 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 5. 서버 작업 다시 시작 → `http://127.0.0.1:8080/api/health?deep=1`이 정상이고 응답의 커밋이 새 커밋인지 60초 동안 확인.
 6. **확인 실패면 자동으로 옛 커밋으로 되돌리고 다시 시작**(마이그레이션은 되돌리지 않음). `deep=1`은 DB까지 보므로 **반영 중 Supabase가 일시정지돼 있으면 이 단계에서도 되돌림**이 일어남 — Supabase를 Restore한 뒤 다시 업데이트. 되돌린 뒤에도 정상이 아니면 오류로 남기고 팀장에게 보고.
 7. **관리자 권한(elevated)으로 실행하면** 시작할 때 WARN 한 줄을 화면과 `update.log`에 남기고 그대로 진행: "관리자 권한으로 실행 중: 새로 받는 파일의 소유자가 Administrators가 되지만, 상속 권한으로 서버 계정이 접근할 수 있어 동작에는 영향이 없습니다. 가능하면 일반 권한 PowerShell에서 실행하세요." **소유자 · 권한은 바꾸지 않음**(`icacls` 쓰지 않음 — 팀장 결정). 일반 권한이면 이 줄도 없음.
+8. **PC 앱 설치 파일 빌드**(2단계 명세 13.7.1절 — 5번 상태 확인까지 **성공한 뒤에만**, 빌드 중에도 서버는 새 코드로 돎): 이번 반영에서 `desktop\`이 바뀌었으면(또는 `-BuildDesktop`) `node` · `npm`(22 이상) 확인 → `desktop\`에서 `npm ci` → `npm run dist`(electron-builder NSIS, **20분 제한** — `-BuildTimeoutSec`). Electron · NSIS · npm 캐시는 `D:\PaperLab\cache\`(첫 빌드만 수백 MB를 받음). 결과는 `releases`(`cloud.env`의 `PAPERLAB_RELEASES_DIR` — 서버가 읽는 폴더와 같은 규칙, 없으면 `D:\PaperLab\releases`)의 `.staging`에서 `latest.yml`의 sha512 · 크기를 실제 `.exe`와 다시 맞춰 본 뒤 `.exe` → `.blockmap` → `release.json`(sha256) → **`latest.yml`(마지막, 교체)** 순서로 옮기고 **최근 3개 버전**만 남김. 빌드 로그 전체는 `D:\PaperLab\logs\desktop-build-<시각>.log`, `update.log`에는 성공 줄(버전 · sha256 · 걸린 초)과 빌드 로그의 서버 주소 한 줄. **빌드는 어느 단계에서 실패해도 WARN만 남기고 이전 설치 파일을 그대로 두며 종료 코드는 서버 결과대로(성공 0)**. `-Ref` · `-RestartOnly` · 6번에서 되돌린 경우에는 빌드하지 않음(앱은 다운그레이드하지 않음). `desktop\`이 바뀌었는데 `desktop\package.json` 버전이 이미 `releases`에 있으면 빌드하지 않고 WARN(같은 버전 이름으로 다른 내용을 내보내지 않음 — 개발팀에 버전을 올려 달라고 보고).
+9. **서버 PC에는 PaperLab PC 앱(워커)을 설치하지 않습니다**(사용자 결정 Q-S3) — 이 PC는 설치 파일을 만들어 `/downloads/`로 내보내기만 합니다.
 
 ## 12. 문제 해결
 
@@ -301,6 +305,9 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | PDF 업로드 · 보기 CORS 오류 | R2 CORS | 10절 2번 |
 | 백업 실패 | `backup.log`(값 없이 오류만), `admin pg-dump-check`, `admin latest-backup` | "pg_dump를 찾지 못했어요" → `PAPERLAB_PG_DUMP`(4절). 버전 오류 → PostgreSQL 클라이언트를 운영 DB 주 버전 이상으로. "SUPABASE_APP_DB_URL 이 비어 있어요" → `admin app-role --write-env --if-missing` |
 | 업데이트가 "마이그레이션 단계"에서 실패 · 되돌림 | `update.log`, Supabase 대시보드 | Supabase 일시정지면 **[사용자]** Restore 후 다시 `update.ps1`. 그 밖이면 팀장에게 보고(서버는 옛 코드로 계속 돎) |
+| `update.log`에 "데스크톱 앱 빌드 실패(…)" WARN | 같은 줄의 단계 · 이유, 적힌 `desktop-build-<시각>.log`(마지막 줄들) | 서버 업데이트는 정상(이전 설치 파일 그대로). 인터넷 끊김 · 디스크 부족이면 고친 뒤 `update.ps1 -BuildDesktop`. 그 밖(코드 · 설정 오류)은 빌드 로그 이름과 함께 팀장에게 보고 — 서버 PC에서 고치지 않음 |
+| "버전이 같아 빌드하지 않았어요" WARN | `desktop\package.json`의 `version` | 개발팀에 버전을 올린 커밋을 요청(서버 PC에서 고치지 않음) |
+| "Node.js 22 이상 · npm 이 없어 … 건너뛰어요" WARN | `node -v` · `npm -v` | 4절 Node.js LTS 설치 → `update.ps1 -BuildDesktop` |
 | 감시 작업이 계속 재시작 | `watchdog.log`, `D:\PaperLab\tmp\diag-hang-health`가 남아 있는지 | 진단 파일이면 지움(9절 17번). 아니면 `server.log` 확인 · 팀장 보고 |
 | 작업이 로그온 없이 안 돔 | 작업 속성 "사용자가 로그온했는지 여부에 관계없이 실행", 저장된 비밀번호 | `install.ps1 -ReRegisterTasks -SkipFunnel` |
 | 재부팅 뒤 바깥에서 안 열림 | Tailscale 무인 실행(U-2) | U-2 다시 |
@@ -313,7 +320,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 파일 · 명령 | 역할 |
 |---|---|
 | `deploy/server-pc/install.ps1` | 7절 전체. **관리자 권한 PowerShell 필요**(아니면 시작 때 멈춤, `-DryRun`은 예외). `-DryRun` · `-EnvFile` · `-RepoUrl` · `-SkipFunnel` · `-PythonVersion` · `-ReRegisterTasks` · `-RecreateVenv` · `-Root` `-AppDir` `-LogDir` `-TmpDir` `-Branch` `-Port` |
-| `deploy/server-pc/update.ps1` | 11절 업데이트 동작 · `-Ref` · `-Yes` · `-RestartOnly` · `-DryRun`(`git fetch`만 함) · `-TimeoutSec`(기본 60). 반영 뒤 단계(pip 포함)가 실패하면 옛 커밋으로 되돌림. 관리자 권한으로 돌면 시작할 때 WARN 한 줄만(소유자는 바꾸지 않음 — 11절 7번) |
+| `deploy/server-pc/update.ps1` | 11절 업데이트 동작 · `-Ref` · `-Yes` · `-RestartOnly` · `-DryRun`(`git fetch`만 함) · `-TimeoutSec`(기본 60) · **`-BuildDesktop`**(8번 PC 앱 빌드만 다시 — 새 커밋 없어도) · `-BuildTimeoutSec`(기본 1200) · `-ReleasesDir` · `-CacheDir`(시험용 — 기본은 `PAPERLAB_RELEASES_DIR` 규칙 · `D:\PaperLab\cache`). 반영 뒤 단계(pip 포함)가 실패하면 옛 커밋으로 되돌림. 관리자 권한으로 돌면 시작할 때 WARN 한 줄만(소유자는 바꾸지 않음 — 11절 7번) |
 | `deploy/server-pc/funnel.ps1` | `on`(`tailscale funnel --bg 8080`) · `status` · `off`, `-DryRun`. `tailscale`는 PATH → `Program Files\Tailscale` 순으로 찾음 |
 | `deploy/server-pc/watchdog.ps1` | 5분마다: `/api/health` 3번 연속 실패면 서버 재시작(1시간 3번까지, 넘으면 경고만). 하루 한 번: 공개 주소 · 최근 백업(36시간) · 디스크 여유(시스템 5GB · 데이터 20GB) → `watchdog.log`(1MB × 5). **`-DryRun`은 아무것도 바꾸지 않음**(작업 재시작 없이 `[DRY]` 기록만 — 품질팀 F3, 개발팀 수정). `-SkipDaily` · `-StateFile` · `-MaxRestartsPerHour` 등은 시험용 |
 | `deploy/server-pc/uninstall.ps1` | 작업 삭제 · Funnel 끔(`cloud.env` · 저장소는 지우지 않는다고 알림) |

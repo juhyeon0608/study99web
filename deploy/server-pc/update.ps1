@@ -12,6 +12,13 @@
   7. /api/health?deep=1 이 정상이고 commit 이 새 커밋인지 확인. 60초 안에 안 되면 자동으로 옛 커밋으로 되돌리고
      다시 시작 · 경고 (마이그레이션은 되돌리지 않음)
   8. 결과를 update.log 에
+  9. (2단계 명세 13.7.1) 서버 상태 확인까지 성공했고 이번 반영에서 desktop\ 이 바뀌었으면(또는 -BuildDesktop) PC 앱 설치 파일 빌드:
+     node · npm(22 이상) 확인 → desktop\ 에서 npm ci → npm run dist(electron-builder NSIS, 20분 제한, 캐시는 <루트>\cache)
+     → <releases>\.staging 에서 latest.yml 의 sha512 · 크기를 실제 .exe 와 맞춰 본 뒤 .exe · .blockmap · release.json · latest.yml(마지막)
+     순서로 옮김 → 최근 3개 버전만 보관. 버전(desktop\package.json)이 이미 releases 에 있으면 빌드하지 않고 WARN.
+     빌드가 실패해도 WARN 만 남기고 이전 설치 파일을 그대로 둠 — 종료 코드는 서버 업데이트 결과대로(성공 0).
+     -Ref(특정 커밋 · 되돌리기) · -RestartOnly · 상태 확인 실패로 되돌린 경우에는 빌드하지 않음.
+     releases 폴더는 서버와 같은 규칙: 환경 변수 PAPERLAB_RELEASES_DIR → cloud.env 의 같은 키(이 한 줄만 읽음) → D:\PaperLab\releases.
   코드 반영 뒤 단계(pip install · 마이그레이션 · 재시작 · 확인)가 실패하면 옛 커밋으로 되돌림 — 종료 코드 1.
   관리자 권한(elevated)으로 실행하면 시작할 때 경고 한 줄만 남기고 계속함(새 파일 소유자가 Administrators 가 되지만
   D:\PaperLab 상속 권한으로 서버 계정이 접근할 수 있음 — 소유자는 바꾸지 않음). 가능하면 일반 권한 PowerShell 에서 실행.
@@ -23,6 +30,7 @@
   powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1
   powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1 -Ref 1a2b3c4      # 특정 커밋으로
   powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1 -RestartOnly      # cloud.env 를 고친 뒤
+  powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1 -BuildDesktop     # 처음 배포 · 지난 빌드 실패 뒤 다시(새 커밋이 없어도)
 #>
 [CmdletBinding()]
 param(
@@ -36,7 +44,11 @@ param(
   [string]$EnvFile,
   [string]$Remote = 'origin',
   [int]$TimeoutSec = 60,
-  [switch]$DryRun
+  [switch]$DryRun,
+  [switch]$BuildDesktop,
+  [string]$ReleasesDir,
+  [string]$CacheDir,
+  [int]$BuildTimeoutSec = 1200
 )
 
 $ErrorActionPreference = 'Stop'
@@ -49,6 +61,8 @@ if (-not $Branch) { $Branch = $cfg.branch }
 if ($Port -le 0) { $Port = [int]$cfg.port }
 if (-not $EnvFile) { $EnvFile = Get-PLDefaultEnvFile }
 $TaskServer = $cfg.tasks.server
+if (-not $ReleasesDir) { $ReleasesDir = Get-PLReleasesDir -EnvFile $EnvFile }
+if (-not $CacheDir) { $CacheDir = Join-Path $cfg.root 'cache' }
 $Log = $null
 if (-not $DryRun) { $Log = Join-Path $LogDir 'update.log' }
 $Py = Get-PLVenvPython -AppDir $AppDir
@@ -70,6 +84,17 @@ function Restart-AndCheck {
   }
   $h = Wait-PLHealth -Port $Port -Deep -TimeoutSec $TimeoutSec -Commit $ExpectCommit
   return [bool]$h
+}
+
+function Build-Desktop {
+  <# 9단계 — 서버 반영 · 상태 확인이 끝난 뒤에만 부름. 실패해도 WARN 만(종료 코드에 영향 없음) #>
+  param([switch]$Changed, [string]$Commit)
+  try {
+    Invoke-PLDesktopBuild -AppDir $AppDir -ReleasesDir $ReleasesDir -CacheDir $CacheDir -LogDir $LogDir -LogFile $Log -Commit $Commit `
+      -TimeoutSec $BuildTimeoutSec -Changed:$Changed -DryRun:$DryRun | Out-Null
+  } catch {
+    Write-PLLog -LogFile $Log -Level WARN -Message "데스크톱 앱 빌드 단계 오류: $($_.Exception.Message) — 이전 설치 파일을 그대로 둬요 (서버 업데이트 결과에는 영향 없음)"
+  }
 }
 
 function Install-Deps {
@@ -130,6 +155,7 @@ if ($Ref) {
 $newShort = $target.Substring(0, 7)
 if ($target -eq $old) {
   Write-PLLog -LogFile $Log -Message "새 커밋이 없어요 (지금 $oldShort)"
+  if ($BuildDesktop -and -not $Ref) { Build-Desktop -Commit $oldShort }
   exit 0
 }
 $ErrorActionPreference = 'Continue'
@@ -153,6 +179,7 @@ if (-not $Yes -and -not $DryRun) {
 # 마이그레이션 실패만은 서버를 멈추기 전이라 다시 시작하지 않음(서버는 옛 코드로 계속)
 Write-PLLog -LogFile $Log -Message "업데이트 시작: $oldShort → $newShort"
 $pyprojectChanged = [bool](((Invoke-PLGit diff --name-only $old $target '--' pyproject.toml) | Out-String).Trim())
+$desktopChanged = [bool](((Invoke-PLGit diff --name-only $old $target '--' desktop/) | Out-String).Trim())
 $updated = $false
 $migrated = $false
 $migrationFailed = $false
@@ -231,5 +258,13 @@ try {
   if ($updated) { Write-PLLog -LogFile $Log -Message $result }
   else { Write-PLLog -LogFile $Log -Level ERROR -Message $result }
 }
-if ($updated) { exit 0 }
+# 9. PC 앱 설치 파일 빌드 — 서버 재시작 · 상태 확인이 끝난 뒤(빌드가 서버 반영을 늦추거나 막지 않게). 실패는 WARN 만
+if ($updated) {
+  if ($Ref) {
+    if ($desktopChanged -or $BuildDesktop) { Write-PLLog -LogFile $Log -Message "-Ref 로 커밋을 맞춘 경우라 데스크톱 앱은 빌드하지 않아요 (앱은 다운그레이드하지 않음)" }
+  } elseif ($desktopChanged -or $BuildDesktop) {
+    Build-Desktop -Changed:$desktopChanged -Commit $newShort
+  }
+  exit 0
+}
 exit 1

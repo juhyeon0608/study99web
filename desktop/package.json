@@ -1,0 +1,23 @@
+{
+  "name": "paperlab-desktop",
+  "productName": "PaperLab",
+  "version": "0.2.0",
+  "private": true,
+  "description": "PaperLab PC 앱 — 클라우드 화면 + 이 PC의 AI 도구(claude · codex · gemini)로 작업 실행",
+  "author": "PaperLab",
+  "license": "UNLICENSED",
+  "main": "main/main.js",
+  "scripts": {
+    "start": "node scripts/copy-css.js && electron .",
+    "test": "node --test \"test/*.test.js\"",
+    "pack": "electron-builder --config electron-builder.config.js --win dir --publish never",
+    "dist": "electron-builder --config electron-builder.config.js --win nsis --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
+  },
+  "devDependencies": {
+    "electron": "44.7.0",
+    "electron-builder": "26.15.3"
+  }
+}
