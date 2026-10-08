@@ -67,12 +67,12 @@ export function modal({ title, body = "", foot = null, wide = false, onClose = n
 
 export const modalOpen = () => openModals > 0;
 
-export function confirmDialog(message, { ok = "확인", danger = false } = {}) {
+export function confirmDialog(message, { ok = "확인", danger = false, title = "확인" } = {}) {
   return new Promise((resolve) => {
     const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button>
       <button class="btn ${danger ? "primary danger-fill" : "primary"}" data-yes>${esc(ok)}</button></div>`);
     let result = false;
-    const m = modal({ title: "확인", body: `<p style="margin:4px 0 8px">${esc(message)}</p>`, foot, onClose: () => resolve(result) });
+    const m = modal({ title, body: `<p style="margin:4px 0 8px">${esc(message)}</p>`, foot, onClose: () => resolve(result) });
     $("[data-no]", foot).onclick = () => m.close();
     $("[data-yes]", foot).onclick = () => { result = true; m.close(); };
     setTimeout(() => $("[data-yes]", foot).focus(), 40);

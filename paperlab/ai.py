@@ -1,8 +1,11 @@
-"""AI 기능: 수준별·섹션별 요약, 수식 풀이, 논문과 대화(Q&A, 쪽 번호 근거 포함).
+"""AI 기능: 수준별·섹션별 요약, 수식 풀이, 논문과 대화(Q&A, 쪽 번호 근거 포함), 글쓰기 도우미 (2단계 9장).
 
-두 가지 엔진을 지원한다.
-- api: Anthropic API (anthropic SDK). PDF를 그대로 보내 그림·수식까지 읽고, 답변에 쪽 단위 인용이 붙는다.
-- cli: 이미 설치된 Claude Code CLI(`claude -p`). API 키 없이 쓸 수 있고, 추출한 텍스트만 보낸다.
+엔진(작업별 경로 — jobs.py가 정함):
+- claude(API): Anthropic API (anthropic SDK). PDF를 그대로 보내 그림·수식까지 읽고, 답변에 쪽 단위 인용이 붙는다.
+- codex · gemini(API): OpenAI Responses API · Google Gemini generateContent를 httpx로 직접 부른다. 본문 **텍스트만**
+  보내고(PDF 원본 없음 — 9.5절), 프롬프트 · 결과 해석은 CLI 워커와 같은 함수(`*_request` · `parse_text_result`)를 쓴다.
+- CLI: 서버는 실행하지 않는다. 워커가 잡을 때 서버가 `*_request`로 프롬프트를 만들어 주고, 올라온 원문을
+  `parse_text_result`로 해석한다(11장).
 """
 
 from __future__ import annotations
@@ -10,12 +13,14 @@ from __future__ import annotations
 import base64
 import json
 import re
-import shutil
-import subprocess
 from dataclasses import dataclass
 from typing import Callable, Iterator
+from urllib.parse import quote
 
+import httpx
 import anthropic
+
+from .config import redact
 
 MODELS = {
     "claude-opus-5-5": "Claude Opus 5.5 (기본, 가장 정확)",
@@ -138,10 +143,29 @@ WRITE_SYSTEM = """당신은 연구자의 논문 집필을 돕는 편집자입니
 - 근거가 부족한 주장은 쓰지 말고, 필요하면 [확인 필요]라고 표시하세요."""
 
 CLI_CITE_RULE = "\n- 근거가 되는 쪽은 문장 끝에 [p.쪽번호] 형식으로 표시하세요 (예: [p.3])."
+SUMMARY_SYSTEM = "당신은 논문을 정확하게 정리하는 연구 조수입니다."
+
+# OpenAI · Google API (2단계 U2 — 텍스트 전용). 기본 모델 = K19 확정(2026-10-08)
+API_MODEL_DEFAULTS = {"codex": "gpt-6.1-sol", "gemini": "gemini-3.8-flash"}
+ENGINE_KEYS = {"claude": "anthropic_api_key", "codex": "openai_api_key", "gemini": "google_api_key"}
+ENGINE_COMPANY = {"claude": "Anthropic", "codex": "OpenAI", "gemini": "Google"}
+OPENAI_URL = "https://api.openai.com/v1/responses"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+TEXT_API_TIMEOUT = 600.0
+MODEL_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")
+
+
+def scrub_keys(text: str) -> str:
+    """오류 문구에서 API 키 · 기기 토큰 패턴을 지운다 (명세 9.5 — config.redact와 같은 규칙)"""
+    return redact(str(text or ""))
 
 
 class AIError(Exception):
-    pass
+    """AI 실패. code = 9.6절 error_code(폴백 판정에 씀)"""
+
+    def __init__(self, message: str, code: str = ""):
+        super().__init__(message)
+        self.code = code
 
 
 @dataclass
@@ -175,11 +199,82 @@ def _extract_json(text: str) -> dict:
         text = m.group(1)
     start, end = text.find("{"), text.rfind("}")
     if start < 0 or end < 0:
-        raise AIError("AI 응답에서 JSON을 찾지 못했어요")
+        raise AIError("AI 응답에서 JSON을 찾지 못했어요", "bad_output")
     try:
-        return json.loads(text[start:end + 1])
+        data = json.loads(text[start:end + 1])
     except json.JSONDecodeError as e:
-        raise AIError(f"AI 응답 JSON을 읽지 못했어요: {e}") from e
+        raise AIError(f"AI 응답 JSON을 읽지 못했어요: {e}", "bad_output") from e
+    if not isinstance(data, dict):
+        raise AIError("AI 응답 JSON 모양이 틀렸어요", "bad_output")
+    return data
+
+
+# ---------------------------------------------------------------- 텍스트 요청 (CLI 워커 · OpenAI · Google 공용)
+def summary_request(ctx: "PaperContext", lang: str) -> tuple[str, str]:
+    """(시스템, 프롬프트). 본문 텍스트를 쪽 표시와 함께 넣는다"""
+    if not ctx.text_pages():
+        raise AIError("이 논문에는 읽을 수 있는 본문이나 초록이 없어요. PDF를 첨부해 주세요.", "bad_request")
+    schema = json.dumps(SUMMARY_SCHEMA, ensure_ascii=False)
+    return SUMMARY_SYSTEM, (f"<paper title=\"{ctx.title}\">\n{ctx.tagged_text()}\n</paper>\n\n{SUMMARY_PROMPT.format(lang=lang)}\n\n"
+                            f"다른 말 없이 아래 JSON 스키마를 따르는 JSON 객체 하나만 출력하세요.\n{schema}")
+
+
+def chat_request(ctx: "PaperContext", history: list[dict], question: str, lang: str) -> tuple[str, str]:
+    convo = "\n\n".join(f"{'사용자' if m['role'] == 'user' else '조수'}: {m['content']}" for m in history)
+    return CHAT_SYSTEM.format(lang=lang) + CLI_CITE_RULE, (
+        f"<paper title=\"{ctx.title}\">\n{ctx.tagged_text()}\n</paper>\n\n"
+        + (f"<conversation>\n{convo}\n</conversation>\n\n" if convo else "") + f"질문: {question}")
+
+
+def write_request(mode: str, text: str, *, instruction: str = "", context: str = "",
+                  sources: list[dict] | None = None) -> tuple[str, str]:
+    if mode not in WRITE_MODES:
+        raise AIError("알 수 없는 글쓰기 모드예요", "bad_request")
+    parts = [WRITE_MODES[mode]]
+    if instruction:
+        parts.append(f"추가 요청: {instruction}")
+    if sources:
+        lines = []
+        for s in sources:
+            lines.append(f"<source key=\"{s['key']}\">\n제목: {s.get('title', '')}\n"
+                         f"저자·연도: {s.get('authors', '')} ({s.get('year') or 'n.d.'})\n"
+                         + "\n".join(f"{k}: {v}" for k, v in (("초록", s.get("abstract")), ("요약", s.get("summary")),
+                                                             ("내 메모", s.get("note"))) if v)
+                         + "\n</source>")
+        parts.append("<sources>\n" + "\n".join(lines) + "\n</sources>")
+    if context:
+        parts.append(f"<context>\n{context}\n</context>")
+    parts.append(f"<text>\n{text}\n</text>")
+    return WRITE_SYSTEM, "\n\n".join(parts)
+
+
+def parse_text_result(kind: str, text: str, structured=None) -> dict:
+    """CLI · OpenAI · Google 원문 → 반영할 결과. summary {"summary"}, chat {"text","citations"}, write {"text"}"""
+    text = str(text or "")
+    if kind == "summary":
+        data = structured if isinstance(structured, dict) else _extract_json(text)
+        return {"summary": normalize_summary(data)}
+    if not text.strip():
+        raise AIError("AI 응답이 비어 있어요", "bad_output")
+    if kind == "chat":
+        body, cites = cli_citations(text)
+        return {"text": body, "citations": cites}
+    return {"text": text.strip()}
+
+
+def http_error_code(status: int, body: str = "") -> str:
+    """OpenAI · Google HTTP 오류 → error_code (9.6절)"""
+    if status == 401 or (status == 400 and "API_KEY_INVALID" in body):
+        return "api_auth"
+    if status == 403:
+        return "api_permission"
+    if status in (402, 429):  # OpenAI 크레딧 소진도 429, Google 선불 잔액 소진 402
+        return "api_rate_limit"
+    if status in (503, 529):
+        return "api_overloaded"
+    if status >= 500:
+        return "api_server"
+    return "api_bad_request"
 
 
 def normalize_summary(data: dict) -> dict:
@@ -227,39 +322,29 @@ ProgressFn = Callable[[str, float | None], None]
 
 
 class AIService:
-    def __init__(self, get_setting: Callable[[str], str], http_client=None, cli_enabled: bool = False):
-        self.get_setting = get_setting
-        self._http_client = http_client  # 테스트에서 가짜 전송 계층을 넣을 때 쓴다
-        # CLI 엔진은 2단계 PC 워커에서만 켠다 (클라우드 서버는 False)
-        self.cli_enabled = cli_enabled
+    """한 사용자의 AI 호출. engine = 작업 경로 칸의 엔진(claude는 Anthropic SDK, codex · gemini는 텍스트 API).
+    서버 환경 변수(ANTHROPIC_API_KEY · OPENAI_API_KEY · GEMINI_API_KEY · GOOGLE_API_KEY 등)는 보지 않는다 — 사용자 설정의 키만
+    (명세 9.5, AC-48)."""
 
-    @property
-    def engine(self) -> str:
-        return self.get_setting("ai_engine") or "api"
+    def __init__(self, get_setting: Callable[[str], str], http_client=None):
+        self.get_setting = get_setting
+        self._http_client = http_client  # 테스트에서 가짜 전송 계층을 넣을 때 쓴다 (Anthropic · OpenAI · Google 공용)
 
     @property
     def model(self) -> str:
         return self.get_setting("model") or "claude-opus-5-5"
 
-    def status(self) -> dict:
-        if self.engine == "cli":
-            if not self.cli_enabled:
-                # 1단계 클라우드: CLI 엔진은 2단계(PC 워커 연결) 뒤에 쓴다
-                return {"engine": "cli", "ready": False, "message": "CLI 엔진은 PC 연결(2단계) 뒤에 쓸 수 있어요"}
-            path = shutil.which("claude")
-            return {"engine": "cli", "ready": bool(path),
-                    "message": "Claude CLI를 찾았어요" if path else "claude 명령을 찾지 못했어요. Claude Code를 설치하고 로그인해 주세요."}
-        # 서버 환경 변수(ANTHROPIC_API_KEY · ANTHROPIC_AUTH_TOKEN 등)는 보지 않는다 — 다른 사용자 비용으로 돌면 안 됨
-        # (명세 8.1, AC-48). 사용자 설정의 키만 본다
-        has_key = bool(self.get_setting("anthropic_api_key"))
-        return {"engine": "api", "ready": has_key, "model": self.model,
-                "message": "API 키가 설정돼 있어요" if has_key else "설정에서 Anthropic API 키를 넣어주세요."}
+    def model_name(self, engine: str = "claude") -> str:
+        """요약에 기록할 모델 이름"""
+        if engine == "claude":
+            return self.model
+        return (self.get_setting("api_models") or {}).get(engine) or API_MODEL_DEFAULTS[engine]
 
-    # ------------------------------------------------------------ API engine
+    # ------------------------------------------------------------ Anthropic
     def _client(self) -> anthropic.Anthropic:
         key = self.get_setting("anthropic_api_key") or None
         if not key:
-            raise AIError("설정에서 Anthropic API 키를 넣어주세요.")
+            raise AIError("설정에서 Anthropic API 키를 넣어주세요.", "api_no_key")
         kw = {"http_client": self._http_client} if self._http_client else {}
         # api_key를 명시하면 SDK(1.x)는 자격 증명 환경 변수(ANTHROPIC_API_KEY · ANTHROPIC_AUTH_TOKEN)와 프로필 ·
         # 기본 자격 증명 탐색을 하지 않는다. 다만 ANTHROPIC_BASE_URL은 여전히 읽으므로 주소를 고정해 사용자 키가
@@ -284,7 +369,7 @@ class AIService:
         else:
             pages = ctx.text_pages()
             if not pages:
-                raise AIError("이 논문에는 읽을 수 있는 본문이나 초록이 없어요. PDF를 첨부해 주세요.")
+                raise AIError("이 논문에는 읽을 수 있는 본문이나 초록이 없어요. PDF를 첨부해 주세요.", "bad_request")
             # 쪽마다 블록을 나눠 두면 인용 위치(블록 번호)가 곧 쪽 번호가 된다
             block = {"type": "document",
                      "source": {"type": "content",
@@ -297,42 +382,87 @@ class AIService:
 
     def _call_errors(self, e: Exception) -> AIError:
         if isinstance(e, anthropic.AuthenticationError):
-            return AIError("API 키가 올바르지 않아요. 설정에서 확인해 주세요.")
+            return AIError("API 키가 올바르지 않아요. 설정에서 확인해 주세요.", "api_auth")
         if isinstance(e, anthropic.PermissionDeniedError):
-            return AIError("이 API 키로는 선택한 모델을 쓸 수 없어요.")
+            return AIError("이 API 키로는 선택한 모델을 쓸 수 없어요.", "api_permission")
         if isinstance(e, anthropic.NotFoundError):
-            return AIError("모델을 찾을 수 없어요. 설정에서 모델을 확인해 주세요.")
+            return AIError("모델을 찾을 수 없어요. 설정에서 모델을 확인해 주세요.", "api_bad_request")
         if isinstance(e, anthropic.RateLimitError):
-            return AIError("요청이 너무 많아요. 잠시 후 다시 시도해 주세요.")
+            return AIError("요청이 너무 많아요. 잠시 후 다시 시도해 주세요.", "api_rate_limit")
         if isinstance(e, anthropic.BadRequestError):
-            return AIError(f"요청 오류: {self._scrub(e.message)}")
+            return AIError(f"요청 오류: {self._scrub(e.message)}", "api_bad_request")
         if isinstance(e, anthropic.APIStatusError):
-            return AIError(f"Anthropic 서버 오류 ({e.status_code}). 잠시 후 다시 시도해 주세요.")
+            code = "api_overloaded" if e.status_code in (503, 529) else "api_server"
+            return AIError(f"Anthropic 서버 오류 ({e.status_code}). 잠시 후 다시 시도해 주세요.", code)
+        if isinstance(e, anthropic.APITimeoutError):
+            return AIError("Anthropic 서버 응답이 너무 늦어요. 잠시 후 다시 시도해 주세요.", "api_timeout")
         if isinstance(e, anthropic.APIConnectionError):
-            return AIError("Anthropic 서버에 연결할 수 없어요. 인터넷 연결을 확인해 주세요.")
-        return AIError(self._scrub(str(e)))
+            return AIError("Anthropic 서버에 연결할 수 없어요. 인터넷 연결을 확인해 주세요.", "api_connection")
+        return AIError(self._scrub(str(e)), "api_server")
 
     def _scrub(self, text: str) -> str:
-        """오류 문구에 API 키가 섞이면 지운다 (명세 8.2)"""
+        """오류 문구에 API 키가 섞이면 지운다 (명세 8.2 · 9.5)"""
         text = str(text or "")
-        key = self.get_setting("anthropic_api_key") or ""
-        if key:
-            text = text.replace(key, "***")
-        return re.sub(r"sk-ant-[A-Za-z0-9_\-]{6,}", "sk-ant-***", text)
+        for name in ENGINE_KEYS.values():
+            key = self.get_setting(name) or ""
+            if key:
+                text = text.replace(key, "***")
+        return scrub_keys(text)
 
-    def summarize(self, ctx: PaperContext, progress: ProgressFn | None = None) -> dict:
+    # ------------------------------------------------------------ OpenAI · Google (텍스트 전용)
+    def text_complete(self, engine: str, system: str, prompt: str, schema: dict | None = None) -> str:
+        """OpenAI Responses API · Gemini generateContent 한 번 (스트리밍 없이 — 결과를 끝에 한 번). 키는 헤더로만."""
+        name = ENGINE_COMPANY[engine]
+        key = self.get_setting(ENGINE_KEYS[engine]) or ""
+        if not key:
+            raise AIError(f"설정에서 {name} API 키를 넣어주세요.", "api_no_key")
+        model = self.model_name(engine)
+        if not MODEL_ID_RE.fullmatch(model):
+            raise AIError(f"{name} API 모델 이름이 올바르지 않아요.", "api_bad_request")
+        if engine == "codex":
+            url, headers = OPENAI_URL, {"Authorization": f"Bearer {key}"}
+            body: dict = {"model": model, "instructions": system, "input": prompt}
+            if schema:
+                body["text"] = {"format": {"type": "json_schema", "name": "paper_summary", "schema": schema, "strict": True}}
+        else:
+            url, headers = GEMINI_URL.format(model=quote(model, safe="")), {"x-goog-api-key": key}
+            body = {"systemInstruction": {"parts": [{"text": system}]},
+                    "contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+            if schema:
+                # 스키마는 프롬프트에 글로 들어 있음(summary_request). 공식 참조에서 확인한 필드(responseMimeType)만 쓴다
+                body["generationConfig"] = {"responseMimeType": "application/json"}
+        client = self._http_client or httpx.Client()
+        try:
+            r = client.post(url, json=body, headers=headers, timeout=TEXT_API_TIMEOUT)
+        except httpx.TimeoutException:
+            raise AIError(f"{name} 서버 응답이 너무 늦어요. 잠시 후 다시 시도해 주세요.", "api_timeout") from None
+        except httpx.HTTPError:
+            raise AIError(f"{name} 서버에 연결할 수 없어요. 인터넷 연결을 확인해 주세요.", "api_connection") from None
+        finally:
+            if client is not self._http_client:
+                client.close()
+        if r.status_code >= 400:
+            code = http_error_code(r.status_code, r.text[:2000])
+            msg = {"api_auth": f"{name} API 키가 올바르지 않아요. 설정에서 확인해 주세요.",
+                   "api_permission": f"이 {name} API 키로는 선택한 모델을 쓸 수 없어요.",
+                   "api_rate_limit": f"{name} API 사용 한도에 걸렸어요. 잠시 후 다시 시도해 주세요."}.get(
+                code, f"{name} API 오류 ({r.status_code}).")
+            raise AIError(msg, code)
+        try:
+            data = r.json()
+        except ValueError:
+            raise AIError(f"{name} API 응답을 읽지 못했어요.", "api_server") from None
+        return _openai_text(data) if engine == "codex" else _gemini_text(data)
+
+    # ------------------------------------------------------------ 작업
+    def summarize(self, ctx: PaperContext, progress: ProgressFn | None = None, engine: str = "claude") -> dict:
         progress = progress or (lambda msg, frac: None)
         lang = self.get_setting("summary_language") or "한국어"
+        if engine != "claude":
+            system, prompt = summary_request(ctx, lang)
+            progress(f"{ENGINE_COMPANY[engine]} API로 정리하는 중", None)
+            return parse_text_result("summary", self.text_complete(engine, system, prompt, SUMMARY_SCHEMA))["summary"]
         prompt = SUMMARY_PROMPT.format(lang=lang)
-        if self.engine == "cli":
-            progress("Claude CLI로 요약하는 중", None)
-            schema = json.dumps(SUMMARY_SCHEMA, ensure_ascii=False)
-            text = self._run_cli(
-                f"<paper title=\"{ctx.title}\">\n{ctx.tagged_text()}\n</paper>\n\n{prompt}\n\n"
-                f"다른 말 없이 아래 JSON 스키마를 따르는 JSON 객체 하나만 출력하세요.\n{schema}",
-                system="당신은 논문을 정확하게 정리하는 연구 조수입니다.")
-            return normalize_summary(_extract_json(text))
-
         kw = self._request_kwargs()
         kw["output_config"] = {**kw.get("output_config", {}),
                                "format": {"type": "json_schema", "schema": SUMMARY_SCHEMA}}
@@ -351,27 +481,21 @@ class AIService:
         except anthropic.APIError as e:
             raise self._call_errors(e) from e
         if final.stop_reason == "refusal":
-            raise AIError("모델이 이 요청을 처리하지 않았어요 (안전 정책). 다른 모델로 다시 시도해 보세요.")
+            raise AIError("모델이 이 요청을 처리하지 않았어요 (안전 정책). 다른 모델로 다시 시도해 보세요.", "api_refusal")
         if final.stop_reason == "max_tokens":
-            raise AIError("요약이 너무 길어 중간에 끊겼어요. 다시 시도해 주세요.")
+            raise AIError("요약이 너무 길어 중간에 끊겼어요. 다시 시도해 주세요.", "api_max_tokens")
         text = "".join(b.text for b in final.content if b.type == "text")
         return normalize_summary(_extract_json(text))
 
-    def chat(self, ctx: PaperContext, history: list[dict], question: str) -> Iterator[dict]:
+    def chat(self, ctx: PaperContext, history: list[dict], question: str, engine: str = "claude") -> Iterator[dict]:
         """이벤트를 차례로 내보낸다: {"type":"delta","text":...} … {"type":"done","text":...,"citations":[...]}"""
         lang = self.get_setting("summary_language") or "한국어"
-        if self.engine == "cli":
-            convo = "\n\n".join(f"{'사용자' if m['role'] == 'user' else '조수'}: {m['content']}" for m in history)
-            text = self._run_cli(
-                f"<paper title=\"{ctx.title}\">\n{ctx.tagged_text()}\n</paper>\n\n"
-                + (f"<conversation>\n{convo}\n</conversation>\n\n" if convo else "")
-                + f"질문: {question}",
-                system=CHAT_SYSTEM.format(lang=lang) + CLI_CITE_RULE)
-            text, cites = cli_citations(text)
-            yield {"type": "delta", "text": text}
-            yield {"type": "done", "text": text, "citations": cites}
+        if engine != "claude":
+            system, prompt = chat_request(ctx, history, question, lang)
+            res = parse_text_result("chat", self.text_complete(engine, system, prompt))
+            yield {"type": "delta", "text": res["text"]}
+            yield {"type": "done", **res}
             return
-
         doc = self._document_block(ctx, citations=True)
         messages: list[dict] = []
         for i, m in enumerate(history):
@@ -395,87 +519,73 @@ class AIService:
         except anthropic.APIError as e:
             raise self._call_errors(e) from e
         if final.stop_reason == "refusal":
-            raise AIError("모델이 이 질문에 답하지 않았어요 (안전 정책).")
+            raise AIError("모델이 이 질문에 답하지 않았어요 (안전 정책).", "api_refusal")
+        if final.stop_reason == "max_tokens":
+            raise AIError("답이 너무 길어 중간에 끊겼어요.", "api_max_tokens")
         text, cites = api_citations(final.content, page_based=ctx.usable_pdf(self.model))
         yield {"type": "done", "text": text, "citations": cites}
 
     def write(self, mode: str, text: str, *, instruction: str = "", context: str = "",
-              sources: list[dict] | None = None) -> Iterator[dict]:
+              sources: list[dict] | None = None, engine: str = "claude") -> Iterator[dict]:
         """글쓰기 도우미. 이벤트: {"type":"delta","text"} … {"type":"done","text"}"""
-        if mode not in WRITE_MODES:
-            raise AIError("알 수 없는 글쓰기 모드예요")
-        parts = [WRITE_MODES[mode]]
-        if instruction:
-            parts.append(f"추가 요청: {instruction}")
-        if sources:
-            lines = []
-            for s in sources:
-                lines.append(f"<source key=\"{s['key']}\">\n제목: {s.get('title', '')}\n"
-                             f"저자·연도: {s.get('authors', '')} ({s.get('year') or 'n.d.'})\n"
-                             + "\n".join(f"{k}: {v}" for k, v in (("초록", s.get("abstract")), ("요약", s.get("summary")),
-                                                                 ("내 메모", s.get("note"))) if v)
-                             + "\n</source>")
-            parts.append("<sources>\n" + "\n".join(lines) + "\n</sources>")
-        if context:
-            parts.append(f"<context>\n{context}\n</context>")
-        parts.append(f"<text>\n{text}\n</text>")
-        prompt = "\n\n".join(parts)
-
-        if self.engine == "cli":
-            out = self._run_cli(prompt, system=WRITE_SYSTEM).strip()
+        system, prompt = write_request(mode, text, instruction=instruction, context=context, sources=sources)
+        if engine != "claude":
+            out = parse_text_result("write", self.text_complete(engine, system, prompt))["text"]
             yield {"type": "delta", "text": out}
             yield {"type": "done", "text": out}
             return
         kw = self._request_kwargs(effort=self.get_setting("effort") or "medium")
-        chunks = []
         try:
             with self._client().beta.messages.stream(
-                    max_tokens=16000, system=WRITE_SYSTEM, messages=[{"role": "user", "content": prompt}], **kw) as stream:
+                    max_tokens=16000, system=system, messages=[{"role": "user", "content": prompt}], **kw) as stream:
                 for event in stream:
                     if event.type == "text" and event.text:
-                        chunks.append(event.text)
                         yield {"type": "delta", "text": event.text}
                 final = stream.get_final_message()
         except anthropic.APIError as e:
             raise self._call_errors(e) from e
         if final.stop_reason == "refusal":
-            raise AIError("모델이 이 요청을 처리하지 않았어요 (안전 정책).")
+            raise AIError("모델이 이 요청을 처리하지 않았어요 (안전 정책).", "api_refusal")
+        if final.stop_reason == "max_tokens":
+            raise AIError("결과가 너무 길어 중간에 끊겼어요.", "api_max_tokens")
         text_out = "".join(b.text for b in final.content if b.type == "text").strip()
         yield {"type": "done", "text": text_out}
 
-    # ------------------------------------------------------------ CLI engine
-    def _run_cli(self, prompt: str, system: str) -> str:
-        if not self.cli_enabled:
-            raise AIError("CLI 엔진은 PC 연결(2단계) 뒤에 쓸 수 있어요")
-        exe = shutil.which("claude")
-        if not exe:
-            raise AIError("claude 명령을 찾지 못했어요. Claude Code를 설치하고 `claude`로 한 번 로그인해 주세요.")
-        base = [exe, "-p", "--output-format", "json"]
-        model = self.get_setting("model")
-        if model:
-            base += ["--model", model]
-        attempts = [base + ["--tools", "", "--no-session-persistence", "--system-prompt", system],
-                    base + ["--append-system-prompt", system]]
-        last_err = ""
-        for cmd in attempts:
-            try:
-                proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
-                                      timeout=1200,
-                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            except subprocess.TimeoutExpired as e:
-                raise AIError("Claude CLI 응답이 20분 안에 오지 않았어요") from e
-            if proc.returncode == 0:
-                try:
-                    data = json.loads(proc.stdout)
-                except json.JSONDecodeError:
-                    return proc.stdout
-                if data.get("is_error"):
-                    raise AIError(f"Claude CLI 오류: {data.get('result') or data}")
-                return data.get("result") or ""
-            last_err = (proc.stderr or proc.stdout or "").strip()
-            if "unknown option" not in last_err.lower():
-                break
-        raise AIError(f"Claude CLI 실행 실패: {last_err[:500]}")
+
+_GEMINI_BLOCKED = {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "LANGUAGE", "IMAGE_SAFETY"}
+
+
+def _openai_text(data: dict) -> str:
+    """Responses API 응답 → 글. 거절 · 길이 끊김은 AIError (9.6절)"""
+    parts = []
+    for item in data.get("output") or []:
+        for c in (item.get("content") or []) if item.get("type") == "message" else []:
+            if c.get("type") == "refusal":
+                raise AIError(f"OpenAI 모델이 이 요청을 처리하지 않았어요: {scrub_keys(c.get('refusal'))[:300]}", "api_refusal")
+            if c.get("type") == "output_text":
+                parts.append(c.get("text") or "")
+    if data.get("status") == "incomplete":
+        reason = (data.get("incomplete_details") or {}).get("reason")
+        if reason == "content_filter":
+            raise AIError("OpenAI 모델이 이 요청을 처리하지 않았어요 (안전 정책).", "api_refusal")
+        raise AIError("결과가 너무 길어 중간에 끊겼어요.", "api_max_tokens")
+    return "".join(parts)
+
+
+def _gemini_text(data: dict) -> str:
+    block = (data.get("promptFeedback") or {}).get("blockReason")
+    if block:
+        raise AIError(f"Gemini가 이 요청을 처리하지 않았어요 ({block}).", "api_refusal")
+    cands = data.get("candidates") or []
+    if not cands:
+        raise AIError("Gemini 응답이 비어 있어요.", "api_refusal")
+    cand = cands[0]
+    reason = cand.get("finishReason") or ""
+    if reason == "MAX_TOKENS":
+        raise AIError("결과가 너무 길어 중간에 끊겼어요.", "api_max_tokens")
+    if reason in _GEMINI_BLOCKED:
+        raise AIError(f"Gemini가 이 요청을 처리하지 않았어요 ({reason}).", "api_refusal")
+    return "".join(p.get("text") or "" for p in (cand.get("content") or {}).get("parts") or [] if not p.get("thought"))
 
 
 def api_citations(content, page_based: bool) -> tuple[str, list[dict]]:

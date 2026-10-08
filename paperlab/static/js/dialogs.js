@@ -4,6 +4,7 @@ import { api, downloadBlob } from "./api.js";
 import { forgetStyle, listStyles, render, sentenceCase, styleOptions } from "./cite.js";
 import { INHA } from "./extlinks.js";
 import { formatManagerDialog, formatOptions, listFormats } from "./formats.js";
+import { COMPANY, fmtAgo, fmtClock } from "./jobs.js";
 import {
   $, $$, authorsShort, avatarEl, confirmDialog, copyText, el, errorToast, esc, fmtBytes, modal, pickFiles, promptDialog, toast,
 } from "./ui.js";
@@ -213,46 +214,57 @@ export async function citeDialog(paperOrId) {
 }
 
 // --------------------------------------------------------------- settings
-export async function settingsDialog() {
-  let s, status;
+export async function settingsDialog({ focus = "" } = {}) {
+  let s, status, devices;
   try {
-    [s, status] = await Promise.all([api.get("/api/settings"), api.get("/api/ai/status")]);
+    [s, status, devices] = await Promise.all([api.get("/api/settings"), api.get("/api/ai/status"), api.get("/api/devices")]);
   } catch (e) { return errorToast(e); }
   const usageP = refreshUsage(); // 설정 창 열 때 사용량을 다시 받는다 (사이드바 막대도 함께)
   const models = state.meta.models;
   const styles = await listStyles(true).catch(() => []);
   const formats = await listFormats(true).catch(() => null);
   const fmtDefault = s.doc_format_default || "default";
-  const keyUnreadable = s.anthropic_api_key_status === "unreadable";
   const user = state.user || {};
   const body = el(`<form autocomplete="off">
-    <div class="section-title" style="margin-top:0">AI (요약 · 논문과 대화)</div>
-    <div class="field"><label>AI 엔진</label>
-      <div class="seg" id="engine-seg">
-        <button type="button" data-v="api" class="active">Anthropic API</button>
-        <button type="button" data-v="cli" disabled aria-describedby="cli-soon">Claude CLI</button>
-      </div>
-      <div class="hint" id="engine-hint">PDF를 그림·수식까지 통째로 읽고, 답변에 쪽 번호 근거가 붙어요. 사용량만큼 요금이 나가요.</div>
-      <div class="hint is-strong" id="cli-soon">Claude CLI는 PC 연결(2단계) 뒤에 쓸 수 있어요.</div>
-    </div>
-    <div class="field api-only"><label for="set-api-key">Anthropic API 키</label>
-      <input class="input" type="password" id="set-api-key" name="anthropic_api_key" placeholder="${s.anthropic_api_key_set ? "저장됨 (바꾸려면 새 키 입력)" : "sk-ant-..."}">
-      ${keyUnreadable ? `<div class="notice" data-tone="warn" data-key-warn style="margin-top:6px">${ICON_WARN}<div>저장된 키를 읽지 못했어요. 키를 다시 입력해 주세요.</div></div>` : ""}
-      <div class="hint">키는 계정별로 암호화해 클라우드에 저장돼요. PC를 꺼도 AI를 쓰려면 API 키가 필요해요. <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">키 발급받기</a>
-      ${s.anthropic_api_key_set || keyUnreadable ? ' · <a href="#" id="clear-key">저장된 키 지우기</a>' : ""}</div>
-    </div>
-    <div class="grid-2">
-      <div class="field"><label>모델</label><select class="input" name="model">
-        ${Object.entries(models).map(([k, v]) => `<option value="${k}" ${k === s.model ? "selected" : ""}>${esc(v)}</option>`).join("")}
-        ${models[s.model] ? "" : `<option value="${esc(s.model)}" selected>${esc(s.model)}</option>`}
-      </select></div>
-      <div class="field api-only"><label>생각 깊이 (effort)</label><select class="input" name="effort">
-        ${[["low", "낮음 · 빠름"], ["medium", "보통 (기본)"], ["high", "높음 · 정확"], ["xhigh", "매우 높음"]]
-          .map(([k, v]) => `<option value="${k}" ${k === s.effort ? "selected" : ""}>${v}</option>`).join("")}
-      </select></div>
-    </div>
-    <div class="field"><label>AI 답변 언어</label><input class="input" name="summary_language" value="${esc(s.summary_language)}"></div>
+    <div class="section-title" id="set-ai-title" style="margin-top:0">AI 엔진</div>
+    <div class="notice" data-tone="info" data-ai-intro>${ICON_INFO}<div><b>API 키가 있으면 API로 먼저, 안 되면 연결된 PC의 CLI로 실행해요.</b> 키가 없는 엔진은 PC에서만 실행돼요. PC를 꺼도 AI를 쓰려면 API 키가 필요해요.</div></div>
+    ${JOB_KINDS.map(([kind, label]) => `<div class="field"><label id="rt-${kind}">${label} — 쓰는 순서</label>
+      <div class="row" role="group" aria-labelledby="rt-${kind}">${[0, 1, 2].map((i) => `<select class="input grow" data-route-kind="${kind}" data-route-i="${i}" aria-label="${label} ${i + 1}순위 엔진"${i === 0 ? ` aria-describedby="rl-${kind}"` : ""}></select>`).join("")}</div>
+      <div class="hint" data-route-line="${kind}" id="rl-${kind}"></div></div>`).join("")}
+    ${AI_KEYS.map((k) => `<div class="field" data-key-field="${k.name}"><label for="key-${k.name}">${k.label}</label>
+      <div class="row"><input class="input grow" type="password" id="key-${k.name}" name="${k.name}" autocomplete="off" aria-describedby="ks-${k.name}">
+        <button type="button" class="icon-btn" data-key-reveal aria-pressed="false" aria-label="${k.company} API 키 보이기">${ICON_EYE}</button>
+        <button type="button" class="btn sm ghost" data-key-clear="${k.name}">지우기</button></div>
+      <div class="row small" id="ks-${k.name}" data-key-state></div>
+      <div data-key-fail-slot></div></div>`).join("")}
+    <div class="field"><div class="hint">키는 계정별로 암호화해 저장해요. OpenAI · Google API에는 PDF 그림 · 쪽 인용 없이 <b>본문 글만</b> 보내요. 요금은 각 회사에서 키 주인에게 나가요.</div></div>
+    <details data-model-details style="margin-bottom:12px"><summary>모델 · 생각 깊이 (고급)<span data-model-changed></span></summary>
+      <div class="grid-2" style="margin-top:8px">
+        <div class="field"><label for="set-model">Anthropic API 모델</label><select class="input" id="set-model" name="model">
+          ${Object.entries(models).map(([k, v]) => `<option value="${k}" ${k === s.model ? "selected" : ""}>${esc(v)}</option>`).join("")}
+          ${models[s.model] ? "" : `<option value="${esc(s.model)}" selected>${esc(s.model)}</option>`}
+        </select></div>
+        <div class="field"><label for="set-effort">생각 깊이 (effort)</label><select class="input" id="set-effort" name="effort">
+          ${[["low", "낮음 · 빠름"], ["medium", "보통 (기본)"], ["high", "높음 · 정확"], ["xhigh", "매우 높음"]]
+            .map(([k, v]) => `<option value="${k}" ${k === s.effort ? "selected" : ""}>${v}</option>`).join("")}
+        </select></div>
+        <div class="field"><label for="set-api-codex">OpenAI API 모델</label><input class="input" id="set-api-codex" name="api_model_codex" value="${esc((s.api_models || {}).codex || "")}" placeholder="기본값" maxlength="100" spellcheck="false"></div>
+        <div class="field"><label for="set-api-gemini">Google API 모델</label><input class="input" id="set-api-gemini" name="api_model_gemini" value="${esc((s.api_models || {}).gemini || "")}" placeholder="기본값" maxlength="100" spellcheck="false"></div>
+        <div class="field"><label for="set-cli-claude">PC의 claude 모델</label><select class="input" id="set-cli-claude" name="cli_model_claude">
+          ${[["default", "계정 기본 모델"], ["opus", "opus"], ["sonnet", "sonnet"], ["haiku", "haiku"]]
+            .map(([k, v]) => `<option value="${k}" ${k === ((s.cli_models || {}).claude || "default") ? "selected" : ""}>${v}</option>`).join("")}
+        </select></div>
+        <div class="field"><label for="set-cli-other">PC의 codex · gemini 모델</label><select class="input" id="set-cli-other" disabled><option>계정 기본 모델</option></select></div>
+      </div></details>
+    <div class="field"><label for="set-lang">AI 답변 언어</label><input class="input" id="set-lang" name="summary_language" value="${esc(s.summary_language)}"></div>
     <div class="status-line ${status.ready ? "ok" : "bad"}" id="ai-status">${status.ready ? "✓" : "!"} ${esc(status.message)}</div>
+
+    <div class="section-title" id="set-pc-title">연결된 PC</div>
+    <div class="field"><div class="hint">PaperLab 앱을 설치하고 연결한 PC는 그 PC의 claude · codex · gemini 로그인으로 AI 작업을 실행해요. 여러 대가 켜져 있으면 먼저 가져간 PC가 실행해요.</div></div>
+    <div data-pc-mismatch-slot></div>
+    <ul class="item-list" data-device-list aria-labelledby="set-pc-title"></ul>
+    <div class="row" data-pc-actions style="margin-bottom:6px"></div>
+    <div class="field"><div class="hint">PC를 더 이상 쓰지 않으면 여기서 해지해 주세요. 앱을 지워도 연결은 남아 있어요.</div></div>
 
     <div class="section-title">인용</div>
     <div class="grid-2">
@@ -313,8 +325,7 @@ export async function settingsDialog() {
   $("[data-avatar]", body).replaceWith(avatarEl(user, true));
   bindExtLink($("[data-inha-login]", body));
   $("[data-inha-guide]", body).onclick = (e) => inhaGuideDialog({ returnFocus: e.currentTarget });
-  // 저장된 ai_engine이 cli여도 1단계는 API만 보여 주고, 저장하면 api가 된다 (명세 8.1)
-  const engine = "api";
+  const ai = aiSection(body, s, () => devices);
   const drawCustom = (list) => {
     const box = $("[data-custom-styles]", body);
     box.innerHTML = "";
@@ -358,7 +369,11 @@ export async function settingsDialog() {
     } catch (e) { errorToast(e); }
   };
   const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn primary" data-save>저장</button></div>`);
-  const m = modal({ title: "설정", body, foot, wide: true });
+  const m = modal({ title: "설정", body, foot, wide: true, onClose: () => pcs.stop() });
+  const pcs = pcSection(body, () => devices, (list) => { devices = list; ai.drawRoutes(); });
+  // 첫 초점은 엔진 첫 상자 (키 칸에 바로 초점이 가면 실수로 붙여 넣기 쉬움 — 디자인 2장)
+  if (focus === "pc") setTimeout(() => { const t = $("#set-pc-title", body); t.tabIndex = -1; t.focus(); t.scrollIntoView({ block: "start" }); }, 60);
+  else setTimeout(() => $('[data-route-kind="summary"][data-route-i="0"]', body).focus(), 60);
   // 저장 공간 (D14): 못 받으면 안내 한 줄
   usageP.then((u) => {
     const slot = $("[data-usage-slot]", body);
@@ -370,19 +385,12 @@ export async function settingsDialog() {
     m.close();
     if (actions.logout) actions.logout();
   };
-  const clear = $("#clear-key", body);
-  if (clear) clear.onclick = async (e) => {
-    e.preventDefault();
-    try {
-      state.settings = await api.put("/api/settings", { anthropic_api_key: null });
-      toast("저장된 API 키를 지웠어요");
-      m.close();
-    } catch (err) { errorToast(err); }
-  };
+  ai.onCleared = (fresh) => { s = fresh; state.settings = fresh; };
   $("[data-no]", foot).onclick = () => m.close();
   $("[data-save]", foot).onclick = async () => {
     const fd = Object.fromEntries(new FormData(body).entries());
-    fd.ai_engine = engine;
+    for (const k of ["api_model_codex", "api_model_gemini", "cli_model_claude"]) delete fd[k];
+    Object.assign(fd, ai.values());
     fd.korean_first = !!$("[name=korean_first]", body).checked;
     try {
       state.settings = await api.put("/api/settings", fd);
@@ -391,6 +399,372 @@ export async function settingsDialog() {
       m.close();
     } catch (e) { errorToast(e); }
   };
+}
+
+// ------------------------------------------------ 2단계: AI 엔진 · 연결된 PC (docs/design/phase2-worker-electron-ui.md 2~4장)
+const JOB_KINDS = [["summary", "요약"], ["chat", "논문과 대화"], ["write", "글쓰기 도우미"]];
+const ENGINE_LABEL = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
+const AI_KEYS = [
+  { name: "anthropic_api_key", engine: "claude", company: "Anthropic", label: "Anthropic API 키 (Claude)", ph: "sk-ant-...", url: "https://console.anthropic.com/settings/keys" },
+  { name: "openai_api_key", engine: "codex", company: "OpenAI", label: "OpenAI API 키 (Codex)", ph: "sk-...", url: "https://platform.openai.com/api-keys" },
+  { name: "google_api_key", engine: "gemini", company: "Google", label: "Google API 키 (Gemini)", ph: "AIza...", url: "https://aistudio.google.com/apikey" },
+];
+const ICON_EYE = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const ICON_DOWNLOAD = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19.5h14"/></svg>`;
+const desktop = () => window.paperlabDesktop || null;
+
+// a***@example.com — 서버 jobs.mask_email과 같은 규칙 (디자인 16장 요청 8)
+export function maskEmail(email) {
+  const [local, domain] = String(email || "").split(/@(.*)/s);
+  return local && domain !== undefined ? `${local.slice(0, 1)}***@${domain}` : "";
+}
+
+const onlineFor = (devices, engine) => devices.filter((d) => !d.revoked && d.online && !d.paused
+  && (d.engines || []).some((e) => e.name === engine && e.logged_in)).length;
+const hasDevice = (devices, engine) => devices.some((d) => !d.revoked && (d.engines || []).some((e) => e.name === engine));
+
+// "AI 엔진" 구역: 엔진 순서 상자 · 경로 줄 · 키 세 칸 · 모델. values()는 저장할 값
+function aiSection(body, s, getDevices) {
+  const out = { onCleared: null };
+  const routing = s.ai_routing || {};
+  const keyState = (k) => {
+    const input = $(`#key-${k.name}`, body);
+    if (input.value.trim()) return "typed";
+    return s[`${k.name}_status`] || "none";
+  };
+  const hasKey = (engine) => { const st = keyState(AI_KEYS.find((k) => k.engine === engine)); return st === "set" || st === "typed"; };
+
+  // 엔진 순서: 앞 칸과 겹치면 뒤 칸을 비우고 당김 (PD-1)
+  const order = (kind) => $$(`[data-route-kind="${kind}"]`, body).map((x) => x.value).filter(Boolean);
+  const fill = (kind, list) => {
+    const sels = $$(`[data-route-kind="${kind}"]`, body);
+    sels.forEach((sel, i) => {
+      const used = list.slice(0, i);
+      const opts = ["claude", "codex", "gemini"].filter((e) => !used.includes(e));
+      const disabled = i > 0 && !list[i - 1];
+      sel.innerHTML = (i ? `<option value="">없음</option>` : "") + opts.map((e) => `<option value="${e}">${ENGINE_LABEL[e]}</option>`).join("");
+      sel.value = disabled ? "" : (list[i] || "");
+      sel.disabled = disabled;
+    });
+  };
+  out.drawRoutes = () => {
+    const devices = getDevices();
+    for (const [kind, label] of JOB_KINDS) {
+      const list = order(kind);
+      const line = $(`[data-route-line="${kind}"]`, body);
+      const parts = [];
+      for (const e of list) {
+        if (hasKey(e)) parts.push(`${COMPANY[e]} API`);
+        if (hasDevice(devices, e)) parts.push(`PC의 ${e}`);
+      }
+      const cliEngines = list.filter((e) => hasDevice(devices, e));
+      const on = cliEngines.reduce((n, e) => Math.max(n, onlineFor(devices, e)), 0);
+      let text;
+      if (!parts.length) {
+        const e = list[0];
+        text = `이대로는 ${label}을(를) 쓸 수 없어요 — ${COMPANY[e]} API 키를 넣거나, ${e}가 있는 PC를 연결해 주세요.`;
+      } else if (!cliEngines.length) text = `${parts.join(" → ")}만 써요`;
+      else if (parts.every((p) => p.startsWith("PC의")) && parts.length === 1) text = `${parts[0]}만 써요 (${on ? `켜진 PC ${on}대` : "켜진 PC 없음 — 켜질 때까지 기다려요"})`;
+      else text = `${parts[0]} → ${parts.length > 1 ? `${parts.length === 2 ? "안 되면 " : ""}${parts.slice(1).join(" → ")}` : ""} (${on ? `켜진 PC ${on}대` : "켜진 PC 없음"})`;
+      line.textContent = text;
+      if (parts.length) line.removeAttribute("data-tone"); else line.dataset.tone = "warn";
+    }
+  };
+  for (const [kind] of JOB_KINDS) {
+    fill(kind, routing[kind] || ["claude"]);
+    $$(`[data-route-kind="${kind}"]`, body).forEach((sel) => (sel.onchange = () => { fill(kind, order(kind)); out.drawRoutes(); }));
+  }
+
+  // 키 칸 (3.4절)
+  const drawKey = (k) => {
+    const field = $(`[data-key-field="${k.name}"]`, body);
+    const input = $("input", field);
+    const st = keyState(k);
+    const saved = s[`${k.name}_status`] || "none";
+    const hint = s[`${k.name}_hint`] || "";
+    input.placeholder = saved === "set" ? `저장됨 · ${hint ? `…${hint} ` : ""}(바꾸려면 새 키 입력)` : saved === "unreadable" ? "다시 입력해 주세요" : k.ph;
+    const chip = st === "typed" ? `<span class="chip accent">저장하면 바뀌어요</span>`
+      : st === "set" ? `<span class="chip success">✓ 저장됨${hint ? ` · 끝자리 ${esc(hint)}` : ""}</span>`
+        : st === "unreadable" ? `<span class="chip warn">! 저장된 키를 읽지 못했어요</span>` : `<span class="chip">없음</span>`;
+    const row = $("[data-key-state]", field);
+    row.dataset.keyState = st === "typed" ? saved : st;
+    row.innerHTML = `${chip}<span class="grow"></span><a class="ext-link" href="${k.url}" target="_blank" rel="noopener noreferrer">키 발급받기${EXT_MARK}</a>`;
+    $("[data-key-clear]", field).classList.toggle("hidden", saved === "none");
+    const fail = s[`${k.name}_last_error`];
+    $("[data-key-fail-slot]", field).innerHTML = fail && st !== "typed" ? `<div class="notice" data-tone="warn" data-key-fail style="margin-top:6px">${ICON_WARN}<div>${fail.code === "api_permission"
+      ? `<b>최근 실패: 이 키로 쓸 수 없는 모델이에요</b> (${esc(fmtClock(fail.at))}). 모델 설정이나 키 권한을 확인해 주세요.`
+      : `<b>최근 실패: 키가 올바르지 않아요</b> (${esc(fmtClock(fail.at))}). 그 작업은 PC로 넘겼어요. 키를 확인해 주세요.`}</div></div>` : "";
+  };
+  for (const k of AI_KEYS) {
+    const field = $(`[data-key-field="${k.name}"]`, body);
+    const input = $("input", field);
+    input.oninput = () => { drawKey(k); out.drawRoutes(); };
+    const eye = $("[data-key-reveal]", field);
+    eye.onclick = () => {
+      const show = input.type === "password";
+      input.type = show ? "text" : "password";
+      eye.setAttribute("aria-pressed", String(show));
+      eye.setAttribute("aria-label", `${k.company} API 키 ${show ? "가리기" : "보이기"}`);
+    };
+    $("[data-key-clear]", field).onclick = async () => {
+      try {
+        const fresh = await api.put("/api/settings", { [k.name]: null });
+        Object.assign(s, fresh);
+        if (out.onCleared) out.onCleared(fresh);
+        input.value = "";
+        drawKey(k);
+        out.drawRoutes();
+        toast(`${k.company} API 키를 지웠어요`);
+      } catch (e) { errorToast(e); }
+    };
+    drawKey(k);
+  }
+  // 모델: 기본이 아닌 값이 있으면 접힌 제목에 표시
+  const changed = () => {
+    const v = out.values();
+    const diff = v.api_models.codex || v.api_models.gemini || v.cli_models.claude !== "default" || ($("#set-effort", body).value !== "medium");
+    $("[data-model-changed]", body).textContent = diff ? " · 바꾼 값 있음" : "";
+  };
+  out.values = () => ({
+    ai_routing: Object.fromEntries(JOB_KINDS.map(([kind]) => [kind, order(kind)])),
+    cli_models: { claude: $("#set-cli-claude", body).value, codex: "default", gemini: "default" },
+    api_models: { codex: $("#set-api-codex", body).value.trim(), gemini: $("#set-api-gemini", body).value.trim() },
+  });
+  $$("[data-model-details] select, [data-model-details] input", body).forEach((x) => x.addEventListener("change", changed));
+  changed();
+  out.drawRoutes();
+  return out;
+}
+
+// "연결된 PC" 구역 (4장): 목록 · 이름 바꾸기 · 해지 · 연결 코드 · 이 PC 연결 · PC 앱 받기. 창이 열려 있는 동안 15초마다 다시 받음
+function pcSection(body, getDevices, setDevices) {
+  const list = $("[data-device-list]", body);
+  const actionsBox = $("[data-pc-actions]", body);
+  const dk = desktop();
+  let info = null;
+  let timer = null;
+  const reload = async () => {
+    try { setDevices(await api.get("/api/devices")); draw(); } catch (e) { errorToast(e); }
+  };
+  const draw = () => {
+    if (list.contains(document.activeElement) && document.activeElement !== list) return; // 초점이 있으면 다음 주기에
+    const devices = [...getDevices()];
+    const rank = (d) => (info && info.deviceId === d.id ? 0 : d.revoked ? 4 : !d.online ? 3 : d.paused ? 2 : 1);
+    devices.sort((a, b) => rank(a) - rank(b) || String(b.last_seen_at || "").localeCompare(String(a.last_seen_at || "")));
+    list.innerHTML = "";
+    const active = devices.filter((d) => !d.revoked);
+    if (!active.length) {
+      list.appendChild(el(`<li class="item-card" data-state="empty"><p class="item-meta" style="font-size:13px">연결된 PC가 없어요. PC를 연결하면 API 키 없이도 그 PC의 claude · codex · gemini 로그인으로 요약 · 대화 · 글쓰기를 쓸 수 있어요.</p></li>`));
+    }
+    for (const d of devices) list.appendChild(deviceCard(d));
+    const here = info && info.paired && active.some((d) => d.id === info.deviceId);
+    actionsBox.innerHTML = "";
+    if (dk && !here) actionsBox.appendChild(button(`<button type="button" class="btn sm primary" data-pair-here>이 PC 연결</button>`, pairHere));
+    if (!dk) actionsBox.appendChild(button(`<button type="button" class="btn sm primary" data-pair-code>연결 코드 만들기</button>`, () => pairCodeDialog(reload)));
+    actionsBox.appendChild(button(`<button type="button" class="btn sm" data-pc-app>${ICON_DOWNLOAD} PC 앱 받기</button>`, () => pcAppDialog()));
+  };
+  const button = (html, fn) => { const b = el(html); b.onclick = fn; return b; };
+  const deviceCard = (d) => {
+    const state_ = d.revoked ? "revoked" : !d.online ? "offline" : d.paused ? "paused" : "online";
+    const chip = { online: `<span class="chip success">● 켜짐</span>`, paused: `<span class="chip warn">❙❙ 일시 중지</span>`, offline: `<span class="chip">○ 꺼짐</span>`,
+      revoked: `<span class="chip">해지됨 · ${esc(fmtAgo(d.revoked_at))}</span>` }[state_];
+    const engines = ["claude", "codex", "gemini"].map((n) => {
+      const e = (d.engines || []).find((x) => x.name === n);
+      if (!e) return `<span class="chip">${n} 없음</span>`;
+      return e.logged_in ? `<span class="chip success" title="${esc(`${n} ${e.version || ""}`)}">${n} ✓ · 동시 ${e.slots || 1}</span>`
+        : `<span class="chip warn" title="${esc(`${n} ${e.version || ""}`)}">${n} ! 로그인 필요</span>`;
+    }).join("");
+    const os = String(d.os || "").split(/\s+/).slice(0, 2).join(" ");
+    const lead = state_ === "revoked" ? "이 PC는 작업을 받지 않아요. 30일 뒤 목록에서 사라져요."
+      : state_ === "paused" ? "이 PC에서 작업 받기를 멈춰 두었어요" : state_ === "online" && d.running_jobs ? `실행 중 ${d.running_jobs}개` : "";
+    const meta = [lead, `마지막 확인 ${fmtAgo(d.last_seen_at) || "기록 없음"}`, d.app_version ? `앱 ${d.app_version}` : "", os].filter(Boolean);
+    const card = el(`<li class="item-card" data-device-id="${d.id}" data-state="${state_}">
+      <div class="item-head"><span class="item-title">${esc(d.name)}</span>${chip}
+        ${info && info.deviceId === d.id ? `<span class="chip accent">이 PC</span>` : ""}
+        ${d.update_required && !d.revoked ? `<span class="chip warn">업데이트 필요</span>` : ""}
+        ${d.revoked ? "" : `<span class="item-actions"><button type="button" class="btn sm" data-device-rename aria-label="${esc(d.name)} 이름 바꾸기">이름 바꾸기</button>
+          <button type="button" class="btn sm danger" data-device-revoke aria-label="${esc(d.name)} 연결 해지">연결 해지</button></span>`}</div>
+      ${d.revoked ? "" : `<div class="chips" aria-label="엔진">${engines}</div>`}
+      <p class="item-meta">${esc(state_ === "revoked" ? lead : meta.join(" · "))}</p></li>`);
+    if (!d.revoked) {
+      $("[data-device-rename]", card).onclick = async () => {
+        const name = await promptDialog("PC 이름", { value: d.name, ok: "바꾸기" });
+        if (!name) return;
+        try { await api.patch(`/api/devices/${d.id}`, { name: name.trim() }); toast("이름을 바꿨어요", "success"); reload(); } catch (e) { errorToast(e); }
+      };
+      $("[data-device-revoke]", card).onclick = async () => {
+        if (!(await confirmDialog("이 PC는 더 이상 작업을 받지 않아요. 실행 중인 작업은 다른 PC로 넘어가요.",
+          { title: `‘${d.name}’ 연결을 해지할까요?`, ok: "해지", danger: true }))) return;
+        try {
+          const r = await api.del(`/api/devices/${d.id}`);
+          toast(`연결을 해지했어요${r.requeued_jobs ? ` · 실행 중이던 작업 ${r.requeued_jobs}개를 다시 대기시켰어요` : ""}`, "success");
+          reload();
+        } catch (e) { errorToast(e); }
+      };
+    }
+    return card;
+  };
+  // 앱 창: [이 PC 연결] 한 번 (명세 12.2 ① — 코드만 main 프로세스로, 토큰은 화면에 오지 않음)
+  const pairHere = async (e) => {
+    const btn = e.currentTarget;
+    if (info && info.paired && info.accountHint && info.accountHint !== maskEmail(user().email)) {
+      if (!(await confirmDialog(`${info.accountHint} 계정의 작업은 더 이상 이 PC에서 실행되지 않아요. 그 계정의 연결된 PC 목록에서 이 PC를 해지해 주세요.`,
+        { title: "이 PC를 지금 계정으로 다시 연결할까요?", ok: "다시 연결" }))) return;
+    }
+    btn.disabled = true;
+    btn.setAttribute("aria-busy", "true");
+    btn.innerHTML = `<span class="spinner" aria-hidden="true"></span> 연결하는 중…`;
+    try {
+      const { code } = await api.post("/api/devices/pair-codes");
+      const r = await dk.pair(code);
+      if (!r || !r.ok) throw new Error((r && r.error) || "잠시 후 다시 시도해 주세요.");
+      toast(`연결됐어요: ${r.deviceName || ""}`, "success");
+      info = await dk.info();
+      await reload();
+      const mine = info && $(`[data-device-id="${info.deviceId}"] [data-device-rename]`, list);
+      if (mine) mine.focus();
+    } catch (err) {
+      toast(`연결하지 못했어요. ${err.message || "잠시 후 다시 시도해 주세요."}`, "error");
+      draw();
+    }
+  };
+  const user = () => state.user || {};
+  (async () => {
+    if (dk) {
+      try { info = await dk.info(); } catch { info = null; }
+      const mine = maskEmail(user().email);
+      if (info && info.paired && info.accountHint && info.accountHint !== mine) {
+        $("[data-pc-mismatch-slot]", body).innerHTML = `<div class="notice" data-tone="warn" data-pc-mismatch>${ICON_WARN}<div>이 PC의 작업 실행은 <b>${esc(info.accountHint)}</b> 계정에 연결돼 있어요. 이 계정의 작업을 이 PC에서 실행하려면 [이 PC 연결]을 눌러 주세요.</div></div>`;
+      }
+    }
+    draw();
+  })();
+  timer = setInterval(reload, 15000);
+  return { stop: () => clearInterval(timer), reload };
+}
+
+// 연결 코드 창 (S5 — 브라우저): 코드 · 남은 시간 · 복사 · 3초마다 기기 목록을 보고 새 기기가 생기면 성공
+function pairCodeDialog(onPaired) {
+  const body = el(`<div>
+    <p style="margin-top:0">PaperLab 앱이 설치된 PC에서 이 코드를 넣어 주세요.</p>
+    <code class="pair-code" data-pair-code>····-····</code>
+    <div class="row small" style="margin:8px 0"><span class="grow"><span data-pair-left></span> · 10분 동안 한 번만 쓸 수 있어요</span><button type="button" class="btn sm" data-copy-code>코드 복사</button></div>
+    <p class="small muted" style="margin:0 0 10px">넣는 곳: 화면 오른쪽 아래 트레이의 PaperLab 아이콘 → [코드로 연결…]</p>
+    <div class="notice" data-tone="info">${ICON_INFO}<div>연결하려는 PC가 지금 이 PC라면, PaperLab 앱 창의 설정에서 [이 PC 연결]을 누르면 코드 없이 연결돼요.</div></div>
+    <div class="status-line" role="status" data-pair-wait style="margin-top:10px"><span class="spinner" aria-hidden="true"></span> PC에서 코드를 넣기를 기다리는 중…</div>
+  </div>`);
+  const foot = el(`<div style="display:contents"><div class="left"><button class="btn" data-new-code>새 코드</button></div><button class="btn" data-close>닫기</button></div>`);
+  let tick = null;
+  let poll = null;
+  let issued = null;
+  let expires = 0;
+  let code = "";
+  const stop = () => { clearInterval(tick); clearInterval(poll); };
+  const m = modal({ title: "이 PC 연결", body, foot, onClose: stop });
+  const codeEl = $("[data-pair-code]", body);
+  const wait = $("[data-pair-wait]", body);
+  const left = $("[data-pair-left]", body);
+  const drawLeft = () => {
+    const sec = Math.max(0, Math.round((expires - Date.now()) / 1000));
+    left.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")} 남음`;
+    if (!sec && !codeEl.hasAttribute("data-expired")) {
+      codeEl.setAttribute("data-expired", "");
+      wait.className = "status-line bad";
+      wait.textContent = "코드 시간이 지났어요. 새 코드를 만들어 주세요.";
+      $("[data-new-code]", foot).classList.add("primary");
+      clearInterval(poll);
+    }
+  };
+  const fresh = async () => {
+    stop();
+    try {
+      issued = Date.now() - 5000;
+      const r = await api.post("/api/devices/pair-codes");
+      code = r.code;
+      expires = new Date(r.expires_at).getTime();
+    } catch (e) { errorToast(e); return; }
+    codeEl.textContent = code;
+    codeEl.removeAttribute("data-expired");
+    codeEl.setAttribute("aria-label", `연결 코드 ${code.replace("-", "").split("").join(" ")}`);
+    wait.className = "status-line";
+    wait.innerHTML = `<span class="spinner" aria-hidden="true"></span> PC에서 코드를 넣기를 기다리는 중…`;
+    $("[data-new-code]", foot).classList.remove("primary");
+    drawLeft();
+    tick = setInterval(drawLeft, 1000);
+    poll = setInterval(async () => {
+      try {
+        const devices = await api.get("/api/devices");
+        const made = devices.find((d) => !d.revoked && new Date(d.created_at).getTime() > issued);
+        if (made) {
+          clearInterval(poll);
+          clearInterval(tick);
+          wait.className = "status-line ok";
+          wait.textContent = `✓ 연결됐어요: ${made.name}`;
+          if (onPaired) onPaired();
+        }
+      } catch { /* 다음 주기에 */ }
+    }, 3000);
+  };
+  $("[data-copy-code]", body).onclick = () => copyText(code);
+  $("[data-new-code]", foot).onclick = fresh;
+  $("[data-close]", foot).onclick = () => m.close();
+  fresh();
+}
+
+// PC 앱 받기 창 (S4 — GET /api/desktop/release, 4.5절)
+export async function pcAppDialog() {
+  const body = el(`<div data-pc-app-body><div class="status-line"><span class="spinner" aria-hidden="true"></span> 설치 파일 정보를 불러오는 중…</div></div>`);
+  const foot = el(`<div style="display:contents"><button class="btn" data-close>닫기</button></div>`);
+  const m = modal({ title: "PaperLab PC 앱 받기", body, foot });
+  $("[data-close]", foot).onclick = () => m.close();
+  const load = async () => {
+    body.innerHTML = `<div class="status-line"><span class="spinner" aria-hidden="true"></span> 설치 파일 정보를 불러오는 중…</div>`;
+    let r = null;
+    try { r = await api.get("/api/desktop/release"); } catch (e) {
+      if (e.status === 404) {
+        body.innerHTML = `<div class="notice" data-tone="warn">${ICON_WARN}<div><b>PC 앱을 준비 중이에요.</b> 관리자에게 알려 주세요.</div></div>`;
+        return;
+      }
+      body.innerHTML = `<div class="status-line bad">설치 파일 정보를 불러오지 못했어요.</div><button type="button" class="btn sm" data-again style="margin-top:8px">다시 시도</button>`;
+      $("[data-again]", body).onclick = load;
+      return;
+    }
+    const file = r.url.split("/").pop();
+    const hashCmd = `Get-FileHash "$env:USERPROFILE\\Downloads\\${file}"`;
+    const dk = desktop();
+    let appVer = "";
+    if (dk) { try { appVer = (await dk.info()).appVersion || ""; } catch { appVer = ""; } }
+    body.innerHTML = "";
+    body.appendChild(el(`<div>
+      ${dk ? `<div class="notice" data-tone="info">${ICON_INFO}<div>지금 PaperLab 앱 ${esc(appVer)}을 쓰고 있어요. 업데이트는 자동으로 받아요. 다른 PC에 설치하려면 그 PC에서 이 화면을 열어 주세요.</div></div>`
+        : !/Windows/.test(navigator.userAgent) ? `<div class="notice" data-tone="info">${ICON_INFO}<div>PC 앱은 Windows용이에요. Windows PC에서 이 화면을 열어 받아 주세요.</div></div>` : ""}
+      <p class="small muted" data-release-meta style="margin-top:0">Windows 10 · 11용 · 버전 ${esc(r.version)} · ${esc(fmtBytes(r.size))}${r.built_at ? ` · ${esc(fmtAgo(r.built_at))} 만듦` : ""}</p>
+      <a class="btn primary" style="width:100%;justify-content:center" href="${esc(r.url)}" download data-release-download>${ICON_DOWNLOAD} 설치 파일 받기</a>
+      <p class="small muted" style="margin:6px 0 12px">받기가 안 되면 1분 뒤 다시 눌러 주세요.</p>
+      <div class="section-title" style="margin-top:0">설치 순서</div>
+      <ol class="inha-guide-list" data-install-steps>
+        <li>받은 <b>${esc(file)}</b>를 실행해요.</li>
+        <li>“Windows의 PC 보호” 창이 뜨면 <b>[추가 정보] → [실행]</b>을 눌러요.</li>
+        <li>관리자 권한 없이 설치되고 PaperLab 창이 열려요.</li>
+        <li><b>[Google로 계속하기]</b> → 브라우저에서 로그인해요.</li>
+        <li>설정 → 연결된 PC → <b>[이 PC 연결]</b>을 눌러요.</li>
+        <li>쓰려는 AI 도구에 한 번 로그인해요. 명령 프롬프트에서 claude · codex · gemini를 실행하면 돼요.</li>
+      </ol>
+      <div class="notice" data-tone="info">${ICON_INFO}<div>“알 수 없는 게시자” 경고가 떠요. PaperLab은 코드 서명 인증서가 없어서 Windows가 처음 보는 프로그램으로 표시해요. 이 화면에서 받은 파일이면 실행해도 돼요. 확실히 하려면 아래에서 파일 지문을 비교해 보세요.</div></div>
+      ${r.sha256 ? `<details data-release-hash style="margin-top:10px"><summary>받은 파일 확인하기 (SHA-256)</summary>
+        <div class="code-box" data-sha256 style="margin-top:8px">${esc(r.sha256)}</div>
+        <div class="row" style="justify-content:flex-end;margin:6px 0"><button type="button" class="btn sm" data-copy-hash>지문 복사</button></div>
+        <p class="small">PowerShell에서 아래 명령의 결과(Hash)가 위 값과 같으면 서버가 내보낸 파일 그대로예요.</p>
+        <div class="code-box">${esc(hashCmd)}</div>
+        <div class="row" style="justify-content:flex-end;margin-top:6px"><button type="button" class="btn sm" data-copy-cmd>명령 복사</button></div></details>` : ""}
+    </div>`));
+    $("[data-release-download]", body).onclick = () => toast("설치 파일을 받고 있어요. 받은 뒤 실행해 주세요.", "", { duration: 8000 });
+    const ch = $("[data-copy-hash]", body);
+    if (ch) ch.onclick = () => copyText(r.sha256.toUpperCase());
+    const cc = $("[data-copy-cmd]", body);
+    if (cc) cc.onclick = () => copyText(hashCmd);
+  };
+  load();
 }
 
 // ------------------------------------------------------- add by identifier

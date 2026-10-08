@@ -334,6 +334,7 @@ def test_storage_keys_ignore_injected_paths(ab, cloud):
     with admin(cloud.project) as conn:
         conn.execute("update paperlab.papers set pdf_key = %s where id = %s", (f"users/{B['user'].id}/papers/{B['pid']}.pdf",
                                                                                A["pid"]))
+    a.put("/api/settings", json={"anthropic_api_key": "sk-ant-test-key-0001"})  # 2단계: 대화 경로가 있어야 PDF를 읽으러 감
     before = len(cloud.storage.log)
     assert a.get(f"/api/papers/{A['pid']}/pdf-url").status_code == 404
     with a.stream("POST", f"/api/papers/{A['pid']}/chat", json={"question": "q"}) as r:
@@ -406,7 +407,8 @@ def test_settings_secrets_and_isolation(ab, cloud):
     assert a.put("/api/settings", json={"anthropic_api_key": ""}).json()["anthropic_api_key_set"] is True
     assert b.get("/api/settings").json()["anthropic_api_key_set"] is False
     assert b.get("/api/settings").json()["model"] == "claude-opus-5-5"
-    assert a.put("/api/settings", json={"ai_engine": "cli"}).status_code == 400
+    r = a.put("/api/settings", json={"ai_engine": "cli"})  # 2단계 AC-31: 400이 아니고 무시
+    assert r.status_code == 200 and "ai_engine" not in r.json()
     with admin(cloud.project) as conn:
         ct = conn.execute("select ciphertext from paperlab.user_secrets where user_id = %s", (A["user"].id,)).fetchone()[0]
         assert key.encode() not in bytes(ct)

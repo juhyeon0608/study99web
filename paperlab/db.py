@@ -71,6 +71,12 @@ def folder_name_problem(name: str) -> str:
     return ""
 
 
+def actor_claims(uid: str, actor: str) -> dict:
+    """워커(기기 토큰 확인 뒤) · API 실행기용 사용자 권한 claims — 서버가 만드는 claims는 이 함수 한 곳에서만 (2단계 5.5절, AC-24).
+    actor: "device:<id>" | "api-runner" (로그 · 감사용)"""
+    return {"sub": str(uid), "role": "authenticated", "aud": "authenticated", "paperlab_actor": str(actor)}
+
+
 class DBUnavailable(Exception):
     """DB 일시정지 · 연결 실패 · 풀 대기 시간 초과 (→ 503 db_unavailable)"""
 

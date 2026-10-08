@@ -203,7 +203,7 @@ def test_ai_write_endpoint_passes_sources(project, session_db, users):
         def status(self):
             return {"ready": True, "message": ""}
 
-        def write(self, mode, text, instruction="", context="", sources=None):
+        def write(self, mode, text, instruction="", context="", sources=None, engine="claude"):
             self.seen = (mode, text, sources)
             yield {"type": "delta", "text": "초안"}
             yield {"type": "done", "text": f"초안 [@{sources[0]['key']}]"}
@@ -211,6 +211,7 @@ def test_ai_write_endpoint_passes_sources(project, session_db, users):
     fake = FakeAI()
     cloud = Cloud(project, session_db, users, ai=fake)
     c = cloud.client(cloud.user())
+    c.put("/api/settings", json={"anthropic_api_key": "sk-ant-test-key-0001"})  # 2단계: 경로(키 또는 연결된 PC)가 있어야 함
     pid = c.post("/api/papers", json=SAMPLE).json()["paper"]["id"]
     key = c.get(f"/api/papers/{pid}").json()["citekey"]
     c.put(f"/api/papers/{pid}/note", json={"content": "중요한 논문"})

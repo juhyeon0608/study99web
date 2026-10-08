@@ -564,6 +564,7 @@ API는 지금과 같음: `GET /api/styles`(기본 스타일 + 내 스타일), `G
 | `APP_ENCRYPTION_KEY` | 8.2절 | 예 | 비밀 |
 | `PAPERLAB_PUBLIC_URL` | **신규(S2)** — 공개 주소 `https://kimjuhyeon.tailac17f6.ts.net`. Origin · Host 검사(6.5절), 상태 확인 스크립트 | 예 | 비밀 아님. 비었거나 `https://`가 아니면 서버 시작 거부 |
 | `PAPERLAB_PG_DUMP` | **신규(S9, 선택)** — `pg_dump.exe` 경로. 비면 `PATH`에서 찾음(서버 PC는 PATH에 있음). 코드에 경로를 박지 않음 | 선택 | 비밀 아님 |
+| `PAPERLAB_RELEASES_DIR` | **2단계(선택)** — PC 앱 설치 파일 배포 폴더. 서버가 `/downloads/`로 내려줄 파일을 여기서 읽음(읽기만). 기본값 `D:\PaperLab\releases`([2단계 명세](phase2-worker-electron.md) 13.7.1절) | 선택(없으면 기본값) | 비밀 아님. 값 검사 없음 — 폴더나 파일이 없으면 `/downloads/*` 404 |
 | `GCP_PROJECT_ID`, `GCP_REGION` | **폐기**(Cloud Run 배포 스크립트 전용이었음) | **아니오** — 관리자 PC `cloud.env`에서도 지워도 됨 | |
 | `SUPABASE_TEST_URL`, `SUPABASE_TEST_ANON_KEY`, `SUPABASE_TEST_SERVICE_ROLE_KEY`, `SUPABASE_TEST_DB_URL` | **테스트 전용**(10.2절) | 서버 PC에서 품질 검증을 돌릴 때만(19.4절 질문 Q-S7) | 운영 서버는 절대 읽지 않음 |
 

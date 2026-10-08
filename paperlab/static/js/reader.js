@@ -6,6 +6,10 @@ import { api, streamEvents } from "./api.js";
 import { listStyles, render, styleOptions } from "./cite.js";
 import { EXT_MARK, bindExtLink, citeDialog, editPaperDialog, issuesBox, settingsDialog, uploadPdfs } from "./dialogs.js";
 import { INHA, paperProxyTarget } from "./extlinks.js";
+import {
+  ICON_WARN, cancelJob, errorLabel, retryJob, setStatusLine, statusLineEl, summaryCard,
+  updateSummaryCard, watchJob,
+} from "./jobs.js";
 import { exportAnnotations } from "./library.js";
 import { quoteRuleText } from "./refquote.js";
 import { onRefresh, state } from "./state.js";
@@ -22,20 +26,14 @@ let pdfjs = null;
 let R = null; // 현재 열린 논문의 읽기 상태
 let openSeq = 0; // 열기 도중 다른 화면으로 가면 늦게 끝난 열기를 버린다
 
-// 진행 중인 요약 스트림: 논문 id → {message, progress, abort}. 읽기 화면을 떠나도 끊지 않는다
-// (탭을 닫을 때만 멈춤 — 팀장 결정 3, 명세 9.3 ②)
-const runs = new Map();
-const failed = new Map(); // 다른 화면에 있는 동안 실패한 요약의 오류 문구 (돌아오면 한 번 보여 줌)
-const DISCONNECTED = "연결이 끊겨 요약이 멈췄어요. 다시 만들어 주세요.";
-const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
+// 요약은 서버 작업(2단계 15장 — 탭을 닫아도 계속, U8). 화면은 진행 중인 요약 작업만 따라간다: 논문 id → stop()
+const watches = new Map();
+const ACTIVE = (j) => j && (j.status === "queued" || j.status === "running");
 
-export const summariesRunning = () => runs.size > 0;
-
-// 로그아웃할 때: 진행 중인 요약을 멈춘다
+// 로그아웃할 때: 화면의 따라가기만 멈춘다 (서버 작업은 계속)
 export function stopSummaries() {
-  for (const run of runs.values()) run.abort.abort();
-  runs.clear();
-  failed.clear();
+  for (const stop of watches.values()) stop();
+  watches.clear();
 }
 
 // 쓰던 노트를 지금 저장한다 (로그아웃 전)
@@ -685,119 +683,110 @@ async function summaryTab(body) {
       const r = await api.get(`/api/papers/${R.pid}/summary`);
       if (R !== me) return;
       R.summary = r.summary;
+      R.summaryJob = r.job;
       R.summaryLoaded = true;
+      if (ACTIVE(r.job)) followSummary(R.pid, r.job); // 다시 열면 진행 중 작업을 이어서 (AC-92)
     } catch (e) { body.innerHTML = `<div class="msg error">${esc(e.message)}</div>`; return; }
     if (R.tab !== "summary") return;
   }
   body.innerHTML = "";
-  if (runs.has(R.pid)) return drawProgress(body);
-  if (failed.has(R.pid)) {
-    const err = failed.get(R.pid);
-    failed.delete(R.pid);
-    return drawSummaryCta(body, err);
-  }
+  const job = R.summaryJob;
+  if (ACTIVE(job) || (job && job.status === "failed" && !R.summary && !R.failSeen)) return drawJobCard(body, job);
   if (!R.summary) return drawSummaryCta(body);
   drawSummary(body, R.summary);
 }
 
-async function drawSummaryCta(body, error = "") {
+async function drawSummaryCta(body) {
   const st = await api.get("/api/ai/status").catch(() => ({ ready: false, message: "" }));
   if (!R || R.tab !== "summary") return;
   body.innerHTML = "";
+  // 쓸 방법이 없으면 버튼은 aria-disabled + 이유 (디자인 6.1 — S10)
   const v = el(`<div class="ai-cta"><div class="big">✦</div><h3>AI로 이 논문 정리하기</h3>
     <p class="small">한 줄 요약, 초등~대학원 수준별 설명, 섹션별 요약, 핵심 수식 풀이, 기여와 한계를 만들어요.</p>
-    ${error ? `<div class="msg error" style="margin:12px 0;text-align:left">${esc(error)}</div>` : ""}
-    ${st.ready ? `<button class="btn primary" data-go>요약 만들기</button>` : `<div class="status-line bad" style="margin:12px 0;text-align:left">${esc(st.message)}</div><button class="btn primary" data-set>설정 열기</button>`}
+    <button class="btn primary" data-go ${st.ready ? "" : `aria-disabled="true" aria-describedby="ai-off-why"`}>요약 만들기</button>
+    ${st.ready ? "" : `<p class="small" id="ai-off-why" tabindex="-1" style="margin-top:8px">${esc(st.message)} <a href="#" data-set>설정 열기</a></p>`}
   </div>`);
-  const go = $("[data-go]", v);
-  if (go) go.onclick = startSummary;
+  $("[data-go]", v).onclick = () => (st.ready ? startSummary() : $("#ai-off-why", v).focus());
   const set = $("[data-set]", v);
-  if (set) set.onclick = settingsDialog;
+  if (set) set.onclick = (e) => { e.preventDefault(); settingsDialog(); };
   body.appendChild(v);
 }
 
-// 요약 시작: SSE 스트림(progress … done | error)을 끝까지 읽는다. 읽기 화면을 떠나도 계속된다
-function startSummary() {
+// 요약 시작: 작업을 만들고(202 · 진행 중이면 그 작업) 따라간다. 탭을 닫아도 서버에서 계속
+async function startSummary() {
   if (!R) return;
   const pid = R.pid;
-  if (!runs.has(pid)) {
-    const run = { message: "요약을 준비하는 중", progress: null, abort: new AbortController() };
-    runs.set(pid, run);
-    failed.delete(pid);
-    summaryStream(pid, run);
-  }
-  showTab("summary");
+  let r;
+  try { r = await api.post(`/api/papers/${pid}/summary`); } catch (e) { return errorToast(e); }
+  if (R && R.pid === pid) { R.summaryJob = r.job; R.failSeen = false; }
+  followSummary(pid, r.job);
+  if (R && R.pid === pid) showTab("summary");
 }
 
-async function summaryStream(pid, run) {
-  let result = null;
-  let error = "";
-  try {
-    await streamEvents(`/api/papers/${pid}/summary`, {}, (ev) => {
-      if (ev.type === "progress") {
-        run.message = ev.message || run.message;
-        run.progress = ev.progress == null ? null : Number(ev.progress);
-        updateProgress(pid);
-      } else if (ev.type === "done") {
-        result = ev.summary;
-      } else if (ev.type === "error") {
-        error = ev.error || "요약을 만들지 못했어요";
-      }
-    }, run.abort.signal);
-    if (!result && !error) error = DISCONNECTED;
-  } catch (e) {
-    if (e && e.name === "AbortError") return; // 로그아웃으로 멈춤
-    // 시작 뒤 연결이 끊기면 fetch가 TypeError를 던진다
-    error = e instanceof TypeError ? DISCONNECTED : (e && e.message) || DISCONNECTED;
-  } finally {
-    if (runs.get(pid) === run) runs.delete(pid);
-  }
-  if (run.abort.signal.aborted) return;
+function followSummary(pid, job) {
+  if (watches.has(pid)) watches.get(pid)();
+  const stop = watchJob(job.id, (j) => onSummaryJob(pid, j), { first: job });
+  watches.set(pid, stop);
+}
+
+async function onSummaryJob(pid, j) {
   const here = R && R.pid === pid;
-  if (result) {
-    if (here) { R.summary = result; R.summaryLoaded = true; }
-    toast("AI 요약이 준비됐어요", "success");
-    if (here && R.tab === "summary") showTab("summary");
+  if (!j) { watches.delete(pid); return; }
+  if (here) R.summaryJob = j;
+  if (ACTIVE(j)) {
+    if (here && R.tab === "summary") {
+      const card = $("[data-summary-progress]", R.view);
+      if (card && card.dataset.jobId === String(j.id)) updateSummaryCard(card, j);
+      else showTab("summary");
+    }
     return;
   }
-  if (here && R.tab === "summary") return drawSummaryCta($(".panel-body", R.view), error);
-  failed.set(pid, error);
-  toast(error, "error");
+  watches.delete(pid);
+  if (j.status === "succeeded") {
+    let s = null;
+    try { s = (await api.get(`/api/papers/${pid}/summary`)).summary; } catch { s = null; }
+    if (R && R.pid === pid) {
+      R.summary = s;
+      // 폴백 · PC로 만들었으면 맨 위에 작은 줄 한 번 (디자인 6장)
+      R.summaryNote = j.runner === "cli" && (j.history || []).length
+        ? `PC의 ${j.engine}로 만들었어요 (${errorLabel(j.history[0].error_code, j.history[0].engine)}로 넘김)` : "";
+    }
+    toast("AI 요약이 준비됐어요", "success");
+  } else if (j.status === "cancelled") {
+    toast("요약을 취소했어요");
+  } else if (!(R && R.pid === pid && R.tab === "summary")) {
+    toast(j.error || "요약을 만들지 못했어요", "error");
+  }
+  if (R && R.pid === pid && R.tab === "summary") showTab("summary");
 }
 
-function progressParts(run) {
-  const pct = run.progress != null && Number.isFinite(run.progress) ? Math.max(0, Math.min(100, Math.round(run.progress * 100))) : null;
-  return { pct, msg: `${run.message}${pct != null ? ` · ${pct}%` : ""}` };
-}
-
-function drawProgress(body) {
-  const { pct, msg } = progressParts(runs.get(R.pid));
-  body.innerHTML = "";
-  body.appendChild(el(`<div class="ai-cta" data-summary-progress><div class="big">✦</div><h3>논문을 정리하고 있어요</h3>
-    <p class="small" data-progress-msg>${esc(msg)}</p>
-    <div class="progress ${pct == null ? "indeterminate" : ""}" style="margin:14px 20px" role="progressbar" aria-label="요약 진행"
-      aria-valuemin="0" aria-valuemax="100" ${pct != null ? `aria-valuenow="${pct}"` : ""}><div style="width:${pct || 0}%"></div></div>
-    <div class="notice" data-tone="info" data-keep-open>${ICON_INFO}<div>다른 화면에 다녀와도 괜찮아요. 탭만 닫지 마세요.</div></div>
-    <p class="small">보통 1~3분 걸려요.</p></div>`));
-}
-
-// 진행 이벤트가 올 때 그 자리에서 문구 · 막대만 바꾼다
-function updateProgress(pid) {
-  if (!R || R.pid !== pid || R.tab !== "summary") return;
-  const box = $("[data-summary-progress]", R.view);
-  if (!box) return;
-  const { pct, msg } = progressParts(runs.get(pid));
-  $("[data-progress-msg]", box).textContent = msg;
-  const bar = $(".progress", box);
-  bar.classList.toggle("indeterminate", pct == null);
-  if (pct != null) bar.setAttribute("aria-valuenow", pct); else bar.removeAttribute("aria-valuenow");
-  $("div", bar).style.width = `${pct || 0}%`;
+function drawJobCard(body, job) {
+  const card = summaryCard(job, {
+    onCancel: async () => {
+      try {
+        const r = await cancelJob(job.id);
+        if (r.status === "cancelled" && R) { R.summaryJob = { ...R.summaryJob, status: "cancelled" }; }
+      } catch (e) { errorToast(e); }
+    },
+    onRetry: async () => {
+      try {
+        const r = await retryJob(R.summaryJob.id);
+        R.summaryJob = r.job;
+        followSummary(R.pid, r.job);
+        showTab("summary");
+      } catch (e) { errorToast(e); }
+    },
+  });
+  if (job.status === "failed") R.failSeen = true;
+  body.appendChild(card);
 }
 
 // 요약 그리기 (읽기 화면 · 참고 패널 공용). ask: false면 [물어보기] · [다시 만들기] 없음(참고 패널 — 보여 주기만)
 export function drawSummary(body, s, { ask = true } = {}) {
   const d = s.data;
-  const v = el(`<div>
+  const note = ask && R && R.summaryNote ? R.summaryNote : "";
+  if (note) R.summaryNote = "";
+  const v = el(`<div>${note ? `<p class="small muted" style="margin:0 0 8px">${esc(note)}</p>` : ""}
     <div class="tldr"><b>한 줄 요약</b>${esc(d.tldr)}</div>
     <div class="qmr">
       ${d.research_question ? `<div><b>연구 질문</b>${esc(d.research_question)}</div>` : ""}
@@ -872,6 +861,8 @@ async function chatTab(body) {
   if (!R.chat) {
     body.innerHTML = `<div class="ai-cta"><span class="spinner"></span></div>`;
     try { R.chat = await api.get(`/api/papers/${R.pid}/chat`); } catch (e) { R.chat = []; errorToast(e); }
+    // 진행 중인 대화 작업(PC 실행 · 탭을 닫았다 다시 연 경우)을 이어서 보여 준다
+    R.chatJobs = await api.get(`/api/jobs?status=active&kind=chat&paper_id=${R.pid}`).then((r) => r.jobs.reverse()).catch(() => []);
     if (R !== me || R.tab !== "chat") return;
     body.innerHTML = "";
   }
@@ -906,7 +897,75 @@ async function chatTab(body) {
       log.appendChild(sug);
     }
     for (const m of R.chat) log.appendChild(messageEl(m));
+    for (const job of R.chatJobs || []) {
+      log.appendChild(el(`<div class="msg user">${esc(job.question || "")}</div>`));
+      log.appendChild(jobNode(job));
+    }
     log.scrollTop = log.scrollHeight;
+  };
+
+  // PC(CLI)에서 만드는 답 자리: 폴백 안내 · 중간 글 · 한 줄 상태 + [취소]
+  const jobNodes = new Map();
+  const jobNode = (job, fallback = null) => {
+    if (jobNodes.has(job.id)) return jobNodes.get(job.id).node;
+    const node = el(`<div class="msg assistant" data-job-id="${job.id}">
+      ${fallback ? `<div class="notice" data-tone="warn" data-job-fallback>${ICON_WARN}<div>API가 실패해서 PC로 넘겼어요 (${esc(fallback)}).</div></div>` : ""}
+      <div class="prose hidden"></div></div>`);
+    const line = statusLineEl(async () => {
+      try { await cancelJob(job.id); } catch (e) { errorToast(e); }
+    });
+    node.appendChild(line);
+    if (!R.chatWaitNoted) {
+      R.chatWaitNoted = true;
+      node.appendChild(el(`<p class="small muted" style="margin:4px 0 0">탭을 닫아도 답은 저장돼요. 다시 열면 보여요.</p>`));
+    }
+    const entry = { node, stop: null };
+    jobNodes.set(job.id, entry);
+    const me = R;
+    busy(true);
+    entry.stop = watchJob(job.id, async (j) => {
+      if (R !== me) { entry.stop && entry.stop(); return; }
+      if (!j || j.status === "cancelled") return finishJob(job.id, null);
+      if (j.status === "succeeded") {
+        try { R.chat = await api.get(`/api/papers/${R.pid}/chat`); } catch { /* 다음에 열면 보임 */ }
+        R.chatJobs = (R.chatJobs || []).filter((x) => x.id !== j.id);
+        jobNodes.delete(j.id);
+        busy(false);
+        draw();
+        if (j.runner === "cli") log.appendChild(el(`<p class="small muted" style="margin:0">PC의 ${esc(j.engine)}로 답했어요</p>`));
+        return;
+      }
+      if (j.status === "failed") {
+        const err = el(`<div class="msg error" data-job-state="failed"><div class="row"><span class="grow">${esc(j.error || "답을 만들지 못했어요")}</span>
+          <button type="button" class="btn sm" data-job-retry>다시 시도</button></div></div>`);
+        $("[data-job-retry]", err).onclick = async () => {
+          try {
+            const r = await retryJob(j.id);
+            err.replaceWith(jobNode(r.job));
+          } catch (e) { errorToast(e); }
+        };
+        node.replaceWith(err);
+        return finishJob(j.id, err);
+      }
+      const partial = (j.progress || {}).partial_text || "";
+      const prose = $(".prose", node);
+      if (partial) { prose.classList.remove("hidden"); prose.innerHTML = renderMarkdown(partial); }
+      setStatusLine(line, j, "답을 만드는");
+      if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "PC"}에서 답을 만드는 중 (${j.engine})`;
+    }, { first: job });
+    return node;
+  };
+  const finishJob = (id, keep) => {
+    const e = jobNodes.get(id);
+    if (e && !keep) e.node.remove();
+    jobNodes.delete(id);
+    R.chatJobs = (R.chatJobs || []).filter((x) => x.id !== id);
+    busy(false);
+  };
+  const busy = (on) => {
+    R.sending = on || jobNodes.size > 0;
+    sendBtn.disabled = R.sending;
+    ta.placeholder = R.sending ? "답을 기다리는 중이에요…" : "논문에 대해 물어보세요";
   };
 
   const send = async (text) => {
@@ -926,10 +985,13 @@ async function chatTab(body) {
     log.scrollTop = log.scrollHeight;
     const me = R;
     R.abort = new AbortController();
+    let jobEv = null;
     try {
       await streamEvents(`/api/papers/${R.pid}/chat`, { question }, (ev) => {
         if (R !== me) return;
-        if (ev.type === "delta") {
+        if (ev.type === "queued" || ev.type === "fallback") {
+          jobEv = ev; // CLI로 감: 이미 나온 API 글은 지우고 작업을 따라간다
+        } else if (ev.type === "delta") {
           pending.content += ev.text;
           updateMessage(node, pending);
         } else if (ev.type === "done") {
@@ -944,6 +1006,14 @@ async function chatTab(body) {
         if (nearBottom) log.scrollTop = log.scrollHeight;
       }, R.abort.signal);
       if (R !== me) return;
+      if (jobEv) {
+        R.chat.pop();
+        R.chatJobs = [...(R.chatJobs || []), jobEv.job];
+        jobNode(jobEv.job, jobEv.type === "fallback" && jobEv.job.history.length
+          ? errorLabel(jobEv.job.history[jobEv.job.history.length - 1].error_code) : null);
+        draw();
+        return;
+      }
       if (pending.pending) throw new Error("응답이 끝나기 전에 연결이 끊겼어요");
       R.chat.push(pending);
     } catch (e) {
@@ -952,7 +1022,7 @@ async function chatTab(body) {
       node.replaceWith(el(`<div class="msg error">${esc(e.message)}</div>`));
       ta.value = text;
     } finally {
-      if (R === me) { R.sending = false; sendBtn.disabled = false; }
+      if (R === me) busy(false);
     }
   };
 

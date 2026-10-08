@@ -4,12 +4,13 @@
 import { ApiError, api, setApiHooks, setApiLive } from "./api.js";
 import { hasAuthCode, initAuth, sessionUser, signInWithGoogle, signOut, startSession, takeRedirectError } from "./auth.js";
 import {
-  cancelUploads, folderIcon, folderPickDialog, folderSubtree, settingsDialog, uploadPdfs, uploadsRunning, usageInfo,
+  cancelUploads, folderIcon, folderPickDialog, folderSubtree, maskEmail, settingsDialog, uploadPdfs, uploadsRunning, usageInfo,
 } from "./dialogs.js";
 import { renderDiscover } from "./discover.js";
 import { closeGraph, renderGraph, resetGraphMemory } from "./graph.js";
 import { flushLibrary, loadPapers, renderLibrary } from "./library.js";
-import { closeReader, flushReader, openReader, stopSummaries, summariesRunning } from "./reader.js";
+import { closeJobs, renderJobs, startJobBadge, stopJobBadge } from "./jobs.js";
+import { closeReader, flushReader, openReader, stopSummaries } from "./reader.js";
 import { resetRefMemory } from "./refpane.js";
 import { closeWriter, composeDialog, flushWriter, openManuscript, renderWriteList, unsavedDraft } from "./writing.js";
 import { actions, onRefresh, refreshAll, resetState, setUsageLoader, state } from "./state.js";
@@ -224,6 +225,7 @@ async function enterApp(me) {
   authed = true;
   document.body.dataset.auth = "in";
   setApiLive(true);
+  startJobBadge(); // 사이드바 "작업" 진행 중 개수 (30초마다 — 디자인 9.1)
   // 구글에서 돌아오면 주소에서 code를 지운 뒤(supabase-js) 떠나기 전 화면으로, 없으면 서재로
   let back = "";
   try { back = sessionStorage.getItem(RETURN_HASH_KEY) || ""; sessionStorage.removeItem(RETURN_HASH_KEY); } catch { /* 무시 */ }
@@ -372,6 +374,7 @@ async function logout() {
   authed = false;
   setApiLive(false);
   stopSummaries();
+  stopJobBadge();
   cancelUploads();
   await signOut();
   clearApp();
@@ -380,6 +383,7 @@ async function logout() {
 actions.logout = logout;
 
 function clearApp() {
+  closeJobs();
   closeReader();
   closeWriter();
   resetGraphMemory(); // 다음 사용자에게 이전 계정의 그래프(서재 표시)가 남지 않게
@@ -411,12 +415,34 @@ function openAccountMenu(btn, e, left) {
     <div><div class="account-menu-name">${esc(u.name || "")}</div><div class="account-menu-email">${esc(u.email || "")}</div></div></div>`);
   $("[data-avatar]", head).replaceWith(avatarEl(u, true));
   btn.setAttribute("aria-expanded", "true");
-  popupMenu(btn, [
+  const items = [
     { label: "설정", action: () => settingsDialog() },
     { label: "로그아웃", action: logout },
-  ], { left, head, className: "account-menu", focus: e.detail === 0, onClose: () => btn.setAttribute("aria-expanded", "false") });
+  ];
+  // 좁은 화면(사이드바 숨김)에서는 "작업 (n)" 항목 (디자인 9.1)
+  if (!left) items.unshift({ label: `작업${state.stats.jobs ? ` (${state.stats.jobs})` : ""}`, action: () => { location.hash = "#/jobs"; } });
+  const dk = window.paperlabDesktop;
+  if (dk) items.unshift(desktopItem);
+  btn.setAttribute("aria-expanded", "true");
+  popupMenu(btn, items, { left, head, className: "account-menu", focus: e.detail === 0, onClose: () => btn.setAttribute("aria-expanded", "false") });
 }
 
+// 앱 창에서만: 계정 메뉴 맨 위 "이 PC 상태" (디자인 10장 — S11). info()는 비동기라 열기 전에 미리 받아 둔다
+const desktopItem = { label: "이 PC 상태", sub: "", action: () => window.paperlabDesktop.openStatusWindow() };
+async function refreshDesktopItem() {
+  const dk = window.paperlabDesktop;
+  if (!dk) return;
+  let info = null;
+  try { info = await dk.info(); } catch { info = null; }
+  const mine = maskEmail((state.user || {}).email);
+  desktopItem.sub = !info || !info.paired ? "연결 안 됨"
+    : info.accountHint && info.accountHint !== mine ? "다른 계정에 연결됨"
+      : info.workerState === "paused" ? "작업 받기 멈춤" : info.workerState === "update_required" ? "업데이트 필요"
+        : info.workerState === "offline" ? "서버 연결 끊김" : `${info.deviceName || "이 PC"} · 연결됨`;
+}
+
+$("#account-btn").onmouseenter = refreshDesktopItem;
+$("#account-btn").onfocus = refreshDesktopItem;
 $("#account-btn").onclick = (e) => openAccountMenu(e.currentTarget, e, true);
 // 좁은 화면 오른쪽 아래 버튼: 오른쪽 맞춤
 $("#account-mini").onclick = (e) => openAccountMenu(e.currentTarget, e, false);
@@ -773,6 +799,15 @@ async function route() {
     return openReader(main, Number(m[1]), m[2] ? Number(m[2]) : null);
   }
   closeReader();
+  if (hash.startsWith("#/jobs")) {
+    closeWriter();
+    closeGraph();
+    app.classList.remove("reading");
+    state.view = "jobs";
+    renderSidebar();
+    return renderJobs(main);
+  }
+  closeJobs();
   if (/^#\/graph(\/|$)/.test(hash)) {
     // 인용 그래프: 읽기 화면처럼 사이드바를 숨기고 전체 폭 (디자인 GD-1). 사이드바 메뉴 항목은 없음(K-12)
     closeWriter();
@@ -843,9 +878,9 @@ window.addEventListener("keydown", (e) => {
   }
 });
 
-// 요약 · 업로드가 진행 중이면 탭을 닫기 전에 브라우저 확인 창 (문구는 브라우저가 정함)
+// 업로드가 진행 중이면 탭을 닫기 전에 브라우저 확인 창 (문구는 브라우저가 정함). 요약은 서버 작업이라 탭을 닫아도 계속(2단계 U8)
 window.addEventListener("beforeunload", (e) => {
-  if (summariesRunning() || uploadsRunning()) {
+  if (uploadsRunning()) {
     e.preventDefault();
     e.returnValue = "";
   }

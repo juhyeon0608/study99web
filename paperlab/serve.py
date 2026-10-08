@@ -258,7 +258,9 @@ def main(argv: list[str] | None = None, *, runner=run_server, acl_check=env_file
     commit = git_commit()
     hang_file = Path(args.diag_hang_file) if args.diag_hang_file else None
     try:
-        app = create_app(config, commit=commit,
+        from .downloads import releases_dir
+        # 설치 파일 폴더: cloud.env · 환경 변수 PAPERLAB_RELEASES_DIR, 없으면 D:\PaperLab\releases (2단계 13.7.1절)
+        app = create_app(config, commit=commit, releases=releases_dir(env),
                          diag_hang=(lambda: hang_file.exists()) if hang_file else None)
     except (ConfigError, StorageError) as e:
         log.error(json.dumps({"message": "서버를 만들지 못했어요", "variables": getattr(e, "names", [])},

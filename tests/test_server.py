@@ -155,16 +155,17 @@ def _events(resp) -> list[dict]:
     return [json.loads(line[6:]) for line in resp.iter_lines() if line.startswith("data: ")]
 
 
-def test_summary_stream_and_chat(cloud, client):
-    """AC-53 · AC-29"""
+def test_summary_job_and_chat(cloud, client):
+    """2단계: 요약 = 작업(AC-25 — 1단계 AC-53 대체) · 대화 SSE(API 칸, AC-29)"""
+    cloud.app.state.runner.start(scan=False)
+    assert client.put("/api/settings", json={"anthropic_api_key": "sk-ant-test-key-0001"}).status_code == 200
     pid = cloud.upload(client, make_pdf(), "r.pdf")["id"]
-    with client.stream("POST", f"/api/papers/{pid}/summary") as r:
-        assert r.headers["content-type"].startswith("text/event-stream")
-        events = _events(r)
-    assert events[0]["type"] == "progress" and events[-1]["type"] == "done"
-    assert events[-1]["summary"]["data"]["tldr"].endswith("요약")
+    r = client.post(f"/api/papers/{pid}/summary")
+    assert r.status_code == 202 and r.json()["job"]["runner"] == "api"
+    job = cloud.wait_job(client, r.json()["job"]["id"])
+    assert job["status"] == "succeeded"
     s = client.get(f"/api/papers/{pid}/summary").json()
-    assert s["summary"]["data"]["tldr"].endswith("요약") and s["job"] is None
+    assert s["summary"]["data"]["tldr"].endswith("요약") and s["job"]["id"] == job["id"]
     assert client.get(f"/api/papers/{pid}").json()["keywords"] == ["resnet"]
 
     with client.stream("POST", f"/api/papers/{pid}/chat", json={"question": "몇 쪽?"}) as r:
@@ -173,6 +174,7 @@ def test_summary_stream_and_chat(cloud, client):
     assert events[-1]["text"] == "2쪽 논문입니다[1]"
     hist = client.get(f"/api/papers/{pid}/chat").json()
     assert [m["role"] for m in hist] == ["user", "assistant"] and hist[1]["citations"][0]["page"] == 1
+    assert events[-1]["id"] == hist[1]["id"]
     assert client.delete(f"/api/papers/{pid}/chat").json() == {"ok": True}
     assert client.get(f"/api/papers/{pid}/chat").json() == []
     import psycopg
@@ -182,12 +184,13 @@ def test_summary_stream_and_chat(cloud, client):
 
 
 def test_summary_error_saves_nothing(cloud, client):
-    """AC-53: 가짜 AI 오류 → error 이벤트, 저장 없음"""
+    """AI 거절(폴백 안 함) → 작업 failed, 저장 없음"""
+    cloud.app.state.runner.start(scan=False)
+    client.put("/api/settings", json={"anthropic_api_key": "sk-ant-test-key-0001"})
     pid = client.post("/api/papers", json=SAMPLE).json()["paper"]["id"]
     cloud.fake_ai.fail = True
-    with client.stream("POST", f"/api/papers/{pid}/summary") as r:
-        events = _events(r)
-    assert events[-1]["type"] == "error"
+    job = cloud.wait_job(client, client.post(f"/api/papers/{pid}/summary").json()["job"]["id"])
+    assert job["status"] == "failed" and job["error_code"] == "api_refusal"
     assert client.get(f"/api/papers/{pid}/summary").json()["summary"] is None
 
 

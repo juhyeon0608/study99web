@@ -12,10 +12,23 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+ENGINES = ("claude", "codex", "gemini")
+JOB_KINDS = ("summary", "chat", "write")
+# 2단계 엔진 라우팅 (명세 9.4, 확정 U1: 기본은 모두 claude). ai_engine은 더 이상 쓰지 않는다(읽지도 저장하지도 않음 — AC-31)
+DEFAULT_ROUTING = {k: ["claude"] for k in JOB_KINDS}
+CLI_MODEL_CHOICES = {"claude": ("default", "opus", "sonnet", "haiku"), "codex": ("default",), "gemini": ("default",)}
+AI_KEY_NAMES = ("anthropic_api_key", "openai_api_key", "google_api_key")
+LAST_ERROR_KEYS = tuple(f"{k}_last_error" for k in AI_KEY_NAMES)  # 서버만 씀 (PUT으로 못 바꿈 — 7.3절)
+_MODEL_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")
+
 DEFAULT_SETTINGS: dict = {
-    # 1단계 클라우드는 "api"만 (CLI 엔진은 2단계 PC 연결 뒤)
-    "ai_engine": "api",
+    "ai_routing": DEFAULT_ROUTING,
+    "cli_models": {e: "default" for e in ENGINES},
+    "api_models": {},  # {"codex": "<OpenAI 모델 id>", "gemini": "<Gemini 모델 id>"} — 비면 ai.API_MODEL_DEFAULTS
+    **{k: None for k in LAST_ERROR_KEYS},
     "anthropic_api_key": "",
+    "openai_api_key": "",
+    "google_api_key": "",
     "model": "claude-opus-5-5",
     "effort": "medium",
     "summary_language": "한국어",
@@ -32,9 +45,8 @@ DEFAULT_SETTINGS: dict = {
     "doc_format_default": "default",
 }
 
-SECRET_KEYS = ("anthropic_api_key", "openalex_api_key", "semantic_scholar_api_key")
+SECRET_KEYS = AI_KEY_NAMES + ("openalex_api_key", "semantic_scholar_api_key")
 PLAIN_KEYS = tuple(k for k in DEFAULT_SETTINGS if k not in SECRET_KEYS)
-CLI_ENGINE_MESSAGE = "CLI 엔진은 PC 연결(2단계) 뒤에 쓸 수 있어요"
 
 DEFAULT_ENV_FILE = Path.home() / ".paperlab" / "cloud.env"
 STORAGE_LIMIT_DEFAULT = 10 * 1024 ** 3  # R2 무료 10GB (명세 7.6, 가정)
@@ -54,13 +66,19 @@ class ConfigError(Exception):
 _URL_CRED_RE = re.compile(r"(postgres(?:ql)?://)[^@/\s]+@", re.I)
 _KV_PASSWORD_RE = re.compile(r"(password\s*=\s*)(\S+)", re.I)
 _SIG_RE = re.compile(r"(X-Amz-(?:Signature|Credential|Security-Token)=)[^&\s]+", re.I)
+# API 키(Anthropic · OpenAI · Google) · 기기 토큰 (2단계 9.5 · 13.8절). sk-는 실제 키 모양(단어 경계 + 20자 이상)만
+_KEY_RES = (re.compile(r"\b(sk-ant-)[A-Za-z0-9_\-]{6,}"), re.compile(r"\b(sk-)[A-Za-z0-9_\-]{20,}"),
+            re.compile(r"\b(AIza)[A-Za-z0-9_\-]{6,}"), re.compile(r"\b(pld1\.)[A-Za-z0-9_.\-]{6,}"))
 
 
 def redact(text: str) -> str:
     """예외 메시지 등에서 접속 문자열의 계정·비밀번호, 서명 주소 서명을 가린다."""
     text = _URL_CRED_RE.sub(r"\1***@", str(text))
     text = _KV_PASSWORD_RE.sub(r"\1***", text)
-    return _SIG_RE.sub(r"\1***", text)
+    text = _SIG_RE.sub(r"\1***", text)
+    for rx in _KEY_RES:
+        text = rx.sub(r"\1***", text)
+    return text
 
 
 def load_env_file(path: str | Path | None = None, environ: dict | None = None) -> dict:
@@ -263,17 +281,22 @@ class UserSettings:
     """
 
     def __init__(self, stored: dict | None = None, secrets: dict | None = None,
-                 broken_secrets: set | None = None):
+                 broken_secrets: set | None = None, hints: dict | None = None):
         self._values = dict(DEFAULT_SETTINGS)
         for k, v in (stored or {}).items():
             if k in PLAIN_KEYS:
                 self._values[k] = v
-        # 저장된 값이 cli여도 1단계는 api로 읽는다 (명세 8.1)
-        if self._values.get("ai_engine") != "api":
-            self._values["ai_engine"] = "api"
+        # 저장 형식이 틀린 값(옛 버전 · 손으로 고친 값)은 기본값으로 읽는다
+        for k, check in (("ai_routing", normalize_routing), ("cli_models", normalize_cli_models),
+                         ("api_models", normalize_api_models)):
+            try:
+                self._values[k] = check(self._values[k])
+            except ValueError:
+                self._values[k] = check(DEFAULT_SETTINGS[k])
         for k in SECRET_KEYS:
             self._values[k] = (secrets or {}).get(k) or ""
         self.broken_secrets = set(broken_secrets or ())
+        self.hints = dict(hints or {})
 
     def get(self, key: str):
         return self._values.get(key, DEFAULT_SETTINGS.get(key))
@@ -292,14 +315,55 @@ class UserSettings:
             has = bool(out.pop(key))
             out[key + "_set"] = has
             out[key + "_status"] = "set" if has else ("unreadable" if key in self.broken_secrets else "none")
+            if key in AI_KEY_NAMES:
+                # 끝 4자리 (키 원문은 보내지 않음 — 7.3절, crypto.hint는 12자 미만이면 빈 값)
+                out[key + "_hint"] = self.hints.get(key, "") if has else ""
         out["env_api_key_set"] = False
         return out
+
+
+def normalize_routing(value) -> dict:
+    """ai_routing 검사 (9.4절): 알려진 작업 · 엔진만, 중복 없음, 1~3개. 빠진 작업은 기본값. 틀리면 ValueError(→ 400)"""
+    if not isinstance(value, dict) or any(k not in JOB_KINDS for k in value):
+        raise ValueError("작업별 엔진 설정이 올바르지 않아요")
+    out = {}
+    for kind in JOB_KINDS:
+        order = value.get(kind, DEFAULT_ROUTING[kind])
+        if (not isinstance(order, list) or not 1 <= len(order) <= 3 or any(e not in ENGINES for e in order)
+                or len(set(order)) != len(order)):
+            raise ValueError("작업별 엔진은 claude · codex · gemini 중 1~3개를 겹치지 않게 골라 주세요")
+        out[kind] = list(order)
+    return out
+
+
+def normalize_cli_models(value) -> dict:
+    if not isinstance(value, dict) or any(k not in ENGINES for k in value):
+        raise ValueError("PC 모델 설정이 올바르지 않아요")
+    out = {e: str(value.get(e) or "default") for e in ENGINES}
+    for e, v in out.items():
+        if v not in CLI_MODEL_CHOICES[e]:
+            raise ValueError(f"PC의 {e} 모델은 {' · '.join(CLI_MODEL_CHOICES[e])} 중에서 골라 주세요")
+    return out
+
+
+def normalize_api_models(value) -> dict:
+    if not isinstance(value, dict) or any(k not in ("codex", "gemini") for k in value):
+        raise ValueError("API 모델 설정이 올바르지 않아요")
+    out = {}
+    for e, v in value.items():
+        v = str(v or "").strip()
+        if v and not _MODEL_ID_RE.fullmatch(v):
+            raise ValueError("API 모델 이름은 영문 · 숫자 · - . _ 만 1~100자로 써 주세요")
+        if v:
+            out[e] = v
+    return out
 
 
 def split_settings_changes(changes: dict) -> tuple[dict, dict]:
     """PUT /api/settings 본문 → (평문 설정 변경, 비밀 변경 {이름: 값 | None(지우기)}).
 
-    비밀은 빈 문자열이면 "변경 없음", null이면 지우기. ai_engine "cli"는 ValueError(→ 400).
+    비밀은 빈 문자열이면 "변경 없음", null이면 지우기. ai_engine은 무시(2단계 — 어떤 값이든 400 아님, AC-31).
+    *_last_error는 서버만 쓰므로 무시하고, AI 키를 바꾸거나 지우면 그 키의 최근 실패를 지운다(7.3절).
     """
     plain, secrets = {}, {}
     for key, value in (changes or {}).items():
@@ -310,8 +374,14 @@ def split_settings_changes(changes: dict) -> tuple[dict, dict]:
                 continue
             else:
                 secrets[key] = str(value).strip()
-        elif key in PLAIN_KEYS:
-            if key == "ai_engine" and value != "api":
-                raise ValueError(CLI_ENGINE_MESSAGE if value == "cli" else "ai_engine은 api만 쓸 수 있어요")
+            if key in AI_KEY_NAMES:
+                plain[key + "_last_error"] = None
+        elif key in PLAIN_KEYS and key not in LAST_ERROR_KEYS:
+            if key == "ai_routing":
+                value = normalize_routing(value)
+            elif key == "cli_models":
+                value = normalize_cli_models(value)
+            elif key == "api_models":
+                value = normalize_api_models(value)
             plain[key] = value
     return plain, secrets

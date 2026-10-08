@@ -310,12 +310,12 @@ def test_db_unavailable_returns_503(app_env):
 
 
 def test_removed_endpoints_are_gone(app_env):
-    """15장: /api/upload · /api/papers/{id}/pdf · /api/jobs/{id} 삭제"""
+    """15장: /api/upload · /api/papers/{id}/pdf 삭제 (/api/jobs/{id}는 2단계 작업 큐로 다시 생김 — 숫자 id만)"""
     app, keys = app_env
     c = TestClient(app, headers={"Authorization": f"Bearer {keys.token()}", "X-PaperLab": "1"})
     assert c.post("/api/upload").status_code in (404, 405)
     assert c.get("/api/papers/1/pdf").status_code in (404, 405)
-    assert c.get("/api/jobs/abc").status_code in (404, 405)
+    assert c.get("/api/jobs/abc").status_code == 422
 
 
 def test_head_health_allowed(app_env):

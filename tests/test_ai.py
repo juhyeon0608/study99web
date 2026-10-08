@@ -135,48 +135,6 @@ def test_refusal_is_reported():
         assert "안전 정책" in str(e)
 
 
-def test_cli_engine_with_fake_claude(tmp_path, monkeypatch):
-    """CLI 엔진(2단계용 코드)을 **가짜 claude**로만 확인한다. 이 PC의 실제 claude CLI는 절대 부르지 않는다:
-    가짜를 PATH 맨 앞에 두고(os.pathsep), Windows는 claude.cmd 래퍼, 시작할 때 shutil.which가 가짜를 가리키는지 단언.
-    가짜는 호출 기록 파일을 남긴다(실제로 가짜가 불렸는지 확인)."""
-    import os
-    import shutil
-    import sys
-
-    calls = tmp_path / "calls.jsonl"
-    script = tmp_path / "fake_claude.py"
-    script.write_text(
-        "import json, sys\n"
-        "args = sys.argv[1:]\n"
-        "sys.stdin.reconfigure(encoding='utf-8')\n"
-        "prompt = sys.stdin.read()\n"
-        f"open({str(calls)!r}, 'a', encoding='utf-8').write(json.dumps({{'args': args}}, ensure_ascii=False) + '\\n')\n"
-        "assert '-p' in args and '--tools' in args and '<page number=\"2\">' in prompt\n"
-        "sys.stdout.reconfigure(encoding='utf-8')\n"
-        "print(json.dumps({'type': 'result', 'is_error': False, 'result': '두 번째 쪽에 나와요 [p.2]'}))\n",
-        encoding="utf-8")
-    if sys.platform == "win32":
-        fake = tmp_path / "claude.cmd"
-        # cmd는 배치 파일을 OEM 코드 페이지로 읽는다 (파이썬 경로에 한글이 있을 수 있음)
-        fake.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="oem")
-    else:
-        fake = tmp_path / "claude"
-        fake.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
-        fake.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ.get("PATH", ""))
-    found = shutil.which("claude")
-    # 가짜를 못 찾으면 여기서 멈춘다 — 실제 CLI가 불리지 않게
-    assert found and os.path.samefile(found, fake), f"가짜 claude가 아닌 것을 찾았어요: {found}"
-    # 모델 인자는 가짜 CLI 기준(실제 CLI의 모델 이름 지원 여부는 2단계 범위)
-    svc = ai.AIService({"ai_engine": "cli", "model": "fake-model"}.get, cli_enabled=True)
-    assert svc.status()["ready"]
-    ctx = ai.PaperContext(title="T", pdf_bytes=None, page_texts=["첫 쪽", "둘째 쪽"])
-    done = list(svc.chat(ctx, [], "어디에 나와?"))[-1]
-    assert done["text"] == "두 번째 쪽에 나와요 [1]" and done["citations"][0]["page"] == 2
-    logged = calls.read_text(encoding="utf-8").splitlines()
-    assert len(logged) == 1 and "--model" in logged[0] and "fake-model" in logged[0]
-
-
 def test_pdf_limits_fall_back_to_text():
     big = ai.PaperContext(title="T", pdf_bytes=b"%PDF" + b"0" * (23 * 1024 * 1024), page_texts=["a"])
     assert not big.usable_pdf("claude-opus-5-5")
@@ -184,3 +142,119 @@ def test_pdf_limits_fall_back_to_text():
     assert long.usable_pdf("claude-opus-5-5") and not long.usable_pdf("claude-haiku-4-5")
     svc = ai.AIService({"model": "claude-haiku-4-5"}.get)
     assert svc._document_block(long, citations=True)["source"]["type"] == "content"
+
+
+# ---- 2단계: CLI 요청 만들기 · 결과 해석 (AC-60 대체), OpenAI · Google 텍스트 API (U2 — 가짜 전송, 실제 호출 없음) ----
+import httpx
+import pytest
+
+
+def test_text_requests_carry_paper_text_and_rules():
+    ctx = ai.PaperContext(title="ResNet", pdf_bytes=None, page_texts=["첫 쪽", "둘째 쪽"])
+    system, prompt = ai.summary_request(ctx, "한국어")
+    assert system == ai.SUMMARY_SYSTEM and '<page number="2">\n둘째 쪽' in prompt and '"tldr"' in prompt
+    system, prompt = ai.chat_request(ctx, [{"role": "user", "content": "앞 질문"}], "어디?", "한국어")
+    assert "[p.쪽번호]" in system and "사용자: 앞 질문" in prompt and prompt.endswith("질문: 어디?")
+    system, prompt = ai.write_request("polish", "고칠 글", sources=[{"key": "he2016", "title": "ResNet"}])
+    assert system == ai.WRITE_SYSTEM and '<source key="he2016">' in prompt and "<text>\n고칠 글\n</text>" in prompt
+    with pytest.raises(ai.AIError):
+        ai.summary_request(ai.PaperContext(title="T", pdf_bytes=None, page_texts=[]), "한국어")
+
+
+def test_parse_text_result_by_kind():
+    out = ai.parse_text_result("summary", '설명\n```json\n{"tldr": "핵심"}\n```')
+    assert out["summary"]["tldr"] == "핵심"
+    assert ai.parse_text_result("summary", "", {"tldr": "구조"})["summary"]["tldr"] == "구조"
+    chat = ai.parse_text_result("chat", "결과 [p.3]")
+    assert chat["text"] == "결과 [1]" and chat["citations"][0]["page"] == 3
+    assert ai.parse_text_result("write", "  다듬은 글 ") == {"text": "다듬은 글"}
+    for kind, text in (("summary", "JSON 아님"), ("chat", "  ")):
+        with pytest.raises(ai.AIError) as e:
+            ai.parse_text_result(kind, text)
+        assert e.value.code == "bad_output"
+
+
+def test_server_has_no_cli_execution():
+    """AC-60: 서버 코드에 subprocess · shutil.which("claude")가 없음 (CLI는 PC 워커만)"""
+    from pathlib import Path
+    src = Path(ai.__file__).parent
+    for f in src.glob("*.py"):
+        text = f.read_text(encoding="utf-8")
+        assert 'which("claude")' not in text, f.name
+        if f.name in ("ai.py", "jobs.py", "worker_api.py", "api_runner.py", "server.py"):
+            assert "subprocess" not in text, f.name
+
+
+def _text_service(engine, handler, **settings):
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    base = {"openai_api_key": "sk-test-openai-key-123", "google_api_key": "AIza-test-google-key-123"}
+    base.update(settings)
+    return ai.AIService(base.get, http_client=client)
+
+
+@pytest.mark.parametrize("engine", ["codex", "gemini"])
+def test_text_api_request_shape_text_only_key_in_header(engine):
+    """AC-46 (요청 모양): PDF 없이 본문 글만, 키는 헤더로만(주소 쿼리에 없음), 기본 모델 = K19 후보"""
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if engine == "codex":
+            return httpx.Response(200, json={"status": "completed", "output": [{"type": "message", "content": [
+                {"type": "output_text", "text": '{"tldr": "핵심"}'}]}]})
+        return httpx.Response(200, json={"candidates": [{"finishReason": "STOP", "content": {"parts": [
+            {"text": '{"tldr": "핵심"}'}]}}]})
+
+    svc = _text_service(engine, handler)
+    ctx = ai.PaperContext(title="ResNet", pdf_bytes=b"%PDF-1.7 binary", page_texts=["본문 첫 쪽 글"])
+    out = svc.summarize(ctx, engine=engine)
+    assert out["tldr"] == "핵심"
+    req = seen[0]
+    body = req.content.decode("utf-8")
+    assert "본문 첫 쪽 글" in body and "application/pdf" not in body and "JVBER" not in body
+    assert "key" not in str(req.url.query).lower() and "sk-test" not in str(req.url) and "AIza" not in str(req.url)
+    if engine == "codex":
+        assert req.headers["authorization"] == "Bearer sk-test-openai-key-123"
+        data = _json.loads(body)
+        assert data["model"] == ai.API_MODEL_DEFAULTS["codex"] and data["text"]["format"]["type"] == "json_schema"
+    else:
+        assert req.headers["x-goog-api-key"] == "AIza-test-google-key-123"
+        assert ai.API_MODEL_DEFAULTS["gemini"] in str(req.url)
+
+
+@pytest.mark.parametrize("status,code", [(401, "api_auth"), (403, "api_permission"), (429, "api_rate_limit"),
+                                         (500, "api_server"), (503, "api_overloaded"), (400, "api_bad_request")])
+@pytest.mark.parametrize("engine", ["codex", "gemini"])
+def test_text_api_http_errors_map_to_codes(engine, status, code):
+    """AC-47 (오류 판정): 오류 문구에 키가 남지 않음"""
+    svc = _text_service(engine, lambda r: httpx.Response(status, text="bad key sk-test-openai-key-123"))
+    with pytest.raises(ai.AIError) as e:
+        svc.text_complete(engine, "s", "p")
+    assert e.value.code == code and "sk-test" not in str(e.value) and "AIza" not in str(e.value)
+
+
+def test_text_api_refusal_and_truncation():
+    cases = [
+        ("codex", {"output": [{"type": "message", "content": [{"type": "refusal", "refusal": "no"}]}]}, "api_refusal"),
+        ("codex", {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "output": []},
+         "api_max_tokens"),
+        ("gemini", {"promptFeedback": {"blockReason": "SAFETY"}}, "api_refusal"),
+        ("gemini", {"candidates": [{"finishReason": "MAX_TOKENS", "content": {"parts": []}}]}, "api_max_tokens"),
+    ]
+    for engine, body, code in cases:
+        svc = _text_service(engine, lambda r, b=body: httpx.Response(200, json=b))
+        with pytest.raises(ai.AIError) as e:
+            svc.text_complete(engine, "s", "p")
+        assert e.value.code == code, (engine, body)
+
+
+def test_text_api_connection_errors():
+    def boom(request):
+        raise httpx.ConnectError("down")
+
+    with pytest.raises(ai.AIError) as e:
+        _text_service("codex", boom).text_complete("codex", "s", "p")
+    assert e.value.code == "api_connection"
+    with pytest.raises(ai.AIError) as e:
+        ai.AIService({}.get).text_complete("gemini", "s", "p")
+    assert e.value.code == "api_no_key"

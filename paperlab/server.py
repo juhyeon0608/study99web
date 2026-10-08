@@ -25,13 +25,17 @@ from urllib.parse import quote
 
 import psycopg
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from contextlib import asynccontextmanager
+
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, citations, compose, csl_style, doc_formats, format_import, pdf, writer
+from . import __version__, citations, compose, csl_style, doc_formats, downloads, format_import, jobs, pdf, \
+    worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, AIError, AIService, PaperContext
+from .api_runner import ApiRunner
 from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
 from .citecache import PgStore
 from .config import ServerConfig, UserSettings, split_settings_changes
@@ -115,10 +119,6 @@ class AppStaticFiles(StaticFiles):
         return full, stat
 
 
-class SummaryCancelled(Exception):
-    """요약 스트림이 끊겨 AI 호출을 멈출 때"""
-
-
 class RequestCtx:
     """한 요청의 사용자 범위 상태. DB 트랜잭션은 처음 쓸 때 연다(lib)."""
 
@@ -194,22 +194,26 @@ class RequestCtx:
 
 
 def load_user_settings(lib: Library, box: SecretBox, uid: str) -> UserSettings:
-    secrets, broken = {}, set()
+    secrets, broken, hints = {}, set(), {}
     for row in lib.list_secrets():
         try:
             secrets[row["name"]] = box.decrypt(uid, row["name"], row["ciphertext"], row["nonce"], row["key_id"])
+            hints[row["name"]] = row["hint"] or ""
         except DecryptError:
             # 키를 잃었거나 다른 행에서 복사된 값 → 설정 안 된 것으로 보고 다시 입력 안내 (AC-45)
             broken.add(row["name"])
-    return UserSettings(lib.get_settings(), secrets, broken)
+    return UserSettings(lib.get_settings(), secrets, broken, hints)
 
 
 def create_app(config: ServerConfig, *, database: Database | None = None, storage: Storage | None = None,
                verifier: TokenVerifier | None = None, jwks: JWKSCache | None = None,
                sources_factory: Callable | None = None, ai_factory: Callable | None = None,
-               dev: bool = False, commit: str = "", diag_hang: Callable[[], bool] | None = None) -> FastAPI:
+               dev: bool = False, commit: str = "", diag_hang: Callable[[], bool] | None = None,
+               releases: Path | None = None, runner_opts: dict | None = None) -> FastAPI:
     """앱을 만든다. commit = 배포한 git 커밋 앞 7자리(/api/health의 version에 붙음 — update.ps1 확인용).
-    diag_hang: 감시 작업 검사용 진단 스위치(AC-77) — 참이면 /api/health가 응답하지 않는 것처럼 오래 멈춘다."""
+    diag_hang: 감시 작업 검사용 진단 스위치(AC-77) — 참이면 /api/health가 응답하지 않는 것처럼 오래 멈춘다.
+    releases: 설치 파일 폴더(없으면 PAPERLAB_RELEASES_DIR · D:\\PaperLab\\releases), runner_opts: API 실행기 수치(테스트 주입).
+    API 실행기는 앱 수명(lifespan) 시작 때 돈다 — uvicorn 실행 · `with TestClient(app)`. 테스트는 app.state.runner.start()."""
     db = database or Database(config.db_url, timeout=config.db_pool_timeout)
     store = storage or create_storage(config.storage_backend, config.r2)
     verifier = verifier or TokenVerifier(config.supabase_url, config.jwt_secret, jwks=jwks)
@@ -222,7 +226,16 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         log.warning("허용 목록이 비어 있어 모든 사용자 요청이 403이 됩니다 (ALLOWED_EMAILS · PAPERLAB_ALLOWLIST 확인)")
     app_version = f"{__version__}+{commit}" if commit else __version__
 
-    app = FastAPI(title="PaperLab", version=__version__, docs_url=None, redoc_url=None, openapi_url=None)
+    @asynccontextmanager
+    async def lifespan(_app):
+        _app.state.runner.start()
+        try:
+            yield
+        finally:
+            _app.state.runner.stop()
+
+    app = FastAPI(title="PaperLab", version=__version__, docs_url=None, redoc_url=None, openapi_url=None,
+                  lifespan=lifespan)
     st = app.state
     st.config, st.db, st.storage, st.verifier, st.allowlist = config, db, store, verifier, allowlist
     st.box = SecretBox(config.encryption_key)
@@ -231,6 +244,18 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     st.backup_sizes = BackupSizeCache(store)
     st.compose_store = {}
     st.compose_lock = threading.Lock()
+    # 2단계: 작업 큐 · 연결된 PC · 설치 파일 (명세 2단계 7 · 8 · 13.7.1 · 15장)
+    st.workers = ws = worker_api.WorkerState()
+    downloads.register(app, Path(releases) if releases else downloads.releases_dir())
+
+    def guide() -> str:
+        """경로가 없을 때 안내 — 설치 파일이 있는지에 따라 (팀장 결정 Q2a-1)"""
+        return jobs.no_route_message(bool(st.release_info()))
+
+    st.guide = guide
+    st.runner = runner = ApiRunner(db, store, lambda lib, uid: load_user_settings(lib, st.box, uid),
+                                   lambda get: st.ai_factory(get), guide, max_pdf_bytes=AI_MAX_PDF_BYTES,
+                                   **(runner_opts or {}))
 
     # ------------------------------------------------------------ security
     # 같은 출처 판단 (명세 6.5, 팀장 결정 S2): 운영은 설정 PAPERLAB_PUBLIC_URL의 출처 하나만 — Host에서 출처를 만들지 않는다
@@ -269,9 +294,14 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 # 매번 ETag · Last-Modified로 재검증(바뀌지 않았으면 304) — 업데이트 뒤 옛 JS 모듈이 섞이지 않게
                 response.headers["Cache-Control"] = "no-cache"
             # JSON 한 줄 로그: 토큰 · 키 · 서명 주소 · 본문 · 이메일은 남기지 않는다 (명세 13.5)
-            access_log.info(json.dumps({"request_id": request_id, "method": request.method, "path": path,
-                                        "status": response.status_code, "ms": int((time.monotonic() - started) * 1000),
-                                        "user_id": user_id}))
+            entry = {"request_id": request_id, "method": request.method, "path": path,
+                     "status": response.status_code, "ms": int((time.monotonic() - started) * 1000), "user_id": user_id}
+            device_id = getattr(request.state, "device_id", None)
+            if device_id:
+                entry["device_id"] = device_id  # 워커 요청: 기기 번호만 (토큰 · 이메일 없음 — 13.8절)
+            if path.startswith("/downloads/"):
+                entry["bytes"] = response.headers.get("content-length")  # 설치 파일 접근 로그 크기 (13.7.1절)
+            access_log.info(json.dumps(entry))
             return response
 
         if not host_ok(request):
@@ -280,7 +310,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         origin = request.headers.get("origin")
         if origin is not None and not origin_ok(request, origin):
             return finish(JSONResponse({"detail": "허용되지 않은 출처", "code": "bad_origin"}, status_code=403))
-        if path.startswith("/api/") and (request.method, path) not in PUBLIC_API:
+        if path.startswith("/api/worker/"):
+            # 워커 API: 기기 토큰 인증은 경로 처리기가 한다(Supabase JWT는 받지 않음 — AC-19). 쓰기 헤더는 같은 규칙
+            if request.method not in SAFE_METHODS and request.headers.get("x-paperlab") != "1":
+                return finish(JSONResponse({"detail": "허용되지 않은 요청", "code": "bad_request_header"},
+                                           status_code=403))
+        elif path.startswith("/api/") and (request.method, path) not in PUBLIC_API:
             token = bearer_token(request.headers.get("authorization"))
             if not token:
                 return finish(JSONResponse(AUTH_REQUIRED, status_code=401))
@@ -294,6 +329,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 return finish(JSONResponse(NOT_ALLOWED, status_code=403))
             user_id = claims["sub"]
             request.state.claims = claims
+            ws.seen_user(user_id)  # 워커 적응형 폴링 — 최근 화면 활동 (10.2절)
             # 쓰기 요청은 화면(api.js)이 붙이는 헤더가 있어야 한다 (CSRF 이중 방어)
             if request.method not in SAFE_METHODS and request.headers.get("x-paperlab") != "1":
                 return finish(JSONResponse({"detail": "허용되지 않은 요청", "code": "bad_request_header"},
@@ -311,6 +347,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     @app.exception_handler(NotFoundError)
     async def not_found(request: Request, exc: NotFoundError):
         return JSONResponse({"detail": str(exc) or "찾을 수 없어요"}, status_code=404)
+
+    @app.exception_handler(jobs.JobError)
+    async def job_error(request: Request, exc: jobs.JobError):
+        return JSONResponse({"detail": exc.detail, "code": exc.code}, status_code=exc.status)
 
     @app.exception_handler(StorageKeyError)
     async def bad_key(request: Request, exc: StorageKeyError):
@@ -508,7 +548,86 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.get("/api/ai/status")
     def ai_status(ctx: RequestCtx = Ctx):
-        return ctx.ai.status()
+        return jobs.ai_status(ctx.settings.get, jobs.device_rows(ctx.lib), bool(st.release_info()))
+
+    @app.get("/api/ai/engines")
+    def ai_engines(ctx: RequestCtx = Ctx):
+        return jobs.engines_summary(ctx.settings.get, jobs.device_rows(ctx.lib))
+
+    # ------------------------------------------------------------- 작업 (2단계 7.1절)
+    def maintain(ctx: RequestCtx) -> None:
+        """사용자 범위 정리: 리스 만료 · 대기 기한(매번), 오래된 행 지우기(10분에 한 번 — 6.8절)"""
+        jobs.expire(ctx.lib)
+        if ws.should_sweep(ctx.uid):
+            jobs.sweep(ctx.lib)
+
+    def route_for(ctx: RequestCtx, kind: str) -> list[dict]:
+        route = jobs.build_route(kind, ctx.settings.get, jobs.device_rows(ctx.lib))
+        if not route:
+            raise jobs.JobError(400, guide(), "no_route")
+        return route
+
+    def new_job(ctx: RequestCtx, kind: str, params: dict, paper_id: int | None) -> tuple[dict, bool]:
+        row, created = jobs.create_job(ctx.lib, kind, route_for(ctx, kind), params, paper_id)
+        if created:
+            log.info(f"job created job={row['id']} kind={kind} runner={row['runner']} engine={row['engine']}")
+            if row["runner"] == "api":
+                job_id, uid = row["id"], ctx.uid
+                ctx.after_commit.append(lambda: runner.enqueue(job_id, uid))
+        return jobs.get_job(ctx.lib, row["id"], ws.free), created
+
+    @app.get("/api/jobs")
+    def list_jobs(status: str = "active", paper_id: int | None = None, kind: str = "", limit: int = 50,
+                  ctx: RequestCtx = Ctx):
+        maintain(ctx)
+        return jobs.list_jobs(ctx.lib, ws.free, status, paper_id, kind, limit)
+
+    @app.get("/api/jobs/{job_id}")
+    def get_job(job_id: int, ctx: RequestCtx = Ctx):
+        maintain(ctx)
+        return jobs.get_job(ctx.lib, job_id, ws.free)
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: int, ctx: RequestCtx = Ctx):
+        out = jobs.cancel_job(ctx.lib, job_id)
+        log.info(f"job cancel job={job_id} status={out['status']}")
+        return out
+
+    @app.post("/api/jobs/{job_id}/retry")
+    def retry_job(job_id: int, ctx: RequestCtx = Ctx):
+        src = jobs.retry_source(ctx.lib, job_id)
+        view, created = new_job(ctx, src["kind"], src["params"] or {}, src["paper_id"])
+        return JSONResponse({"job": view}, status_code=202 if created else 200)
+
+    # ------------------------------------------------------------- 연결된 PC (2단계 7.2절)
+    @app.get("/api/devices")
+    def list_devices(ctx: RequestCtx = Ctx):
+        maintain(ctx)
+        return [jobs.device_view(d) for d in jobs.device_rows(ctx.lib)]
+
+    @app.post("/api/devices/pair-codes")
+    def pair_code(ctx: RequestCtx = Ctx):
+        ctx.lib.ensure_profile(ctx.email)  # 워커 쪽 account_hint · 허용 목록 확인이 profiles.email을 읽는다
+        return jobs.new_pair_code(ctx.lib)
+
+    @app.patch("/api/devices/{device_id}")
+    def rename_device(device_id: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        name = jobs.device_name(data.get("name"))
+        if not name or name != str(data.get("name") or "").strip():
+            raise HTTPException(400, "PC 이름은 1~60자로, 줄바꿈 같은 제어 문자 없이 써 주세요")
+        n = jobs.valid_id(device_id) and ctx.lib._x(
+            "update paperlab.devices set name = %s, updated_at = now() where id = %s and user_id = %s",
+            (name, device_id, ctx.uid)).rowcount
+        if not n:
+            raise HTTPException(404, "PC를 찾을 수 없어요")
+        return {"ok": True, "name": name}
+
+    @app.delete("/api/devices/{device_id}")
+    def revoke_device(device_id: int, ctx: RequestCtx = Ctx):
+        n = jobs.revoke_device(ctx.lib, device_id)
+        ws.free.pop(device_id, None)
+        log.info(f"device revoked device_id={device_id} requeued={n}")
+        return {"ok": True, "requeued_jobs": n}
 
     # -------------------------------------------------------------- papers
     @app.get("/api/papers")
@@ -1414,55 +1533,35 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         return res
 
     # ------------------------------------------------------------------ AI
-    def context_for(ctx: RequestCtx, p: dict) -> PaperContext:
-        """PDF는 서버가 저장소에서 직접 읽는다. 22MB 넘으면 텍스트로 대체(받지도 않음)."""
+    def context_for(ctx: RequestCtx, p: dict, with_pdf: bool = True) -> PaperContext:
+        """PDF는 서버가 저장소에서 직접 읽는다. 22MB 넘으면 텍스트로 대체(받지도 않음).
+        with_pdf=False: OpenAI · Google API는 본문 글만 보내므로 PDF를 받지 않는다(2단계 9.5절)."""
         info = ctx.lib.pdf_info(p["id"]) or {}
         page_texts = ctx.lib.page_texts(p["id"])
         if info.get("pdf_key"):
             ctx.storage.check(info["pdf_key"])  # 남의 경로면 StorageKeyError → 404
         ctx.release()  # R2에서 PDF를 받는 동안 DB 연결을 잡지 않는다 (F9)
         data = None
-        if info.get("pdf_key") and (info.get("pdf_size") or 0) <= AI_MAX_PDF_BYTES:
+        if with_pdf and info.get("pdf_key") and (info.get("pdf_size") or 0) <= AI_MAX_PDF_BYTES:
             try:
                 data = ctx.storage.get(info["pdf_key"])
             except NotFound:
                 data = None
         return PaperContext(title=p["title"], pdf_bytes=data, page_texts=page_texts, abstract=p.get("abstract") or "")
 
-    def ready_ai(ctx: RequestCtx):
-        ai = ctx.ai
-        status = ai.status()
-        if not status["ready"]:
-            raise HTTPException(400, status["message"])
-        return ai
-
     @app.get("/api/papers/{pid}/summary")
     def get_summary(pid: int, ctx: RequestCtx = Ctx):
         need_paper(ctx, pid)
-        # job은 항상 null (요약은 SSE 스트림 — 명세 9.3, 화면 호환용 필드)
-        return {"summary": ctx.lib.get_summary(pid), "job": None}
+        maintain(ctx)
+        # job = 진행 중이거나 마지막 요약 작업 (2단계 7.1절 — 탭을 닫았다 열어도 이어서 보임)
+        return {"summary": ctx.lib.get_summary(pid), "job": jobs.latest_summary_job(ctx.lib, pid, ws.free)}
 
     @app.post("/api/papers/{pid}/summary")
-    def make_summary(pid: int, request: Request, ctx: RequestCtx = Ctx):
-        p = need_paper(ctx, pid)
-        ai = ready_ai(ctx)
-        paper_ctx = context_for(ctx, p)
-        model = ctx.settings.get("model")
-        claims = ctx.claims
-        had_keywords = bool(p.get("keywords"))
-
-        def save(data: dict) -> None:
-            with db.user_tx(claims) as lib:
-                lib.save_summary(pid, data, model)
-                if data.get("keywords") and not had_keywords:
-                    lib.update_paper(pid, {"keywords": data["keywords"][:10]})
-
-        def saved_summary() -> dict | None:
-            with db.user_tx(claims) as lib:
-                return lib.get_summary(pid)
-
-        return StreamingResponse(summary_events(ai, paper_ctx, save, saved_summary, request.is_disconnected),
-                                 media_type="text/event-stream", headers=SSE_HEADERS)
+    def make_summary(pid: int, ctx: RequestCtx = Ctx):
+        """요약 = 작업 (2단계 15장). 202 {job}, 같은 논문 진행 중 요약이 있으면 200 {job}"""
+        need_paper(ctx, pid)
+        view, created = new_job(ctx, "summary", {}, pid)
+        return JSONResponse({"job": view}, status_code=202 if created else 200)
 
     @app.get("/api/papers/{pid}/chat")
     def chat_history(pid: int, ctx: RequestCtx = Ctx):
@@ -1475,66 +1574,164 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         ctx.lib.clear_chat(pid)
         return {"ok": True}
 
-    @app.post("/api/papers/{pid}/chat")
-    def chat(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
-        p = need_paper(ctx, pid)
-        question = (data.get("question") or "").strip()
-        if not question:
-            raise HTTPException(400, "질문을 입력해 주세요")
-        ai = ready_ai(ctx)
-        history = [{"role": m["role"], "content": m["content"]} for m in ctx.lib.chat_history(pid)]
-        paper_ctx = context_for(ctx, p)
-        claims = ctx.claims
+    def stream_job(ctx: RequestCtx, request: Request, kind: str, params: dict, paper_id: int | None,
+                   run) -> StreamingResponse:
+        """대화 · 글쓰기 (9.3절): 첫 칸이 API면 요청 안 SSE 그대로, CLI면 {"type":"queued","job"} 하나 보내고 끝.
+        API가 폴백 대상 오류로 실패하면 작업을 다음 칸으로 넘기고 {"type":"fallback","job"}.
+        run(engine) → 이벤트 반복자 (done 이벤트 → 결과 반영).
 
-        def events():
-            # 긴 AI 호출 동안 트랜잭션을 잡지 않고, 저장할 때만 짧은 트랜잭션을 연다
+        화면 연결이 끊기면(탭 · 창 닫음) 곧바로 작업을 취소하고 그 뒤에 온 결과는 저장하지 않는다(품질팀 H1).
+        AI 호출은 별도 스레드가 돌리고, 이 비동기 생성기는 0.05초마다 끊김을 확인한다 — 한 번에 응답이 오는
+        OpenAI · Google 경로도 기다리는 동안 끊김을 본다. 가비지 수집에 기대지 않는다."""
+        row, _ = jobs.create_job(ctx.lib, kind, route_for(ctx, kind), params, paper_id, running_api=True)
+        job_id, uid, claims, engine = row["id"], ctx.uid, ctx.claims, row["engine"]
+        log.info(f"job created job={job_id} kind={kind} runner={row['runner']} engine={engine}")
+        if row["runner"] == "cli":
+            view = jobs.get_job(ctx.lib, job_id, ws.free)
+            return StreamingResponse(iter([_sse({"type": "queued", "job": view})]), media_type="text/event-stream",
+                                     headers=SSE_HEADERS)
+        token = str(row["lease_token"])
+        events_src = run(engine)  # 여기서 PDF · 본문을 준비(트랜잭션은 커밋 — F9)
+        ctx.release()
+        q: queue.Queue = queue.Queue()
+        stop = threading.Event()
+
+        def produce() -> None:
             try:
-                for ev in ai.chat(paper_ctx, history, question):
-                    if ev["type"] == "done":
-                        with db.user_tx(claims) as lib:
-                            lib.add_chat_message(pid, "user", question)
-                            ev["id"] = lib.add_chat_message(pid, "assistant", ev["text"], ev["citations"])
-                    yield _sse(ev)
+                for ev in events_src:
+                    if stop.is_set():
+                        break
+                    q.put(("ev", ev))
             except AIError as e:
-                yield _sse({"type": "error", "error": str(e)})
+                q.put(("err", e))
+            except Exception as e:  # noqa: BLE001 - 아래에서 실패로 기록
+                q.put(("exc", e))
+            finally:
+                q.put(("end", None))
+                close = getattr(events_src, "close", None)
+                if stop.is_set() and close:
+                    try:
+                        close()  # 스트림을 닫아 회사 API 연결도 끊는다
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        def save_done(ev: dict) -> list[str]:
+            with db.user_tx(claims) as lib:
+                try:
+                    j = jobs.lock_leased(lib, job_id, token)
+                except jobs.JobError:
+                    return []
+                status, res = jobs.finish_success(lib, j, {"text": ev["text"], "citations": ev.get("citations") or []},
+                                                  engine)
+            res = res or {}
+            if status != "succeeded":
+                return [_sse({"type": "error", "error": "작업을 취소했어요" if status == "cancelled"
+                              else jobs.DEFAULT_ERRORS["apply_failed"]})]
+            if "message_id" in res:
+                ev["id"] = res["message_id"]
+            ev["job_id"] = job_id
+            return [_sse(ev)]
+
+        def fail(code: str, message: str) -> list[str]:
+            with db.user_tx(claims) as lib:
+                try:
+                    j = jobs.lock_leased(lib, job_id, token)
+                except jobs.JobError:
+                    return []
+                jobs.record_key_error(lib, engine, code)
+                status = jobs.fail_or_fallback(lib, j, code, message, guide=guide())
+                view = jobs.get_job(lib, job_id, ws.free)
+            log.info(f"job failed job={job_id} code={code} status={status}")
+            if status == "queued":
+                if view["runner"] == "api":
+                    runner.enqueue(job_id, uid)
+                return [_sse({"type": "fallback", "job": view})]
+            return [_sse({"type": "error", "error": view["error"], "job": view})]
+
+        def cancel_now() -> None:
+            try:
+                with db.user_tx(claims) as lib:
+                    jobs._end(lib, jobs.lock_leased(lib, job_id, token), "cancelled", "interrupted", jobs.INTERRUPTED)
+                log.info(f"job cancelled job={job_id} (화면 연결 끊김)")
+            except (jobs.JobError, DBUnavailable):
+                pass
+
+        async def events():
+            ended = False
+            threading.Thread(target=produce, name=f"sse-job-{job_id}", daemon=True).start()
+            try:
+                while True:
+                    try:
+                        kind_, item = q.get_nowait()
+                    except queue.Empty:
+                        if await request.is_disconnected():
+                            return
+                        await asyncio.sleep(0.05)
+                        continue
+                    if kind_ == "ev" and item["type"] != "done":
+                        yield _sse(item)
+                        continue
+                    if await request.is_disconnected():
+                        return  # 끊긴 뒤에 온 결과는 저장하지 않는다
+                    ended = True
+                    if kind_ == "ev":
+                        out = await run_in_threadpool(save_done, item)
+                    elif kind_ == "err":
+                        out = await run_in_threadpool(fail, item.code or "api_server", str(item))
+                    elif kind_ == "exc":
+                        log.warning("sse job crashed job=%s: %s", job_id, type(item).__name__)
+                        out = await run_in_threadpool(fail, "api_server", "AI 응답을 처리하지 못했어요")
+                    else:
+                        out = await run_in_threadpool(fail, "bad_output", "AI 응답이 끝나기 전에 멈췄어요")
+                    for x in out:
+                        yield x
+                    return
             except DBUnavailable:
                 yield _sse({"type": "error", "error": DB_UNAVAILABLE["detail"]})
+            finally:
+                stop.set()
+                if not ended:
+                    # 끊김 · 취소된 스트림: 곧바로 취소로 (취소 영역 안에서는 await할 수 없으므로 스레드로)
+                    threading.Thread(target=cancel_now, name=f"sse-cancel-{job_id}", daemon=True).start()
 
         return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_HEADERS)
 
+    @app.post("/api/papers/{pid}/chat")
+    def chat(pid: int, request: Request, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        p = need_paper(ctx, pid)
+        question = str(data.get("question") or "").strip()
+        if not question:
+            raise HTTPException(400, "질문을 입력해 주세요")
+        if len(question) > 8000:
+            raise HTTPException(400, "질문이 너무 길어요")
+
+        def run(engine: str):
+            history = [{"role": m["role"], "content": m["content"]} for m in ctx.lib.chat_history(pid)]
+            paper_ctx = context_for(ctx, p, with_pdf=engine == "claude")
+            return ctx.ai.chat(paper_ctx, history, question, engine=engine)
+
+        return stream_job(ctx, request, "chat", {"question": question}, pid, run)
+
     @app.post("/api/ai/write")
-    def ai_write(data: dict = Body(...), ctx: RequestCtx = Ctx):
-        """원고 글쓰기 도우미 (스트리밍)"""
-        ai = ready_ai(ctx)
-        text = (data.get("text") or "").strip()
+    def ai_write(request: Request, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """원고 글쓰기 도우미 (스트리밍 · CLI면 작업)"""
+        text = str(data.get("text") or "").strip()
         mode = data.get("mode") or "polish"
         if not text and mode != "draft":
             raise HTTPException(400, "다듬을 글을 선택해 주세요")
-        lib = ctx.lib
-        sources = []
-        for key, p in lib.papers_by_citekeys([str(k) for k in data.get("keys") or []][:30]).items():
-            summary = lib.get_summary(p["id"])
-            highlights = [a["text"] + (f" — {a['comment']}" if a["comment"] else "")
-                          for a in lib.list_annotations(p["id"])[:15] if a["text"]]
-            note = "\n".join(filter(None, [p.get("note") or ""] + [f"하이라이트: {h}" for h in highlights]))
-            sources.append({
-                "key": key, "title": p["title"], "year": p.get("year"),
-                "authors": ", ".join(" ".join(x for x in (a.get("given"), a.get("family"), a.get("literal")) if x)
-                                     for a in (p.get("authors") or [])[:6]),
-                "abstract": (p.get("abstract") or "")[:2500],
-                "summary": (summary["data"].get("tldr", "") + " " + summary["data"].get("results", "")).strip() if summary else "",
-                "note": note[:3000],
-            })
+        mid = data.get("manuscript_id")
+        if mid is not None and (isinstance(mid, bool) or not isinstance(mid, int) or not 0 < mid < 10 ** 15):
+            raise HTTPException(400, "원고 번호가 올바르지 않아요")
+        keys = [str(k)[:200] for k in data.get("keys") or []][:30]
+        params = {"mode": str(mode)[:20], "text": text, "instruction": str(data.get("instruction") or "")[:2000],
+                  "context": str(data.get("context") or "")[:6000], "keys": keys, "manuscript_id": mid}
 
-        def events():
-            try:
-                for ev in ai.write(mode, text, instruction=(data.get("instruction") or "")[:2000],
-                                   context=(data.get("context") or "")[:6000], sources=sources):
-                    yield _sse(ev)
-            except AIError as e:
-                yield _sse({"type": "error", "error": str(e)})
+        def run(engine: str):
+            sources = jobs.write_sources(ctx.lib, keys)
+            return ctx.ai.write(params["mode"], text, instruction=params["instruction"], context=params["context"],
+                                sources=sources, engine=engine)
 
-        return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_HEADERS)
+        return stream_job(ctx, request, "write", params, None, run)
 
     # ------------------------------------------------------- doc formats
     def user_format_id(format_id) -> int | None:
@@ -1901,6 +2098,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 return Response(status_code=404)
             return Response(data, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
+    worker_api.register(app, db, allowlist, ws, guide, runner)
+
     # -------------------------------------------------------------- static
     @app.get("/")
     def index():
@@ -1909,59 +2108,3 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     # 운영에서는 개발 전용 파일(이메일 로그인 모듈)을 내보내지 않는다 (1단계 운영은 구글 로그인만)
     app.mount("/static", AppStaticFiles(directory=STATIC_DIR, hidden=() if dev else DEV_ONLY_STATIC), name="static")
     return app
-
-
-async def summary_events(ai, paper_ctx: PaperContext, save: Callable[[dict], None],
-                         saved_summary: Callable[[], dict | None], is_disconnected):
-    """요약 SSE (명세 9.3 ②): progress … done | error. 연결이 끊기면 AI 스트림을 멈추고 저장하지 않는다."""
-    loop = asyncio.get_running_loop()
-    events: queue.Queue = queue.Queue()
-    cancel = threading.Event()
-    last = {"msg": None, "frac": -1.0}
-
-    def progress(message: str, frac: float | None) -> None:
-        if cancel.is_set():
-            raise SummaryCancelled()
-        f = -1.0 if frac is None else float(frac)
-        # 너무 잦은 이벤트를 줄인다: 문구가 바뀌거나 1% 이상 움직였을 때만
-        if message != last["msg"] or f - last["frac"] >= 0.01:
-            last.update(msg=message, frac=f)
-            events.put({"type": "progress", "message": message, "progress": frac})
-
-    def work() -> dict:
-        return ai.summarize(paper_ctx, progress)
-
-    fut = loop.run_in_executor(None, work)
-    try:
-        while True:
-            while not events.empty():
-                yield _sse(events.get_nowait())
-            if fut.done():
-                break
-            if await is_disconnected():
-                cancel.set()
-                return
-            await asyncio.sleep(0.1)
-        while not events.empty():
-            yield _sse(events.get_nowait())
-        try:
-            data = fut.result()
-        except SummaryCancelled:
-            return
-        except AIError as e:
-            yield _sse({"type": "error", "error": str(e)})
-            return
-        except Exception as e:  # noqa: BLE001 - 작업 실패는 화면에 그대로 알린다
-            yield _sse({"type": "error", "error": f"{type(e).__name__}: {e}"})
-            return
-        if cancel.is_set() or await is_disconnected():
-            return
-        try:
-            await run_in_threadpool(save, data)
-            summary = await run_in_threadpool(saved_summary)
-        except DBUnavailable:
-            yield _sse({"type": "error", "error": DB_UNAVAILABLE["detail"]})
-            return
-        yield _sse({"type": "done", "summary": summary})
-    finally:
-        cancel.set()

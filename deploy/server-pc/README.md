@@ -117,6 +117,7 @@ tailscale version
      ```
      `PAPERLAB_ALLOWLIST=off`가 없으면 서버는 허용 목록을 켠 것으로 보고, `ALLOWED_EMAILS`가 없으니 **서버는 뜨지만 모든 로그인 사용자가 403("허용되지 않은 계정")** 을 받습니다(시작 로그 · `serve --check`에 경고 줄 — 팀장 결정). 값은 `on`/`off`만(대소문자 무관) — 그 밖의 값이면 시작 거부. `PAPERLAB_PUBLIC_URL`은 `server.json`의 `public_url`과 같아야 합니다.
    - (필요할 때만) `PAPERLAB_PG_DUMP=…` (4절)
+   - (선택 — 2단계) `PAPERLAB_RELEASES_DIR=…` PC 앱 설치 파일 배포 폴더. 없으면 기본값 `D:\PaperLab\releases`
    - (품질 검증을 이 PC에서 할 때만 — 질문 Q-S7) `SUPABASE_TEST_*` 4줄은 그대로 둠, 아니면 지움
    - `SUPABASE_APP_DB_URL`은 **비워 둡니다**(설치 스크립트가 채움)
 4. Claude Code 확인(값을 보지 않음):

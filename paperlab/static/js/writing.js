@@ -2,6 +2,7 @@
 // 워드(.docx)·한글(.hwpx) 내보내기 · 워드·한글 문서의 [@인용키] 변환
 
 import { api, downloadBlob, streamEvents } from "./api.js";
+import { ICON_WARN, cancelJob, errorLabel, retryJob, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
 import { htmlToRuns, listStyles, renderClusters, styleOptions } from "./cite.js";
 import { settingsDialog } from "./dialogs.js";
 import {
@@ -844,8 +845,10 @@ function currentHeading(ta) {
 
 async function runAi(mode, ta) {
   const st = await api.get("/api/ai/status").catch(() => ({ ready: false, message: "" }));
-  if (!st.ready) {
-    toast(st.message || "AI 설정이 필요해요", "error");
+  // 글쓰기 도우미 경로 기준 (요약 경로 기준인 ready가 아니라 kinds.write.first — 품질팀 M2)
+  if (!(st.kinds && st.kinds.write && st.kinds.write.first)) {
+    toast(!st.ready && st.message ? st.message
+      : "글쓰기 도우미에 쓸 수 있는 엔진이 없어요. 설정에서 엔진 순서 · API 키 · 연결된 PC를 확인해 주세요.", "error");
     return settingsDialog();
   }
   let { s, e, text } = selectionOrParagraph(ta);
@@ -871,24 +874,80 @@ async function runAi(mode, ta) {
     <textarea class="input hidden" style="width:100%;min-height:240px"></textarea></div>`);
   const foot = el(`<div style="display:contents"><div class="left"><button class="btn" data-edit>고쳐서 넣기</button><button class="btn" data-copy>복사</button></div>
     <button class="btn" data-no>취소</button><button class="btn primary" data-ok disabled>${insertAfter ? "커서 위치에 넣기" : "바꾸기"}</button></div>`);
-  const m = modal({ title: "AI 글쓰기 도우미", body, foot, wide: true, onClose: () => abort.abort() });
+  // 창을 닫으면(✕ · Esc · 바깥 클릭 · [취소]) API 스트림은 끊고, PC 작업은 대기 중이든 실행 중이든 취소 (PD-4)
+  let job = null;
+  let stopWatch = null;
+  const m = modal({ title: "AI 글쓰기 도우미", body, foot, wide: true, onClose: () => {
+    abort.abort();
+    if (stopWatch) stopWatch();
+    if (job && (job.status === "queued" || job.status === "running")) cancelJob(job.id).catch(() => {});
+  } });
   const abort = new AbortController();
   let result = "";
   const out = $(".ai-out", body);
+  const showResult = () => {
+    out.style.whiteSpace = "normal";
+    out.innerHTML = window.DOMPurify.sanitize(window.marked.parse(result));
+  };
+  let jobEv = null;
   try {
-    await streamEvents("/api/ai/write", { mode, text, keys, instruction, context }, (ev) => {
-      if (ev.type === "delta") { result += ev.text; out.textContent = result; }
-      else if (ev.type === "done") {
-        result = ev.text;
-        out.style.whiteSpace = "normal";
-        out.innerHTML = window.DOMPurify.sanitize(window.marked.parse(result));
-      }
+    await streamEvents("/api/ai/write", { mode, text, keys, instruction, context, manuscript_id: W.m ? W.m.id : null }, (ev) => {
+      if (ev.type === "queued" || ev.type === "fallback") jobEv = ev;
+      else if (ev.type === "delta") { result += ev.text; out.textContent = result; }
+      else if (ev.type === "done") { result = ev.text; showResult(); }
       else if (ev.type === "error") throw new Error(ev.error);
     }, abort.signal);
-    $("[data-ok]", foot).disabled = false;
   } catch (err) {
     if (err.name !== "AbortError") out.innerHTML = `<div class="msg error">${esc(err.message)}</div>`;
     return;
+  }
+  if (jobEv) {
+    // PC(CLI)에서 만드는 글: 상태 줄 + 중간 글. 결과는 작업의 result.text (디자인 8장)
+    result = "";
+    out.innerHTML = "";
+    const fb = jobEv.type === "fallback" && jobEv.job.history.length
+      ? el(`<div class="notice" data-tone="warn" data-job-fallback>${ICON_WARN}<div>API가 실패해서 PC로 넘겼어요 (${esc(errorLabel(jobEv.job.history[jobEv.job.history.length - 1].error_code))}).</div></div>`) : null;
+    const line = statusLineEl(null);
+    const note = el(`<p class="small muted" style="margin:4px 0 8px">창을 닫으면 이 작업은 취소돼요.</p>`);
+    out.before(...[fb, line, note].filter(Boolean));
+    const follow = (first) => {
+      stopWatch = watchJob(first.id, (j) => {
+        if (!j) return;
+        job = j;
+        if (j.status === "succeeded") {
+          line.remove();
+          note.remove();
+          result = (j.result && j.result.text) || "";
+          showResult();
+          $("[data-ok]", foot).disabled = false;
+          return;
+        }
+        if (j.status === "failed" || j.status === "cancelled") {
+          line.remove();
+          note.remove();
+          out.innerHTML = `<div class="msg error">${esc(j.status === "failed" ? j.error || "글을 만들지 못했어요" : "작업을 취소했어요")}</div>`;
+          const again = el(`<button type="button" class="btn" data-job-retry>다시 시도</button>`);
+          again.onclick = async () => {
+            again.remove();
+            try {
+              const r = await retryJob(j.id);
+              out.innerHTML = "";
+              out.before(line, note);
+              follow(r.job);
+            } catch (e) { errorToast(e); }
+          };
+          $(".left", foot).appendChild(again);
+          return;
+        }
+        const partial = (j.progress || {}).partial_text || "";
+        if (partial) out.textContent = partial;
+        setStatusLine(line, j, "글을 만드는");
+        if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "PC"}에서 글을 만드는 중 (${j.engine})`;
+      }, { first });
+    };
+    follow(jobEv.job);
+  } else {
+    $("[data-ok]", foot).disabled = false;
   }
   const edit = $("textarea", body);
   $("[data-edit]", foot).onclick = () => { edit.value = result; edit.classList.remove("hidden"); out.classList.add("hidden"); edit.focus(); };

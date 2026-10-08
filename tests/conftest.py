@@ -114,8 +114,8 @@ def pytest_configure(config):
 class TestUser:
     id: str
     email: str
-    password: str
-    token: str = ""
+    password: str = field(repr=False)
+    token: str = field(default="", repr=False)
 
     __test__ = False
 
@@ -123,10 +123,11 @@ class TestUser:
 @dataclass
 class TestProject:
     url: str
-    anon_key: str
-    service_key: str
-    admin_db: str
-    app_db: str
+    # 비밀값은 pytest 실패 출력(지역 변수 표시)에 나오지 않게 repr에서 뺀다
+    anon_key: str = field(repr=False)
+    service_key: str = field(repr=False)
+    admin_db: str = field(repr=False)
+    app_db: str = field(repr=False)
     created: list = field(default_factory=list)
 
     __test__ = False
@@ -307,24 +308,42 @@ class FakeSources:
 
 
 class FakeAI:
+    """가짜 AI (2단계: engine 인자 · 오류 코드). fail = True(거절 — 폴백 없음) | "api_auth" 같은 error_code | False.
+    calls에 (동작, engine)을 남긴다 — API 호출 횟수 확인(AC-28)"""
     fail = False
 
-    def status(self):
-        return {"engine": "api", "ready": True, "message": ""}
+    def __init__(self):
+        self.calls = []
+        self.gate = None  # threading.Event — 요약을 그 자리에서 기다리게 (실행 중 취소 · 동시 실행 시험)
 
-    def summarize(self, ctx, progress):
+    def model_name(self, engine="claude"):
+        return f"fake-{engine}"
+
+    def _maybe_fail(self):
         from paperlab import ai as ai_mod
-        progress("작성 중", 0.5)
         if self.fail:
-            raise ai_mod.AIError("가짜 AI 오류")
+            code = self.fail if isinstance(self.fail, str) else "api_refusal"
+            raise ai_mod.AIError(f"가짜 AI 오류 ({code})", code)
+
+    def summarize(self, ctx, progress, engine="claude"):
+        from paperlab import ai as ai_mod
+        self.calls.append(("summarize", engine))
+        progress("작성 중", 0.5)
+        while self.gate is not None and not self.gate.wait(0.05):
+            progress("작성 중", 0.5)
+        self._maybe_fail()
         return ai_mod.normalize_summary({"tldr": f"{ctx.title} 요약", "keywords": ["resnet"]})
 
-    def chat(self, ctx, history, question):
+    def chat(self, ctx, history, question, engine="claude"):
+        self.calls.append(("chat", engine))
+        self._maybe_fail()
         yield {"type": "delta", "text": "답"}
         yield {"type": "done", "text": f"{len(ctx.page_texts)}쪽 논문입니다[1]",
                "citations": [{"n": 1, "page": 1, "end_page": 1, "text": "residual"}]}
 
-    def write(self, mode, text, **kw):
+    def write(self, mode, text, engine="claude", **kw):
+        self.calls.append(("write", engine))
+        self._maybe_fail()
         yield {"type": "done", "text": text}
 
 
@@ -343,7 +362,7 @@ class Cloud:
 
     __test__ = False
 
-    def __init__(self, project, session_db, users, ai=None, ai_factory=None, **cfg):
+    def __init__(self, project, session_db, users, ai=None, ai_factory=None, releases=None, runner_opts=None, **cfg):
         from paperlab.server import create_app
         from paperlab.storage import FakeStorage
 
@@ -353,7 +372,9 @@ class Cloud:
         config = make_config(project.app_db, supabase_url=project.url, supabase_anon_key=project.anon_key, **cfg)
         self.app = create_app(config, database=session_db, storage=self.storage,
                               sources_factory=lambda get: FakeSources(),
-                              ai_factory=ai_factory or (lambda get: self.fake_ai))
+                              ai_factory=ai_factory or (lambda get: self.fake_ai),
+                              releases=releases or Path(__file__).parent / "_no_releases",  # 설치 파일 없음(2a 기본)
+                              runner_opts=runner_opts)
         self.known_uids: set[str] = set()
 
     def user(self, allowed: bool = True) -> TestUser:
@@ -380,6 +401,15 @@ class Cloud:
         assert r.status_code == 200, r.text
         return r.json()
 
+    def wait_job(self, client, job_id: int, until=("succeeded", "failed", "cancelled"), timeout: float = 20.0) -> dict:
+        """작업이 그 상태가 될 때까지 GET /api/jobs/{id}를 부른다(API 실행기는 다른 스레드)"""
+        deadline = time.monotonic() + timeout
+        while True:
+            job = client.get(f"/api/jobs/{job_id}").json()
+            if job.get("status") in until or time.monotonic() > deadline:
+                return job
+            time.sleep(0.1)
+
     def assert_keys_scoped(self) -> None:
         """AC-39: 사용자 요청이 만든 모든 저장소 키가 users/{uid}/ 또는 incoming/{uid}/ 로 시작"""
         for op, key in self.storage.log:
@@ -393,6 +423,7 @@ class Cloud:
 def cloud(project, session_db, users):
     c = Cloud(project, session_db, users)
     yield c
+    c.app.state.runner.stop()
     c.assert_keys_scoped()
 
 

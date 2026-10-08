@@ -1424,3 +1424,55 @@ button.cite-row[aria-current="true"] { background: var(--accent-soft); box-shado
 button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .cs-item .cs-peek { flex: none; align-self: center; height: 20px; margin-left: 2px; padding: 0 7px; font-size: 11px; }
 @media (hover: hover) { .cs-item:not(.active):not(:hover) .cs-peek { visibility: hidden; } }
+
+/* ---------------- 2단계 작업 큐 · PC 연결 (docs/design/phase2-worker-electron-ui.md) ---------------- */
+/* 목록 카드 — 연결된 PC(S4) · 작업 목록(S6) · 앱 "이 PC 상태"의 엔진(E4) 공용 */
+.item-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.item-card {
+  display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface);
+}
+.item-card[data-state="revoked"] { background: var(--surface-2); border-style: dashed; }
+.item-head { display: flex; align-items: center; gap: 6px 8px; flex-wrap: wrap; min-width: 0; }
+.item-title { font-weight: 650; min-width: 0; overflow-wrap: anywhere; }
+.item-card[data-state="revoked"] .item-title { font-weight: 550; color: var(--text-2); }
+.item-meta { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-2); word-break: keep-all; overflow-wrap: anywhere; }
+.item-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.item-card > .item-actions { margin-left: 0; }
+.item-card details > summary { cursor: pointer; font-size: 12px; color: var(--text-2); width: max-content; max-width: 100%; }
+.item-card details > .graph-steps { margin-top: 6px; font-size: 12px; }
+.item-card .check { font-weight: 650; }
+
+/* 이 PC 연결 코드 (S5) */
+.pair-code {
+  display: block; padding: 14px 10px; border: 1px dashed var(--border-strong); border-radius: 10px; background: var(--surface-2);
+  font: 700 30px/1.2 var(--mono); letter-spacing: .12em; text-align: center; color: var(--text); user-select: all;
+}
+.pair-code[data-expired] { color: var(--text-3); text-decoration: line-through; user-select: none; }
+
+/* 작업 진행 카드 (S7) — 1B .graph-progress-card를 탭 안에 바로. 단계 = 경로(API → PC) */
+.job-card { margin: 20px auto; text-align: left; }
+.job-card .graph-progress-head > svg.ico { width: 20px; height: 20px; color: var(--text-2); }
+.job-card[data-job-state="failed"] .graph-progress-head > svg.ico { color: var(--warn); }
+.graph-steps li[data-state="failed"] { color: var(--text-2); }
+.graph-steps li[data-state="failed"]::before { content: "✕"; color: var(--warn); font-weight: 700; }
+
+/* 한 줄 상태(대화 · 글쓰기 · 작업 목록): 글자 칸이 늘고 버튼은 오른쪽 */
+.status-line .grow { flex: 1; min-width: 0; }
+.status-line > svg.ico { flex: none; }
+.msg.assistant > .status-line, .msg.assistant > .notice { margin-top: 6px; }
+
+/* 사이드바 "작업" 진행 중 개수 */
+.nav-item .count[data-active] { color: var(--accent-text); font-weight: 700; }
+
+/* E5 앱 창 로그인 대기 — 로그인 전 화면(#gate)의 새 묶음 */
+.gate[data-gate="desktop-wait"] .gate-pane[data-pane="desktop-wait"] { display: flex; }
+
+/* 앱 자체 화면(desktop/ui — app://) 전용: 이 PC 상태 창 */
+.local-page { max-width: 600px; margin: 0 auto; padding: 16px 16px 32px; }
+.local-head { display: flex; align-items: center; gap: 10px; margin: 0 0 4px; font-size: 17px; font-weight: 700; }
+.local-head .gate-mark { width: 28px; height: 28px; }
+/* 경로 줄이 비면 주황 (디자인 3.3절 [data-tone="warn"] — 부록 A에 빠진 한 줄) */
+.hint[data-tone="warn"] { color: var(--warn); }
+/* 390px 설정 창: 긴 양식 이름이 선택 상자를 넓혀 넘치지 않게 (품질팀 L9) */
+.modal.wide { min-width: 0; max-width: calc(100vw - 40px); }

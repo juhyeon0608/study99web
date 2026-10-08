@@ -1,8 +1,6 @@
 """DB 없이 도는 1단계 단위 테스트: 암호화 · 설정 · 관리 명령 도우미 · 요약 SSE · AI 키 · 코드 검사."""
 
-import asyncio
 import base64
-import json
 import os
 import re
 import subprocess
@@ -39,7 +37,8 @@ def test_secretbox_roundtrip_and_aad():
     with pytest.raises(DecryptError):
         box.decrypt(a, "anthropic_api_key", sealed.ciphertext, sealed.nonce, "00000000")
     with pytest.raises(DecryptError):
-        box.decrypt(a, "anthropic_api_key", sealed.ciphertext[:-1] + b"\0", sealed.nonce, sealed.key_id)
+        box.decrypt(a, "anthropic_api_key", sealed.ciphertext[:-1] + bytes([sealed.ciphertext[-1] ^ 1]), sealed.nonce,
+                    sealed.key_id)  # 마지막 바이트를 반드시 바꾼다 (원래 0이면 변조가 안 되던 1/256 흔들림)
     # 같은 값도 nonce가 달라 암호문이 다르다
     assert box.encrypt(a, "anthropic_api_key", plain).ciphertext != sealed.ciphertext
 
@@ -79,8 +78,9 @@ def test_encryption_key_validation_names_only():
 def test_user_settings_public_shape():
     s = UserSettings({"ai_engine": "cli", "model": "claude-sonnet-5-5", "unknown": 1},
                      {"anthropic_api_key": "sk-ant-x"}, broken_secrets={"openalex_api_key"})
-    assert s.get("ai_engine") == "api"  # 저장된 cli는 api로 읽음
     pub = s.public()
+    assert "ai_engine" not in pub  # 2단계: ai_engine은 읽지도 쓰지도 않음 (AC-31 대체)
+    assert pub["ai_routing"] == {"summary": ["claude"], "chat": ["claude"], "write": ["claude"]}  # 확정 U1
     assert pub["anthropic_api_key_set"] is True and pub["anthropic_api_key_status"] == "set"
     assert pub["openalex_api_key_set"] is False and pub["openalex_api_key_status"] == "unreadable"
     assert pub["semantic_scholar_api_key_status"] == "none"
@@ -91,11 +91,10 @@ def test_user_settings_public_shape():
 def test_split_settings_changes():
     plain, secrets = split_settings_changes({"model": "m", "anthropic_api_key": "sk-ant-1 ", "openalex_api_key": "",
                                              "semantic_scholar_api_key": None, "bogus": 1})
-    assert plain == {"model": "m"}
+    assert plain == {"model": "m", "anthropic_api_key_last_error": None}  # 키를 다시 저장하면 최근 실패를 지움 (7.3절)
     assert secrets == {"anthropic_api_key": "sk-ant-1", "semantic_scholar_api_key": None}
-    with pytest.raises(ValueError, match="2단계"):
-        split_settings_changes({"ai_engine": "cli"})
-    assert split_settings_changes({"ai_engine": "api"})[0] == {"ai_engine": "api"}
+    # 2단계 AC-31: ai_engine은 어떤 값이든 400이 아니고 무시
+    assert split_settings_changes({"ai_engine": "cli"}) == ({}, {})
 
 
 def test_allowed_emails_normalized():
@@ -123,12 +122,10 @@ def test_server_env_api_key_is_never_used(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "server-token")
     monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://evil.example")
     svc = ai_mod.AIService(UserSettings({}, {}).get)
-    st = svc.status()
-    assert st["ready"] is False and "API 키" in st["message"]
-    with pytest.raises(ai_mod.AIError):
+    with pytest.raises(ai_mod.AIError) as e:
         svc._client()
+    assert e.value.code == "api_no_key"
     user = ai_mod.AIService(UserSettings({}, {"anthropic_api_key": "sk-ant-user"}).get)
-    assert user.status()["ready"] is True
     # 승인자 L3: 사용자 키만 쓰고(환경의 토큰 · 키를 보지 않음), 주소는 환경 변수로 바뀌지 않음
     client = user._client()
     assert client.api_key == "sk-ant-user" and client.auth_token is None
@@ -136,78 +133,10 @@ def test_server_env_api_key_is_never_used(monkeypatch):
     assert "Authorization" not in client.auth_headers and client.auth_headers.get("X-Api-Key") == "sk-ant-user"
 
 
-def test_cli_engine_disabled_in_cloud():
-    svc = ai_mod.AIService({"ai_engine": "cli", "model": "claude-opus-5-5"}.get)
-    st = svc.status()
-    assert st["ready"] is False and "2단계" in st["message"]
-    with pytest.raises(ai_mod.AIError):
-        svc._run_cli("x", "y")
-
-
 def test_ai_error_messages_scrub_keys():
     svc = ai_mod.AIService({"anthropic_api_key": "sk-ant-user-secret-123456"}.get)
     assert "sk-ant-user-secret-123456" not in svc._scrub("bad key sk-ant-user-secret-123456 and sk-ant-another-999999")
     assert "another-999999" not in svc._scrub("sk-ant-another-999999")
-
-
-# ---------------------------------------------------------------- 요약 SSE (AC-53)
-class _AI:
-    def __init__(self, fail=False, steps=3):
-        self.fail, self.steps = fail, steps
-
-    def summarize(self, ctx, progress):
-        for i in range(self.steps):
-            progress("요약을 작성하는 중", (i + 1) / (self.steps + 1))
-        if self.fail:
-            raise ai_mod.AIError("가짜 오류")
-        return {"tldr": "끝"}
-
-
-def _run_summary(ai, disconnect_after=None):
-    from paperlab.server import summary_events
-
-    saved, n = [], {"calls": 0}
-
-    async def is_disconnected():
-        n["calls"] += 1
-        return disconnect_after is not None and n["calls"] > disconnect_after
-
-    async def collect():
-        out = []
-        async for chunk in summary_events(ai, None, saved.append, lambda: {"data": saved[-1]} if saved else None,
-                                          is_disconnected):
-            out.append(json.loads(chunk[6:]))
-        return out
-
-    return asyncio.run(collect()), saved
-
-
-def test_summary_stream_progress_then_done():
-    events, saved = _run_summary(_AI())
-    assert events[0]["type"] == "progress" and 0 < events[0]["progress"] < 1
-    assert events[-1] == {"type": "done", "summary": {"data": {"tldr": "끝"}}}
-    assert saved == [{"tldr": "끝"}]
-
-
-def test_summary_stream_error_saves_nothing():
-    events, saved = _run_summary(_AI(fail=True))
-    assert events[-1]["type"] == "error" and "가짜 오류" in events[-1]["error"] and saved == []
-
-
-def test_summary_stream_disconnect_saves_nothing():
-    import threading
-    gate = threading.Event()
-
-    class Slow(_AI):
-        def summarize(self, ctx, progress):
-            progress("논문을 읽는 중", 0.05)
-            gate.wait(2)
-            progress("요약을 작성하는 중", 0.5)  # 끊긴 뒤 → SummaryCancelled
-            return {"tldr": "저장되면 안 됨"}
-
-    events, saved = _run_summary(Slow(), disconnect_after=0)
-    gate.set()
-    assert saved == [] and all(e["type"] == "progress" for e in events)
 
 
 # ---------------------------------------------------------------- 관리 명령 도우미
