@@ -1,11 +1,12 @@
 // 진입점: 로그인 게이트(시작 · 로그인 · 허용 안 됨 · 멈춤), 계정 메뉴, 사이드바(필터 · 폴더 · 컬렉션 · 태그 · 저장 공간),
-// 화면 전환(#/library, #/discover, #/read/:id, #/write, #/graph · #/graph/W…)
+// 화면 전환(#/library, #/discover, #/ask(3단계 AI 질문), #/read/:id, #/write, #/graph · #/graph/W…)
 
 import { ApiError, api, setApiHooks, setApiLive } from "./api.js";
 import { exchangeCode, googleAuthUrl, hasAuthCode, initAuth, sessionUser, signInWithGoogle, signOut, startSession, takeRedirectError } from "./auth.js";
 import {
   cancelUploads, folderIcon, folderPickDialog, folderSubtree, maskEmail, settingsDialog, uploadPdfs, uploadsRunning, usageInfo,
 } from "./dialogs.js";
+import { closeAsk, renderAsk, scopeFromFilter, scopeHash } from "./ask.js";
 import { renderDiscover } from "./discover.js";
 import { closeGraph, renderGraph, resetGraphMemory } from "./graph.js";
 import { flushLibrary, loadPapers, renderLibrary } from "./library.js";
@@ -469,8 +470,9 @@ function openAccountMenu(btn, e, left) {
     { label: "설정", action: () => settingsDialog() },
     { label: "로그아웃", action: logout },
   ];
-  // 좁은 화면(사이드바 숨김)에서는 "작업 (n)" 항목 (디자인 9.1)
+  // 좁은 화면(사이드바 숨김)에서는 "작업 (n)" · "AI 질문" 항목 (디자인 9.1, 3단계 팀장 결정 — 시안 8장)
   if (!left) items.unshift({ label: `작업${state.stats.jobs ? ` (${state.stats.jobs})` : ""}`, action: () => { location.hash = "#/jobs"; } });
+  if (!left) items.unshift({ label: "AI 질문", action: () => { location.hash = scopeHash(scopeFromFilter(state.filter)); } });
   const dk = window.paperlabDesktop;
   if (dk) items.unshift(desktopItem);
   btn.setAttribute("aria-expanded", "true");
@@ -831,7 +833,10 @@ for (const b of $$("#sidebar .nav-item[data-filter]")) {
     setFilter({ kind, id: id || null });
   };
 }
-$$("#sidebar .nav-item[data-view]").forEach((b) => (b.onclick = () => { location.hash = `#/${b.dataset.view}`; }));
+// AI 질문: 서재에서 컬렉션 · 폴더를 고른 상태면 그 범위로 (3단계 시안 2.2절)
+$$("#sidebar .nav-item[data-view]").forEach((b) => (b.onclick = () => {
+  location.hash = b.dataset.view === "ask" ? scopeHash(scopeFromFilter(state.filter)) : `#/${b.dataset.view}`;
+}));
 $("#add-collection").onclick = () => newCollection();
 $("#add-folder").onclick = () => newFolder();
 
@@ -842,6 +847,7 @@ async function route() {
   const app = $("#app");
   const m = hash.match(/^#\/read\/(\d+)(?:\/p(\d+))?/);
   if (!hash.startsWith("#/write")) closeWriter();
+  if (!hash.startsWith("#/ask")) closeAsk();
   if (m) {
     state.view = "reader";
     app.classList.add("reading");
@@ -875,6 +881,11 @@ async function route() {
     return w[1] ? openManuscript(main, Number(w[1])) : renderWriteList(main);
   }
   app.classList.remove("reading");
+  if (hash.startsWith("#/ask")) {
+    state.view = "ask";
+    renderSidebar();
+    return renderAsk(main);
+  }
   if (hash.startsWith("#/discover")) {
     state.view = "discover";
     renderSidebar();

@@ -274,6 +274,8 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 암호화 키 회전 | 명세 8.3절 순서(서버 멈춤 → `cloud.env` 새 키 → `admin rotate-key` → 서버 시작) |
 | Windows 계정 비밀번호를 바꾼 뒤 | 작업 3개의 저장된 비밀번호도 바꿔야 함 — `install.ps1 -ReRegisterTasks -SkipFunnel`(자격 증명 창에 **[사용자]** 가 새 비밀번호 입력) |
 | 급히 공개를 막기 | `funnel.ps1 off` (서버는 계속 돌지만 바깥에서 못 들어옴) |
+| 임베딩 모델 받기(3단계 AI 질문 · 처음 한 번) | `D:\PaperLab\study99web`에서 서버 계정으로 `.venv\Scripts\python -m paperlab.admin rag-model --download` → `update.ps1 -RestartOnly`. 아래 "임베딩 모델" |
+| 색인 처음부터 다시(모델 · 규칙을 바꾼 뒤) | `.venv\Scripts\python -m paperlab.admin rag-reindex --all` — 모든 논문이 '색인 대기'가 되고, 사용자가 AI 질문 화면을 열 때 차례로 다시 색인(옛 벡터 파일은 교체 때 지워짐) |
 | 복원 | `deploy/README.md` 4장 복원 절차 |
 | 제거 | `deploy\server-pc\uninstall.ps1`(작업 삭제 · Funnel 끔, `-DryRun` 가능). 저장소 · `cloud.env`는 **[사용자]** 가 직접 지움 |
 
@@ -287,7 +289,17 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 6. **확인 실패면 자동으로 옛 커밋으로 되돌리고 다시 시작**(마이그레이션은 되돌리지 않음). `deep=1`은 DB까지 보므로 **반영 중 Supabase가 일시정지돼 있으면 이 단계에서도 되돌림**이 일어남 — Supabase를 Restore한 뒤 다시 업데이트. 되돌린 뒤에도 정상이 아니면 오류로 남기고 팀장에게 보고.
 7. **관리자 권한(elevated)으로 실행하면** 시작할 때 WARN 한 줄을 화면과 `update.log`에 남기고 그대로 진행: "관리자 권한으로 실행 중: 새로 받는 파일의 소유자가 Administrators가 되지만, 상속 권한으로 서버 계정이 접근할 수 있어 동작에는 영향이 없습니다. 가능하면 일반 권한 PowerShell에서 실행하세요." **소유자 · 권한은 바꾸지 않음**(`icacls` 쓰지 않음 — 팀장 결정). 일반 권한이면 이 줄도 없음.
 8. **PC 앱 설치 파일 빌드**(2단계 명세 13.7.1절 — 5번 상태 확인까지 **성공한 뒤에만**, 빌드 중에도 서버는 새 코드로 돎): 이번 반영에서 `desktop\`이 바뀌었으면(또는 `-BuildDesktop`) `node` · `npm`(22 이상) 확인 → `desktop\`에서 `npm ci` → `npm run dist`(electron-builder NSIS, **20분 제한** — `-BuildTimeoutSec`). Electron · NSIS · npm 캐시는 `D:\PaperLab\cache\`(첫 빌드만 수백 MB를 받음). 결과는 `releases`(`cloud.env`의 `PAPERLAB_RELEASES_DIR` — 서버가 읽는 폴더와 같은 규칙, 없으면 `D:\PaperLab\releases`)의 `.staging`에서 `latest.yml`의 sha512 · 크기를 실제 `.exe`와 다시 맞춰 본 뒤 `.exe` → `.blockmap` → `release.json`(sha256) → **`latest.yml`(마지막, 교체)** 순서로 옮기고 **최근 3개 버전**만 남김. 빌드 로그 전체는 `D:\PaperLab\logs\desktop-build-<시각>.log`, `update.log`에는 성공 줄(버전 · sha256 · 걸린 초)과 빌드 로그의 서버 주소 한 줄. **빌드는 어느 단계에서 실패해도 WARN만 남기고 이전 설치 파일을 그대로 두며 종료 코드는 서버 결과대로(성공 0)**. `-Ref` · `-RestartOnly` · 6번에서 되돌린 경우에는 빌드하지 않음(앱은 다운그레이드하지 않음). `desktop\`이 바뀌었는데 `desktop\package.json` 버전이 이미 `releases`에 있으면 빌드하지 않고 WARN(같은 버전 이름으로 다른 내용을 내보내지 않음 — 개발팀에 버전을 올려 달라고 보고).
+10. **임베딩 모델 확인**(3단계): 5번 상태 확인까지 성공하면 `admin rag-model`로 모델 파일이 있는지(SHA-256까지) 봄. 없거나 틀리면 **WARN만**(서버는 낱말 검색만으로 동작, 종료 코드 영향 없음) — 아래 "임베딩 모델"대로 받음.
 9. **서버 PC에는 PaperLab PC 앱(워커)을 설치하지 않습니다**(사용자 결정 Q-S3) — 이 PC는 설치 파일을 만들어 `/downloads/`로 내보내기만 합니다.
+
+**임베딩 모델**(3단계 명세 6.3절 — EmbeddingGemma-300M ONNX, 약 330MB)
+
+- 받는 곳: Hugging Face 공식 저장소 `onnx-community/embeddinggemma-300m-ONNX`, **고정 커밋 `5090578`**. 받는 파일은 `onnx/model_quantized.onnx` · `onnx/model_quantized.onnx_data` · `tokenizer.json` 세 개뿐이고, 받은 뒤 코드에 적힌 SHA-256과 맞는지 확인합니다(틀리면 지움).
+- 이 저장소는 **게이트(동의 · 로그인)가 없습니다**(2026-10-08 확인). 모델은 Gemma 이용 약관(https://ai.google.dev/gemma/terms)을 따릅니다 — 서버 PC 안에서 검색용 임베딩으로만 씁니다.
+- 놓는 곳: `D:\PaperLab\models\embeddinggemma-300m\`(다른 곳이면 `cloud.env`에 `PAPERLAB_EMBED_MODEL_DIR=<폴더>`). **저장소(git)에는 넣지 않습니다.**
+- 실행 패키지 `onnxruntime` · `tokenizers` · `numpy`는 `pyproject.toml`에 있어 `update.ps1`의 `pip install -e .`이 설치합니다.
+- 모델이 없으면 서버는 그대로 뜨고 AI 질문 화면에 "지금은 낱말 검색만 해요"가 보입니다. 모델을 받은 뒤 `update.ps1 -RestartOnly` → 모델 없이 색인된 논문은 다음에 AI 질문을 열 때 다시 색인됩니다.
+- 서버 시작 줄(`server.log`)의 `"embed": true`로 확인합니다.
 
 ## 12. 문제 해결
 
@@ -330,4 +342,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | `python -m paperlab.admin app-role --write-env [--if-missing]` | 앱 역할 주소를 `cloud.env`에 씀(`--if-missing`: 이미 있으면 그대로) |
 | `python -m paperlab.admin backup --tmp-dir <폴더>` | 백업(앱 역할 주소 + `pg_dump`, 임시 파일 정리) |
 | `python -m paperlab.admin pg-dump-check` | `pg_dump` 주 버전 ≥ DB 서버 주 버전인지(앱 역할 주소로 버전만 읽음) |
+| `python -m paperlab.admin rag-model [--download] [--dir <폴더>]` | 3단계 임베딩 모델 파일 확인(SHA-256 — 없거나 틀리면 종료 코드 2) · `--download`면 Hugging Face 공식 저장소(고정 커밋)에서 받음 |
+| `python -m paperlab.admin rag-reindex --all` | 모든 논문을 색인 대기로(3단계 10.3절) |
+| `python -m paperlab.admin orphans [--delete]` | DB에 없는 R2 PDF와 벡터 파일(`users/*/rag/*.bin`) 찾기 · 지우기 |
 | `python -m paperlab.admin latest-backup [--max-hours 36]` | R2의 가장 최근 백업 날짜(없거나 기한 넘으면 종료 코드 2) |

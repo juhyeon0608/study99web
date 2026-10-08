@@ -77,6 +77,11 @@ export function closeReader() {
 export async function openReader(main, pid, startPage = null) {
   teardown();
   const seq = openSeq;
+  state.lastReadId = pid; // AI 질문 화면의 "한 논문만: 읽기 화면 대화 →" (시안 AD-1)
+  // AI 질문 출처에서 왔으면(시안 4장) 쪽 이동 대신 그 위치 표시 — 하이라이트를 다 그린 뒤
+  const spot = state.askSpot && state.askSpot.paper_id === pid ? state.askSpot : null;
+  state.askSpot = null;
+  if (spot) startPage = null;
   main.innerHTML = `<div class="empty"><span class="spinner"></span></div>`;
   let paper;
   try {
@@ -142,6 +147,7 @@ export async function openReader(main, pid, startPage = null) {
   R.annotations = annotations;
   drawAllHighlights();
   if (R.tab === "highlights") showTab("highlights");
+  if (spot) goToSpot(spot.page, spot.rect, spot.text);
 }
 
 // 하이라이트 색 버튼 (읽기 화면 막대 · 참고 패널 막대 공용 — 색 이름 · 고른 색을 화면 읽기에도)
@@ -464,6 +470,29 @@ export function goToPage(n, flashTextStr = "") {
     R.pendingFlash = { page: n, text: flashTextStr };
     if (pg.rendered && pg.el.querySelector(".textLayer span")) flashText(pg, flashTextStr);
   }
+}
+
+// 3단계 출처 위치(시안 4장): 그 쪽에서 rect(0~1) 위쪽이 화면 위 1/4에 오게 스크롤 → .spot-rect 6초 + 글 반짝임.
+// rect가 없으면 쪽 이동 + 글 반짝임만
+export function goToSpot(page, rect, text = "") {
+  if (!R || !R.pages.length) return;
+  const n = Math.max(1, Math.min(R.pages.length, Number(page) || 1));
+  const pg = R.pages[n - 1];
+  if (!pg.el) return;
+  if (!rect) { goToPage(n, text); toast(`p.${n}의 출처 위치를 표시했어요`); return; }
+  const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const top = pg.el.offsetTop + rect[1] * pg.el.offsetHeight - R.scroller.clientHeight / 4;
+  R.scroller.scrollTo({ top: Math.max(0, top), behavior: reduce ? "auto" : "smooth" });
+  const box = el(`<div class="spot-rect"></div>`);
+  Object.assign(box.style, { left: `${rect[0] * 100}%`, top: `${rect[1] * 100}%`, width: `${(rect[2] - rect[0]) * 100}%`,
+    height: `${(rect[3] - rect[1]) * 100}%` });
+  pg.el.querySelector(".hl-layer").appendChild(box);
+  setTimeout(() => box.remove(), 6000);
+  if (text) {
+    R.pendingFlash = { page: n, text };
+    if (pg.rendered && pg.el.querySelector(".textLayer span")) flashText(pg, text);
+  }
+  toast(`p.${n}의 출처 위치를 표시했어요`);
 }
 
 // 인용된 문장과 겹치는 텍스트 조각을 잠깐 표시한다
@@ -870,7 +899,7 @@ async function chatTab(body) {
   const quote = el(`<div class="quote-chip hidden"><span></span><button class="icon-btn small">✕</button></div>`);
   const input = el(`<div class="chat-input"><textarea class="input" rows="1" placeholder="논문에 대해 물어보세요" title="Enter 전송 · Shift+Enter 줄바꿈"></textarea>
     <button class="btn primary" data-send>보내기</button></div>`);
-  const foot = el(`<div class="row small" style="padding:0 12px 8px;color:var(--text-3)"><span>답변의 [번호]를 누르면 근거가 있는 쪽으로 이동해요</span><span class="spacer"></span><button class="btn sm ghost" data-clear>대화 지우기</button></div>`);
+  const foot = el(`<div class="row small" style="padding:0 12px 8px;color:var(--text-3)"><span>답변의 [번호]를 누르면 근거가 있는 쪽으로 이동해요</span><span class="spacer"></span><a class="btn sm ghost" href="#/ask" title="서재 전체 · 컬렉션 · 폴더의 논문들을 함께 근거로 물어봐요">여러 논문에 질문 →</a><button class="btn sm ghost" data-clear>대화 지우기</button></div>`);
   body.append(log, quote, input, foot);
   const ta = $("textarea", input);
   const sendBtn = $("[data-send]", input);

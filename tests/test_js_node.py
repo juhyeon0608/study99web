@@ -4,6 +4,7 @@
 - graph.test.mjs: 인용 그래프 순수 함수 · 코드 검사 · 벤더 해시 (docs/specs/citation-graph.md 11장 E — AC-G50 · 51 · 52)
 - refquote.test.mjs: 참고 패널 넣기 형식 · 쪽 번호 · 이스케이프 · 코드 검사 (docs/specs/writing-reference-pane.md 12장 D)
 - jobs.test.mjs: 2단계 작업 상태 문구 · 경로 단계 · 기한 · 계정 가림 (docs/design/phase2-worker-electron-ui.md 5장)
+- ask.test.mjs: 3단계 AI 질문 주소 · 색인 상태 · 찾기 단계 · 인용 검증 표시 (docs/design/phase3-ask-ui.md)
 - Node가 없거나 너무 오래되면(20.10 미만) 건너뛴다(skip) — AC-8.
 - 경로에 한글 · 공백이 있어도 되게 셸을 거치지 않고 리스트 인자로 부른다.
 """
@@ -20,7 +21,7 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 MIN_NODE = (20, 10)  # --test-reporter · String.isWellFormed · --experimental-detect-module
 DETECT_DEFAULT = (22, 7)  # 이 버전부터 package.json 없는 .js의 ES 모듈 문법을 기본으로 알아봄
-MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8}  # 너무 적게 통과하면(테스트가 사라짐) 실패
+MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8}  # 너무 적게 통과하면(테스트가 사라짐) 실패
 
 
 def _node_version(node: str) -> tuple[int, ...] | None:

@@ -134,8 +134,9 @@ def test_serve_runs_uvicorn_on_loopback_with_trusted_proxy(tmp_path, monkeypatch
     for h in logging.getLogger().handlers:
         h.flush()
     text = (logs / "server.log").read_text(encoding="utf-8")
-    first = json.loads(text.splitlines()[0])
-    assert first["message"] == "서버 시작" and first["host"] == "127.0.0.1" and first["level"] == "INFO"
+    # 모델 파일이 없으면 시작 줄 앞에 "낱말 검색만" WARN이 먼저 남을 수 있음(3단계) — 시작 줄을 찾아 검사
+    first = next(r for r in map(json.loads, text.splitlines()) if r.get("message") == "서버 시작")
+    assert first["host"] == "127.0.0.1" and first["level"] == "INFO" and "embed" in first
     assert '"path": "/api/health"' in text
     for secret in SECRETS:
         assert secret not in text

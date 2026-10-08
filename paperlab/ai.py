@@ -410,7 +410,8 @@ class AIService:
         return scrub_keys(text)
 
     # ------------------------------------------------------------ OpenAI · Google (텍스트 전용)
-    def text_complete(self, engine: str, system: str, prompt: str, schema: dict | None = None) -> str:
+    def text_complete(self, engine: str, system: str, prompt: str, schema: dict | None = None,
+                      schema_name: str = "paper_summary") -> str:
         """OpenAI Responses API · Gemini generateContent 한 번 (스트리밍 없이 — 결과를 끝에 한 번). 키는 헤더로만."""
         name = ENGINE_COMPANY[engine]
         key = self.get_setting(ENGINE_KEYS[engine]) or ""
@@ -423,7 +424,7 @@ class AIService:
             url, headers = OPENAI_URL, {"Authorization": f"Bearer {key}"}
             body: dict = {"model": model, "instructions": system, "input": prompt}
             if schema:
-                body["text"] = {"format": {"type": "json_schema", "name": "paper_summary", "schema": schema, "strict": True}}
+                body["text"] = {"format": {"type": "json_schema", "name": schema_name, "schema": schema, "strict": True}}
         else:
             url, headers = GEMINI_URL.format(model=quote(model, safe="")), {"x-goog-api-key": key}
             body = {"systemInstruction": {"parts": [{"text": system}]},
@@ -529,12 +530,22 @@ class AIService:
               sources: list[dict] | None = None, engine: str = "claude") -> Iterator[dict]:
         """글쓰기 도우미. 이벤트: {"type":"delta","text"} … {"type":"done","text"}"""
         system, prompt = write_request(mode, text, instruction=instruction, context=context, sources=sources)
+        yield from self.complete(system, prompt, engine)
+
+    def complete(self, system: str, prompt: str, engine: str = "claude", schema: dict | None = None,
+                 schema_name: str = "result") -> Iterator[dict]:
+        """범용 한 번 호출(3단계 서재 질문 · AI로 찾기 · 인용 검증 · 글쓰기). claude는 스트림, OpenAI · Google은 text_complete.
+        이벤트: {"type":"delta","text"} … {"type":"done","text"}. schema가 있으면 JSON 출력을 강제한다."""
         if engine != "claude":
-            out = parse_text_result("write", self.text_complete(engine, system, prompt))["text"]
+            out = self.text_complete(engine, system, prompt, schema, schema_name).strip()
+            if not out:
+                raise AIError("AI 응답이 비어 있어요", "bad_output")
             yield {"type": "delta", "text": out}
             yield {"type": "done", "text": out}
             return
         kw = self._request_kwargs(effort=self.get_setting("effort") or "medium")
+        if schema:
+            kw["output_config"] = {**kw.get("output_config", {}), "format": {"type": "json_schema", "schema": schema}}
         try:
             with self._client().beta.messages.stream(
                     max_tokens=16000, system=system, messages=[{"role": "user", "content": prompt}], **kw) as stream:
@@ -548,8 +559,18 @@ class AIService:
             raise AIError("모델이 이 요청을 처리하지 않았어요 (안전 정책).", "api_refusal")
         if final.stop_reason == "max_tokens":
             raise AIError("결과가 너무 길어 중간에 끊겼어요.", "api_max_tokens")
-        text_out = "".join(b.text for b in final.content if b.type == "text").strip()
-        yield {"type": "done", "text": text_out}
+        yield {"type": "done", "text": "".join(b.text for b in final.content if b.type == "text").strip()}
+
+    def complete_text(self, system: str, prompt: str, engine: str = "claude", schema: dict | None = None,
+                      schema_name: str = "result") -> str:
+        """complete의 마지막 글만"""
+        done = None
+        for ev in self.complete(system, prompt, engine, schema, schema_name):
+            if ev["type"] == "done":
+                done = ev
+        if not done or not done["text"]:
+            raise AIError("AI 응답이 비어 있어요", "bad_output")
+        return done["text"]
 
 
 _GEMINI_BLOCKED = {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "LANGUAGE", "IMAGE_SAFETY"}

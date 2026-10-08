@@ -1,7 +1,7 @@
 // 논문 찾기: OpenAlex · arXiv · Semantic Scholar · Crossref 통합 검색 (Google Scholar 방식)
 
 import { api, qs } from "./api.js";
-import { EXT_MARK, addPaper, bindExtLink, citeDialog, copySearchQuery, extMark, openExternal } from "./dialogs.js";
+import { EXT_MARK, SCHOLAR_LIBRARY_NOTE, addPaper, bindExtLink, citeDialog, copySearchQuery, extMark, openExternal } from "./dialogs.js";
 import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
 import { openGraph, seedFromResult } from "./graph.js";
 import { state } from "./state.js";
@@ -41,6 +41,7 @@ export function renderDiscover(main) {
         <div class="searchbox"><input class="input" name="q" placeholder="주제, 제목, 저자, DOI, arXiv ID…" value="${esc(ds.q)}"></div>
         <select class="input" name="source" style="width:auto">${SOURCES.map(([k, n]) => `<option value="${k}" ${k === ds.source ? "selected" : ""}>${n}</option>`).join("")}</select>
         <button class="btn primary" style="height:40px;padding:0 20px">검색</button>
+        <button type="button" class="btn" style="height:40px" data-ai-find title="입력한 글을 질문으로 여러 검색어로 찾아 한국어로 요약해요">✦ AI로 찾기</button>
       </form>
       <div class="discover-filters">
         <span>기간</span>
@@ -71,6 +72,13 @@ export function renderDiscover(main) {
     search();
   };
   form.onsubmit = (e) => { e.preventDefault(); submit(); };
+  // 3단계 AI로 찾기 (시안 2.2절 · AD-5): 입력 글을 메모리로 넘기고 바로 실행. 2자 미만이면 입력칸에 초점만
+  $("[data-ai-find]", view).onclick = () => {
+    const q = $("[name=q]", view).value.trim();
+    if (q.length < 2) return $("[name=q]", view).focus();
+    state.askFind = q;
+    location.hash = "#/ask/find";
+  };
   $$("[data-sort] button", view).forEach((b) => (b.onclick = () => {
     ds.sort = b.dataset.v;
     $$("[data-sort] button", view).forEach((x) => x.classList.toggle("active", x === b));
@@ -220,24 +228,28 @@ function pager(page, total, go) {
   return p;
 }
 
-function resultCard(it) {
+// 결과 카드. AI로 찾기 출처(시안 5.2 · AD-3)는 { n, lite: true } — 번호 · Scholar 링크, 이 화면 안에서만 도는 버튼(피인용 · 참고문헌 · 관련)은 뺌
+export function resultCard(it, { n = null, lite = false } = {}) {
   const venue = [it.venue, it.year].filter(Boolean).join(", ");
+  const scholar = lite ? scholarUrl(it.title || it.doi || "") : null;
+  const titleLabel = n ? ` aria-label="출처 ${n}: ${esc(it.title)}"` : "";
   const inha = paperProxyTarget(it); // 학교 프록시로 열 주소 — 없으면 링크를 그리지 않음
   const host = it.pdf_url ? (() => { try { return new URL(it.pdf_url).hostname.replace(/^www\./, ""); } catch { return "PDF"; } })() : "";
   const card = el(`<div class="result">
-    <div class="r-title">${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener">${esc(it.title)}</a>` : esc(it.title)}</div>
+    <div class="r-title">${n ? `<span class="cite-ref" aria-hidden="true">${n}</span>` : ""}${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener"${titleLabel}>${esc(it.title)}</a>` : `<span tabindex="-1"${titleLabel}>${esc(it.title)}</span>`}</div>
     <div class="r-meta">${esc(authorsShort(it.authors, 4))}${venue ? ` - ${esc(venue)}` : ""}${it.doi ? ` - doi:${esc(it.doi)}` : it.arxiv_id ? ` - arXiv:${esc(it.arxiv_id)}` : ""}</div>
     ${it.tldr ? `<div class="r-tldr"><b>TL;DR</b> ${esc(it.tldr)}</div>` : ""}
     ${it.abstract ? `<div class="r-abs clamp" title="눌러서 펼치기">${esc(it.abstract)}</div>` : ""}
     <div class="r-actions">
       <span data-lib></span>
       <button class="link" data-cite>인용</button>
-      ${it.cited_by_count != null ? `<button class="link" data-g="cited_by">피인용 ${fmtNum(it.cited_by_count)}</button>` : ""}
+      ${lite ? "" : `${it.cited_by_count != null ? `<button class="link" data-g="cited_by">피인용 ${fmtNum(it.cited_by_count)}</button>` : ""}
       <button class="link" data-g="references">참고문헌</button>
-      <button class="link" data-g="related">관련 논문</button>
+      <button class="link" data-g="related">관련 논문</button>`}
       <button class="link" data-graph-open title="이 논문과 주제가 가까운 논문들을 그래프로 봐요">그래프</button>
       ${safeUrl(it.pdf_url) ? `<a href="${esc(safeUrl(it.pdf_url))}" target="_blank" rel="noopener">[PDF] ${esc(host)}</a>` : ""}
       ${inha ? `<a class="ext-link" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${INHA_OPEN_TITLE}">${esc(INHA.buttons.view)}${EXT_MARK}</a>` : ""}
+      ${scholar ? `<a class="ext-link" href="${esc(scholar)}" target="_blank" rel="noopener noreferrer" data-scholar-open title="${esc(SCHOLAR_LIBRARY_NOTE)}">${esc(INHA.buttons.scholar)}${EXT_MARK}</a>` : ""}
     </div></div>`);
   const inhaLink = $("[data-inha-open]", card);
   if (inhaLink) bindExtLink(inhaLink);

@@ -165,6 +165,13 @@ export function fmtDate(iso) {
 }
 
 // 수식($..$, $$..$$, \(..\), \[..\])을 먼저 KaTeX로 바꿔 두고 마크다운을 렌더링한다
+// AI 답 · 마크다운을 그릴 때: 바깥 주소를 부르는 그림 · 미디어 · style(배경 그림)과 폼(가짜 입력 · 보내기)을 막는다
+// (3단계 품질팀 M1 · N4 — 읽음 추적 · 주소 유출 · 피싱 방지)
+export const MD_PURIFY = {
+  FORBID_TAGS: ["img", "image", "picture", "source", "video", "audio", "form", "input", "button", "textarea", "select", "style"],
+  FORBID_ATTR: ["style", "srcset", "background"],
+};
+
 export function renderMarkdown(text, { citations = false } = {}) {
   if (!text) return "";
   const store = [];
@@ -182,7 +189,7 @@ export function renderMarkdown(text, { citations = false } = {}) {
     .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => keep(tex(m.trim(), false)))
     .replace(/(^|[^\\$])\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d)/g, (_, pre, m) => pre + keep(tex(m, false)));
   let html = window.marked ? window.marked.parse(src, { breaks: true, gfm: true }) : `<p>${esc(src)}</p>`;
-  html = window.DOMPurify ? window.DOMPurify.sanitize(html) : esc(src);
+  html = window.DOMPurify ? window.DOMPurify.sanitize(html, MD_PURIFY) : esc(src);
   // 수식·인용 번호는 정화한 뒤 텍스트 노드에서만 바꾼다 (속성 안의 같은 글자는 건드리지 않는다)
   const t = document.createElement("template");
   t.innerHTML = html;

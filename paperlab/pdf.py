@@ -109,3 +109,10 @@ def extract(data: bytes) -> PdfInfo:
 def page_count(data: bytes) -> int:
     with pymupdf.open(stream=data, filetype="pdf") as doc:
         return doc.page_count
+
+
+def text_blocks(data: bytes) -> list[tuple[float, float, list[tuple]]]:
+    """쪽마다 (폭, 높이, [(x0, y0, x1, y1, 글), …]) — 글 블록만 (3단계 조각 좌표, 명세 10.2절)"""
+    with pymupdf.open(stream=data, filetype="pdf") as doc:
+        return [(page.rect.width, page.rect.height,
+                 [b[:5] for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]) for page in doc]

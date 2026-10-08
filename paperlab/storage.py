@@ -3,6 +3,7 @@
 키 규칙 (7.1절)
 - 논문 PDF: users/{user_id}/papers/{paper_id}.pdf      ← paper_key()
 - 올리는 중: incoming/{user_id}/{upload_id}.pdf        ← incoming_key()
+- 벡터 파일: users/{user_id}/rag/{paper_id}.v{ver}.{gen}.bin ← rag_key() (3단계 8.1절 — 서명 주소를 만들지 않음)
 - DB 백업:  backups/db/{YYYYMMDD}.dump                ← backup_key() (관리 명령 전용)
 
 사용자 요청 경로는 `UserStorage`만 쓴다. 모든 동작이 키가 users/{uid}/ 또는 incoming/{uid}/로 시작하는지
@@ -15,6 +16,7 @@ import hashlib
 import hmac
 import logging
 import re
+import secrets
 import threading
 import time
 import uuid
@@ -30,6 +32,8 @@ PDF_TYPE = "application/pdf"
 # 키 · id 검사는 항상 fullmatch (re.match + `$`는 끝 줄바꿈 앞에서도 맞음 — 승인자 L2)
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _PAPER_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/papers/([1-9][0-9]{0,18})\.pdf$")
+_RAG_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/rag/([1-9][0-9]{0,18})\.v([a-z0-9]{1,16})\.([0-9a-f]{8})\.bin$")
+RAG_TYPE = "application/octet-stream"
 _INCOMING_KEY_RE = re.compile(r"^incoming/([0-9a-f-]{36})/([0-9a-f-]{36})\.pdf$")
 _BACKUP_KEY_RE = re.compile(r"^backups/db/\d{8}\.dump$")
 
@@ -66,6 +70,14 @@ def incoming_key(uid: str, upload_id: str) -> str:
     return f"incoming/{uid}/{upload_id}.pdf"
 
 
+def rag_key(uid: str, paper_id: int, version: str) -> str:
+    """벡터 파일 키. gen = 쓸 때마다 새 16진수 8자리(새 키에 쓰고 DB 포인터만 바꿔 교체 — 8.4절)"""
+    key = f"users/{_check_uuid(uid, '사용자 id')}/rag/{paper_id}.v{version}.{secrets.token_hex(4)}.bin"
+    if isinstance(paper_id, bool) or not isinstance(paper_id, int) or not _RAG_KEY_RE.fullmatch(key):
+        raise StorageKeyError("벡터 파일 키 형식이 틀렸어요")
+    return key
+
+
 def backup_key(day: str) -> str:
     key = f"backups/db/{day}.dump"
     if not _BACKUP_KEY_RE.fullmatch(key):
@@ -74,11 +86,11 @@ def backup_key(day: str) -> str:
 
 
 def check_user_key(uid: str, key: str) -> str:
-    """키가 그 사용자의 users/{uid}/papers/{id}.pdf 또는 incoming/{uid}/{uuid}.pdf 인지 확인한다."""
+    """키가 그 사용자의 users/{uid}/papers/{id}.pdf · users/{uid}/rag/….bin · incoming/{uid}/{uuid}.pdf 인지 확인한다."""
     _check_uuid(uid, "사용자 id")
     if not isinstance(key, str) or not key:
         raise StorageKeyError("빈 키")
-    m = _PAPER_KEY_RE.fullmatch(key) or _INCOMING_KEY_RE.fullmatch(key)
+    m = _PAPER_KEY_RE.fullmatch(key) or _RAG_KEY_RE.fullmatch(key) or _INCOMING_KEY_RE.fullmatch(key)
     if not m or m.group(1) != uid:
         raise StorageKeyError("이 사용자의 저장소 키가 아니에요")
     return key
@@ -402,11 +414,17 @@ class UserStorage:
     def check(self, key: str) -> str:
         return check_user_key(self.uid, key)
 
+    def _pdf_only(self, key: str) -> str:
+        """서명 주소는 PDF · 올리는 중 키에만 — 벡터 파일은 브라우저로 가지 않는다(3단계 8.1절, AC-S02)"""
+        if _RAG_KEY_RE.fullmatch(self.check(key)):
+            raise StorageKeyError("서명 주소를 만들 수 없는 키예요")
+        return key
+
     def create_upload(self, key: str) -> dict:
-        return self.storage.create_upload(self.check(key), PDF_TYPE)
+        return self.storage.create_upload(self._pdf_only(key), PDF_TYPE)
 
     def sign_get(self, key: str, filename: str = "") -> dict:
-        return self.storage.sign_get(self.check(key), filename=filename)
+        return self.storage.sign_get(self._pdf_only(key), filename=filename)
 
     def get(self, key: str) -> bytes:
         return self.storage.get(self.check(key))
@@ -414,8 +432,8 @@ class UserStorage:
     def head(self, key: str) -> int | None:
         return self.storage.head(self.check(key))
 
-    def put(self, key: str, data: bytes) -> None:
-        self.storage.put(self.check(key), data, PDF_TYPE)
+    def put(self, key: str, data: bytes, content_type: str = PDF_TYPE) -> None:
+        self.storage.put(self.check(key), data, content_type)
 
     def move(self, src: str, dst: str) -> None:
         self.storage.move(self.check(src), self.check(dst))

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ENGINES = ("claude", "codex", "gemini")
-JOB_KINDS = ("summary", "chat", "write")
+JOB_KINDS = ("summary", "chat", "write", "find", "verify")  # 작업별 엔진 설정 (3단계: AI로 찾기 · 인용 검증 — K-15)
 # 2단계 엔진 라우팅 (명세 9.4, 확정 U1: 기본은 모두 claude). ai_engine은 더 이상 쓰지 않는다(읽지도 저장하지도 않음 — AC-31)
 DEFAULT_ROUTING = {k: ["claude"] for k in JOB_KINDS}
 CLI_MODEL_CHOICES = {"claude": ("default", "opus", "sonnet", "haiku"), "codex": ("default",), "gemini": ("default",)}

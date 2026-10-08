@@ -23,6 +23,10 @@ dependencies = [
   "boto3>=1.34",
   "PyJWT[crypto]>=2.8",
   "cryptography>=42",
+  # 3단계 RAG (명세 6.3절): 벡터 행렬 · 서버 PC 로컬 임베딩(EmbeddingGemma ONNX — 모델 파일은 admin rag-model --download)
+  "numpy>=1.26",
+  "onnxruntime>=1.18",
+  "tokenizers>=0.19",
 ]
 
 [project.optional-dependencies]
@@ -39,4 +43,5 @@ testpaths = ["tests"]
 markers = [
   "db: 테스트용 Supabase 프로젝트(SUPABASE_TEST_*)가 필요한 테스트",
   "r2: 실환경 R2 계약 테스트 (PAPERLAB_R2_CONTRACT=1 일 때만)",
+  "model: 실제 임베딩 모델 파일이 있을 때만 (PAPERLAB_EMBED_MODEL_DIR)",
 ]

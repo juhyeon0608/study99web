@@ -258,6 +258,14 @@ try {
   if ($updated) { Write-PLLog -LogFile $Log -Message $result }
   else { Write-PLLog -LogFile $Log -Level ERROR -Message $result }
 }
+# 10. (3단계 명세 6.3절) 임베딩 모델 파일이 있는지만 확인 — 없으면 WARN 만(서버는 낱말 검색만으로 동작, 종료 코드 영향 없음)
+if ($updated -and -not $DryRun) {
+  $code = Invoke-PLNative -FilePath $Py -Arguments @('-m', 'paperlab.admin', '--env-file', $EnvFile, 'rag-model') -WorkingDirectory $AppDir
+  if ($code -ne 0) {
+    Write-PLLog -LogFile $Log -Level WARN -Message ("임베딩 모델 파일이 없거나 틀려요 — AI 질문은 낱말 검색만 해요. 받기: " +
+      "python -m paperlab.admin rag-model --download (서버 PC 계정으로, deploy\server-pc\README.md '임베딩 모델')")
+  }
+}
 # 9. PC 앱 설치 파일 빌드 — 서버 재시작 · 상태 확인이 끝난 뒤(빌드가 서버 반영을 늦추거나 막지 않게). 실패는 WARN 만
 if ($updated) {
   if ($Ref) {

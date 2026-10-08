@@ -124,9 +124,13 @@ def register(app: FastAPI, db: Database, allowlist, ws: WorkerState, guide, runn
         return out
 
     def enqueue_if_api(lib, job_id: int) -> None:
-        r = lib._one("select user_id from paperlab.jobs where id = %s and user_id = %s and runner = 'api' "
-                     "and status = 'queued'", (job_id, lib.uid))
-        return (lambda: runner.enqueue(job_id, str(r["user_id"]))) if r else (lambda: None)
+        r = lib._one("select user_id, runner, (kind = 'find' and params ? 'queries' and not params ? 'candidates') as held "
+                     "from paperlab.jobs where id = %s and user_id = %s and status = 'queued'", (job_id, lib.uid))
+        if r and r["runner"] == "api":
+            return lambda: runner.enqueue(job_id, str(r["user_id"]))
+        if r and r["held"]:  # AI로 찾기 ①단계(검색어) 결과 → 서버가 검색한 뒤 ②단계로 (3단계 13.2절)
+            return lambda: runner.prepare_find(job_id, str(r["user_id"]))
+        return lambda: None
 
     def version_gate(body: dict, d: dict) -> JSONResponse | None:
         try:

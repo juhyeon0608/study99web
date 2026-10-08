@@ -173,12 +173,24 @@ function altR() {
   focusPick();
 }
 
-// 왼쪽 "이 원고의 인용" · 자동완성 [보기]: peek = 원고 입력을 끊지 않음(초점 그대로)
-function openFrom(pid, { peek = false, title = "" } = {}) {
+// 왼쪽 "이 원고의 인용" · 자동완성 [보기]: peek = 원고 입력을 끊지 않음(초점 그대로).
+// page: PDF 탭의 그 쪽으로 (3단계 인용 검증 근거 — 시안 6.2절)
+function openFrom(pid, { peek = false, title = "", page = null } = {}) {
+  P.goPage = page ? { pid, page } : null;
   if (!P.open) show({ focus: false, pid });
   else if (P.current !== pid || P.ext) openPaper(pid);
+  else goPending();
   if (peek) say("참고 패널에서 열었어요: " + (title || "논문"));
   else focusPick();
+}
+
+function goPending() {
+  const g = P.goPage;
+  if (!g || !P.paper || P.paper.id !== g.pid) return;
+  P.goPage = null;
+  setTab("pdf");
+  embedPdf(g.page);
+  say(`참고 패널에서 p.${g.page}를 열었어요`);
 }
 
 // ------------------------------------------------------------------ 틀 · 고르기 상자 · 탭
@@ -380,6 +392,7 @@ async function openPaper(pid, { user = false } = {}) {
   drawPick();
   drawTab();
   markCiteRows();
+  goPending();
 }
 
 // 추천에서 연 서재 밖 논문: 정보 탭만(메모리에만 — 다른 논문으로 바꾸면 사라짐)

@@ -21,3 +21,8 @@ node_modules/
 # 데스크톱 앱 (2단계 2b): 아이콘 폴더는 커밋(위 build/ 규칙의 예외), app.css 사본은 빌드 생성물(PD-5)
 !desktop/build/
 desktop/ui/app.css
+
+# 3단계 임베딩 모델 파일 (서버 PC D:\PaperLab\models — 저장소에 넣지 않음, admin rag-model --download)
+models/
+*.onnx
+*.onnx_data

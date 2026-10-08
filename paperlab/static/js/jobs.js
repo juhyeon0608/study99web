@@ -6,7 +6,7 @@ import { state } from "./state.js";
 import { $, $$, copyText, el, errorToast, esc, toast } from "./ui.js";
 
 export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" };
-const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기" };
+const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증" };
 const ACTIVE = new Set(["queued", "running"]);
 export const ICON_CLOCK = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"/></svg>`;
 export const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
@@ -23,9 +23,10 @@ const ERROR_LABELS = {
   cli_model: "고른 CLI 모델을 쓸 수 없음", cli_timeout: "시간 제한을 넘김", cli_bad_output: "결과를 읽지 못함", bad_output: "결과를 읽지 못함",
   cli_exit: "CLI가 오류로 끝남", lease_exhausted: "PC 연결이 계속 끊김", lease_expired: "PC 연결이 끊김", input_too_large: "논문 본문이 너무 김",
   output_too_large: "결과가 너무 김", bad_input: "읽을 수 있는 본문이 없음",
+  index_failed: "색인하지 못함", search_failed: "검색 결과를 받지 못함", // 3단계
 };
 export const errorLabel = (code, engine = "") => (ERROR_LABELS[code] || "실패").replace("{p}", engine);
-export const slotName = (s) => (s.runner === "api" ? `${COMPANY[s.engine]} API` : `PC의 ${s.engine}`);
+export const slotName = (s) => (s.engine === "local" ? "서버에서 실행" : s.runner === "api" ? `${COMPANY[s.engine]} API` : `PC의 ${s.engine}`);
 
 // ------------------------------------------------------------------ 시간 (1장 — 사용자 PC 시간대)
 const pad = (n) => String(n).padStart(2, "0");
@@ -88,12 +89,12 @@ export function jobLine(job, verb = "실행", { elapsed = true } = {}) {
   const pct = typeof p.fraction === "number" ? ` · ${Math.round(p.fraction * 100)}%` : "";
   const dev = job.device ? `‘${job.device.name}’` : "PC";
   switch (st) {
-    case "api-queued": return `${COMPANY[job.engine]} API 차례를 기다리는 중`;
-    case "api-running": return `${COMPANY[job.engine]} API로 ${verb}하는 중${p.message ? ` · ${p.message}` : ""}${pct}`;
+    case "api-queued": return job.engine === "local" ? "서버 차례를 기다리는 중" : `${COMPANY[job.engine]} API 차례를 기다리는 중`;
+    case "api-running": return `${job.engine === "local" ? "서버에서" : `${COMPANY[job.engine]} API로`} ${verb}하는 중${p.message ? ` · ${p.message}` : ""}${pct}`;
     case "cli-waiting": return job.waiting_reason ? WAITING[job.waiting_reason].replace("{p}", job.engine) : "PC가 곧 작업을 가져가요";
     case "cli-running": return `${reassigned(job) ? "PC 연결이 끊겨 다른 PC로 넘겼어요 · " : ""}${dev}에서 실행 중 (${job.engine})${elapsed && job.started_at ? ` · ${elapsedText(job)}` : ""}`;
     case "cancelling": return "취소하는 중…";
-    case "succeeded": return job.runner === "api" ? `완료 · ${COMPANY[job.engine]} API` : `완료 · ${dev}(${job.engine})에서 실행`;
+    case "succeeded": return job.engine === "local" ? "완료 · 서버에서 실행" : job.runner === "api" ? `완료 · ${COMPANY[job.engine]} API` : `완료 · ${dev}(${job.engine})에서 실행`;
     case "failed": return `실패: ${job.error || errorLabel(job.error_code, job.engine)}`;
     default: return "취소됨";
   }
@@ -293,9 +294,25 @@ export async function renderJobs(main) {
   load();
 }
 
-function jobTitle(j) {
+// 3단계 작업 이름 · 여는 주소 (docs/design/phase3-ask-ui.md 7.1절)
+const SCOPE_LABEL = { library: "서재 전체", collection: "컬렉션", folder: "폴더" };
+export function kindLabel(j) {
+  return j.kind === "chat" && !j.paper_id && j.scope ? "서재 질문" : KIND_LABEL[j.kind] || j.kind;
+}
+export function jobTitle(j) {
   if (j.kind === "write") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "글쓰기 도우미";
+  if (j.kind === "verify") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "인용 검증 (원고가 지워졌어요)";
+  if (j.kind === "index") return "서재 색인";
+  if (j.kind === "find") return j.question ? `“${j.question.length > 40 ? `${j.question.slice(0, 40)}…` : j.question}”` : "AI로 찾기 (결과가 지워졌어요)";
+  if (j.kind === "chat" && !j.paper_id && j.scope) return SCOPE_LABEL[j.scope.type] || "서재 질문";
   return j.paper_title || "삭제된 논문";
+}
+export function jobHref(j) {
+  if (j.kind === "index") return "#/ask";
+  if (j.kind === "find") return `#/ask/find/j${j.id}`;
+  if (j.kind === "verify") return j.manuscript_id ? `#/write/${j.manuscript_id}` : "";
+  if (j.kind === "chat" && !j.paper_id && j.scope) return j.scope.type === "library" ? "#/ask" : `#/ask/${j.scope.type[0]}${j.scope.id}`;
+  return j.paper_id && j.kind !== "write" ? `#/read/${j.paper_id}` : "";
 }
 
 function drawList(list, jobs, tab, reload) {
@@ -328,7 +345,8 @@ function jobItem(j, reload) {
   const st = jobState(j);
   const active = ACTIVE.has(j.status);
   const title = jobTitle(j);
-  const href = j.paper_id && j.kind !== "write" ? `#/read/${j.paper_id}` : "";
+  const expired = j.kind === "find" && !j.question; // 24시간 정리로 질문 · 결과가 지워짐 (3단계 품질팀 L4)
+  const href = jobHref(j);
   const meta = [
     (j.route || []).map(slotName).join(" → "),
     j.started_at ? `${fmtClock(j.started_at)} 시작` : `${fmtClock(j.created_at)} 만듦`,
@@ -337,10 +355,10 @@ function jobItem(j, reload) {
   ].filter(Boolean).join(" · ");
   const tone = j.status === "failed" ? " bad" : j.status === "succeeded" ? " ok" : "";
   const li = el(`<li class="item-card" data-job-id="${j.id}" data-job-state="${st}">
-    <div class="item-head"><span class="chip">${KIND_LABEL[j.kind]}</span>
+    <div class="item-head"><span class="chip">${esc(kindLabel(j))}</span>
       ${href ? `<a class="item-title" href="${href}">${esc(title)}</a>` : `<span class="item-title">${esc(title)}</span>`}
       <span class="item-actions"></span></div>
-    <div class="status-line${tone}"><span class="grow" data-elapsed>${esc(jobLine(j))}</span></div>
+    <div class="status-line${tone}"><span class="grow" data-elapsed>${esc(expired && !active ? "만료됨 — 24시간이 지나 지워졌어요" : jobLine(j))}</span></div>
     <p class="item-meta">${esc(meta)}</p>
     ${(j.history || []).length ? `<details><summary>시도한 순서 보기</summary>${stepsHtml(j) || `<ol class="graph-steps">${j.history.map((h) => `<li data-state="failed">${esc(slotName(h))} <span class="graph-step-msg">${esc(errorLabel(h.error_code, h.engine))}</span></li>`).join("")}</ol>`}</details>` : ""}
   </li>`);
@@ -351,6 +369,8 @@ function jobItem(j, reload) {
     const c = btn("취소", "", async () => { c.disabled = true; try { await cancelJob(j.id); } catch (e) { errorToast(e); } reload(); });
     c.disabled = st === "cancelling";
     c.setAttribute("aria-label", `${title} 작업 취소`);
+  } else if (expired) {
+    // 다시 시도할 질문이 없음 — 버튼 없음
   } else if (j.status === "failed" || j.status === "cancelled") {
     btn("다시 시도", "primary", async () => { try { await retryJob(j.id); toast("작업을 다시 시작했어요", "success"); } catch (e) { errorToast(e); } reload(); });
   } else if (j.kind === "write" && j.result && j.result.text) {

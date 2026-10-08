@@ -260,15 +260,19 @@ def main(argv: list[str] | None = None, *, runner=run_server, acl_check=env_file
     try:
         from .downloads import releases_dir
         # 설치 파일 폴더: cloud.env · 환경 변수 PAPERLAB_RELEASES_DIR, 없으면 D:\PaperLab\releases (2단계 13.7.1절)
+        from .rag import load_embedder
+        # 3단계 임베딩 모델: cloud.env · 환경 변수 PAPERLAB_EMBED_MODEL_DIR, 없으면 D:\PaperLab\models\embeddinggemma-300m
         app = create_app(config, commit=commit, releases=releases_dir(env),
-                         diag_hang=(lambda: hang_file.exists()) if hang_file else None)
+                         diag_hang=(lambda: hang_file.exists()) if hang_file else None,
+                         embedder=load_embedder(env.get("PAPERLAB_EMBED_MODEL_DIR") or None))
     except (ConfigError, StorageError) as e:
         log.error(json.dumps({"message": "서버를 만들지 못했어요", "variables": getattr(e, "names", [])},
                              ensure_ascii=False))
         return 1
     log.info(json.dumps({"message": "서버 시작", "version": __version__, "commit": commit, "host": HOST,
                          "port": args.port, "storage": config.storage_backend,
-                         "allowlist": "on" if config.allowlist_enabled else "off"}, ensure_ascii=False))
+                         "allowlist": "on" if config.allowlist_enabled else "off",
+                         "embed": app.state.rag.embedder is not None}, ensure_ascii=False))
     runner(app, args.port)
     return 0
 

@@ -315,6 +315,8 @@ class FakeAI:
     def __init__(self):
         self.calls = []
         self.gate = None  # threading.Event — 요약을 그 자리에서 기다리게 (실행 중 취소 · 동시 실행 시험)
+        self.prompts = []  # 3단계 complete에 들어온 (시스템, 프롬프트)
+        self.reply = None  # 3단계 complete 답: 글 또는 (system, prompt, schema) → 글
 
     def model_name(self, engine="claude"):
         return f"fake-{engine}"
@@ -346,6 +348,18 @@ class FakeAI:
         self._maybe_fail()
         yield {"type": "done", "text": text}
 
+    def complete(self, system, prompt, engine="claude", schema=None, schema_name="result"):
+        """3단계 범용 호출(서재 질문 · AI로 찾기 · 인용 검증)"""
+        self.calls.append(("complete", engine))
+        self.prompts.append((system, prompt))
+        self._maybe_fail()
+        text = self.reply(system, prompt, schema) if callable(self.reply) else (self.reply or "가짜 답이에요 [1][2].")
+        yield {"type": "delta", "text": text[:5]}
+        yield {"type": "done", "text": text}
+
+    def complete_text(self, system, prompt, engine="claude", schema=None, schema_name="result"):
+        return [ev for ev in self.complete(system, prompt, engine, schema, schema_name)][-1]["text"]
+
 
 def make_config(db_url: str, supabase_url: str = "https://test-ref.supabase.co", **kw):
     from paperlab.config import ServerConfig
@@ -362,7 +376,8 @@ class Cloud:
 
     __test__ = False
 
-    def __init__(self, project, session_db, users, ai=None, ai_factory=None, releases=None, runner_opts=None, **cfg):
+    def __init__(self, project, session_db, users, ai=None, ai_factory=None, releases=None, runner_opts=None,
+                 embedder=None, rag_cache=None, sources_factory=None, **cfg):
         from paperlab.server import create_app
         from paperlab.storage import FakeStorage
 
@@ -371,10 +386,10 @@ class Cloud:
         self.fake_ai = ai or FakeAI()
         config = make_config(project.app_db, supabase_url=project.url, supabase_anon_key=project.anon_key, **cfg)
         self.app = create_app(config, database=session_db, storage=self.storage,
-                              sources_factory=lambda get: FakeSources(),
+                              sources_factory=sources_factory or (lambda get: FakeSources()),
                               ai_factory=ai_factory or (lambda get: self.fake_ai),
                               releases=releases or Path(__file__).parent / "_no_releases",  # 설치 파일 없음(2a 기본)
-                              runner_opts=runner_opts)
+                              runner_opts=runner_opts, embedder=embedder, rag_cache=rag_cache)
         self.known_uids: set[str] = set()
 
     def user(self, allowed: bool = True) -> TestUser:

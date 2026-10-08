@@ -2,7 +2,8 @@
 // 워드(.docx)·한글(.hwpx) 내보내기 · 워드·한글 문서의 [@인용키] 변환
 
 import { api, downloadBlob, streamEvents } from "./api.js";
-import { ICON_WARN, cancelJob, errorLabel, retryJob, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
+import { sortVerify, vdName, verifyDoneText, verifyMarks, verifySummary } from "./ask.js";
+import { ICON_INFO, ICON_WARN, cancelJob, errorLabel, retryJob, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
 import { htmlToRuns, listStyles, renderClusters, styleOptions } from "./cite.js";
 import { settingsDialog } from "./dialogs.js";
 import {
@@ -13,10 +14,14 @@ import { ICON_REF, refPane } from "./refpane.js";
 import { CITE_RE, parseCitation } from "./refquote.js";
 import { state } from "./state.js";
 import {
-  $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles, popupMenu, toast,
+  $, $$, MD_PURIFY, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles, popupMenu,
+  toast,
 } from "./ui.js";
 
-const W = { m: null, saver: null, previewTimer: null, papers: null, view: "split", seq: 0, formats: null, fmt: null, ref: null };
+const W = { m: null, saver: null, previewTimer: null, papers: null, view: "split", seq: 0, formats: null, fmt: null, ref: null,
+  vd: null }; // vd: 3단계 인용 검증 { data, marks, stop, running }
+const ICON_VERIFY = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6zM9 12l2 2 4-4"/></svg>`;
+const VERIFY_TITLE = "원고의 인용 문장이 원문에 근거가 있는지 확인해요. 직접 인용은 글자를 대조하고, 나머지는 AI가 판정해요.";
 const MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
 const PEEK_KEY = MAC ? "⌘+Enter" : "Ctrl+Enter";
 const LONG = { duration: 8000 };
@@ -55,9 +60,9 @@ async function buildDocument(text, { style, locale, koreanFirst } = {}) {
   const clusterRuns = (n, fmt) => {
     const c = clusters[n];
     const r = rendered.clusters[n];
-    if (!r || !r.html) return [{ text: c.raw, ...fmt, warn: true }];
-    const runs = htmlToRuns(r.html, fmt);
-    if (r.missing && r.missing.length) runs.push({ text: ` [@${r.missing.join("; @")}?]`, warn: true });
+    if (!r || !r.html) return [{ text: c.raw, ...fmt, warn: true, cite: n }];
+    const runs = htmlToRuns(r.html, fmt).map((x) => ({ ...x, cite: n })); // cite = 인용 순번(인용 검증 표시 — AD-2)
+    if (r.missing && r.missing.length) runs.push({ text: ` [@${r.missing.join("; @")}?]`, warn: true, cite: n });
     return rendered.note ? [{ footnote: htmlToRuns(r.html) }] : runs;
   };
   const textRuns = (s, fmt) => {
@@ -139,21 +144,43 @@ function unescapeHtml(s) {
   return String(s).replace(/&(amp|lt|gt|quot|#39);/g, (_, e) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" }[e]));
 }
 
+// 인용 검증에서 약함 · 근거 없음인 인용 런을 감싼다 (시안 6.3절). 그 밖은 runHtml 그대로
 function runsHtml(runs, notes) {
-  return runs.map((r) => {
-    if (r.footnote) {
-      notes.push(r.footnote);
-      return `<sup class="fn-ref">${notes.length}</sup>`;
-    }
-    let h = esc(r.text);
-    if (r.code) h = `<code>${h}</code>`;
-    if (r.b) h = `<b>${h}</b>`;
-    if (r.i) h = `<i>${h}</i>`;
-    if (r.sup) h = `<sup>${h}</sup>`;
-    if (r.sub) h = `<sub>${h}</sub>`;
-    if (r.warn) h = `<span class="cite-warn" title="서재에 없는 인용키예요">${h}</span>`;
-    return h;
-  }).join("");
+  const marks = (W.vd && W.vd.marks) || new Map();
+  let out = "";
+  let group = null;
+  let buf = "";
+  const flush = () => {
+    if (group === null) return;
+    const mk = marks.get(group);
+    out += `<span class="cite-vd" data-verdict="${mk.verdict}" data-vd-claim="${mk.i}" role="button" tabindex="0" title="${esc(`${mk.name}${mk.reason ? ` — ${mk.reason}` : ""}`)}">${buf}</span><span class="sr-only">(인용 검증: ${esc(mk.name)})</span>`;
+    group = null;
+    buf = "";
+  };
+  for (const r of runs) {
+    const h = runHtml(r, notes);
+    if (r.cite != null && marks.has(r.cite)) {
+      if (group !== r.cite) { flush(); group = r.cite; }
+      buf += h;
+    } else { flush(); out += h; }
+  }
+  flush();
+  return out;
+}
+
+function runHtml(r, notes) {
+  if (r.footnote) {
+    notes.push(r.footnote);
+    return `<sup class="fn-ref">${notes.length}</sup>`;
+  }
+  let h = esc(r.text);
+  if (r.code) h = `<code>${h}</code>`;
+  if (r.b) h = `<b>${h}</b>`;
+  if (r.i) h = `<i>${h}</i>`;
+  if (r.sup) h = `<sup>${h}</sup>`;
+  if (r.sub) h = `<sub>${h}</sub>`;
+  if (r.warn) h = `<span class="cite-warn" title="서재에 없는 인용키예요">${h}</span>`;
+  return h;
 }
 
 function blocksToHtml(blocks) {
@@ -181,6 +208,8 @@ function blocksToHtml(blocks) {
 export function closeWriter() {
   if (W.ref) W.ref.destroy(); // 패널 닫기 · PDF 메모리 풀기 · 진행 중인 추천 멈춤
   W.ref = null;
+  if (W.vd && W.vd.stop) W.vd.stop();
+  W.vd = null;
   if (W.saver) W.saver.flush();
   W.saver = null;
   W.m = null;
@@ -312,17 +341,19 @@ export async function openManuscript(main, id) {
       <span class="menu-wrap"><button class="btn sm" data-ai>✦ AI 도우미 ▾</button></span>
       <button type="button" class="btn sm" data-ref-toggle aria-pressed="false" aria-controls="ref-pane" aria-keyshortcuts="Alt+R"
         title="참고 패널 (Alt+R)">${ICON_REF}참고</button>
+      <button type="button" class="btn sm" data-verify title="${VERIFY_TITLE}">${ICON_VERIFY}<span>인용 검증</span></button>
       <span class="spacer"></span>
       <div class="seg" data-view><button data-v="edit">편집</button><button data-v="split">나란히</button><button data-v="preview">미리보기</button></div>
     </div>
     <div class="writer-body">
       <aside class="writer-side"><div class="section-title" style="margin-top:0">개요</div><div data-outline></div>
-        <div class="section-title">이 원고의 인용</div><div data-cites class="small"></div></aside>
+        <div class="section-title">이 원고의 인용</div><div data-cites class="small"></div>
+        <div class="section-title hidden" id="vd-h">인용 검증</div><div class="small hidden" data-verify-box></div></aside>
       <div class="writer-edit"><textarea class="writer-ta" spellcheck="false" placeholder="# 제목\n\n## 1. 서론\n\n본문에 [@인용키] 로 인용을 넣으세요."></textarea></div>
       <div class="writer-preview"><div class="doc" data-doc></div></div>
       <aside class="panel ref-pane" id="ref-pane" aria-label="참고 패널"></aside>
     </div>
-    <div class="writer-status small muted" data-status></div>
+    <div class="writer-status small muted" data-status><span data-status-text></span> <span data-verify-sum></span></div>
     <div class="sr-only" role="status" data-ref-live></div></section>`);
   main.appendChild(view);
   const ta = $(".writer-ta", view);
@@ -337,6 +368,7 @@ export async function openManuscript(main, id) {
       await api.patch(`/api/manuscripts/${m.id}`, { content });
       m.content = content;
       saveState.textContent = "저장됨";
+      if (W.vd && W.vd.data && W.m === m) loadVerify(view, ta); // 저장 뒤 인용 검증을 지금 원고에 다시 맞춤(AI 없음 — 6.4절)
     } catch (e) { saveState.textContent = "저장 실패"; errorToast(e); }
   }, 800);
   W.saver = { flush: () => (ta.value !== m.content ? save.flush() : null) };
@@ -425,6 +457,26 @@ export async function openManuscript(main, id) {
     },
   });
   $("[data-ref-toggle]", view).onclick = () => W.ref && W.ref.toggle();
+  // 3단계 인용 검증 (시안 6장)
+  W.vd = { data: null, marks: new Map(), stop: null, running: false };
+  $("[data-verify]", view).onclick = () => runVerify(view, ta);
+  $("[data-verify-box]", view).addEventListener("click", (e) => {
+    const claim = e.target.closest("[data-vd-claim]");
+    if (claim) return selectClaim(view, ta, Number(claim.dataset.vdClaim));
+    const ev = e.target.closest("[data-vd-ev]");
+    if (ev && W.ref) W.ref.open(Number(ev.dataset.paper), { page: Number(ev.dataset.page), peek: true });
+    if (e.target.closest("[data-verify-again]")) runVerify(view, ta);
+  });
+  const docEl = $("[data-doc]", view);
+  const fromPreview = (e) => {
+    const mk = e.target.closest(".cite-vd[data-vd-claim]");
+    if (!mk || (e.type === "keydown" && e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    selectClaim(view, ta, Number(mk.dataset.vdClaim));
+  };
+  docEl.addEventListener("click", fromPreview);
+  docEl.addEventListener("keydown", fromPreview);
+  loadVerify(view, ta);
   $("[data-cites]", view).addEventListener("click", (e) => {
     const b = e.target.closest("button[data-ref-open]");
     if (b && W.ref) W.ref.open(Number(b.dataset.refOpen));
@@ -674,8 +726,158 @@ function drawStatus(view, ta) {
   const noSpace = body.replace(/\s/g, "").length;
   const words = (body.match(/\S+/g) || []).length;
   const cites = (text.match(CITE_RE) || []).length;
-  $("[data-status]", view).textContent =
+  $("[data-status-text]", view).textContent =
     `글자 ${chars.toLocaleString("ko-KR")}자 (공백 제외 ${noSpace.toLocaleString("ko-KR")}자) · 단어 ${words.toLocaleString("ko-KR")}개 · 인용 ${cites}곳`;
+}
+
+// ------------------------------------------------------------------ 인용 검증 (3단계 12장 · 시안 6장)
+async function loadVerify(view, ta) {
+  const m = W.m;
+  let data;
+  try { data = await api.get(`/api/manuscripts/${m.id}/verify`); } catch { return; }
+  if (W.m !== m) return;
+  showVerify(view, ta, data);
+}
+
+async function runVerify(view, ta) {
+  const m = W.m;
+  const btn = $("[data-verify]", view);
+  if (W.vd.running) return;
+  W.vd.running = true;
+  btn.disabled = true;
+  btn.setAttribute("aria-busy", "true");
+  btn.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>검증 중…</span>`;
+  try {
+    if (W.saver) await W.saver.flush(); // 저장되지 않은 글은 먼저 저장
+    const data = await api.post(`/api/manuscripts/${m.id}/verify`, {});
+    if (W.m !== m) return;
+    showVerify(view, ta, data, { announce: !(data.job && ["queued", "running"].includes(data.job.status)) });
+  } catch (e) {
+    errorToast(e);
+  } finally {
+    if (W.m === m) {
+      W.vd.running = false;
+      btn.disabled = false;
+      btn.removeAttribute("aria-busy");
+      btn.innerHTML = `${ICON_VERIFY}<span>인용 검증</span>`;
+    }
+  }
+}
+
+function showVerify(view, ta, data, { announce = false } = {}) {
+  const vd = W.vd;
+  if (!vd) return;
+  vd.data = data;
+  vd.marks = verifyMarks(data.items);
+  drawVerify(view, ta);
+  renderPreview(view, ta);
+  if (announce) sayWriter(view, verifyDoneText(data.counts));
+  const job = data.job;
+  if (vd.stop) { vd.stop(); vd.stop = null; }
+  if (job && ["queued", "running"].includes(job.status)) {
+    const me = vd;
+    vd.stop = watchJob(job.id, (j) => {
+      if (W.vd !== me || !j) return;
+      me.data.job = j;
+      if (["queued", "running"].includes(j.status)) return drawVerify(view, ta);
+      me.stop = null;
+      api.get(`/api/manuscripts/${W.m.id}/verify`).then((d) => {
+        if (W.vd !== me) return;
+        showVerify(view, ta, d, { announce: j.status === "succeeded" });
+      }).catch(() => {});
+    }, { first: job });
+  }
+}
+
+function sayWriter(view, text) {
+  const live = $("[data-ref-live]", view);
+  if (!live) return;
+  live.textContent = "";
+  setTimeout(() => { if (live.isConnected) live.textContent = text; }, 60);
+}
+
+function drawVerify(view, ta) {
+  const box = $("[data-verify-box]", view);
+  const head = $("#vd-h", view);
+  const sum = $("[data-verify-sum]", view);
+  const data = W.vd && W.vd.data;
+  const job = data && data.job;
+  const has = data && (data.items.length || job);
+  box.classList.toggle("hidden", !has);
+  head.classList.toggle("hidden", !has);
+  const sumText = has && window.matchMedia("(max-width: 1100px)").matches ? verifySummary(data.counts) : ""; // 왼쪽 칸이 숨는 폭만 (AD-4)
+  sum.textContent = sumText ? `· ${sumText}` : "";
+  if (!has) { box.innerHTML = ""; return; }
+  box.innerHTML = "";
+  if (data.unverified) {
+    const n = el(`<div class="notice" data-tone="warn" data-verify-stale>${ICON_WARN}<div>원고가 바뀌었어요 — 새로 쓴 인용 ${data.unverified}개는 아직 검증 전이에요. <button type="button" class="link" data-verify-again>다시 검증</button></div></div>`);
+    box.appendChild(n);
+  }
+  if (job && ["queued", "running"].includes(job.status)) {
+    const line = statusLineEl(async () => { try { await cancelJob(job.id); } catch (e) { errorToast(e); } });
+    line.dataset.verifyJob = "";
+    setStatusLine(line, job, "확인");
+    const pending = (data.counts || {}).pending || 0;
+    if (pending) $(".grow", line).textContent = `문장 ${pending}개를 AI가 확인하고 있어요 · ${$(".grow", line).textContent}`;
+    box.appendChild(line);
+  } else if (job && job.status === "succeeded" && job.result && job.result.remaining) {
+    box.appendChild(el(`<div class="notice" data-tone="info">${ICON_INFO}<div>남은 ${job.result.remaining}개는 [인용 검증]을 다시 누르면 확인해요.</div></div>`));
+  } else if (job && job.status === "failed" && (data.counts || {}).pending) {
+    box.appendChild(el(`<div class="status-line bad">${ICON_WARN}<span class="grow">${esc(job.error || "AI 판정을 하지 못했어요")}</span></div>`));
+  }
+  const counts = data.counts || {};
+  const chips = el(`<div class="chips" aria-label="검증 결과 요약" style="margin:6px 0"></div>`);
+  for (const [v, label] of [["unsupported", "근거 없음"], ["weak", "약함"], ["unchecked", "확인 못 함"], ["pending", "확인 중"], ["supported", "근거 있음"]]) {
+    if (counts[v]) chips.appendChild(el(`<span class="chip" data-verdict="${v}"><span class="vd">${label} ${counts[v]}</span></span>`));
+  }
+  box.appendChild(chips);
+  const sorted = sortVerify(data.items);
+  const row = (it) => {
+    const li = el(`<li class="cite-row" data-verdict="${esc(it.verdict)}" data-method="${esc(it.method)}"><span class="vd">${esc(vdName(it))}</span>
+      <button type="button" class="graph-row-btn" data-vd-claim="${it.i}" title="편집기에서 이 문장 선택"></button></li>`);
+    const b = $("button", li);
+    b.textContent = `${it.sentence || ""} `;
+    b.appendChild(el(`<code>@${esc(it.citekey)}</code>`));
+    if (it.reason) { const r = el(`<span class="muted"></span>`); r.textContent = it.reason; li.appendChild(r); }
+    const ev = (it.evidence || []).filter((e) => e.page);
+    if (ev.length && it.paper_id) {
+      const span = el(`<span class="muted">근거 후보 </span>`);
+      for (const e of ev) {
+        const p = el(`<button type="button" class="page-link" data-vd-ev data-paper="${Number(it.paper_id)}" data-page="${Number(e.page)}" title="참고 패널에서 p.${Number(e.page)} 열기">p.${Number(e.page)}</button>`);
+        if (e.text) p.title += ` — ${e.text}`;
+        span.append(p, " ");
+      }
+      li.appendChild(span);
+    }
+    return li;
+  };
+  const problems = sorted.filter((it) => it.verdict !== "supported");
+  if (problems.length) {
+    const ol = el(`<ol class="graph-items" aria-labelledby="vd-h"></ol>`);
+    problems.forEach((it) => ol.appendChild(row(it)));
+    box.appendChild(ol);
+  }
+  const good = sorted.filter((it) => it.verdict === "supported");
+  if (good.length) {
+    const det = el(`<details><summary class="small">근거 있음 ${good.length}개 보기</summary><ol class="graph-items"></ol></details>`);
+    good.forEach((it) => $("ol", det).appendChild(row(it)));
+    box.appendChild(det);
+  }
+}
+
+// 편집기에서 그 문장 선택 · 스크롤 · 초점 (편집 보기가 숨어 있으면 나란히 보기로 — 6.2절)
+function selectClaim(view, ta, i) {
+  const it = W.vd && W.vd.data && W.vd.data.items[i];
+  if (!it) return;
+  if (view.classList.contains("view-preview")) {
+    const split = $('[data-view] button[data-v="split"]', view);
+    if (split) split.click();
+  }
+  ta.focus();
+  ta.setSelectionRange(it.start, it.end);
+  ta.blur(); // 커서 위치로 스크롤 (drawOutline과 같은 방법)
+  ta.focus();
+  ta.setSelectionRange(it.start, it.end);
 }
 
 function drawCites(view, built) {
@@ -887,7 +1089,7 @@ async function runAi(mode, ta) {
   const out = $(".ai-out", body);
   const showResult = () => {
     out.style.whiteSpace = "normal";
-    out.innerHTML = window.DOMPurify.sanitize(window.marked.parse(result));
+    out.innerHTML = window.DOMPurify.sanitize(window.marked.parse(result), MD_PURIFY);
   };
   let jobEv = null;
   try {
@@ -1063,7 +1265,7 @@ async function exportAs(format, view, ta) {
 }
 
 function stripWarn(blocks) {
-  return blocks.map((b) => (b.runs ? { ...b, runs: b.runs.map(({ warn, ...r }) => r) } : b));
+  return blocks.map((b) => (b.runs ? { ...b, runs: b.runs.map(({ warn, cite, ...r }) => r) } : b));
 }
 
 function copyFormatted(view) {

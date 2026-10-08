@@ -16,7 +16,7 @@ from datetime import timedelta
 
 from psycopg.types.json import Jsonb
 
-from . import ai
+from . import ai, find, rag, verify
 from .config import ENGINES, JOB_KINDS, UserSettings, redact
 from .db import Library, iso, now_dt
 
@@ -27,8 +27,11 @@ LEASE_S = 90            # 리스 (하트비트 3번을 놓치면 만료). 테스
 HEARTBEAT_S = 30
 MAX_ATTEMPTS = 3        # CLI 잡기 횟수(재할당 포함)
 API_MAX_ATTEMPTS = 2    # 같은 API 칸 다시 실행 한도 (15.2절)
-DEADLINE_S = {"summary": 24 * 3600, "chat": 30 * 60, "write": 30 * 60}   # CLI 대기 기한 (확정 U7)
-TIMEOUT_S = {"summary": 1200, "chat": 600, "write": 600}                 # CLI 시간 제한 (11.5절)
+DEADLINE_S = {"summary": 24 * 3600, "chat": 30 * 60, "write": 30 * 60,   # CLI 대기 기한 (확정 U7)
+              "find": 30 * 60, "verify": 24 * 3600}                        # 3단계 14.2절
+TIMEOUT_S = {"summary": 1200, "chat": 600, "write": 600, "find": 600, "verify": 1200}  # CLI 시간 제한 (11.5절)
+ALL_KINDS = JOB_KINDS + ("index",)   # index는 서버 안 색인(엔진 local) — 작업별 엔진 설정에는 없음
+FIND_KEEP_HOURS = 24                 # AI로 찾기 질문 · 결과는 24시간 뒤 비움 (K-11)
 ABS_GRACE_S = 300       # 서버 쪽 절대 기한 = 이번 잡기 + 시간 제한 + 5분 (11.5절)
 MAX_ACTIVE_JOBS = 30
 MAX_DEVICES = 10
@@ -70,6 +73,8 @@ DEFAULT_ERRORS = {
     "no_worker_timeout": "켜진 PC가 없어서 작업을 끝내지 못했어요",
     "input_too_large": "논문 본문이 너무 길어서 CLI로 보낼 수 없어요",
     "apply_failed": "결과를 저장하지 못했어요",
+    "index_failed": "색인하지 못한 논문이 있어요",
+    "search_failed": find.SEARCH_FAILED,
 }
 INTERRUPTED = "화면 연결이 끊겨 멈췄어요"
 NO_ROUTE = "AI를 쓸 수 있는 방법이 없어요. 설정에서 API 키를 넣거나, PC에 PaperLab 앱을 설치하고 연결해 주세요."
@@ -341,7 +346,7 @@ select j.*, p.title as paper_title, d.name as device_name, m.title as manuscript
   from paperlab.jobs j
   left join paperlab.papers p on p.id = j.paper_id and p.user_id = j.user_id
   left join paperlab.devices d on d.id = j.device_id and d.user_id = j.user_id
-  left join paperlab.manuscripts m on j.kind = 'write' and m.user_id = j.user_id
+  left join paperlab.manuscripts m on j.kind in ('write', 'verify') and m.user_id = j.user_id
        and m.id = case when j.params ->> 'manuscript_id' ~ '^[0-9]{1,15}$' then (j.params ->> 'manuscript_id')::bigint end
  where j.user_id = %(uid)s
 """
@@ -371,14 +376,16 @@ def job_view(r: dict, devices: list[dict], free: dict) -> dict:
         "id": r["id"], "kind": r["kind"], "status": r["status"], "runner": r["runner"], "engine": r["engine"],
         "route": r["route"], "route_index": r["route_index"],
         "paper_id": r["paper_id"], "paper_title": r.get("paper_title"),
-        "manuscript_title": r.get("manuscript_title") if r["kind"] == "write" else None,
+        "manuscript_title": r.get("manuscript_title") if r["kind"] in ("write", "verify") else None,
+        "manuscript_id": params.get("manuscript_id") if r["kind"] in ("write", "verify") else None,
+        "scope": params.get("scope") if r["kind"] == "chat" else None,
         "device": {"id": r["device_id"], "name": r["device_name"]} if r.get("device_id") and r.get("device_name") else None,
         "waiting_reason": waiting_reason(r, devices, free),
         "progress": r["progress"] or {}, "attempts": r["attempts"], "error_code": r["error_code"], "error": r["error"],
         "cancel_requested": r["cancel_requested"], "history": r["history"] or [],
         "deadline_at": iso(r["deadline_at"]) if r["status"] == "queued" else None,
         # 화면용 덧붙임: 대화 탭을 다시 열 때 질문 말풍선 · 작업 목록 [결과 복사] (디자인 7 · 9장)
-        "question": params.get("question") if r["kind"] == "chat" else None,
+        "question": params.get("question") if r["kind"] in ("chat", "find") else None,
         "result": r["result"],
         "created_at": iso(r["created_at"]), "started_at": iso(r["started_at"]), "finished_at": iso(r["finished_at"]),
     }
@@ -401,7 +408,7 @@ def list_jobs(lib: Library, free: dict, status: str = "active", paper_id: int | 
               limit: int = 50) -> dict:
     cond = {"active": " and j.status in ('queued', 'running')",
             "recent": " and j.created_at > now() - interval '7 days'", "all": ""}.get(status)
-    if cond is None or (kind and kind not in JOB_KINDS):
+    if cond is None or (kind and kind not in ALL_KINDS):
         raise JobError(400, "조건이 올바르지 않아요", "bad_request")
     params = {"uid": lib.uid, "pid": paper_id, "kind": kind, "limit": max(1, min(int(limit), 200))}
     if paper_id is not None:
@@ -412,6 +419,13 @@ def list_jobs(lib: Library, free: dict, status: str = "active", paper_id: int | 
     total = lib._one("select count(*)::int as n from paperlab.jobs j where j.user_id = %(uid)s" + cond, params)["n"]
     devices = device_rows(lib)
     return {"jobs": [job_view(r, devices, free) for r in rows], "total": total}
+
+
+def latest_job(lib: Library, free: dict, cond: str, params: dict | None = None) -> dict | None:
+    """조건에 맞는 작업 중 진행 중인 것 먼저, 없으면 가장 최근 것 (3단계: index · verify)"""
+    r = lib._one(_JOB_SELECT + cond + " order by (j.status in ('queued', 'running')) desc, j.created_at desc, j.id desc "
+                 "limit 1", {"uid": lib.uid, **(params or {})})
+    return job_view(r, device_rows(lib), free) if r else None
 
 
 def latest_summary_job(lib: Library, paper_id: int, free: dict) -> dict | None:
@@ -451,6 +465,9 @@ def sweep(lib: Library) -> None:
            "and coalesce(finished_at, updated_at) < now() - make_interval(days => %s)", (lib.uid, KEEP_DONE_DAYS))
     lib._x("update paperlab.jobs set result = null where user_id = %s and kind = 'write' and result is not null "
            "and finished_at < now() - make_interval(hours => %s)", (lib.uid, WRITE_RESULT_HOURS))
+    lib._x("update paperlab.jobs set params = '{}'::jsonb, result = null where user_id = %s and kind = 'find' "
+           "and (params <> '{}'::jsonb or result is not null) and finished_at < now() - make_interval(hours => %s)",
+           (lib.uid, FIND_KEEP_HOURS))
     lib._x("delete from paperlab.device_pair_codes where user_id = %s and (used_at is not null or expires_at < now())",
            (lib.uid,))
     lib._x("delete from paperlab.devices where user_id = %s and revoked_at < now() - make_interval(days => %s)",
@@ -488,6 +505,8 @@ def retry_source(lib: Library, job_id: int) -> dict:
         raise JobError(404, "작업을 찾을 수 없어요", "not_found")
     if j["status"] not in ("failed", "cancelled"):
         raise JobError(409, "실패하거나 취소한 작업만 다시 시도할 수 있어요", "not_retryable")
+    if j["kind"] == "find" and not (j["params"] or {}).get("question"):  # 24시간 정리로 질문이 지워짐 (품질팀 L4)
+        raise JobError(409, "24시간이 지나 지워진 작업이에요. 질문을 다시 입력해 주세요", "expired")
     return j
 
 
@@ -563,10 +582,24 @@ def _apply(lib: Library, job: dict, parsed: dict, model: str):
         if data.get("keywords") and not p.get("keywords"):
             lib.update_paper(pid, {"keywords": data["keywords"][:10]})
         return None
+    params = job["params"] or {}
+    if kind == "chat" and pid is None:  # 범위 대화(3단계 11.3절): 출처 번호표는 params.sources
+        scope = params.get("scope") or {}
+        text, cites = rag.cite_sources(parsed["text"], params.get("sources") or [])
+        lib.add_scope_message(scope.get("type"), scope.get("id"), "user", params.get("question", ""))
+        mid = lib.add_scope_message(scope.get("type"), scope.get("id"), "assistant", text, cites)
+        return {"message_id": mid}
     if kind == "chat":
-        lib.add_chat_message(pid, "user", (job["params"] or {}).get("question", ""))
+        lib.add_chat_message(pid, "user", params.get("question", ""))
         mid = lib.add_chat_message(pid, "assistant", parsed["text"], parsed.get("citations") or [])
         return {"message_id": mid}
+    if kind == "find":
+        cands = params.get("candidates") or []
+        sources = [dict(c, in_library=x) for c, x in zip(cands, lib.match_library(cands))]
+        return {"answer": parsed.get("answer") or "", "sources": sources, "queries": params.get("queries") or [],
+                "warnings": params.get("warnings") or []}
+    if kind == "verify":
+        return verify.apply_results(lib, job, parsed["results"])
     text = parsed["text"]
     if len(text.encode("utf-8")) > RESULT_TEXT_MAX:
         raise ValueError("too large")
@@ -615,6 +648,12 @@ def clean_progress(value) -> dict:
     frac = value.get("fraction")
     if isinstance(frac, (int, float)) and not isinstance(frac, bool) and 0 <= frac <= 1:
         out["fraction"] = float(frac)
+    if value.get("step") in ("queries", "search", "pick", "summary"):  # AI로 찾기 단계 (시안 5.1절)
+        out["step"] = value["step"]
+    counts = value.get("counts")
+    if isinstance(counts, dict):
+        out["counts"] = {k: int(v) for k, v in counts.items() if k in ("queries", "candidates", "picked")
+                         and isinstance(v, int) and not isinstance(v, bool) and 0 <= v < 100000}
     text = value.get("partial_text")
     if isinstance(text, str) and text:
         out["partial_text"] = text.encode("utf-8")[-PARTIAL_MAX:].decode("utf-8", "ignore")
@@ -676,6 +715,13 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
         return ai.write_request(params.get("mode") or "polish", params.get("text") or "",
                                 instruction=params.get("instruction") or "", context=params.get("context") or "",
                                 sources=write_sources(lib, params.get("keys")))
+    if job["kind"] == "chat" and job["paper_id"] is None:  # 범위 대화 — 출처는 params.sources로 고정(11.3절)
+        scope = params.get("scope") or {}
+        return rag.ask_request(lib, params, lib.scope_history(scope.get("type"), scope.get("id")), lang)
+    if job["kind"] == "find":  # CLI 두 단계(13.2절): ① 검색어 ② 요약
+        if not params.get("queries"):
+            return find.query_request(params.get("question") or "")
+        return find.summary_request(params.get("question") or "", params.get("candidates") or [])
     src = paper_source(lib, job["paper_id"])
     if not src:
         raise LookupError("paper gone")
@@ -689,8 +735,21 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
 def cli_task(lib: Library, job: dict) -> dict | None:
     """잡은 작업의 실행 내용(8.4절). 만들 수 없으면 작업을 실패로 바꾸고 None"""
     settings = UserSettings(lib.get_settings())
+    lang = settings.get("summary_language") or "한국어"
+    params = job["params"] or {}
+    schema = ai.SUMMARY_SCHEMA if job["kind"] == "summary" else None
     try:
-        system, prompt = text_request(lib, job, settings.get("summary_language") or "한국어")
+        if job["kind"] == "find" and params.get("queries") and not params.get("candidates"):
+            find_hold(lib, job, params)  # 서버 검색이 아직 — 검색이 끝나면 다시 잡힘
+            return None
+        if job["kind"] == "verify":
+            system, prompt, ids, remaining = verify.build_request(lib, job, lang)
+            set_params(lib, job, {**params, "claim_ids": ids, "remaining": remaining})
+            schema = verify.VERIFY_SCHEMA
+        else:
+            system, prompt = text_request(lib, job, lang)
+            if job["kind"] == "find" and not params.get("queries"):
+                schema = find.QUERY_SCHEMA
     except ai.AIError as e:
         _end(lib, job, "failed", "input_too_large" if e.code == "input_too_large" else "bad_input", str(e))
         return None
@@ -698,11 +757,44 @@ def cli_task(lib: Library, job: dict) -> dict | None:
         _end(lib, job, "failed", "input_too_large", DEFAULT_ERRORS["input_too_large"])
         return None
     model = (settings.get("cli_models") or {}).get(job["engine"], "default")
-    summary = job["kind"] == "summary"
     return {"id": job["id"], "lease_token": str(job["lease_token"]), "lease_s": LEASE_S, "heartbeat_s": HEARTBEAT_S,
             "kind": job["kind"], "engine": job["engine"], "model": None if model == "default" else model,
-            "output": "json" if summary else "text", "json_schema": ai.SUMMARY_SCHEMA if summary else None,
-            "stream_partial": not summary, "system": system, "prompt": prompt, "timeout_s": TIMEOUT_S[job["kind"]]}
+            "output": "json" if schema else "text", "json_schema": schema,
+            "stream_partial": not schema, "system": system, "prompt": prompt, "timeout_s": TIMEOUT_S[job["kind"]]}
+
+
+def set_params(lib: Library, job: dict, params: dict) -> None:
+    if len(json.dumps(params, ensure_ascii=False).encode("utf-8")) > PARAMS_MAX:
+        raise ai.AIError("요청이 너무 커요", "input_too_large")
+    lib._x("update paperlab.jobs set params = %s, updated_at = now() where id = %s and user_id = %s",
+           (Jsonb(params), job["id"], lib.uid))
+    job["params"] = params
+
+
+def find_hold(lib: Library, job: dict, params: dict) -> str:
+    """AI로 찾기 CLI ①단계 결과(검색어)를 적고 같은 칸으로 다시 대기 — 서버가 검색을 마칠 때까지 잡히지 않게 미뤄 둔다
+    (attempts = 0, 대기 기한 그대로 — 13.2절). 검색은 ApiRunner.prepare_find가 하고 not_before를 지금으로 당긴다"""
+    if job["cancel_requested"]:
+        _end(lib, job, "cancelled")
+        return "cancelled"
+    lib._x("update paperlab.jobs set status = 'queued', params = %s, device_id = null, lease_token = null, "
+           "lease_until = null, attempts = 0, progress = %s, not_before = now() + interval '1 day', updated_at = now() "
+           "where id = %s and user_id = %s",
+           (Jsonb(params), Jsonb({"message": "논문을 검색하는 중", "step": "search",
+                                  "counts": {"queries": len(params.get("queries") or [])}}), job["id"], lib.uid))
+    return "queued"
+
+
+def parse_result(job: dict, text: str, structured=None) -> dict:
+    """CLI · API 원문 → 반영할 결과 (종류별). 틀리면 AIError(bad_output)"""
+    params = job["params"] or {}
+    if job["kind"] == "find":
+        if not params.get("queries"):
+            return {"queries": find.parse_queries(text, structured, params.get("question") or "")}
+        return {"answer": find.check_answer(text, len(params.get("candidates") or []))}
+    if job["kind"] == "verify":
+        return {"results": verify.parse_results(text, structured)}
+    return ai.parse_text_result(job["kind"], text, structured)
 
 
 def worker_result(lib: Library, device_id: int, job_id: int, body: dict, guide: str = "") -> str:
@@ -722,10 +814,12 @@ def worker_result(lib: Library, device_id: int, job_id: int, body: dict, guide: 
         return fail_or_fallback(lib, job, code, body.get("error") or "", device_id=device_id, guide=guide)
     structured = body.get("structured") if isinstance(body.get("structured"), dict) else None
     try:
-        parsed = ai.parse_text_result(job["kind"], text, structured)
+        parsed = parse_result(job, text, structured)
     except ai.AIError as e:
         _end(lib, job, "failed", "bad_output", str(e), _history_entry(job, "bad_output", device_id))
         return "failed"
+    if "queries" in parsed:
+        return find_hold(lib, job, {**(job["params"] or {}), "queries": parsed["queries"]})
     return finish_success(lib, job, parsed, f"cli:{job['engine']}")[0]
 
 

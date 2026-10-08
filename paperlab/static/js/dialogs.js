@@ -228,7 +228,7 @@ export async function settingsDialog({ focus = "" } = {}) {
   const body = el(`<form autocomplete="off">
     <div class="section-title" id="set-ai-title" style="margin-top:0">AI 엔진</div>
     <div class="notice" data-tone="info" data-ai-intro>${ICON_INFO}<div><b>API 키가 있으면 API로 먼저, 안 되면 연결된 PC의 CLI로 실행해요.</b> 키가 없는 엔진은 PC에서만 실행돼요. PC를 꺼도 AI를 쓰려면 API 키가 필요해요.</div></div>
-    ${JOB_KINDS.map(([kind, label]) => `<div class="field"><label id="rt-${kind}">${label} — 쓰는 순서</label>
+    ${JOB_KINDS.map(([kind, label, hint]) => `<div class="field"><label id="rt-${kind}">${label} — 쓰는 순서</label>${hint ? `<div class="hint">${hint}</div>` : ""}
       <div class="row" role="group" aria-labelledby="rt-${kind}">${[0, 1, 2].map((i) => `<select class="input grow" data-route-kind="${kind}" data-route-i="${i}" aria-label="${label} ${i + 1}순위 엔진"${i === 0 ? ` aria-describedby="rl-${kind}"` : ""}></select>`).join("")}</div>
       <div class="hint" data-route-line="${kind}" id="rl-${kind}"></div></div>`).join("")}
     ${AI_KEYS.map((k) => `<div class="field" data-key-field="${k.name}"><label for="key-${k.name}">${k.label}</label>
@@ -296,7 +296,7 @@ export async function settingsDialog({ focus = "" } = {}) {
       <div class="hint" id="set-contact-hint">Crossref에 이메일을 알려 주면 요청이 우선 처리돼요(OpenAlex에는 보내지 않아요).</div></div>
     <div class="grid-2">
       <div class="field"><label for="set-oa-key">OpenAlex API 키 (선택)</label><input class="input" type="password" id="set-oa-key" name="openalex_api_key" placeholder="${s.openalex_api_key_set ? "저장됨" : "없어도 돼요"}" aria-describedby="set-oa-key-hint set-keys-note">
-        <div class="hint" id="set-oa-key-hint">무료 키를 넣으면 하루 사용 한도가 10배가 돼요.</div></div>
+        <div class="hint" id="set-oa-key-hint">무료 키를 넣으면 하루 사용 한도가 10배가 돼요. AI로 찾기도 이 키를 써요.</div></div>
       <div class="field"><label for="set-s2-key">Semantic Scholar API 키 (선택)</label><input class="input" type="password" id="set-s2-key" name="semantic_scholar_api_key" placeholder="${s.semantic_scholar_api_key_set ? "저장됨" : "없어도 돼요"}" aria-describedby="set-s2-key-hint set-keys-note">
         <div class="hint" id="set-s2-key-hint">키가 있으면 요청이 덜 막혀요.</div></div>
     </div>
@@ -402,7 +402,11 @@ export async function settingsDialog({ focus = "" } = {}) {
 }
 
 // ------------------------------------------------ 2단계: AI 엔진 · 연결된 PC (docs/design/phase2-worker-electron-ui.md 2~4장)
-const JOB_KINDS = [["summary", "요약"], ["chat", "논문과 대화"], ["write", "글쓰기 도우미"]];
+const JOB_KINDS = [["summary", "요약"], ["chat", "논문과 대화 · 서재 질문", "읽기 화면 대화와 AI 질문(내 서재)이 함께 써요."],
+  ["write", "글쓰기 도우미"],
+  // 3단계 (docs/design/phase3-ask-ui.md 7.2절)
+  ["find", "AI로 찾기", "검색어 만들기와 한국어 요약에 써요. 논문 검색은 공개 DB라 무료예요."],
+  ["verify", "인용 검증", "간접 인용 판정에만 써요. 직접 인용은 AI 없이 글자로 대조해요."]];
 const ENGINE_LABEL = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
 const AI_KEYS = [
   { name: "anthropic_api_key", engine: "claude", company: "Anthropic", label: "Anthropic API 키 (Claude)", ph: "sk-ant-...", url: "https://console.anthropic.com/settings/keys" },

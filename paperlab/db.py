@@ -47,7 +47,7 @@ SORTS = {
     "first_author": "lower(p.authors -> 0 ->> 'family') collate \"C\" asc nulls first, p.id",
 }
 # 응답에서 빼는 내부 열
-_HIDDEN_PAPER_COLS = ("user_id", "pdf_key", "title_norm")
+_HIDDEN_PAPER_COLS = ("user_id", "pdf_key", "title_norm", "rag_key", "rag_version")
 SEARCH_LIMIT = 1000
 # PGroonga 연산자는 extensions 스키마에 있다 (search_path에 기대지 않음)
 PGRN_MATCH = "operator(extensions.&@)"
@@ -411,9 +411,13 @@ class Library:
                 {**fields, "_id": paper_id, "_uid": self.uid})
         self._reindex(paper_id)
 
-    def set_pdf(self, paper_id: int, key: str, page_texts: list[str], sha256: str = "", size: int | None = None) -> None:
+    def set_pdf(self, paper_id: int, key: str, page_texts: list[str], sha256: str = "", size: int | None = None) -> str:
+        """PDF를 붙이거나 바꾼다. 같은 트랜잭션에서 벡터 파일 포인터를 비운다(3단계 8.4절) → 옛 rag_key('' = 없음).
+        커밋 뒤 호출하는 쪽이 옛 파일 삭제 · 캐시에서 빼기 · 색인 작업(ensure_index_job)을 한다"""
+        old = self._one("select rag_key from paperlab.papers where id = %s and user_id = %s for update",
+                        (paper_id, self.uid))
         self._x("update paperlab.papers set pdf_key = %s, pdf_sha256 = %s, pdf_size = %s, page_count = %s, "
-                "updated_at = %s where id = %s and user_id = %s",
+                "rag_key = '', rag_version = '', updated_at = %s where id = %s and user_id = %s",
                 (key, sha256, size, len(page_texts) or None, now_dt(), paper_id, self.uid))
         self._x("delete from paperlab.page_texts where paper_id = %s and user_id = %s", (paper_id, self.uid))
         if page_texts:
@@ -421,6 +425,7 @@ class Library:
                 cur.executemany("insert into paperlab.page_texts (user_id, paper_id, page, text) values (%s, %s, %s, %s)",
                                 [(self.uid, paper_id, i + 1, _clean_text(t)) for i, t in enumerate(page_texts)])
         self._reindex(paper_id)
+        return old["rag_key"] if old else ""
 
     def page_texts(self, paper_id: int) -> list[str]:
         return [r["text"] for r in self._all(
@@ -431,11 +436,10 @@ class Library:
         self._x("update paperlab.papers set last_opened_at = %s where id = %s and user_id = %s",
                 (now_dt(), paper_id, self.uid))
 
-    def delete_paper(self, paper_id: int) -> str | None:
-        """지운 논문의 저장소 키('' = PDF 없음). 내 논문이 아니면 None"""
-        row = self._one("delete from paperlab.papers where id = %s and user_id = %s returning pdf_key",
-                        (paper_id, self.uid))
-        return row["pdf_key"] if row else None
+    def delete_paper(self, paper_id: int) -> dict | None:
+        """지운 논문의 저장소 키 {"pdf_key", "rag_key"}('' = 없음). 내 논문이 아니면 None"""
+        return self._one("delete from paperlab.papers where id = %s and user_id = %s returning pdf_key, rag_key",
+                         (paper_id, self.uid))
 
     def _reindex(self, paper_id: int) -> None:
         """검색 메타(paper_search.meta)만 다시 쓴다. 본문은 page_texts에 쓰는 순간 색인된다."""
@@ -853,6 +857,39 @@ class Library:
         sid = self._session_id(paper_id, create=False)
         if sid is not None:
             self._x("delete from paperlab.chat_messages where session_id = %s and user_id = %s", (sid, self.uid))
+
+    # ------------------------------------------------- 범위 대화 (3단계 11장 — 서재 전체 · 컬렉션 · 폴더)
+    _SCOPE_COL = {"library": None, "collection": "collection_id", "folder": "folder_id"}
+
+    def _scope_session(self, scope: str, sid: int | None, create: bool) -> int | None:
+        col = self._SCOPE_COL[scope]
+        where = "user_id = %s and scope = %s" + (f" and {col} = %s" if col else "")
+        args = (self.uid, scope) + ((sid,) if col else ())
+        row = self._one(f"select id from paperlab.chat_sessions where {where}", args)
+        if row or not create:
+            return row["id"] if row else None
+        self._x(f"insert into paperlab.chat_sessions (user_id, scope{', ' + col if col else ''}) "
+                f"values (%s, %s{', %s' if col else ''}) on conflict do nothing", args)
+        return self._scope_session(scope, sid, create=False)
+
+    def scope_history(self, scope: str, sid: int | None) -> list[dict]:
+        session = self._scope_session(scope, sid, create=False)
+        if session is None:
+            return []
+        return [_row(r) for r in self._all(
+            "select id, role, content, citations, created_at from paperlab.chat_messages "
+            "where session_id = %s and user_id = %s order by id", (session, self.uid))]
+
+    def add_scope_message(self, scope: str, sid: int | None, role: str, content: str, citations: list | None = None) -> int:
+        session = self._scope_session(scope, sid, create=True)
+        return self._one("insert into paperlab.chat_messages (user_id, session_id, role, content, citations, created_at) "
+                         "values (%s, %s, %s, %s, %s, %s) returning id",
+                         (self.uid, session, role, _clean_text(content), Jsonb(citations or []), now_dt()))["id"]
+
+    def clear_scope(self, scope: str, sid: int | None) -> None:
+        session = self._scope_session(scope, sid, create=False)
+        if session is not None:
+            self._x("delete from paperlab.chat_messages where session_id = %s and user_id = %s", (session, self.uid))
 
     # ------------------------------------------------------------ manuscripts
     def list_manuscripts(self) -> list[dict]:

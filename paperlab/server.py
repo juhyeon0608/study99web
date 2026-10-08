@@ -31,8 +31,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, citations, compose, csl_style, doc_formats, downloads, format_import, jobs, pdf, \
-    worker_api, writer
+from . import __version__, citations, compose, csl_style, doc_formats, downloads, find, format_import, jobs, pdf, \
+    rag, verify, worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
@@ -70,6 +70,7 @@ STYLE_MAX = 2 * 1024 * 1024
 WARN_LEVEL, FULL_LEVEL = 0.80, 0.95
 HEALTH_DB_TIMEOUT = 4.0  # /api/health?deep=1 의 DB 연결 대기 · 문 실행 제한(초)
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+CSP = "img-src 'self' data: blob: https://*.googleusercontent.com; form-action 'self'"
 KST = timezone(timedelta(hours=9))
 GRAPH_BODY_MAX = 4096  # 인용 그래프 요청 본문 (명세 9.1)
 BAD_SEED = {"detail": "이 논문으로는 그래프를 만들 수 없어요. DOI · arXiv 번호 · 제목 형식을 확인해 주세요.", "code": "bad_seed"}
@@ -209,10 +210,13 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                verifier: TokenVerifier | None = None, jwks: JWKSCache | None = None,
                sources_factory: Callable | None = None, ai_factory: Callable | None = None,
                dev: bool = False, commit: str = "", diag_hang: Callable[[], bool] | None = None,
-               releases: Path | None = None, runner_opts: dict | None = None) -> FastAPI:
+               releases: Path | None = None, runner_opts: dict | None = None, embedder=...,
+               rag_cache: "rag.VectorCache | None" = None) -> FastAPI:
     """앱을 만든다. commit = 배포한 git 커밋 앞 7자리(/api/health의 version에 붙음 — update.ps1 확인용).
     diag_hang: 감시 작업 검사용 진단 스위치(AC-77) — 참이면 /api/health가 응답하지 않는 것처럼 오래 멈춘다.
     releases: 설치 파일 폴더(없으면 PAPERLAB_RELEASES_DIR · D:\\PaperLab\\releases), runner_opts: API 실행기 수치(테스트 주입).
+    embedder: 3단계 임베딩(기본 = 서버 PC에 모델 파일이 있으면 ONNX, 없으면 None — 낱말 검색만. 테스트는 rag.HashEmbedder()),
+    rag_cache: 벡터 캐시(테스트가 상한 · 유휴 시간을 작게 주입).
     API 실행기는 앱 수명(lifespan) 시작 때 돈다 — uvicorn 실행 · `with TestClient(app)`. 테스트는 app.state.runner.start()."""
     db = database or Database(config.db_url, timeout=config.db_pool_timeout)
     store = storage or create_storage(config.storage_backend, config.r2)
@@ -253,9 +257,11 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         return jobs.no_route_message(bool(st.release_info()))
 
     st.guide = guide
+    # 3단계 RAG: 임베딩 · 벡터 캐시는 서버 프로세스 하나에 하나 (K-2 · K-21)
+    st.rag = rg = rag.Rag(store, rag.load_embedder() if embedder is ... else embedder, rag_cache)
     st.runner = runner = ApiRunner(db, store, lambda lib, uid: load_user_settings(lib, st.box, uid),
                                    lambda get: st.ai_factory(get), guide, max_pdf_bytes=AI_MAX_PDF_BYTES,
-                                   **(runner_opts or {}))
+                                   rag=rg, sources_factory=lambda get: st.sources_factory(get), **(runner_opts or {}))
 
     # ------------------------------------------------------------ security
     # 같은 출처 판단 (명세 6.5, 팀장 결정 S2): 운영은 설정 PAPERLAB_PUBLIC_URL의 출처 하나만 — Host에서 출처를 만들지 않는다
@@ -288,6 +294,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             response.headers["X-Request-Id"] = request_id
             # 공개 주소는 HTTPS(Funnel)뿐. ts.net 공유 도메인이라 includeSubDomains는 붙이지 않는다 (http 개발 서버에선 브라우저가 무시)
             response.headers["Strict-Transport-Security"] = "max-age=31536000"
+            # 그림은 이 서버 · data: · blob:(PDF.js) · 구글 프로필 사진만 — AI 답에 섞인 바깥 그림 주소가 불리지 않게 (3단계 품질팀 M1)
+            response.headers["Content-Security-Policy"] = CSP
             if path.startswith("/api/"):
                 response.headers["Cache-Control"] = "no-store"
             elif path.startswith("/static/"):
@@ -338,6 +346,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             response = await call_next(request)
         except DBUnavailable:
             response = JSONResponse(DB_UNAVAILABLE, status_code=503)
+        except Exception as e:  # noqa: BLE001 - 처리되지 않은 예외도 보안 헤더가 붙은 500으로 (품질팀 N5). 내용은 숨김
+            log.error("unhandled %s %s: %s", request.method, path, type(e).__name__)
+            response = JSONResponse({"detail": "서버 오류가 났어요. 잠시 후 다시 시도해 주세요.", "code": "server_error"},
+                                    status_code=500)
         return finish(response)
 
     @app.exception_handler(DBUnavailable)
@@ -379,19 +391,31 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             raise HTTPException(404, "논문을 찾을 수 없어요")
         return p
 
+    def ensure_index(claims: dict) -> None:
+        """커밋 뒤: 색인 대기 논문이 있으면 index 작업(사용자당 진행 중 하나 — 3단계 10.1절)을 만들어 실행기에 넣는다"""
+        with db.user_tx(claims) as lib:
+            job_id = rg.ensure_index_job(lib)
+        if job_id:
+            runner.enqueue(job_id, str(claims["sub"]))
+
+    def pdf_changed(ctx: RequestCtx, pid: int, old_rag: str) -> None:
+        """PDF를 붙이거나 바꾼 커밋 뒤: 옛 벡터 파일 지우기 · 캐시에서 빼기 → 다시 색인 (8.4절)"""
+        ctx.after_commit.append(lambda: rg.forget(ctx.uid, pid, old_rag))
+        ctx.after_commit.append(lambda: ensure_index(ctx.claims))
+
     def store_pdf(ctx: RequestCtx, pid: int, data: bytes) -> pdf.PdfInfo:
         """서버가 받은 PDF(URL에서 받기)를 최종 키에 바로 올리고 본문을 저장한다."""
         info = pdf.extract(data)
         key = ctx.storage.paper_key(pid)
         ctx.storage.put(key, data)
-        ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(), len(data))
+        pdf_changed(ctx, pid, ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(), len(data)))
         return info
 
     def attach_from_incoming(ctx: RequestCtx, pid: int, incoming: str, data: bytes, info: pdf.PdfInfo) -> None:
         """임시 파일을 최종 키로 복사하고 DB에 기록. 임시 파일은 커밋 뒤에 지운다."""
         key = ctx.storage.paper_key(pid)
         ctx.storage.storage.copy(ctx.storage.check(incoming), ctx.storage.check(key))
-        ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(), len(data))
+        pdf_changed(ctx, pid, ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(), len(data)))
         ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
 
     def mark_library(ctx: RequestCtx, items: list[dict]) -> list[dict]:
@@ -560,6 +584,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         jobs.expire(ctx.lib)
         if ws.should_sweep(ctx.uid):
             jobs.sweep(ctx.lib)
+            ctx.after_commit.append(lambda: ensure_index(ctx.claims))  # 3단계 10.1절 — 놓친 색인을 이어서
 
     def route_for(ctx: RequestCtx, kind: str) -> list[dict]:
         route = jobs.build_route(kind, ctx.settings.get, jobs.device_rows(ctx.lib))
@@ -596,6 +621,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     @app.post("/api/jobs/{job_id}/retry")
     def retry_job(job_id: int, ctx: RequestCtx = Ctx):
         src = jobs.retry_source(ctx.lib, job_id)
+        if src["kind"] == "index":  # 색인은 엔진 경로가 없음 — 대기 논문이 있으면 새 색인 작업 (3단계 10.1절)
+            new_id = rg.ensure_index_job(ctx.lib)
+            if new_id:
+                ctx.after_commit.append(lambda: runner.enqueue(new_id, ctx.uid))
+            r = jobs.latest_job(ctx.lib, ws.free, " and j.kind = 'index'")
+            return JSONResponse({"job": r}, status_code=202 if new_id else 200)
         view, created = new_job(ctx, src["kind"], src["params"] or {}, src["paper_id"])
         return JSONResponse({"job": view}, status_code=202 if created else 200)
 
@@ -810,20 +841,21 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         return ctx.lib.get_paper(pid)
 
     def delete_papers(ctx: RequestCtx, ids: list[int]) -> int:
-        """DB에서 지우고, 커밋이 끝난 뒤 저장소 PDF를 지운다(실패해도 응답은 성공 — 로그만)."""
-        keys, n = [], 0
+        """DB에서 지우고, 커밋이 끝난 뒤 저장소 PDF · 벡터 파일을 지우고 캐시에서 뺀다(실패해도 응답은 성공 — 로그만)."""
+        n = 0
         for pid in ids:
             info = ctx.lib.pdf_info(pid)
             if not info:
                 continue
             if info["pdf_key"]:
                 ctx.storage.check(info["pdf_key"])  # 남의 경로면 StorageKeyError → 404
-            key = ctx.lib.delete_paper(pid)
+            gone = ctx.lib.delete_paper(pid)
+            if not gone:
+                continue
             n += 1
-            if key:
-                keys.append(key)
-        for key in keys:
-            ctx.after_commit.append(lambda k=key: ctx.storage.delete_quietly(k))
+            if gone["pdf_key"]:
+                ctx.after_commit.append(lambda k=gone["pdf_key"]: ctx.storage.delete_quietly(k))
+            ctx.after_commit.append(lambda p=pid, k=gone["rag_key"]: rg.forget(ctx.uid, p, k))
         return n
 
     @app.delete("/api/papers/{pid}")
@@ -1732,6 +1764,130 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                                 sources=sources, engine=engine)
 
         return stream_job(ctx, request, "write", params, None, run)
+
+    # ------------------------------------------- 3단계: AI 질문(서재) · AI로 찾기 · 인용 검증 (명세 11 · 12 · 13 · 14.3절)
+    ASK_EMPTY = "이 범위에 색인된 논문이 없어요"
+
+    def user_tx(ctx: RequestCtx) -> Callable:
+        """그 사용자 권한의 짧은 트랜잭션을 여는 함수 (요청 트랜잭션과 별개)"""
+        return lambda: db.user_tx(ctx.claims)
+    RAG_BUSY = "색인을 불러오는 데 시간이 오래 걸려요. 잠시 후 다시 물어봐 주세요."
+
+    def ask_scope(ctx: RequestCtx, value) -> tuple[str, int | None, str]:
+        """주소의 범위(library · c{id} · f{id}) → (종류, id, 이름). 남의 컬렉션 · 폴더면 400 — 파일은 읽지 않음(AC-S03)"""
+        try:
+            stype, sid = rag.parse_scope(value)
+        except ValueError:
+            raise HTTPException(400, "범위가 올바르지 않아요") from None
+        if stype == "library":
+            return stype, sid, ""
+        row = ctx.lib._one(f"select name from paperlab.{'collections' if stype == 'collection' else 'folders'} "
+                           "where id = %s and user_id = %s", (sid, ctx.uid))
+        if not row:
+            raise HTTPException(400, "범위를 찾을 수 없어요")
+        return stype, sid, row["name"]
+
+    def index_status(ctx: RequestCtx, rows: list[dict]) -> dict:
+        done = set(rg.done_versions)
+        with_pdf = [r for r in rows if r["has_pdf"]]
+        no_text = sum(1 for r in with_pdf if r["rag_version"] in done and not r["rag_key"])
+        return {"papers": len(rows), "with_pdf": len(with_pdf), "indexed": len(rag.searchable(rows)), "no_text": no_text,
+                "pending": sum(1 for r in with_pdf if r["rag_version"] not in done),
+                "embed": rg.embedder is not None, "loaded": rg.loaded(ctx.uid, rows)}
+
+    @app.get("/api/ask")
+    def ask_get(scope: str = "library", ctx: RequestCtx = Ctx):
+        """범위 대화 + 색인 상태. 부를 때 색인 작업 보장 + 벡터 미리 불러오기(9.4 · 10.1절)"""
+        stype, sid, name = ask_scope(ctx, scope)
+        maintain(ctx)
+        rows = rag.scope_rows(ctx.lib, stype, sid)
+        job_id = rg.ensure_index_job(ctx.lib)
+        if job_id:
+            ctx.after_commit.append(lambda: runner.enqueue(job_id, ctx.uid))
+        rg.prefetch(user_tx(ctx), ctx.uid, rows if stype == "library" else rag.scope_rows(ctx.lib, "library", None))
+        return {"scope": {"type": stype, "id": sid, "name": name}, "messages": ctx.lib.scope_history(stype, sid),
+                "index": index_status(ctx, rows),
+                "job": jobs.latest_job(ctx.lib, ws.free, " and j.kind = 'index'")}
+
+    @app.delete("/api/ask")
+    def ask_clear(scope: str = "library", ctx: RequestCtx = Ctx):
+        stype, sid, _ = ask_scope(ctx, scope)
+        ctx.lib.clear_scope(stype, sid)
+        return {"ok": True}
+
+    @app.post("/api/ask")
+    def ask(request: Request, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """범위 질문(SSE — 읽기 화면 대화와 같은 이벤트). 출처 8개는 여기서 한 번 골라 params.sources에 고정(11.3절)"""
+        stype, sid, _ = ask_scope(ctx, data.get("scope") or "library")
+        question = str(data.get("question") or "").strip()
+        if not question:
+            raise HTTPException(400, "질문을 입력해 주세요")
+        if len(question) > 8000:
+            raise HTTPException(400, "질문이 너무 길어요")
+        route_for(ctx, "chat")  # 경로가 없으면 검색 전에 400
+        rows = rag.scope_rows(ctx.lib, stype, sid)
+        if not rag.searchable(rows):
+            raise HTTPException(400, ASK_EMPTY)
+        lang = ctx.settings.get("summary_language") or "한국어"
+        ctx.release()  # 범위 행 · 키는 RLS로 읽었음 — R2 로드 · 임베딩 동안 DB 연결을 잡지 않는다 (품질팀 M2)
+        try:
+            sources = rg.sources_for(user_tx(ctx), ctx.uid, rows, question)
+        except rag.RagBusy:
+            raise HTTPException(503, RAG_BUSY) from None
+        params = {"question": question, "scope": {"type": stype, "id": sid}, "sources": sources}
+
+        def run(engine: str):
+            system, prompt = rag.ask_request(ctx.lib, params, ctx.lib.scope_history(stype, sid), lang)
+            return rag.with_citations(ctx.ai.complete(system, prompt, engine), sources)
+
+        return stream_job(ctx, request, "chat", params, None, run)
+
+    @app.post("/api/find")
+    def find_start(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """AI로 찾기(13장) — 백그라운드 작업 + 폴링. 질문은 본문으로만(AC-L03)"""
+        question = str(data.get("question") or "").strip()
+        if not 2 <= len(question) <= 1000:
+            raise HTTPException(400, "질문은 2~1,000자로 써 주세요")
+        view, _ = new_job(ctx, "find", {"question": question}, None)
+        return JSONResponse({"job": view}, status_code=202)
+
+    def verify_job(ctx: RequestCtx, mid: int, active: bool = False) -> dict | None:
+        cond = " and j.kind = 'verify' and j.params ->> 'manuscript_id' = %(mid)s"
+        if active:
+            cond += " and j.status in ('queued', 'running')"
+        return jobs.latest_job(ctx.lib, ws.free, cond, {"mid": str(mid)})
+
+    def need_manuscript(ctx: RequestCtx, mid: int) -> dict:
+        m = ctx.lib.get_manuscript(mid) if jobs.valid_id(mid) else None
+        if not m:
+            raise HTTPException(404, "원고를 찾을 수 없어요")
+        return m
+
+    @app.post("/api/manuscripts/{mid}/verify")
+    def verify_run(mid: int, ctx: RequestCtx = Ctx):
+        """인용 검증(12.1절): 직접 인용 대조 · 근거 후보는 지금, AI 판정은 verify 작업(원고당 진행 중 하나)"""
+        m = need_manuscript(ctx, mid)
+        maintain(ctx)
+        has_route = bool(jobs.build_route("verify", ctx.settings.get, jobs.device_rows(ctx.lib)))
+        ctx.release()  # 대조 · 근거 검색(R2 · 임베딩)은 트랜잭션 밖 — run_check가 짧은 트랜잭션을 따로 연다 (품질팀 M2)
+        try:
+            stats = verify.run_check(user_tx(ctx), rg, ctx.uid, mid, m["content"], has_route)
+        except rag.RagBusy:
+            raise HTTPException(503, RAG_BUSY) from None
+        job = verify_job(ctx, mid, active=True)
+        if stats["pending"] and has_route and not job:
+            job, _ = new_job(ctx, "verify", {"manuscript_id": mid}, None)
+        out = verify.view(ctx.lib, mid, m["content"])
+        out["job"] = job or verify_job(ctx, mid)
+        return out
+
+    @app.get("/api/manuscripts/{mid}/verify")
+    def verify_get(mid: int, ctx: RequestCtx = Ctx):
+        m = need_manuscript(ctx, mid)
+        maintain(ctx)
+        out = verify.view(ctx.lib, mid, m["content"])
+        out["job"] = verify_job(ctx, mid)
+        return out
 
     # ------------------------------------------------------- doc formats
     def user_format_id(format_id) -> int | None:
