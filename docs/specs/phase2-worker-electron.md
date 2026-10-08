@@ -893,7 +893,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | 절전 | 작업 실행 중에만 `powerSaveBlocker.start('prevent-app-suspension')`, 끝나면 해제 |
 | 단일 실행 | `requestSingleInstanceLock()` — 두 번째 실행은 첫 창을 앞으로(워커 중복 방지 · 딥 링크 수신) |
 | 트레이 알림 | 트레이 풍선은 `tray.displayBalloon`으로 띄움(Windows 알림 센터 API 아님). 앱 창이 숨었을 때만(설정에서 끌 수 있음), 첫 숨김 안내 · 업데이트 준비됨 · 연결 해지는 늘 |
-| 서버 주소 | **확정 U6: 설치 파일에 넣기** — `https://kimjuhyeon.tailac17f6.ts.net`. 저장소의 주소 설정 한 곳(1단계 S10 — **`deploy/server-pc/server.json`의 `public_url`**, 별도 `desktop/app-config.json`은 **없음**)에서 빌드 때 `electron-builder.config.js`가 읽어 앱 `package.json`의 `paperlabServer`(`extraMetadata`)로 넣음. 앱은 `https:` 출처가 아니면 시작하지 않음(오류 상자 후 종료). 첫 실행에 주소 입력 화면 **없음**. 앱 설정에 주소 바꾸기 칸도 두지 않음(가정 — 주소가 바뀌면 새 릴리스. 1단계 13.2절 "이름을 바꾸지 않음"). 개발 빌드(`npm start`)만 환경 변수 `PAPERLAB_SERVER_URL`로 덮어쓸 수 있음(배포본에서는 무시 — 가정) |
+| 서버 주소 | **확정 U6: 설치 파일에 넣기** — `https://kimjuhyeon.tailac17f6.ts.net`. 저장소의 주소 설정 한 곳(1단계 S10 — **`deploy/server-pc/server.json`의 `public_url`**, 별도 `desktop/app-config.json`은 **없음**)에서 빌드 때 `electron-builder.config.js`가 읽어 앱 `package.json`의 `paperlabServer`(`extraMetadata`)로 넣음. 앱은 `https:` 출처가 아니면 시작하지 않음(오류 상자 후 종료). 첫 실행에 주소 입력 화면 **없음**. 앱 설정에 주소 바꾸기 칸도 두지 않음(가정 — 주소가 바뀌면 새 릴리스. 1단계 13.2절 "이름을 바꾸지 않음"). 개발 실행(`npm start`)은 환경 변수 `PAPERLAB_SERVER_URL`이 **반드시** 있어야 하고 `127.0.0.1`·`localhost`·`[::1]`만 받음 — 없거나 운영 주소면 시작하지 않음(server.json으로 넘어가지 않음, 13.1절 config.js). 배포본은 이 변수를 무시 |
 
 ### 13.6 앱 자체 화면 (로컬, `app://`)
 
