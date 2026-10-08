@@ -1476,3 +1476,56 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .hint[data-tone="warn"] { color: var(--warn); }
 /* 390px 설정 창: 긴 양식 이름이 선택 상자를 넓혀 넘치지 않게 (품질팀 L9) */
 .modal.wide { min-width: 0; max-width: calc(100vw - 40px); }
+
+/* ---------------- 3단계 AI 질문 · 인용 검증 (docs/design/phase3-ask-ui.md) ---------------- */
+/* #/ask: .view + .discover-head + .tabs 재사용. 탭 줄을 머리 아래 선에 붙임 */
+.ask .discover-head { padding-bottom: 0; }
+.ask .discover-head .sub { margin-bottom: 4px; }
+.ask .discover-head .tabs { margin: 0; border-bottom: 0; }
+.ask .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.ask-pane { flex: 1; min-height: 0; width: 100%; max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; }
+.ask-pane > .discover-filters { margin: 0; padding: 12px 16px 0; }
+.ask-pane > .status-line, .ask-pane > .notice { margin: 8px 16px 0; }
+.ask-pane[data-ask-pane="find"] { overflow-y: auto; gap: 12px; padding: 16px 16px 40px; }
+.ask-pane[data-ask-pane="find"] > * { flex: none; }
+/* 답의 출처 목록: 기존 .cite-list · .cite-item을 목록 · 버튼으로 */
+.msg ol.cite-list { margin: 10px 0 0; padding: 0; list-style: none; }
+.msg button.cite-item { width: 100%; border: 0; background: none; text-align: left; font-size: 12px; color: var(--text-2); }
+.msg .cite-item > span:last-child { min-width: 0; }
+.msg .cite-item b { color: var(--text); font-weight: 600; }
+.msg .cite-ref:focus-visible, .msg button.cite-item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.msg .cite-item.is-flash, .ask-sources > li.is-flash { background: var(--accent-soft); }
+/* AI로 찾기 출처 논문: 논문 찾기 결과 카드(.result) + 번호 */
+.ask-sources { margin: 0; padding: 0; list-style: none; }
+.ask-sources > li { padding: 0 8px; border-radius: 8px; transition: background .6s; scroll-margin-top: 12px; }
+.ask-sources .result { max-width: none; }
+.ask-sources .r-title .cite-ref { margin: 0 6px 0 0; cursor: default; }
+/* 인용 검증 판정 표시: 모양(✓ ◐ ✕ – …) + 글자, 색은 모양 · 왼쪽 줄에만 */
+.vd { display: inline-flex; align-items: baseline; gap: 4px; font-size: 11.5px; font-weight: 650; color: var(--text); white-space: nowrap; }
+.vd::before { content: "–"; content: "–" / ""; width: 12px; flex: none; text-align: center; font-weight: 800; color: var(--text-3); }
+[data-verdict="supported"] .vd::before { content: "✓"; content: "✓" / ""; color: var(--success); }
+[data-verdict="weak"] .vd::before { content: "◐"; content: "◐" / ""; color: var(--warn); }
+[data-verdict="unsupported"] .vd::before { content: "✕"; content: "✕" / ""; color: var(--danger); }
+[data-verdict="pending"] .vd::before { content: "…"; content: "…" / ""; color: var(--accent-text); }
+.cite-row[data-verdict] { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
+.cite-row[data-verdict="weak"] { box-shadow: inset 3px 0 0 var(--warn); }
+.cite-row[data-verdict="unsupported"] { box-shadow: inset 3px 0 0 var(--danger); }
+.cite-row[data-verdict] .muted { white-space: normal; }
+.cite-row[data-verdict] .graph-row-btn { font-weight: 500; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 미리보기 인용 표시: 종이는 늘 흰색이라 밝은 색 고정. 밑줄 모양 + 위첨자 ? ! 로도 구분 */
+.doc .cite-vd { padding: 0 2px; border-radius: 3px; cursor: pointer; text-decoration: underline 1.5px; text-underline-offset: 3px; }
+.doc .cite-vd[data-verdict="weak"] { background: #fff1e0; text-decoration-style: dotted; text-decoration-color: #a35300; }
+.doc .cite-vd[data-verdict="unsupported"] { background: #fdecec; text-decoration-style: wavy; text-decoration-color: #c92a2a; }
+.doc .cite-vd::after { margin-left: 1px; font: 700 10px/1 var(--font); vertical-align: super; }
+.doc .cite-vd[data-verdict="weak"]::after { content: "?"; content: "?" / ""; color: #a35300; }
+.doc .cite-vd[data-verdict="unsupported"]::after { content: "!"; content: "!" / ""; color: #c92a2a; }
+.doc .cite-vd:focus-visible { outline: 2px solid #1e40af; outline-offset: 1px; }
+/* 읽기 화면: 출처 위치(조각 사각형) 표시 — .hl-layer 안 */
+.spot-rect { position: absolute; border: 2px solid var(--accent); border-radius: 4px; background: rgba(var(--accent-rgb), .07); pointer-events: none; animation: pulse 1.4s ease-out 2; }
+@media (prefers-reduced-motion: reduce) { .spot-rect, .hl-rect.pulse, .ask-sources > li { animation: none; transition: none; } }
+@media (max-width: 560px) {
+  .ask .discover-head { padding: 16px 16px 0; }
+  .ask-pane > .discover-filters { padding: 10px 12px 0; }
+  .ask-pane > .status-line, .ask-pane > .notice { margin: 8px 12px 0; }
+  .ask-pane[data-ask-pane="find"] { padding: 12px 12px 32px; }
+}
