@@ -4,6 +4,7 @@
 - 논문 PDF: users/{user_id}/papers/{paper_id}.pdf      ← paper_key()
 - 올리는 중: incoming/{user_id}/{upload_id}.pdf        ← incoming_key()
 - 벡터 파일: users/{user_id}/rag/{paper_id}.v{ver}.{gen}.bin ← rag_key() (3단계 8.1절 — 서명 주소를 만들지 않음)
+- 번역 파일: users/{user_id}/translations/{paper_id}.{gen}.json ← tr_key() (4단계 8.2절 — 서명 주소를 만들지 않음)
 - DB 백업:  backups/db/{YYYYMMDD}.dump                ← backup_key() (관리 명령 전용)
 
 사용자 요청 경로는 `UserStorage`만 쓴다. 모든 동작이 키가 users/{uid}/ 또는 incoming/{uid}/로 시작하는지
@@ -34,6 +35,8 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 _PAPER_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/papers/([1-9][0-9]{0,18})\.pdf$")
 _RAG_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/rag/([1-9][0-9]{0,18})\.v([a-z0-9]{1,16})\.([0-9a-f]{8})\.bin$")
 RAG_TYPE = "application/octet-stream"
+_TR_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/translations/([1-9][0-9]{0,18})\.([0-9a-f]{8})\.json$")
+TR_TYPE = "application/json"
 _INCOMING_KEY_RE = re.compile(r"^incoming/([0-9a-f-]{36})/([0-9a-f-]{36})\.pdf$")
 _BACKUP_KEY_RE = re.compile(r"^backups/db/\d{8}\.dump$")
 
@@ -78,6 +81,14 @@ def rag_key(uid: str, paper_id: int, version: str) -> str:
     return key
 
 
+def tr_key(uid: str, paper_id: int) -> str:
+    """번역 파일 키. gen = 번역 행을 만들 때 새 16진수 8자리(지운 뒤 늦게 온 쓰기와 새 번역이 섞이지 않게 — 4단계 8.2절)"""
+    key = f"users/{_check_uuid(uid, '사용자 id')}/translations/{paper_id}.{secrets.token_hex(4)}.json"
+    if isinstance(paper_id, bool) or not isinstance(paper_id, int) or not _TR_KEY_RE.fullmatch(key):
+        raise StorageKeyError("번역 파일 키 형식이 틀렸어요")
+    return key
+
+
 def backup_key(day: str) -> str:
     key = f"backups/db/{day}.dump"
     if not _BACKUP_KEY_RE.fullmatch(key):
@@ -86,11 +97,13 @@ def backup_key(day: str) -> str:
 
 
 def check_user_key(uid: str, key: str) -> str:
-    """키가 그 사용자의 users/{uid}/papers/{id}.pdf · users/{uid}/rag/….bin · incoming/{uid}/{uuid}.pdf 인지 확인한다."""
+    """키가 그 사용자의 users/{uid}/papers/{id}.pdf · users/{uid}/rag/….bin · users/{uid}/translations/….json ·
+    incoming/{uid}/{uuid}.pdf 인지 확인한다."""
     _check_uuid(uid, "사용자 id")
     if not isinstance(key, str) or not key:
         raise StorageKeyError("빈 키")
-    m = _PAPER_KEY_RE.fullmatch(key) or _RAG_KEY_RE.fullmatch(key) or _INCOMING_KEY_RE.fullmatch(key)
+    m = (_PAPER_KEY_RE.fullmatch(key) or _RAG_KEY_RE.fullmatch(key) or _TR_KEY_RE.fullmatch(key)
+         or _INCOMING_KEY_RE.fullmatch(key))
     if not m or m.group(1) != uid:
         raise StorageKeyError("이 사용자의 저장소 키가 아니에요")
     return key
@@ -415,8 +428,8 @@ class UserStorage:
         return check_user_key(self.uid, key)
 
     def _pdf_only(self, key: str) -> str:
-        """서명 주소는 PDF · 올리는 중 키에만 — 벡터 파일은 브라우저로 가지 않는다(3단계 8.1절, AC-S02)"""
-        if _RAG_KEY_RE.fullmatch(self.check(key)):
+        """서명 주소는 PDF · 올리는 중 키에만 — 벡터 · 번역 파일은 브라우저로 가지 않는다(3단계 8.1절 AC-S02 · 4단계 AC-D03)"""
+        if _RAG_KEY_RE.fullmatch(self.check(key)) or _TR_KEY_RE.fullmatch(key):
             raise StorageKeyError("서명 주소를 만들 수 없는 키예요")
         return key
 

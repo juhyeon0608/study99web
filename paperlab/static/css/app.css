@@ -1529,3 +1529,41 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
   .ask-pane > .status-line, .ask-pane > .notice { margin: 8px 12px 0; }
   .ask-pane[data-ask-pane="find"] { padding: 12px 12px 32px; }
 }
+
+/* ---------------- 4단계 쉬운 설명 · 번역 (docs/design/phase4-explain-translate-ui.md) ---------------- */
+/* 선택 상자: 버튼이 늘어 좁은 화면에서는 줄바꿈. 진행 중 버튼은 aria-disabled(초점 · 툴팁 유지) */
+.sel-pop { flex-wrap: wrap; max-width: calc(100vw - 16px); }
+.btn[aria-disabled="true"] { opacity: .5; cursor: default; }
+/* 패널 탭 6개: 380px 패널에서도 한 줄, 넘치면 가로 스크롤 */
+.panel .tabs { overflow-x: auto; scrollbar-width: none; }
+.panel .tabs button { flex: none; white-space: nowrap; padding: 8px 8px; }
+.panel .tabs button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (max-width: 1180px) { .panel .tabs { padding: 0 4px; gap: 0; } .panel .tabs button { padding: 8px 6px; font-size: 12.5px; } }
+/* 기록 카드: .ann-item 재사용. 왼쪽 줄 = 종류 */
+.ann-item[data-kind="explain"] { border-left-color: var(--accent); }
+.ann-item[data-kind="translate"] { border-left-color: var(--border-strong); }
+.ann-item[data-kind] .q { cursor: auto; color: var(--text-2); margin: 6px 0 8px; }
+.ann-item[data-kind] .foot { flex-wrap: wrap; }
+.ann-item[data-kind] .foot:first-child { margin-top: 0; }
+.ann-item[data-kind] summary { cursor: pointer; margin: 8px 0 4px; font-size: 12.5px; font-weight: 600; color: var(--accent-text); }
+.ann-item[data-kind] > .status-line, .ann-item[data-kind] > .notice { margin-top: 6px; }
+/* 개념 그림: <img src="blob:"> 격리. 그림 색은 테마 계산값이라 바탕은 카드와 같게 */
+.xt-figure { margin: 10px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.xt-figure img { display: block; width: 100%; height: auto; max-height: 480px; object-fit: contain; }
+.xt-figure figcaption { margin-top: 6px; font-size: 11.5px; color: var(--text-3); }
+.xt-figure[data-state="failed"] { border-style: dashed; color: var(--text-2); font-size: 12.5px; }
+/* 전체 번역: 쪽 머리(p.12 번역 ◀ ▶ 따라가기)는 패널 위에 붙음 */
+.xt-head { position: sticky; top: -16px; z-index: 1; display: flex; align-items: center; gap: 6px; margin: 12px -18px 10px; padding: 8px 18px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.xt-head h3 { margin: 0; font-size: 14px; }
+.xt-head .btn[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); }
+.xt-range { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-2); }
+.xt-range .input { width: 72px; text-align: center; }
+/* 900px 이하(패널이 숨는 화면): [쉽게 설명] · [번역] · ◧ 이 패널을 아래 시트로 엶 (AD-1) */
+@media (max-width: 900px) {
+  .reader.panel-sheet .panel {
+    display: flex; position: fixed; left: 0; right: 0; bottom: 0; height: 75vh; z-index: 60;
+    border-left: 0; border-top: 1px solid var(--border); border-radius: 14px 14px 0 0; box-shadow: var(--shadow-lg);
+  }
+  .xt-head { top: -14px; margin: 12px -14px 10px; padding: 8px 14px; }
+  .reader.panel-sheet .panel-body { padding: 14px 14px 24px; }
+}

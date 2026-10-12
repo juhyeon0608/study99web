@@ -167,9 +167,13 @@ export function fmtDate(iso) {
 // 수식($..$, $$..$$, \(..\), \[..\])을 먼저 KaTeX로 바꿔 두고 마크다운을 렌더링한다
 // AI 답 · 마크다운을 그릴 때: 바깥 주소를 부르는 그림 · 미디어 · style(배경 그림)과 폼(가짜 입력 · 보내기)을 막는다
 // (3단계 품질팀 M1 · N4 — 읽음 추적 · 주소 유출 · 피싱 방지)
+// 4단계 품질팀 H-1 · L-2: class · id 금지(AI 글이 앱 클래스 · id로 가짜 창 · 단추를 흉내 내지 못하게 — 수식 · 인용 단추는 정화 뒤에
+// 끼워 넣으므로 영향 없음, 코드 블록의 language-* class는 쓰는 곳 없음), HTML 프로필만 + svg · math 금지(그림은 renderSvg로만)
 export const MD_PURIFY = {
-  FORBID_TAGS: ["img", "image", "picture", "source", "video", "audio", "form", "input", "button", "textarea", "select", "style"],
-  FORBID_ATTR: ["style", "srcset", "background"],
+  USE_PROFILES: { html: true },
+  FORBID_TAGS: ["img", "image", "picture", "source", "video", "audio", "form", "input", "button", "textarea", "select", "style",
+    "svg", "math", "dialog"],
+  FORBID_ATTR: ["style", "srcset", "background", "class", "id", "popover", "popovertarget", "popovertargetaction"],
 };
 
 export function renderMarkdown(text, { citations = false } = {}) {
@@ -280,4 +284,68 @@ export function pickFiles({ accept = "", multiple = false } = {}) {
     document.body.appendChild(input);
     input.click();
   });
+}
+
+// ------------------------------------------------------------- 4단계 AI 개념 그림 (docs/specs/phase4-explain-translate.md 7.3절)
+// AI가 만든 SVG는 믿지 않는다: DOMPurify SVG 프로필(필터 프로필은 켜지 않음)로 정화 → 크기 · url() · 색 처리 → 직렬화해서
+// <img src="blob:">로만 그린다. 이미지로 그린 SVG는 스크립트를 실행하지 않고 바깥 자원을 부르지 않으며, 안의 스타일 · id · class가
+// 앱 화면에 닿지 않는다. SVG 문자열을 innerHTML로 앱 DOM에 넣지 않는다 (MD_PURIFY로도 그리지 않음).
+export const SVG_PURIFY = {
+  USE_PROFILES: { svg: true },
+  FORBID_TAGS: ["style", "image", "a", "use", "foreignObject", "script", "feImage", "animate", "set", "animateMotion",
+    "animateTransform", "textPath", "mpath"],
+  FORBID_ATTR: ["style", "href", "xlink:href", "class"],
+};
+export const SVG_MAX_ELEMENTS = 1500;
+export const SVG_MAX_SIDE = 4000;
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// 순수 함수 (Node 테스트 — AC-G03)
+export const svgColor = (value, { text, accent }) => String(value)
+  .replace(/currentColor/gi, text).replace(/var\(\s*--[\w-]+\s*(?:,[^()]*)?\)/g, accent);
+// CSS 이스케이프(\72 · \r)를 푼 글 (품질팀 L-1 — u\72l(…) 우회)
+export const cssUnescape = (v) => String(v)
+  .replace(/\\([0-9a-f]{1,6})\s?/gi, (_, h) => { const c = parseInt(h, 16); return c > 0 && c <= 0x10ffff ? String.fromCodePoint(c) : "�"; })
+  .replace(/\\(.)/g, "$1");
+// url(#이름)만 남김 — 이스케이프를 푼 뒤 다른 url(…)이 하나라도 있으면 그 속성은 지운다
+export const svgUrlOk = (value) => cssUnescape(value).replace(/url\(#[A-Za-z_][\w.-]*\)/g, "").search(/url\s*\(/i) < 0;
+export function svgViewBoxOk(vb) {
+  const n = String(vb || "").trim().split(/[\s,]+/).map(Number);
+  return n.length === 4 && n.every(Number.isFinite) && n[2] > 0 && n[3] > 0 && n[2] <= SVG_MAX_SIDE && n[3] <= SVG_MAX_SIDE;
+}
+export const svgCountOk = (count) => count <= SVG_MAX_ELEMENTS;
+
+// 지금 테마의 글자색 · 강조 글자색 (그림을 그릴 때의 계산값 — 테마를 바꾸면 다시 그림)
+export function themeColors() {
+  const cs = getComputedStyle(document.documentElement);
+  return { text: cs.getPropertyValue("--text").trim() || "#1b1f27", accent: cs.getPropertyValue("--accent-text").trim() || "#1e40af" };
+}
+
+// AI SVG → <img> 요소 (blob URL은 불러오거나 실패하면 바로 revoke). 그릴 수 없으면 null
+export function renderSvg(svgText, { text = "", colors = null } = {}) {
+  if (!svgText || !window.DOMPurify) return null;
+  const frag = window.DOMPurify.sanitize(String(svgText), { ...SVG_PURIFY, RETURN_DOM_FRAGMENT: true });
+  const root = frag.firstElementChild;
+  if (frag.children.length !== 1 || !root || root.namespaceURI !== SVG_NS || root.localName !== "svg") return null;
+  const all = [root, ...root.querySelectorAll("*")];
+  if (!svgCountOk(all.length) || !svgViewBoxOk(root.getAttribute("viewBox"))) return null;
+  const c = colors || themeColors();
+  for (const node of all) {
+    for (const a of [...node.attributes]) {
+      if (!svgUrlOk(a.value)) { node.removeAttribute(a.name); continue; }
+      const v = svgColor(a.value, c);
+      if (v !== a.value) node.setAttribute(a.name, v);
+    }
+  }
+  root.removeAttribute("width");
+  root.removeAttribute("height");
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(root)], { type: "image/svg+xml" }));
+  const img = document.createElement("img");
+  img.alt = text;
+  img.decoding = "async";
+  const revoke = () => URL.revokeObjectURL(url);
+  img.addEventListener("load", revoke, { once: true });
+  img.addEventListener("error", revoke, { once: true });
+  img.src = url;
+  return img;
 }

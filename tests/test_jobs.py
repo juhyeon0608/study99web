@@ -505,7 +505,8 @@ def test_settings_validation_and_keys(env, project):
     """AC-31 · AC-45(일부 — rotate-key는 기존 회전 코드가 이름과 무관하게 모든 행) · S3 hint"""
     ca, cb = env.client(env.a), env.client(env.b)
     for bad in ({"summary": ["gpt"]}, {"summary": ["claude", "claude"]}, {"summary": []},
-                {"summary": ["claude", "codex", "gemini", "claude"]}, {"translate": ["claude"]}, ["claude"]):
+                {"summary": ["claude", "codex", "gemini", "claude"]},
+                {"translate_paper": ["claude"]}, ["claude"]):  # 4단계: translate는 이제 설정 줄(K-10), 전체 번역은 그 줄을 씀
         assert ca.put("/api/settings", json={"ai_routing": bad}).status_code == 400, bad
     assert ca.put("/api/settings", json={"cli_models": {"claude": "claude-opus-5-5"}}).status_code == 400
     assert ca.put("/api/settings", json={"api_models": {"codex": "bad model!"}}).status_code == 400

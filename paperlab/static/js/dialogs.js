@@ -3,6 +3,7 @@
 import { api, downloadBlob } from "./api.js";
 import { forgetStyle, listStyles, render, sentenceCase, styleOptions } from "./cite.js";
 import { INHA } from "./extlinks.js";
+import { LANGS } from "./explain.js";
 import { formatManagerDialog, formatOptions, listFormats } from "./formats.js";
 import { COMPANY, fmtAgo, fmtClock } from "./jobs.js";
 import {
@@ -257,6 +258,9 @@ export async function settingsDialog({ focus = "" } = {}) {
         <div class="field"><label for="set-cli-other">PC의 codex · gemini 모델</label><select class="input" id="set-cli-other" disabled><option>계정 기본 모델</option></select></div>
       </div></details>
     <div class="field"><label for="set-lang">AI 답변 언어</label><input class="input" id="set-lang" name="summary_language" value="${esc(s.summary_language)}"></div>
+    <div class="field"><label for="set-tr-lang">번역 언어</label><select class="input" id="set-tr-lang" name="translate_language" aria-describedby="set-tr-lang-hint">
+      ${Object.entries(LANGS).map(([k, v]) => `<option value="${k}" ${k === (s.translate_language || "ko") ? "selected" : ""}>${v}</option>`).join("")}</select>
+      <div class="hint" id="set-tr-lang-hint">선택 번역과 전체 번역의 대상 언어예요. 쉬운 설명은 위 ‘AI 답변 언어’로 써요.</div></div>
     <div class="status-line ${status.ready ? "ok" : "bad"}" id="ai-status">${status.ready ? "✓" : "!"} ${esc(status.message)}</div>
 
     <div class="section-title" id="set-pc-title">연결된 PC</div>
@@ -406,7 +410,10 @@ const JOB_KINDS = [["summary", "요약"], ["chat", "논문과 대화 · 서재 �
   ["write", "글쓰기 도우미"],
   // 3단계 (docs/design/phase3-ask-ui.md 7.2절)
   ["find", "AI로 찾기", "검색어 만들기와 한국어 요약에 써요. 논문 검색은 공개 DB라 무료예요."],
-  ["verify", "인용 검증", "간접 인용 판정에만 써요. 직접 인용은 AI 없이 글자로 대조해요."]];
+  ["verify", "인용 검증", "간접 인용 판정에만 써요. 직접 인용은 AI 없이 글자로 대조해요."],
+  // 4단계 (docs/design/phase4-explain-translate-ui.md 7.1절)
+  ["explain", "쉬운 설명", "읽기 화면에서 고른 글을 쉽게 풀고, 필요하면 개념 그림을 그려요."],
+  ["translate", "번역 (선택 · 전체)", "고른 글 번역과 논문 전체 번역이 함께 써요. 전체 번역은 쪽 수만큼 요금이 나가요."]];
 const ENGINE_LABEL = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
 const AI_KEYS = [
   { name: "anthropic_api_key", engine: "claude", company: "Anthropic", label: "Anthropic API 키 (Claude)", ph: "sk-ant-...", url: "https://console.anthropic.com/settings/keys" },

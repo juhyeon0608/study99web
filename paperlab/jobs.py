@@ -16,7 +16,7 @@ from datetime import timedelta
 
 from psycopg.types.json import Jsonb
 
-from . import ai, find, rag, verify
+from . import ai, explain, find, rag, translate, verify
 from .config import ENGINES, JOB_KINDS, UserSettings, redact
 from .db import Library, iso, now_dt
 
@@ -28,9 +28,16 @@ HEARTBEAT_S = 30
 MAX_ATTEMPTS = 3        # CLI 잡기 횟수(재할당 포함)
 API_MAX_ATTEMPTS = 2    # 같은 API 칸 다시 실행 한도 (15.2절)
 DEADLINE_S = {"summary": 24 * 3600, "chat": 30 * 60, "write": 30 * 60,   # CLI 대기 기한 (확정 U7)
-              "find": 30 * 60, "verify": 24 * 3600}                        # 3단계 14.2절
-TIMEOUT_S = {"summary": 1200, "chat": 600, "write": 600, "find": 600, "verify": 1200}  # CLI 시간 제한 (11.5절)
-ALL_KINDS = JOB_KINDS + ("index",)   # index는 서버 안 색인(엔진 local) — 작업별 엔진 설정에는 없음
+              "find": 30 * 60, "verify": 24 * 3600,                        # 3단계 14.2절
+              "explain": 30 * 60, "translate": 30 * 60, "translate_paper": 24 * 3600}  # 4단계 K-7
+TIMEOUT_S = {"summary": 1200, "chat": 600, "write": 600, "find": 600, "verify": 1200,  # CLI 시간 제한 (11.5절)
+             "explain": 600, "translate": 600, "translate_paper": 900}                # 4단계 (전체 번역은 묶음당)
+# index는 서버 안 색인(엔진 local), translate_paper(전체 번역)는 translate 엔진 설정을 씀 — 작업별 엔진 설정에는 없음
+ALL_KINDS = JOB_KINDS + ("index", "translate_paper")
+ROUTE_KIND = {"translate_paper": "translate"}
+EXPLAIN_KINDS = explain.KINDS
+# 전체 번역은 다시 대기 · 잡기 때도 진행(쪽 수)을 남긴다 — 화면이 counts로 번역 보기를 새로 받음 (4단계 6.3절 6번)
+_KEEP_PROGRESS = "progress = case when kind = 'translate_paper' then progress else '{}'::jsonb end"
 FIND_KEEP_HOURS = 24                 # AI로 찾기 질문 · 결과는 24시간 뒤 비움 (K-11)
 ABS_GRACE_S = 300       # 서버 쪽 절대 기한 = 이번 잡기 + 시간 제한 + 5분 (11.5절)
 MAX_ACTIVE_JOBS = 30
@@ -75,6 +82,7 @@ DEFAULT_ERRORS = {
     "apply_failed": "결과를 저장하지 못했어요",
     "index_failed": "색인하지 못한 논문이 있어요",
     "search_failed": find.SEARCH_FAILED,
+    "pdf_changed": translate.PDF_CHANGED,
 }
 INTERRUPTED = "화면 연결이 끊겨 멈췄어요"
 NO_ROUTE = "AI를 쓸 수 있는 방법이 없어요. 설정에서 API 키를 넣거나, PC에 PaperLab 앱을 설치하고 연결해 주세요."
@@ -261,7 +269,7 @@ def build_route(kind: str, get, devices: list[dict]) -> list[dict]:
     """작업 종류의 엔진 순서 → [{runner, engine}…]. 키가 있으면 API 칸, 그 엔진을 광고한 기기가 있으면 CLI 칸"""
     adv = advertised(devices)
     route = []
-    for e in (get("ai_routing") or {}).get(kind) or ["claude"]:
+    for e in (get("ai_routing") or {}).get(ROUTE_KIND.get(kind, kind)) or ["claude"]:
         if get(ai.ENGINE_KEYS[e]):
             route.append({"runner": "api", "engine": e})
         if e in adv:
@@ -310,7 +318,7 @@ def create_job(lib: Library, kind: str, route: list[dict], params: dict, paper_i
                running_api: bool = False) -> tuple[dict, bool]:
     """(행, 새로 만들었는지). 같은 논문 진행 중 요약이 있으면 그 행(7.1절). running_api: 대화 · 글쓰기 API SSE 경로
     (요청 안에서 바로 실행 — interactive 표시. 실행기 · 복구 스캔은 다시 실행하지 않고, 리스가 지나면 취소로 끝냄)."""
-    if kind not in JOB_KINDS or not route:
+    if kind not in ALL_KINDS or kind == "index" or not route:
         raise JobError(400, NO_ROUTE, "no_route")
     if len(json.dumps(params, ensure_ascii=False).encode("utf-8")) > PARAMS_MAX:
         raise JobError(400, "요청이 너무 커요", "too_large")
@@ -327,15 +335,14 @@ def create_job(lib: Library, kind: str, route: list[dict], params: dict, paper_i
         " now() + make_interval(secs => %(deadline)s), "
         " case when %(run)s then gen_random_uuid() end, case when %(run)s then now() + make_interval(secs => %(lease)s) end, "
         " case when %(run)s then now() end, case when %(run)s then now() end, case when %(run)s then 1 else 0 end, %(run)s) "
-        "on conflict (user_id, paper_id, kind) where kind = 'summary' and status in ('queued', 'running') do nothing "
-        "returning *",
+        "on conflict do nothing returning *",  # 진행 중 하나뿐인 종류: summary · translate_paper (부분 유일 색인)
         {"uid": lib.uid, "kind": kind, "status": "running" if run else "queued", "runner": first["runner"],
          "engine": first["engine"], "route": Jsonb(route), "params": Jsonb(params), "pid": paper_id,
          "max": MAX_ATTEMPTS, "deadline": DEADLINE_S[kind], "run": run, "lease": ai.TEXT_API_TIMEOUT + 60})
     if row:
         return row, True
-    existing = lib._one("select * from paperlab.jobs where user_id = %s and paper_id = %s and kind = 'summary' "
-                        "and status in ('queued', 'running')", (lib.uid, paper_id))
+    existing = lib._one("select * from paperlab.jobs where user_id = %s and paper_id = %s and kind = %s "
+                        "and status in ('queued', 'running')", (lib.uid, paper_id, kind))
     if not existing:  # 그 사이 끝났으면 (드묾) 다시 만든다
         return create_job(lib, kind, route, params, paper_id, running_api)
     return existing, False
@@ -382,10 +389,13 @@ def job_view(r: dict, devices: list[dict], free: dict) -> dict:
         "device": {"id": r["device_id"], "name": r["device_name"]} if r.get("device_id") and r.get("device_name") else None,
         "waiting_reason": waiting_reason(r, devices, free),
         "progress": r["progress"] or {}, "attempts": r["attempts"], "error_code": r["error_code"], "error": r["error"],
-        "cancel_requested": r["cancel_requested"], "history": r["history"] or [],
+        "cancel_requested": r["cancel_requested"], "history": r["history"] or [], "interactive": bool(r.get("interactive")),
         "deadline_at": iso(r["deadline_at"]) if r["status"] == "queued" else None,
         # 화면용 덧붙임: 대화 탭을 다시 열 때 질문 말풍선 · 작업 목록 [결과 복사] (디자인 7 · 9장)
         "question": params.get("question") if r["kind"] in ("chat", "find") else None,
+        # 4단계 선택 설명 · 번역: 진행 카드를 다시 그릴 때 (원문 앞부분 · 쪽 — 시안 3.1절)
+        "source_text": (params.get("text") or "")[:200] if r["kind"] in EXPLAIN_KINDS else None,
+        "page": params.get("page") if r["kind"] in EXPLAIN_KINDS else None,
         "result": r["result"],
         "created_at": iso(r["created_at"]), "started_at": iso(r["started_at"]), "finished_at": iso(r["finished_at"]),
     }
@@ -448,8 +458,8 @@ def expire(lib: Library) -> None:
         elif j["attempts"] >= j["max_attempts"]:
             _end(lib, j, "failed", "lease_exhausted", DEFAULT_ERRORS["lease_exhausted"], entry)
         else:
-            lib._x("update paperlab.jobs set status = 'queued', lease_token = null, lease_until = null, progress = '{}'::jsonb, "
-                   "history = %s, updated_at = now() where id = %s and user_id = %s", (_history(j, entry), j["id"], lib.uid))
+            lib._x("update paperlab.jobs set status = 'queued', lease_token = null, lease_until = null, " + _KEEP_PROGRESS
+                   + ", history = %s, updated_at = now() where id = %s and user_id = %s", (_history(j, entry), j["id"], lib.uid))
     lib._x("update paperlab.jobs set status = 'cancelled', error_code = 'interrupted', error = %s, lease_token = null, "
            "lease_until = null, progress = '{}'::jsonb, finished_at = now(), updated_at = now() "
            "where user_id = %s and interactive and status = 'running' and lease_until < now()",
@@ -529,7 +539,7 @@ def fail_or_fallback(lib: Library, job: dict, code: str, message: str, *, device
     if code in RELOCATE_CODES and job["runner"] == "cli" and device_id is not None:
         excluded = sorted(set(job.get("excluded_devices") or []) | {device_id})
         lib._x("update paperlab.jobs set status = 'queued', device_id = null, lease_token = null, lease_until = null, "
-               "progress = '{}'::jsonb, excluded_devices = %s, history = %s, updated_at = now() where id = %s and user_id = %s",
+               + _KEEP_PROGRESS + ", excluded_devices = %s, history = %s, updated_at = now() where id = %s and user_id = %s",
                (Jsonb(excluded), _history(job, entry), job["id"], lib.uid))
         return "queued"
     if code in FALLBACK_CODES or force_fallback:
@@ -543,7 +553,7 @@ def fail_or_fallback(lib: Library, job: dict, code: str, message: str, *, device
                 continue
             lib._x("update paperlab.jobs set status = 'queued', runner = %s, engine = %s, route_index = %s, attempts = 0, "
                    "excluded_devices = '[]'::jsonb, device_id = null, lease_token = null, lease_until = null, "
-                   "progress = '{}'::jsonb, history = %s, not_before = now(), interactive = false, "
+                   + _KEEP_PROGRESS + ", history = %s, not_before = now(), interactive = false, "
                    "deadline_at = case when %s = 'cli' then now() + make_interval(secs => %s) else deadline_at end, "
                    "updated_at = now() where id = %s and user_id = %s",
                    (slot["runner"], slot["engine"], i, _history(job, entry), slot["runner"], DEADLINE_S[job["kind"]],
@@ -600,6 +610,8 @@ def _apply(lib: Library, job: dict, parsed: dict, model: str):
                 "warnings": params.get("warnings") or []}
     if kind == "verify":
         return verify.apply_results(lib, job, parsed["results"])
+    if kind in EXPLAIN_KINDS:
+        return {"explanation_id": explain.save(lib, job, parsed["result"], model)}
     text = parsed["text"]
     if len(text.encode("utf-8")) > RESULT_TEXT_MAX:
         raise ValueError("too large")
@@ -652,7 +664,7 @@ def clean_progress(value) -> dict:
         out["step"] = value["step"]
     counts = value.get("counts")
     if isinstance(counts, dict):
-        out["counts"] = {k: int(v) for k, v in counts.items() if k in ("queries", "candidates", "picked")
+        out["counts"] = {k: int(v) for k, v in counts.items() if k in ("queries", "candidates", "picked", "pages_done", "pages_total")
                          and isinstance(v, int) and not isinstance(v, bool) and 0 <= v < 100000}
     text = value.get("partial_text")
     if isinstance(text, str) and text:
@@ -670,7 +682,8 @@ def claim_cli(lib: Library, device_id: int, engines: list[str]) -> dict | None:
         "  order by created_at, id for update skip locked limit 1) "
         "update paperlab.jobs j set status = 'running', device_id = %(dev)s, lease_token = gen_random_uuid(), "
         "  lease_until = now() + make_interval(secs => %(lease)s), leased_at = now(), attempts = j.attempts + 1, "
-        "  started_at = coalesce(j.started_at, now()), progress = '{}'::jsonb, updated_at = now() "
+        "  started_at = coalesce(j.started_at, now()), progress = case when j.kind = 'translate_paper' then j.progress "
+        "  else '{}'::jsonb end, updated_at = now() "
         "from c where j.id = c.id returning j.*",
         {"uid": lib.uid, "eng": list(engines), "dev": device_id, "lease": LEASE_S})
 
@@ -722,6 +735,8 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
         if not params.get("queries"):
             return find.query_request(params.get("question") or "")
         return find.summary_request(params.get("question") or "", params.get("candidates") or [])
+    if job["kind"] in EXPLAIN_KINDS:  # 4단계: 쪽 문맥은 지금 page_texts에서
+        return explain.build_request(lib, job["paper_id"], params)[:2]
     src = paper_source(lib, job["paper_id"])
     if not src:
         raise LookupError("paper gone")
@@ -746,10 +761,18 @@ def cli_task(lib: Library, job: dict) -> dict | None:
             system, prompt, ids, remaining = verify.build_request(lib, job, lang)
             set_params(lib, job, {**params, "claim_ids": ids, "remaining": remaining})
             schema = verify.VERIFY_SCHEMA
+        elif job["kind"] == "translate_paper":  # 잡기 한 번 = 묶음 하나 (4단계 K-6)
+            prep = translate.prepare_chunk(lib, job)
+            if prep is None:
+                return None
+            _, system, prompt = prep
+            schema = translate.TRANSLATE_SCHEMA
         else:
             system, prompt = text_request(lib, job, lang)
             if job["kind"] == "find" and not params.get("queries"):
                 schema = find.QUERY_SCHEMA
+            elif job["kind"] == "explain":
+                schema = explain.EXPLAIN_SCHEMA
     except ai.AIError as e:
         _end(lib, job, "failed", "input_too_large" if e.code == "input_too_large" else "bad_input", str(e))
         return None
@@ -794,6 +817,8 @@ def parse_result(job: dict, text: str, structured=None) -> dict:
         return {"answer": find.check_answer(text, len(params.get("candidates") or []))}
     if job["kind"] == "verify":
         return {"results": verify.parse_results(text, structured)}
+    if job["kind"] in EXPLAIN_KINDS:
+        return explain.parse(job["kind"], text, structured)
     return ai.parse_text_result(job["kind"], text, structured)
 
 
@@ -835,9 +860,9 @@ def heartbeat(lib: Library, device_id: int, items) -> list[dict]:
         if re.fullmatch(r"[0-9a-f-]{36}", tok):
             kind = lib._one("select kind from paperlab.jobs where id = %s and user_id = %s and device_id = %s",
                             (it["id"], lib.uid, device_id))
-            if kind:
-                r = touch_lease(lib, it["id"], tok, progress=clean_progress(it.get("progress")), renew=True,
-                                timeout_s=TIMEOUT_S[kind["kind"]])
+            if kind:  # 전체 번역은 서버가 적은 쪽 수 진행을 남긴다 (JSON 출력이라 중간 글도 없음)
+                r = touch_lease(lib, it["id"], tok, renew=True, timeout_s=TIMEOUT_S[kind["kind"]],
+                                progress=None if kind["kind"] == "translate_paper" else clean_progress(it.get("progress")))
         out.append({"id": it["id"], "ok": True, **r} if r else {"id": it["id"], "ok": False, "code": "lease_lost"})
     return out
 
@@ -866,5 +891,15 @@ def claim_api(lib: Library, job_id: int, guide: str = "") -> dict | None:
         return None
     return lib._one("update paperlab.jobs set status = 'running', lease_token = gen_random_uuid(), "
                     "lease_until = now() + make_interval(secs => %s), leased_at = now(), attempts = attempts + 1, "
-                    "started_at = coalesce(started_at, now()), progress = '{}'::jsonb, updated_at = now() "
+                    "started_at = coalesce(started_at, now()), " + _KEEP_PROGRESS + ", updated_at = now() "
                     "where id = %s and user_id = %s returning *", (LEASE_S, job_id, lib.uid))
+
+
+def translate_next(lib: Library, job: dict, progress: dict) -> None:
+    """전체 번역 묶음 하나를 반영한 뒤 같은 작업을 다시 대기로 (find_hold와 같은 모양 — 4단계 6.3절 4번 ③):
+    attempts = 0, 바로 잡을 수 있게, CLI 대기 기한은 지금부터 다시 24시간, 진행(쪽 수)은 남김.
+    API 실행기는 이 작업을 대기열 뒤로 다시 넣는다 — 다른 사용자 작업이 사이에 끼어든다(AC-P12)"""
+    lib._x("update paperlab.jobs set status = 'queued', device_id = null, lease_token = null, lease_until = null, "
+           "attempts = 0, progress = %s, not_before = now(), deadline_at = now() + make_interval(secs => %s), "
+           "updated_at = now() where id = %s and user_id = %s",
+           (Jsonb(clean_progress(progress)), DEADLINE_S["translate_paper"], job["id"], lib.uid))

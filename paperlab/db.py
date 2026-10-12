@@ -437,9 +437,12 @@ class Library:
                 (now_dt(), paper_id, self.uid))
 
     def delete_paper(self, paper_id: int) -> dict | None:
-        """지운 논문의 저장소 키 {"pdf_key", "rag_key"}('' = 없음). 내 논문이 아니면 None"""
-        return self._one("delete from paperlab.papers where id = %s and user_id = %s returning pdf_key, rag_key",
-                         (paper_id, self.uid))
+        """지운 논문의 저장소 키 {"pdf_key", "rag_key", "tr_key"}('' = 없음). 내 논문이 아니면 None.
+        번역 행은 외래 키로 함께 지워지므로 키는 지우기 전 스냅숏에서 (4단계 8.2절)"""
+        return self._one("with t as (select tr_key from paperlab.translations where paper_id = %(id)s and user_id = %(uid)s) "
+                         "delete from paperlab.papers where id = %(id)s and user_id = %(uid)s "
+                         "returning pdf_key, rag_key, coalesce((select tr_key from t), '') as tr_key",
+                         {"id": paper_id, "uid": self.uid})
 
     def _reindex(self, paper_id: int) -> None:
         """검색 메타(paper_search.meta)만 다시 쓴다. 본문은 page_texts에 쓰는 순간 색인된다."""

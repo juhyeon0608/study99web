@@ -10,6 +10,7 @@ import {
   ICON_WARN, cancelJob, errorLabel, retryJob, setStatusLine, statusLineEl, summaryCard,
   updateSummaryCard, watchJob,
 } from "./jobs.js";
+import { BUSY_TIP, explainBusy, explainTab, followPage, resetExplain, startExplain } from "./explain.js";
 import { exportAnnotations } from "./library.js";
 import { quoteRuleText } from "./refquote.js";
 import { onRefresh, state } from "./state.js";
@@ -67,6 +68,7 @@ function teardown() {
   document.removeEventListener("keydown", R.onKey);
   document.removeEventListener("selectionchange", R.onSelChange);
   hidePopups();
+  resetExplain(); // 선택 설명 SSE를 끊음(서버는 interrupted로 취소 — 2단계 규칙)
   R = null;
 }
 
@@ -91,6 +93,10 @@ export async function openReader(main, pid, startPage = null) {
     return;
   }
   if (seq !== openSeq) return;
+  // 작업 목록 [열기]에서 온 4단계 작업: 탭 "설명·번역" + 보기 (주소가 아니라 화면 메모리 — 시안 7.3절)
+  const want = state.readerTab && state.readerTab.pid === pid ? state.readerTab : null;
+  state.readerTab = null;
+  if (want) savePrefs({ tab: want.tab, xtView: want.view });
   const p0 = prefs();
   R = {
     pid, paper, annotations: [], pages: [], scale: 1, fit: p0.fit !== false, color: p0.color || "yellow",
@@ -114,7 +120,7 @@ export async function openReader(main, pid, startPage = null) {
     </div>
     <aside class="panel">
       <div class="tabs">
-        <button data-tab="summary">AI 요약</button><button data-tab="chat">질문하기</button>
+        <button data-tab="summary">AI 요약</button><button data-tab="chat">질문하기</button><button data-tab="explain">설명·번역</button>
         <button data-tab="highlights">하이라이트</button><button data-tab="note">노트</button><button data-tab="cite">정보·인용</button>
       </div>
       <div class="panel-body"></div>
@@ -127,6 +133,7 @@ export async function openReader(main, pid, startPage = null) {
   $$("[data-tab]", view).forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
   wireBar(view);
   $("[data-panel]", view).onclick = () => {
+    if (narrow()) { view.classList.toggle("panel-sheet"); return; } // 900px 이하: 아래 시트로 열고 닫음 (AD-1)
     const closed = view.classList.toggle("panel-closed");
     savePrefs({ panelClosed: closed });
     if (R.fit) setTimeout(() => setScale(fitScale(), true), 50);
@@ -136,6 +143,7 @@ export async function openReader(main, pid, startPage = null) {
     if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
     if (e.key === "Escape") {
       if (document.querySelector(".sel-pop")) return hidePopups();
+      if (view.classList.contains("panel-sheet")) return view.classList.remove("panel-sheet"); // Esc는 먼저 시트를 닫음
       location.hash = "#/library";
     }
   };
@@ -455,6 +463,7 @@ function onScroll() {
     R.currentPage = cur;
     const input = $("[data-page]", R.view);
     if (document.activeElement !== input) input.value = cur;
+    if (!R.embed) followPage(cur); // 전체 번역 보기가 PDF 쪽을 따라감 (300ms 멈춘 뒤)
   }
 }
 
@@ -474,12 +483,12 @@ export function goToPage(n, flashTextStr = "") {
 
 // 3단계 출처 위치(시안 4장): 그 쪽에서 rect(0~1) 위쪽이 화면 위 1/4에 오게 스크롤 → .spot-rect 6초 + 글 반짝임.
 // rect가 없으면 쪽 이동 + 글 반짝임만
-export function goToSpot(page, rect, text = "") {
+export function goToSpot(page, rect, text = "", what = "출처") {
   if (!R || !R.pages.length) return;
   const n = Math.max(1, Math.min(R.pages.length, Number(page) || 1));
   const pg = R.pages[n - 1];
   if (!pg.el) return;
-  if (!rect) { goToPage(n, text); toast(`p.${n}의 출처 위치를 표시했어요`); return; }
+  if (!rect) { goToPage(n, text); toast(`p.${n}의 ${what} 위치를 표시했어요`); return; }
   const reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const top = pg.el.offsetTop + rect[1] * pg.el.offsetHeight - R.scroller.clientHeight / 4;
   R.scroller.scrollTo({ top: Math.max(0, top), behavior: reduce ? "auto" : "smooth" });
@@ -492,7 +501,7 @@ export function goToSpot(page, rect, text = "") {
     R.pendingFlash = { page: n, text };
     if (pg.rendered && pg.el.querySelector(".textLayer span")) flashText(pg, text);
   }
-  toast(`p.${n}의 출처 위치를 표시했어요`);
+  toast(`p.${n}의 ${what} 위치를 표시했어요`);
 }
 
 // 인용된 문장과 겹치는 텍스트 조각을 잠깐 표시한다
@@ -576,6 +585,56 @@ function hidePopups() {
   $$(".sel-pop").forEach((p) => p.remove());
 }
 
+// ------------------------------------------------------- 4단계 쉬운 설명 · 번역 (docs/design/phase4-explain-translate-ui.md)
+const narrow = () => window.matchMedia && window.matchMedia("(max-width: 900px)").matches;
+
+// 상자 버튼 [쉽게 설명] · [번역] — 진행 중이면 aria-disabled + 툴팁 (초점 · 툴팁은 남김)
+function xtButtons() {
+  const busy = explainBusy() ? ` aria-disabled="true" title="${esc(BUSY_TIP)}"` : "";
+  return `<button class="btn sm ghost" data-explain${busy}>쉽게 설명</button><button class="btn sm ghost" data-translate${busy}>번역</button>`;
+}
+
+function wireXt(pop, sel) {
+  for (const kind of ["explain", "translate"]) {
+    $(`[data-${kind}]`, pop).onclick = () => {
+      if (explainBusy()) { toast(BUSY_TIP); return; }
+      hidePopups();
+      if (sel.range) sel.range.removeAllRanges();
+      startExplain(kind, sel, explainHost());
+    };
+  }
+}
+
+// 패널을 열고(닫혀 있으면, 900px 이하는 아래 시트) 그 탭으로 — 초점은 옮기지 않음 (PDF 읽기 흐름 유지)
+function openPanel(tab) {
+  const v = R.view;
+  if (v.classList.contains("panel-closed")) {
+    v.classList.remove("panel-closed");
+    savePrefs({ panelClosed: false });
+    if (R.fit) setTimeout(() => setScale(fitScale(), true), 50);
+  }
+  if (narrow()) v.classList.add("panel-sheet");
+  showTab(tab);
+}
+
+// explain.js가 쓰는 읽기 화면 기능 (R은 이 모듈 안에만)
+function explainHost() {
+  return {
+    pid: R.pid, paper: R.paper, prefs, savePrefs,
+    settings: () => state.settings || {},
+    goToSpot: (page, rect, text) => goToSpot(page, rect, text, "원문"),
+    goToPage: (n) => gotoPage(n),
+    currentPage: () => (R && R.currentPage) || 1,
+    addAnnotation: async (page, rects, text, color, comment) => {
+      const a = await api.post(`/api/papers/${R.pid}/annotations`, { page, rects, text, color, comment });
+      R.annotations.push(a);
+      drawHighlight(a);
+      annsChanged();
+    },
+    showExplainTab: () => openPanel("explain"),
+  };
+}
+
 function placePopup(pop, x, y) {
   document.body.appendChild(pop);
   const r = pop.getBoundingClientRect();
@@ -596,7 +655,7 @@ function onMouseUp(e) {
     if (!groups.size) return;
     hidePopups();
     const pop = el(`<div class="sel-pop">${COLORS.map((c) => `<button class="hl-color ${c === R.color ? "active" : ""}" data-c="${c}" title="하이라이트" aria-label="${COLOR_NAMES[c]}${c === "purple" ? "로" : "으로"} 하이라이트"></button>`).join("")}
-      <span class="sep"></span>${R.embed ? `<button class="btn sm primary" data-quote title="${esc(quoteRuleText())}">인용으로 넣기</button>` : ""}<button class="btn sm ghost" data-note>메모</button>${R.embed ? "" : `<button class="btn sm ghost" data-ask>AI에게 묻기</button>`}<button class="btn sm ghost" data-copy>복사</button></div>`);
+      <span class="sep"></span>${R.embed ? `<button class="btn sm primary" data-quote title="${esc(quoteRuleText())}">인용으로 넣기</button>` : ""}<button class="btn sm ghost" data-note>메모</button>${R.embed ? "" : `<button class="btn sm ghost" data-ask>AI에게 묻기</button>${xtButtons()}`}<button class="btn sm ghost" data-copy>복사</button></div>`);
     const create = async (color, comment = "") => {
       hidePopups();
       sel.removeAllRanges();
@@ -637,6 +696,9 @@ function onMouseUp(e) {
         R.quote = text;
         showTab("chat");
       };
+      // 여러 쪽에 걸치면 첫 쪽 번호 · 첫 쪽 사각형 (명세 5.1절)
+      const [page, rects] = [...groups.entries()][0];
+      wireXt(pop, { text, page, rects, range: sel });
     }
     $("[data-copy]", pop).onclick = () => { copyText(text); hidePopups(); };
     const rr = range.getBoundingClientRect();
@@ -646,10 +708,11 @@ function onMouseUp(e) {
 
 function annotationPopup(a, anchor) {
   hidePopups();
+  // AI 버튼 세 개는 둘째 줄 (290px 첫 줄에 다 안 들어감 — AD-6)
   const pop = el(`<div class="sel-pop ann-pop">
     <div class="row">${COLORS.map((c) => `<button class="hl-color ${c === a.color ? "active" : ""}" data-c="${c}" aria-label="${COLOR_NAMES[c]}"></button>`).join("")}
-      <span class="spacer"></span>${R.embed ? `<button class="btn sm ghost" data-quote title="${esc(quoteRuleText())}">인용으로 넣기</button>`
-        : `<button class="btn sm ghost" data-ask>AI에게 묻기</button>`}</div>
+      <span class="spacer"></span>${R.embed ? `<button class="btn sm ghost" data-quote title="${esc(quoteRuleText())}">인용으로 넣기</button>` : ""}</div>
+    ${R.embed ? "" : `<div class="row" data-ai-row><button class="btn sm ghost" data-ask>AI에게 묻기</button>${xtButtons()}</div>`}
     <div class="small muted" style="max-height:60px;overflow:hidden">“${esc(a.text.slice(0, 160))}${a.text.length > 160 ? "…" : ""}”</div>
     <textarea class="input" rows="3" placeholder="메모">${esc(a.comment)}</textarea>
     <div class="row"><button class="btn sm danger" data-del>삭제</button><span class="spacer"></span><button class="btn sm" data-copy>복사</button><button class="btn sm primary" data-save>저장</button></div></div>`);
@@ -667,7 +730,10 @@ function annotationPopup(a, anchor) {
   $("[data-save]", pop).onclick = () => { update({ comment: $("textarea", pop).value.trim() }); hidePopups(); };
   $("[data-copy]", pop).onclick = () => copyText(a.text);
   if (R.embed) $("[data-quote]", pop).onclick = () => { hidePopups(); R.embed.onQuote({ text: a.text, pages: [a.page] }); };
-  else $("[data-ask]", pop).onclick = () => { hidePopups(); R.quote = a.text; showTab("chat"); };
+  else {
+    $("[data-ask]", pop).onclick = () => { hidePopups(); R.quote = a.text; showTab("chat"); };
+    wireXt(pop, { text: a.text, page: a.page, rects: a.rects || [] });
+  }
   $("[data-del]", pop).onclick = () => { hidePopups(); deleteAnnotation(a); };
   const r = anchor.getBoundingClientRect();
   placePopup(pop, r.left + r.width / 2, r.top);
@@ -692,7 +758,8 @@ function showTab(tab) {
   const body = $(".panel-body", R.view);
   body.className = "panel-body" + (tab === "chat" ? " chat-body" : "");
   body.innerHTML = "";
-  ({ summary: summaryTab, chat: chatTab, highlights: highlightsTab, note: noteTab, cite: citeTab })[tab](body);
+  ({ summary: summaryTab, chat: chatTab, explain: (b) => explainTab(b, explainHost()), highlights: highlightsTab, note: noteTab,
+    cite: citeTab })[tab](body);
 }
 
 function pageLink(n) {

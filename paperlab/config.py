@@ -13,7 +13,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 ENGINES = ("claude", "codex", "gemini")
-JOB_KINDS = ("summary", "chat", "write", "find", "verify")  # 작업별 엔진 설정 (3단계: AI로 찾기 · 인용 검증 — K-15)
+# 작업별 엔진 설정 (3단계: AI로 찾기 · 인용 검증 — K-15, 4단계: 쉬운 설명 · 번역(선택 · 전체 공용) — K-10)
+JOB_KINDS = ("summary", "chat", "write", "find", "verify", "explain", "translate")
+# 번역 대상 언어 (4단계 K-9 — translate.LANGS). 쉬운 설명은 summary_language
+TRANSLATE_LANGS = {"ko": "한국어", "en": "English", "ja": "日本語", "zh": "简体中文"}
 # 2단계 엔진 라우팅 (명세 9.4, 확정 U1: 기본은 모두 claude). ai_engine은 더 이상 쓰지 않는다(읽지도 저장하지도 않음 — AC-31)
 DEFAULT_ROUTING = {k: ["claude"] for k in JOB_KINDS}
 CLI_MODEL_CHOICES = {"claude": ("default", "opus", "sonnet", "haiku"), "codex": ("default",), "gemini": ("default",)}
@@ -32,6 +35,7 @@ DEFAULT_SETTINGS: dict = {
     "model": "claude-opus-5-5",
     "effort": "medium",
     "summary_language": "한국어",
+    "translate_language": "ko",
     # OpenAlex/Crossref의 polite pool에 들어가기 위한 연락처 (선택, 비밀 아님)
     "contact_email": "",
     "openalex_api_key": "",
@@ -293,6 +297,8 @@ class UserSettings:
                 self._values[k] = check(self._values[k])
             except ValueError:
                 self._values[k] = check(DEFAULT_SETTINGS[k])
+        if self._values["translate_language"] not in TRANSLATE_LANGS:
+            self._values["translate_language"] = DEFAULT_SETTINGS["translate_language"]
         for k in SECRET_KEYS:
             self._values[k] = (secrets or {}).get(k) or ""
         self.broken_secrets = set(broken_secrets or ())
@@ -383,5 +389,7 @@ def split_settings_changes(changes: dict) -> tuple[dict, dict]:
                 value = normalize_cli_models(value)
             elif key == "api_models":
                 value = normalize_api_models(value)
+            elif key == "translate_language" and value not in TRANSLATE_LANGS:
+                raise ValueError("번역 언어는 ko · en · ja · zh 중에서 골라 주세요")
             plain[key] = value
     return plain, secrets

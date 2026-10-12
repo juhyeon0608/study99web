@@ -81,7 +81,8 @@ def test_user_settings_public_shape():
     pub = s.public()
     assert "ai_engine" not in pub  # 2단계: ai_engine은 읽지도 쓰지도 않음 (AC-31 대체)
     assert pub["ai_routing"] == {"summary": ["claude"], "chat": ["claude"], "write": ["claude"],
-                                 "find": ["claude"], "verify": ["claude"]}  # 확정 U1 · 3단계 K-15
+                                 "find": ["claude"], "verify": ["claude"],
+                                 "explain": ["claude"], "translate": ["claude"]}  # 확정 U1 · 3단계 K-15 · 4단계 K-10
     assert pub["anthropic_api_key_set"] is True and pub["anthropic_api_key_status"] == "set"
     assert pub["openalex_api_key_set"] is False and pub["openalex_api_key_status"] == "unreadable"
     assert pub["semantic_scholar_api_key_status"] == "none"

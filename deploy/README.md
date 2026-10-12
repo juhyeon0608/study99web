@@ -59,7 +59,7 @@ python -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"
 | `python -m paperlab.admin sync-allowlist` | `ALLOWED_EMAILS` → `paperlab.allowed_emails`(Auth Hook을 **연결한 경우에만** 쓰임 — 운영 기본은 미연결). 변수가 비어 있으면 표를 바꾸지 않고 끝남(설치 · 업데이트 스크립트가 늘 불러도 안전) |
 | `python -m paperlab.admin app-role --write-env` | 앱 역할 비밀번호 **명시적 회전** → `cloud.env`의 `SUPABASE_APP_DB_URL` 줄만 바꿔 씀(값은 출력하지 않음). 곧바로 서버 다시 시작(`update.ps1 -RestartOnly`). `--if-missing`은 값이 없을 때만(설치 스크립트) |
 | `python -m paperlab.admin rotate-key` | `cloud.env`의 `APP_ENCRYPTION_KEY`를 새 값으로 바꾼 뒤(서버 멈춘 상태) 실행, 옛 키는 화면에 안 보이게 입력 → 서버 시작 |
-| `python -m paperlab.admin orphans [--delete]` | DB에 없는 R2 PDF 찾기/지우기 |
+| `python -m paperlab.admin orphans [--delete]` | DB에 없는 R2 PDF · 벡터 파일(`rag/`) · 번역 파일(`translations/`) 찾기/지우기 |
 | `python -m paperlab.admin backup --tmp-dir <폴더>` | 수동 백업(보통은 서버 PC 작업 `PaperLab Backup`이 매일 04:00). 앱 역할 주소 + `pg_dump`(`PAPERLAB_PG_DUMP` → PATH). 같은 날 다시 돌리면 그날 파일 `backups/db/<YYYYMMDD>.dump`를 덮어씀. 임시 파일은 끝나면 지움 |
 | `python -m paperlab.admin pg-dump-check` | `pg_dump` 주 버전이 DB 서버 주 버전 이상인지(설치 스크립트가 백업 작업 등록 전에 부름) |
 | `python -m paperlab.admin latest-backup` | R2의 가장 최근 백업 날짜(감시 작업이 하루 한 번 — 36시간 넘으면 종료 코드 2) |

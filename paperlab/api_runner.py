@@ -6,6 +6,8 @@
 - 바깥에서 부를 수 있는 HTTP 경로가 없다(AC-40). 서버가 재시작되면 리스가 지난 작업을 복구 스캔이 다시 잡는다.
 - 3단계: index(서버 안 색인 — 서버 전체 동시 1개, K-2) · find(AI로 찾기) · verify(인용 검증) · 범위 대화(chat, paper_id 없음).
   AI로 찾기 CLI 경로의 서버 검색(13.2절 ②)도 여기서(`prepare_find`) — 워커 잡기 요청이 DB 연결을 오래 잡지 않게.
+- 4단계: explain · translate(선택 — 폴백 · 다시 시도로 API 칸이 된 것), translate_paper(전체 번역 — 잡기 한 번에 묶음 하나,
+  끝나면 같은 작업을 대기열 뒤로 다시 넣음, K-6).
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ from typing import Callable
 
 from psycopg.types.json import Jsonb
 
-from . import find, jobs, rag, verify
+from . import explain, find, jobs, rag, translate, verify
 from .ai import AIError, PaperContext
 from .db import Database, DBUnavailable, actor_claims
 from .storage import NotFound, UserStorage
@@ -186,6 +188,8 @@ class ApiRunner:
                 self.queued.add(job_id)
             self.iq.put((job_id, uid))
             return
+        if peek and peek["kind"] == "translate_paper":
+            return self._run_translate(job_id, uid, guide)
         with self._tx(uid) as lib:
             job = jobs.claim_api(lib, job_id, guide)
             if not job:
@@ -205,6 +209,8 @@ class ApiRunner:
                     system, prompt, ids, remaining = verify.build_request(lib, job, lang)
                     jobs.set_params(lib, job, {**params, "claim_ids": ids, "remaining": remaining})
                     request = (system, prompt)
+                elif job["kind"] in jobs.EXPLAIN_KINDS:
+                    request = explain.build_request(lib, job["paper_id"], params)
             except AIError as e:
                 jobs._end(lib, job, "failed", "bad_input", str(e))
                 return
@@ -241,6 +247,10 @@ class ApiRunner:
                 parsed = _collect(ai.complete(*request, engine=engine, schema=schema[0], schema_name=schema[1]), progress)
                 if job["kind"] == "verify":
                     parsed = {"results": verify.parse_results(parsed["text"])}
+            elif job["kind"] in jobs.EXPLAIN_KINDS:  # 결과가 틀리면 bad_output(폴백 없음)
+                parsed = _collect(ai.complete(request[0], request[1], engine=engine, schema=request[2],
+                                              schema_name="explanation"), progress)
+                parsed = jobs.parse_result(job, parsed["text"])
             elif job["kind"] == "find":
                 parsed = self._find(ai, engine, uid, job, settings, progress)
             elif job["kind"] == "summary":
@@ -299,6 +309,66 @@ class ApiRunner:
                 return  # 리스를 잃음 — 다른 실행이 맡았거나 지워짐: 결과는 버린다 (한 번만 반영)
             status, _ = jobs.finish_success(lib, j, parsed, ai.model_name(engine))
         log.info(f"api job done job={job_id} status={status}")
+
+    # ---------------------------------------------------------------- 4단계 전체 번역
+    def _run_translate(self, job_id: int, uid: str, guide: str) -> None:
+        """묶음 하나(6.3절 4번): 잡기 → 묶음 정하기(params.chunk) → AI 한 번 → 반영(파일은 트랜잭션 밖) →
+        남은 쪽이 있으면 같은 작업을 대기열 뒤로. 폴백 대상 오류는 작업 전체가 다음 칸으로, 거절 · 결과 오류는 그 묶음 쪽만 f"""
+        with self._tx(uid) as lib:
+            job = jobs.claim_api(lib, job_id, guide)
+            if not job:
+                return
+            prep = translate.prepare_chunk(lib, job)
+            if prep is None:
+                return
+            settings = self.settings_loader(lib, uid)
+        pages, system, prompt = prep
+        token = str(job["lease_token"])
+        state = {"uid": uid, "token": token, "cancel": threading.Event()}
+        with self._lock:
+            self.claiming.pop(job_id, None)
+            self.running[job_id] = state
+        ai, engine = self.ai_factory(settings.get), job["engine"]
+        started = time.monotonic()
+        # 취소는 이번 묶음 뒤(6.3절 7번 — 낸 요금의 결과는 남김): 묶음 중에는 끊지 않고 반영 때 cancel_requested를 본다.
+        # 리스 연장 · 취소 읽기는 연장 스레드가 함 (진행 글은 쪽 수 — 반영 때 서버가 적음)
+        good, failed = {}, {}
+        try:
+            out = _collect(ai.complete(system, prompt, engine=engine, schema=translate.TRANSLATE_SCHEMA,
+                                       schema_name="translation"), lambda *_: None)
+            good, failed = translate.parse_chunk(out["text"], None, pages)
+        except AIError as e:
+            code = e.code or "api_server"
+            if code in translate.CHUNK_FAIL_CODES:
+                failed = {p: code for p in pages}
+            else:
+                with self._tx(uid) as lib:
+                    try:
+                        j = jobs.lock_leased(lib, job_id, token)
+                    except jobs.JobError:
+                        return
+                    jobs.record_key_error(lib, engine, code)
+                    status = jobs.fail_or_fallback(lib, j, code, str(e), guide=guide)
+                    again = status == "queued" and lib._one(
+                        "select 1 from paperlab.jobs where id = %s and user_id = %s and runner = 'api'", (job_id, uid))
+                log.info(f"api job failed job={job_id} code={code} status={status}")
+                if again:
+                    with self._lock:
+                        self.running.pop(job_id, None)
+                    self.enqueue(job_id, uid)
+                return
+        try:
+            status = translate.finish_chunk(self._tx_fn(uid), UserStorage(self.storage, uid), job_id, token, good, failed,
+                                            model=ai.model_name(engine), ms=int((time.monotonic() - started) * 1000))
+        except jobs.JobError:
+            return  # 리스를 잃음 — 다른 실행이 맡았거나 지워짐
+        if status == "queued":  # 다음 묶음: 대기열 뒤로 (사용자 사이 공평 — AC-P12)
+            with self._lock:
+                self.running.pop(job_id, None)
+            self.enqueue(job_id, uid)
+
+    def _tx_fn(self, uid: str):
+        return lambda: self._tx(uid)
 
     # ---------------------------------------------------------------- 3단계
     def _find(self, ai, engine: str, uid: str, job: dict, settings, progress) -> dict:

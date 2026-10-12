@@ -6,7 +6,9 @@ import { state } from "./state.js";
 import { $, $$, copyText, el, errorToast, esc, toast } from "./ui.js";
 
 export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" };
-const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증" };
+const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증",
+  explain: "쉬운 설명", translate: "선택 번역", translate_paper: "전체 번역" }; // 4단계 (시안 7.3절)
+const XT_VIEW = { explain: "history", translate: "history", translate_paper: "paper" };
 const ACTIVE = new Set(["queued", "running"]);
 export const ICON_CLOCK = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"/></svg>`;
 export const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
@@ -347,6 +349,8 @@ function jobItem(j, reload) {
   const title = jobTitle(j);
   const expired = j.kind === "find" && !j.question; // 24시간 정리로 질문 · 결과가 지워짐 (3단계 품질팀 L4)
   const href = jobHref(j);
+  // 4단계 작업은 읽기 화면을 "설명·번역" 탭으로 연다 (화면 메모리 — 시안 7.3절)
+  const remember = () => { if (XT_VIEW[j.kind] && j.paper_id) state.readerTab = { pid: j.paper_id, tab: "explain", view: XT_VIEW[j.kind] }; };
   const meta = [
     (j.route || []).map(slotName).join(" → "),
     j.started_at ? `${fmtClock(j.started_at)} 시작` : `${fmtClock(j.created_at)} 만듦`,
@@ -362,6 +366,8 @@ function jobItem(j, reload) {
     <p class="item-meta">${esc(meta)}</p>
     ${(j.history || []).length ? `<details><summary>시도한 순서 보기</summary>${stepsHtml(j) || `<ol class="graph-steps">${j.history.map((h) => `<li data-state="failed">${esc(slotName(h))} <span class="graph-step-msg">${esc(errorLabel(h.error_code, h.engine))}</span></li>`).join("")}</ol>`}</details>` : ""}
   </li>`);
+  const link = $("a.item-title", li);
+  if (link) link.addEventListener("click", remember);
   const acts = $(".item-actions", li);
   const btn = (label, cls, fn) => { const b = el(`<button type="button" class="btn sm ${cls}">${label}</button>`); b.onclick = fn; acts.appendChild(b); return b; };
   if (active) {
@@ -376,7 +382,7 @@ function jobItem(j, reload) {
   } else if (j.kind === "write" && j.result && j.result.text) {
     btn("결과 복사", "", () => { copyText(j.result.text); toast("결과를 복사했어요", "success"); }).title = "결과 글은 24시간 동안 복사할 수 있어요";
   } else if (href) {
-    btn("열기", "", () => { location.hash = href; });
+    btn("열기", "", () => { remember(); location.hash = href; });
   }
   return li;
 }

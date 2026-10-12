@@ -17,9 +17,10 @@ from contextlib import contextmanager
 from fastapi import Body, FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from . import jobs
+from . import jobs, translate
 from .auth import NotAllowed, bearer_token
 from .db import Database, actor_claims, iso, now_dt
+from .storage import UserStorage
 
 log = logging.getLogger("paperlab.worker")
 
@@ -223,12 +224,31 @@ def register(app: FastAPI, db: Database, allowlist, ws: WorkerState, guide, runn
 
     @app.post("/api/worker/jobs/{job_id}/result")
     def result(job_id: int, request: Request, body: dict = Body(...)):
+        paper_job: dict = {}
+
         def work(lib, d):
             jobs.touch_device(lib, d["id"])
+            if jobs.valid_id(job_id) and lib._one("select 1 from paperlab.jobs where id = %s and user_id = %s "
+                                                  "and kind = 'translate_paper'", (job_id, lib.uid)):
+                paper_job.update(uid=lib.uid, dev=d["id"])  # 전체 번역: 파일 쓰기를 트랜잭션 밖에서 (아래)
+                return {}
             status = jobs.worker_result(lib, d["id"], job_id, body, guide())
             log.info(f"job result job={job_id} outcome={body.get('outcome')} status={status} device_id={d['id']}")
             return {"status": status}, enqueue_if_api(lib, job_id)
-        return handle(request, work)
+        out = handle(request, work)
+        if not paper_job:
+            return out
+        uid, dev = paper_job["uid"], paper_job["dev"]
+        tx = lambda: db.user_tx(actor_claims(uid, f"device:{dev}"))  # noqa: E731 - 검증한 기기의 사용자 권한 그대로
+        try:
+            status = translate.chunk_result(tx, UserStorage(runner.storage, uid), job_id, dev, body, guide())
+        except jobs.JobError as e:
+            return err(e.status, {"detail": e.detail, "code": e.code})
+        log.info(f"job result job={job_id} outcome={body.get('outcome')} status={status} device_id={dev}")
+        with tx() as lib:
+            after = enqueue_if_api(lib, job_id)
+        after()
+        return {"status": status}
 
     @app.post("/api/worker/bye")
     def bye(request: Request, body: dict = Body(default={})):

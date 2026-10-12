@@ -17,6 +17,7 @@ export const state = {
   settings: {},
   user: null, // GET /api/me {user_id, email, display_name}
   usage: null, // GET /api/storage/usage {used_bytes, limit_bytes, mine_bytes, level}
+  readerTab: null, // 작업 목록 [열기] → 읽기 화면 탭 {pid, tab, view} (4단계 — 주소 규칙을 늘리지 않음)
 };
 
 // 로그아웃할 때 화면 상태를 처음처럼 비운다

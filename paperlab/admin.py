@@ -6,7 +6,7 @@ r"""관리 명령 (명세 6.3 · 8.3 · 7.4 · 13.3 · 10.2). 서버가 아니�
                                                             앱 역할 비밀번호 회전 → cloud.env의 SUPABASE_APP_DB_URL 줄
                                                                                                          reason=app role password
     python -m paperlab.admin rotate-key                     user_secrets 재암호화(옛 키는 표준 입력)     reason=encryption key rotation
-    python -m paperlab.admin orphans [--delete]             DB에 없는 R2 PDF · 벡터 파일(rag/) 찾기/지우기 reason=orphan scan
+    python -m paperlab.admin orphans [--delete]             DB에 없는 R2 PDF · 벡터 파일(rag/) · 번역 파일(translations/) 찾기/지우기 reason=orphan scan
     python -m paperlab.admin rag-reindex --all              모든 논문을 색인 대기로(파일은 다음 교체 때 지움) reason=rag reindex
     python -m paperlab.admin rag-model [--download] [--dir D:\PaperLab\models\embeddinggemma-300m]
                                                             3단계 임베딩 모델 파일 확인(SHA-256) · 받기(Hugging Face 공식, 고정 커밋)
@@ -50,7 +50,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from .config import (DEFAULT_ENV_FILE, R2_VARS, ConfigError, db_user, decode_encryption_key, is_app_role_user,
                      load_env_file, parse_allowed_emails, redact)
 from .crypto import DecryptError, SecretBox, key_id
-from .storage import _RAG_KEY_RE, Storage, backup_key, create_storage
+from .storage import _RAG_KEY_RE, _TR_KEY_RE, Storage, backup_key, create_storage
 
 log = logging.getLogger("paperlab.admin")
 
@@ -228,25 +228,30 @@ def rotate_keys(conninfo: str, new_key: bytes, old_keys: list[bytes]) -> int:
 
 
 def find_orphans(conninfo: str, storage: Storage, delete: bool = False) -> dict:
-    """DB 행이 없는 users/*/papers/*.pdf와, DB rag_key에 없는 users/*/rag/*.bin (3단계 K-20).
+    """DB 행이 없는 users/*/papers/*.pdf와, DB rag_key에 없는 users/*/rag/*.bin (3단계 K-20),
+    DB translations.tr_key에 없는 users/*/translations/*.json (4단계 8.2절).
     incoming/은 수명 주기 규칙이 처리, backups/는 건드리지 않음."""
     log.info("admin reason=orphan scan delete=%s", delete)
     with _connect(conninfo) as conn:
         known = {r[0] for r in conn.execute("select pdf_key from paperlab.papers where pdf_key <> ''")}
         known_rag = {r[0] for r in conn.execute("select rag_key from paperlab.papers where rag_key <> ''")}
+        known_tr = {r[0] for r in conn.execute("select tr_key from paperlab.translations")}
         db_total = conn.execute("select coalesce(sum(pdf_size), 0) from paperlab.papers where pdf_key <> ''").fetchone()[0]
     objects = storage.list_prefix("users/")
     orphans = [(k, s) for k, s in objects if _PAPER_KEY_RE.fullmatch(k) and k not in known]
     rag_orphans = [(k, s) for k, s in objects if _RAG_KEY_RE.fullmatch(k) and k not in known_rag]
+    tr_orphans = [(k, s) for k, s in objects if _TR_KEY_RE.fullmatch(k) and k not in known_tr]
     if delete:
-        for k, _ in orphans + rag_orphans:
+        for k, _ in orphans + rag_orphans + tr_orphans:
             storage.delete(k)
     incoming = storage.list_prefix("incoming/")
     return {"orphans": [k for k, _ in orphans], "orphan_bytes": sum(s for _, s in orphans),
             "rag_orphans": [k for k, _ in rag_orphans], "rag_orphan_bytes": sum(s for _, s in rag_orphans),
             "rag_bytes": sum(s for k, s in objects if _RAG_KEY_RE.fullmatch(k)),
             "storage_bytes": sum(s for _, s in objects), "db_bytes": int(db_total),
-            "incoming_count": len(incoming), "deleted": len(orphans) + len(rag_orphans) if delete else 0}
+            "tr_orphans": [k for k, _ in tr_orphans], "tr_orphan_bytes": sum(s for _, s in tr_orphans),
+            "incoming_count": len(incoming),
+            "deleted": len(orphans) + len(rag_orphans) + len(tr_orphans) if delete else 0}
 
 
 def rag_reindex_all(conninfo: str) -> int:
@@ -665,7 +670,8 @@ def main(argv: list[str] | None = None) -> int:
             storage = create_storage("r2", {k: env.get(k, "") for k in R2_VARS})
             res = find_orphans(admin_db, storage, delete=args.delete)
             say(f"고아 PDF {len(res['orphans'])}개 ({res['orphan_bytes']} 바이트), "
-                f"고아 벡터 파일 {len(res['rag_orphans'])}개 ({res['rag_orphan_bytes']} 바이트), 삭제 {res['deleted']}개")
+                f"고아 벡터 파일 {len(res['rag_orphans'])}개 ({res['rag_orphan_bytes']} 바이트), "
+                f"고아 번역 파일 {len(res['tr_orphans'])}개 ({res['tr_orphan_bytes']} 바이트), 삭제 {res['deleted']}개")
             say(f"R2 벡터 파일 합계 {res['rag_bytes']} 바이트")
             say(f"R2 users/ 합계 {res['storage_bytes']} 바이트, DB 합계 {res['db_bytes']} 바이트, "
                 f"incoming/ {res['incoming_count']}개")

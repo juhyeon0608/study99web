@@ -25,14 +25,15 @@ from urllib.parse import quote
 
 import psycopg
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from psycopg.types.json import Jsonb
 from contextlib import asynccontextmanager
 
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, citations, compose, csl_style, doc_formats, downloads, find, format_import, jobs, pdf, \
-    rag, verify, worker_api, writer
+from . import __version__, citations, compose, csl_style, doc_formats, downloads, explain, find, format_import, jobs, \
+    pdf, rag, translate, verify, worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
@@ -92,6 +93,18 @@ def _md_title(content: str) -> str:
 
 def _sse(ev: dict) -> str:
     return f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+
+
+def _done_only(events):
+    """쉬운 설명: 중간 글(JSON 조각)은 화면에 흘리지 않고 끝(done)만 (4단계 6.2절)"""
+    try:
+        for ev in events:
+            if ev.get("type") == "done":
+                yield ev
+    finally:
+        close = getattr(events, "close", None)
+        if close:
+            close()
 
 
 DEV_ONLY_STATIC = (STATIC_DIR / "js" / "dev-login.js",)
@@ -399,9 +412,17 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             runner.enqueue(job_id, str(claims["sub"]))
 
     def pdf_changed(ctx: RequestCtx, pid: int, old_rag: str) -> None:
-        """PDF를 붙이거나 바꾼 커밋 뒤: 옛 벡터 파일 지우기 · 캐시에서 빼기 → 다시 색인 (8.4절)"""
+        """PDF를 붙이거나 바꾼 커밋 뒤: 옛 벡터 파일 지우기 · 캐시에서 빼기 → 다시 색인 (8.4절).
+        4단계 K-11: 같은 트랜잭션에서 전체 번역 행을 지우고(선택 기록은 남김) 대기 중 번역 작업은 취소 — 파일은 커밋 뒤.
+        실행 중인 번역 작업은 다음 반영 때 행이 없어 cancelled(6.3절 9번)"""
         ctx.after_commit.append(lambda: rg.forget(ctx.uid, pid, old_rag))
         ctx.after_commit.append(lambda: ensure_index(ctx.claims))
+        old_tr = translate.delete_row(ctx.lib, pid)
+        ctx.lib._x("update paperlab.jobs set status = 'cancelled', error_code = 'pdf_changed', error = %s, lease_token = null, "
+                   "lease_until = null, progress = '{}'::jsonb, finished_at = now(), updated_at = now() where user_id = %s "
+                   "and paper_id = %s and kind = 'translate_paper' and status = 'queued'", (translate.PDF_CHANGED, ctx.uid, pid))
+        if old_tr:
+            ctx.after_commit.append(lambda: ctx.storage.delete_quietly(old_tr))
 
     def store_pdf(ctx: RequestCtx, pid: int, data: bytes) -> pdf.PdfInfo:
         """서버가 받은 PDF(URL에서 받기)를 최종 키에 바로 올리고 본문을 저장한다."""
@@ -627,6 +648,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 ctx.after_commit.append(lambda: runner.enqueue(new_id, ctx.uid))
             r = jobs.latest_job(ctx.lib, ws.free, " and j.kind = 'index'")
             return JSONResponse({"job": r}, status_code=202 if new_id else 200)
+        if src["kind"] == "translate_paper":  # 전체 번역은 끝난 쪽을 두고 남은 쪽부터 (4단계 6.3절 2번)
+            need_paper(ctx, src["paper_id"])
+            return tr_continue(ctx, src["paper_id"], "pending", False)
         view, created = new_job(ctx, src["kind"], src["params"] or {}, src["paper_id"])
         return JSONResponse({"job": view}, status_code=202 if created else 200)
 
@@ -855,6 +879,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             n += 1
             if gone["pdf_key"]:
                 ctx.after_commit.append(lambda k=gone["pdf_key"]: ctx.storage.delete_quietly(k))
+            if gone["tr_key"]:  # 4단계 8.2절 — 번역 행은 외래 키로 함께 지워짐, 파일은 커밋 뒤
+                ctx.after_commit.append(lambda k=gone["tr_key"]: ctx.storage.delete_quietly(k))
             ctx.after_commit.append(lambda p=pid, k=gone["rag_key"]: rg.forget(ctx.uid, p, k))
         return n
 
@@ -1617,6 +1643,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         OpenAI · Google 경로도 기다리는 동안 끊김을 본다. 가비지 수집에 기대지 않는다."""
         row, _ = jobs.create_job(ctx.lib, kind, route_for(ctx, kind), params, paper_id, running_api=True)
         job_id, uid, claims, engine = row["id"], ctx.uid, ctx.claims, row["engine"]
+        model = ctx.ai.model_name(engine) if kind in jobs.EXPLAIN_KINDS else engine
         log.info(f"job created job={job_id} kind={kind} runner={row['runner']} engine={engine}")
         if row["runner"] == "cli":
             view = jobs.get_job(ctx.lib, job_id, ws.free)
@@ -1653,12 +1680,22 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                     j = jobs.lock_leased(lib, job_id, token)
                 except jobs.JobError:
                     return []
-                status, res = jobs.finish_success(lib, j, {"text": ev["text"], "citations": ev.get("citations") or []},
-                                                  engine)
+                parsed = {"text": ev["text"], "citations": ev.get("citations") or []}
+                if kind in jobs.EXPLAIN_KINDS:  # 4단계: 결과 검사 — 틀리면 bad_output(폴백 없음, 6.2절 5번)
+                    try:
+                        parsed = jobs.parse_result(j, ev["text"])
+                    except AIError as e:
+                        jobs._end(lib, j, "failed", "bad_output", str(e), jobs._history_entry(j, "bad_output"))
+                        view = jobs.get_job(lib, job_id, ws.free)
+                        return [_sse({"type": "error", "error": view["error"], "job": view})]
+                status, res = jobs.finish_success(lib, j, parsed, model)
+                found = explain.get_row(lib, res["explanation_id"]) if res and "explanation_id" in res else None
             res = res or {}
             if status != "succeeded":
                 return [_sse({"type": "error", "error": "작업을 취소했어요" if status == "cancelled"
                               else jobs.DEFAULT_ERRORS["apply_failed"]})]
+            if found:
+                return [_sse({"type": "done", "item": explain.item(found), "cached": False, "job_id": job_id})]
             if "message_id" in res:
                 ev["id"] = res["message_id"]
             ev["job_id"] = job_id
@@ -1764,6 +1801,216 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                                 sources=sources, engine=engine)
 
         return stream_job(ctx, request, "write", params, None, run)
+
+    # ------------------------------------------- 4단계: 쉬운 설명 · 선택 번역 · 전체 번역 (docs/specs/phase4-explain-translate.md 10장)
+    @app.post("/api/papers/{pid}/explain")
+    def explain_selection(pid: int, request: Request, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """선택 설명 · 번역(SSE). 같은 (논문, 종류, 언어, 글)이 저장돼 있으면 작업 없이 done 하나(K-4). 글은 본문으로만"""
+        need_paper(ctx, pid)
+        try:
+            req = explain.clean_request(data)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        kind, text = req["kind"], req["text"]
+        lang = explain.lang_for(kind, ctx.settings.get)
+        if kind == "translate" and lang == "ko" and translate.hangul_ratio(text) >= translate.KO_RATIO:
+            raise HTTPException(400, "이미 한국어예요")
+        if not req["force"]:
+            row = explain.cached(ctx.lib, pid, kind, lang, explain.sel_hash(kind, lang, text))
+            if row:
+                res = row["result"] or {}
+                log.info(json.dumps({"event": "explain", "kind": kind, "cached": True, "ms": 0, "svg": bool(res.get("svg")),
+                                     "svg_note": res.get("svg_note") or ""}))
+                return StreamingResponse(iter([_sse({"type": "done", "cached": True, "item": explain.item(row, cached=True)})]),
+                                         media_type="text/event-stream", headers=SSE_HEADERS)
+        params = {**req, "lang": lang}
+
+        def run(engine: str):
+            system, prompt, schema = explain.build_request(ctx.lib, pid, params)
+            events = ctx.ai.complete(system, prompt, engine, schema=schema, schema_name="explanation")
+            return events if kind == "translate" else _done_only(events)
+
+        return stream_job(ctx, request, kind, params, pid, run)
+
+    @app.get("/api/papers/{pid}/explanations")
+    def explanations(pid: int, ctx: RequestCtx = Ctx):
+        """이 논문의 카드(최신 100개) + 진행 중인 PC · 백그라운드 작업(화면 연결에 묶인 SSE 작업은 빼고)"""
+        need_paper(ctx, pid)
+        maintain(ctx)
+        running = [j for k in jobs.EXPLAIN_KINDS for j in jobs.list_jobs(ctx.lib, ws.free, "active", pid, k, 20)["jobs"]
+                   if not j["interactive"]]
+        return {"items": [explain.item(r) for r in explain.list_rows(ctx.lib, pid)], "jobs": running,
+                "keep": explain.MAX_ROWS}
+
+    @app.delete("/api/explanations/{eid}")
+    def delete_explanation(eid: int, ctx: RequestCtx = Ctx):
+        if not jobs.valid_id(eid) or not explain.delete(ctx.lib, eid):
+            raise HTTPException(404, "찾을 수 없어요")
+        return {"ok": True}
+
+    TR_NO_TEXT = "PDF 글자를 읽을 수 없는 논문이에요(스캔본)."
+    TR_NONE = "번역이 없어요"
+
+    def tr_job(ctx: RequestCtx, pid: int, active: bool = False) -> dict | None:
+        cond = " and j.paper_id = %(pid)s and j.kind = 'translate_paper'"
+        return jobs.latest_job(ctx.lib, ws.free, cond + (" and j.status in ('queued', 'running')" if active else ""),
+                               {"pid": pid})
+
+    def tr_texts(ctx: RequestCtx, pid: int) -> list[str]:
+        texts = ctx.lib.page_texts(pid)
+        if not any(t.strip() for t in texts):
+            raise HTTPException(400, TR_NO_TEXT)
+        return texts
+
+    def tr_run(ctx: RequestCtx, pid: int, row: dict, state: str, errors: dict, include_refs: bool,
+               retry: bool) -> JSONResponse:
+        """시작 · 이어서 공용: 대기 쪽 검사 → 경로 · 저장 공간 → 행 갱신 → translate_paper 작업 202 (6.3절 1 · 2번)"""
+        pending = state.count("-")
+        if not pending:
+            raise HTTPException(400, "번역할 쪽이 없어요")
+        if pending > translate.MAX_PAGES:
+            raise HTTPException(400, f"{translate.MAX_PAGES}쪽까지 한 번에 번역할 수 있어요. 쪽 범위를 정해 주세요")
+        route_for(ctx, "translate_paper")
+        ensure_space(ctx)
+        translate.update_row(ctx.lib, row, page_state=state, page_errors=errors, include_refs=include_refs)
+        view, created = new_job(ctx, "translate_paper", {"translation_id": row["id"], "retry": retry}, pid)
+        if created:
+            view["progress"] = jobs.clean_progress(translate.progress(state))
+            ctx.lib._x("update paperlab.jobs set progress = %s where id = %s and user_id = %s",
+                       (Jsonb(view["progress"]), view["id"], ctx.uid))
+        return JSONResponse({"job": view}, status_code=202 if created else 200)
+
+    def tr_continue(ctx: RequestCtx, pid: int, pages, include_refs: bool) -> JSONResponse:
+        row = translate.row_for(ctx.lib, pid, lock=True)
+        if not row:
+            raise HTTPException(404, TR_NONE)
+        active = tr_job(ctx, pid, active=True)
+        if active:
+            return JSONResponse({"job": active}, status_code=200)
+        refs_from = translate.refs_start(tr_texts(ctx, pid))[0]   # 다시 셈 (품질팀 L-6)
+        if refs_from != row["refs_from"]:
+            translate.update_row(ctx.lib, row, refs_from=refs_from)
+            row["refs_from"] = refs_from
+        state, retry, inc = list(row["page_state"]), False, row["include_refs"]
+        if include_refs and not inc:  # 참고문헌 이후도 — 참고문헌 첫 쪽은 제목 아래까지 다시
+            inc = True
+            state = ["-" if c == "r" else c for c in state]
+            if row["refs_from"] and state[row["refs_from"] - 1] in "ds":
+                state[row["refs_from"] - 1] = "-"
+        if pages == "failed":
+            state, retry = ["-" if c == "f" else c for c in state], True
+        elif isinstance(pages, list):
+            if not pages or len(pages) > translate.MAX_PAGES or any(
+                    isinstance(p, bool) or not isinstance(p, int) or not 1 <= p <= len(state) for p in pages):
+                raise HTTPException(400, "쪽 번호가 올바르지 않아요")
+            for p in pages:
+                state[p - 1] = "-"
+            retry = True
+        elif pages != "pending":
+            raise HTTPException(400, "pages는 pending · failed · 쪽 번호 목록 중 하나예요")
+        state = "".join(state)
+        errors = {k: v for k, v in (row["page_errors"] or {}).items() if k.isdigit() and 0 < int(k) <= len(state)
+                  and state[int(k) - 1] == "f"}
+        return tr_run(ctx, pid, row, state, errors, inc, retry)
+
+    @app.get("/api/papers/{pid}/translation")
+    def translation_get(pid: int, ctx: RequestCtx = Ctx):
+        """번역 메타 + 끝난(d) 쪽 글 + 진행 중이거나 마지막 작업 + 시작 창 예상. 파일 키는 RLS 행의 tr_key뿐(8.2절)"""
+        need_paper(ctx, pid)
+        maintain(ctx)
+        row = translate.row_for(ctx.lib, pid)
+        texts = ctx.lib.page_texts(pid)
+        lang = row["lang"] if row else ctx.settings.get("translate_language")
+        out = {"translation": translate.view(row) if row else None, "job": tr_job(ctx, pid),
+               "estimate": translate.estimate(texts, lang) if any(t.strip() for t in texts) else None}
+        if row:
+            ctx.release()  # R2 읽기 동안 DB 연결을 잡지 않는다 (F9)
+            try:
+                pages = translate.read_pages(ctx.storage, row)
+                st = row["page_state"]
+                out["translation"]["pages"] = {k: v for k, v in pages.items()
+                                               if k.isdigit() and 0 < int(k) <= len(st) and st[int(k) - 1] == "d"}
+            except translate.TranslationFileError as e:
+                out["translation"]["error"] = str(e)
+        return out
+
+    @app.post("/api/papers/{pid}/translation")
+    def translation_start(pid: int, data: dict = Body(default={}), ctx: RequestCtx = Ctx):
+        """전체 번역 시작 (6.3절 1번) → 202 {job}, 진행 중이면 200 {job}, 다른 언어 번역이 있으면 409(replace로 교체)"""
+        need_paper(ctx, pid)
+        maintain(ctx)
+        lang = data.get("lang") or ctx.settings.get("translate_language")
+        if lang not in translate.LANGS:
+            raise HTTPException(400, "번역 언어가 올바르지 않아요")
+        active = tr_job(ctx, pid, active=True)
+        if active:
+            return JSONResponse({"job": active}, status_code=200)
+        texts = tr_texts(ctx, pid)
+        n = len(texts)
+        frm = data.get("from") if data.get("from") is not None else 1
+        to = data.get("to") if data.get("to") is not None else n
+        if any(isinstance(x, bool) or not isinstance(x, int) for x in (frm, to)) or not 1 <= frm <= to <= n:
+            raise HTTPException(400, "쪽 범위가 올바르지 않아요")
+        include_refs = data.get("include_refs") is True
+        state, refs_from = translate.plan(texts, lang, frm, to, include_refs)
+        row = translate.row_for(ctx.lib, pid, lock=True)
+        if row and (row["lang"] != lang or len(row["page_state"]) != n):
+            if row["lang"] != lang and data.get("replace") is not True:
+                old, new = translate.LANGS[row["lang"]], translate.LANGS[lang]
+                return JSONResponse({"detail": f"기존 {old} 번역을 지우고 {new}로 새로 번역할까요?", "code": "other_lang",
+                                     "lang": row["lang"]}, status_code=409)
+            old_key = translate.delete_row(ctx.lib, pid)
+            ctx.after_commit.append(lambda: ctx.storage.delete_quietly(old_key))
+            row = None
+        if row:
+            state = translate.merge(row["page_state"], state, frm, to)
+            if refs_from != row["refs_from"]:  # 다시 시작할 때 참고문헌 위치를 다시 셈 (품질팀 L-6)
+                translate.update_row(ctx.lib, row, refs_from=refs_from)
+            errors = {k: v for k, v in (row["page_errors"] or {}).items() if k.isdigit() and 0 < int(k) <= n
+                      and state[int(k) - 1] == "f"}
+        else:
+            row = translate.create_row(ctx.lib, pid, lang, state, refs_from, include_refs,
+                                       (ctx.lib.pdf_info(pid) or {}).get("pdf_sha256") or "")
+            errors = {}
+        return tr_run(ctx, pid, row, state, errors, include_refs, False)
+
+    @app.post("/api/papers/{pid}/translation/continue")
+    def translation_continue(pid: int, data: dict = Body(default={}), ctx: RequestCtx = Ctx):
+        """이어서(pending) · 실패한 쪽 다시(failed) · 쪽 목록 · 참고문헌 포함 (6.3절 2번)"""
+        need_paper(ctx, pid)
+        maintain(ctx)
+        return tr_continue(ctx, pid, data.get("pages", "pending"), data.get("include_refs") is True)
+
+    @app.delete("/api/papers/{pid}/translation")
+    def translation_delete(pid: int, ctx: RequestCtx = Ctx):
+        """진행 중 작업 취소 + 행 삭제 → 커밋 뒤 파일 삭제 (8.2절)"""
+        need_paper(ctx, pid)
+        active = tr_job(ctx, pid, active=True)
+        if active:
+            jobs.cancel_job(ctx.lib, active["id"])
+        key = translate.delete_row(ctx.lib, pid)
+        if not key:
+            raise HTTPException(404, TR_NONE)
+        ctx.after_commit.append(lambda: ctx.storage.delete_quietly(key))
+        return {"ok": True}
+
+    @app.post("/api/papers/{pid}/translation/manuscript")
+    def translation_manuscript(pid: int, ctx: RequestCtx = Ctx):
+        """[원고로 만들기] (K-12): 서버가 번역 파일로 본문을 만든다 — 새 원고 기본 양식"""
+        p = need_paper(ctx, pid)
+        row = translate.row_for(ctx.lib, pid)
+        if not row:
+            raise HTTPException(404, TR_NONE)
+        fmt = ctx.settings.get("doc_format_default")
+        if not format_exists(ctx, fmt):
+            fmt = doc_formats.DEFAULT_ID
+        ctx.release()  # R2 읽기 동안 DB 연결을 잡지 않는다 (F9)
+        try:
+            pages = translate.read_pages(ctx.storage, row)
+        except translate.TranslationFileError as e:
+            raise HTTPException(400, str(e)) from None
+        title, content = translate.manuscript(p["title"], row, pages)
+        return {"id": ctx.lib.add_manuscript(title, content, "blank", fmt), "title": title}
 
     # ------------------------------------------- 3단계: AI 질문(서재) · AI로 찾기 · 인용 검증 (명세 11 · 12 · 13 · 14.3절)
     ASK_EMPTY = "이 범위에 색인된 논문이 없어요"

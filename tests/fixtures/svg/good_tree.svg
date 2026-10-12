@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 240">
+  <g font-size="13" text-anchor="middle" fill="currentColor">
+    <rect x="150" y="10" width="100" height="36" rx="6" fill="none" stroke="var(--accent)"/><text x="200" y="33">모델</text>
+    <rect x="40" y="100" width="120" height="36" rx="6" fill="none" stroke="currentColor"/><text x="100" y="123">인코더</text>
+    <rect x="240" y="100" width="120" height="36" rx="6" fill="none" stroke="currentColor"/><text x="300" y="123">디코더</text>
+    <rect x="40" y="190" width="120" height="36" rx="6" fill="none" stroke="currentColor"/><text x="100" y="213">자기 주의</text>
+    <rect x="240" y="190" width="120" height="36" rx="6" fill="none" stroke="currentColor"/><text x="300" y="213">교차 주의</text>
+  </g>
+  <path d="M200 46L100 100M200 46L300 100M100 136V190M300 136V190" stroke="currentColor" fill="none"/>
+</svg>

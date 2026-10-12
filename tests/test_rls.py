@@ -23,7 +23,7 @@ pytestmark = pytest.mark.db
 
 PERSONAL = ["profiles", "user_secrets", "folders", "papers", "collections", "paper_collections", "tags", "paper_tags",
             "annotations", "notes", "page_texts", "paper_search", "ai_summaries", "chat_sessions", "chat_messages",
-            "manuscripts", "doc_formats", "user_styles"]
+            "manuscripts", "doc_formats", "user_styles", "explanations", "translations"]  # 4단계 AC-D01
 SHARED = ("external_works", "citation_edges")  # 인용 그래프 공용 캐시 (citation-graph 명세 8.4 · AC-G20)
 
 
