@@ -12,13 +12,13 @@ import json
 import logging
 import re
 import secrets
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from psycopg.types.json import Jsonb
 
 from . import ai, explain, find, rag, translate, verify
 from .config import ENGINES, JOB_KINDS, UserSettings, redact
-from .db import Library, iso, now_dt
+from .db import PAPER_TRASHED, Library, iso, now_dt
 
 log = logging.getLogger("paperlab.jobs")
 
@@ -83,6 +83,7 @@ DEFAULT_ERRORS = {
     "index_failed": "색인하지 못한 논문이 있어요",
     "search_failed": find.SEARCH_FAILED,
     "pdf_changed": translate.PDF_CHANGED,
+    "paper_trashed": PAPER_TRASHED,
 }
 INTERRUPTED = "화면 연결이 끊겨 멈췄어요"
 NO_ROUTE = "AI를 쓸 수 있는 방법이 없어요. 설정에서 API 키를 넣거나, PC에 PaperLab 앱을 설치하고 연결해 주세요."
@@ -144,7 +145,10 @@ _DEVICE_SELECT = """
 select d.id, d.name, d.engines, d.app_version, d.os, d.paused, d.last_seen_at, d.revoked_at, d.created_at,
        (d.revoked_at is null and d.last_seen_at > now() - make_interval(secs => %(online)s)) as online,
        (select count(*) from paperlab.jobs j where j.user_id = d.user_id and j.device_id = d.id
-         and j.status = 'running')::int as running_jobs
+         and j.status = 'running')::int as running_jobs,
+       (select jsonb_build_object('enabled', s.enabled, 'state', s.state, 'root_label', s.root_label,
+                                  'last_sync_at', s.last_sync_at, 'counts', s.counts)
+          from paperlab.sync_devices s where s.device_id = d.id and s.user_id = d.user_id) as sync
   from paperlab.devices d where d.user_id = %(uid)s
 """
 
@@ -167,7 +171,18 @@ def device_view(d: dict) -> dict:
             "engines": d["engines"] or [], "app_version": d["app_version"], "os": d["os"], "paused": d["paused"],
             "revoked": d["revoked_at"] is not None, "revoked_at": iso(d["revoked_at"]),
             "running_jobs": d["running_jobs"], "update_required": update_required(d["app_version"]),
-            "created_at": iso(d["created_at"])}
+            "created_at": iso(d["created_at"]),
+            # 6단계 SW-3: 폴더 동기화 요약(켠 적 없으면 null)
+            "sync": _sync_view(d.get("sync"))}
+
+
+def _sync_view(s) -> dict | None:
+    if not isinstance(s, dict):
+        return None
+    at = s.get("last_sync_at")
+    return {"enabled": bool(s.get("enabled")), "state": s.get("state") or "off", "root_label": s.get("root_label") or "",
+            "last_sync_at": iso(datetime.fromisoformat(at)) if isinstance(at, str) else None,
+            "counts": s.get("counts") if isinstance(s.get("counts"), dict) else {}}
 
 
 def new_pair_code(lib: Library) -> dict:
@@ -570,6 +585,8 @@ def finish_success(lib: Library, job: dict, parsed: dict, model: str = "") -> tu
     if job["cancel_requested"]:
         _end(lib, job, "cancelled")
         return "cancelled", None
+    if paper_trashed(lib, job):
+        return "cancelled", None
     try:
         with lib.conn.transaction():  # 저장점 — 반영이 깨져도 작업 상태는 바꿀 수 있게
             result = _apply(lib, job, parsed, model)
@@ -579,6 +596,16 @@ def finish_success(lib: Library, job: dict, parsed: dict, model: str = "") -> tu
         return "failed", None
     _end(lib, job, "succeeded", result=result)
     return "succeeded", result
+
+
+def paper_trashed(lib: Library, job: dict) -> bool:
+    """논문 작업인데 그 논문이 휴지통(또는 없음)이면 작업을 cancelled(paper_trashed)로 끝내고 True — 결과는 쓰지 않는다 (6단계 K-39).
+    작업 행이 RLS(hide_trashed_children)로 숨으면 여기 오기 전에 이미 404 · lease_lost"""
+    if job.get("paper_id") is None or lib.paper_ids([job["paper_id"]]):
+        return False
+    with lib.trash_tx():  # 휴지통 논문의 작업 행은 hide_trashed_children로 숨으므로 끝낼 때만 보이게
+        _end(lib, job, "cancelled", "paper_trashed", PAPER_TRASHED)
+    return True
 
 
 def _apply(lib: Library, job: dict, parsed: dict, model: str):
@@ -749,6 +776,8 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
 
 def cli_task(lib: Library, job: dict) -> dict | None:
     """잡은 작업의 실행 내용(8.4절). 만들 수 없으면 작업을 실패로 바꾸고 None"""
+    if paper_trashed(lib, job):
+        return None
     settings = UserSettings(lib.get_settings())
     lang = settings.get("summary_language") or "한국어"
     params = job["params"] or {}

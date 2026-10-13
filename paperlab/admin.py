@@ -516,6 +516,17 @@ def cache_prune(conninfo: str, max_mb: float) -> dict:
     return {"deleted_works": n_works, "deleted_edges": n_edges, "live_before": live, "live_after": after}
 
 
+def db_maintain(conninfo: str) -> dict:
+    """6단계 K-46: PGroonga 정리(pgroonga_vacuum — 행을 지워도 Groonga 파일은 줄지 않음) 전 · 후 DB 크기(바이트).
+    서재 DB 예산(동기화 첫 연결 미리보기 · files/add db_full)이 이 크기를 쓴다"""
+    log.info("admin reason=db maintain")
+    with _connect(conninfo) as conn:
+        before = int(conn.execute("select pg_database_size(current_database())").fetchone()[0])
+        conn.execute("select extensions.pgroonga_vacuum()")
+        after = int(conn.execute("select pg_database_size(current_database())").fetchone()[0])
+    return {"before_bytes": before, "after_bytes": after}
+
+
 def refuse_test_project(conninfo: str) -> None:
     """운영용 관리 명령: 테스트 표지가 있는 DB면 거부 (운영 보호 장치 3번)"""
     with _connect(conninfo) as conn:
@@ -573,6 +584,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("cache-stats", help="인용 그래프 공용 캐시 크기 · 행 수 · 가장 오래된 날짜")
     p = sub.add_parser("cache-prune", help="공용 캐시를 상한 아래로 (오래된 서지부터)")
     p.add_argument("--max-mb", type=float, default=150.0)
+    sub.add_parser("maintain", help="DB 정리: pgroonga_vacuum() + 전 · 후 DB 크기 (6단계 K-46)")
     p = sub.add_parser("rag-reindex", help="모든 논문을 색인 대기로 (3단계 10.3절)")
     p.add_argument("--all", action="store_true", required=True)
     p = sub.add_parser("rag-model", help="3단계 임베딩 모델 파일 확인 · 받기")
@@ -675,6 +687,9 @@ def main(argv: list[str] | None = None) -> int:
             say(f"R2 벡터 파일 합계 {res['rag_bytes']} 바이트")
             say(f"R2 users/ 합계 {res['storage_bytes']} 바이트, DB 합계 {res['db_bytes']} 바이트, "
                 f"incoming/ {res['incoming_count']}개")
+        elif args.cmd == "maintain":
+            r = db_maintain(admin_db)
+            say(f"DB 정리(pgroonga_vacuum): {r['before_bytes'] / 1048576:.1f}MB → {r['after_bytes'] / 1048576:.1f}MB")
         elif args.cmd == "rag-reindex":
             say(f"색인 대기로 바꾼 논문: {rag_reindex_all(admin_db)}편 (사용자가 AI 질문을 열 때 차례로 다시 색인)")
         elif args.cmd == "cache-stats":

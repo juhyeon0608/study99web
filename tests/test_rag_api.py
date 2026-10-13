@@ -196,6 +196,7 @@ def test_reindex_on_pdf_change_and_delete(env, project):
     assert ops == [("put", newer), ("delete", new_key)]
     # 삭제 → 파일 · 캐시 · 질문에서 빠짐
     ca.delete(f"/api/papers/{pid}")
+    ca.post("/api/trash/purge", json={"ids": [pid]})  # 6단계: 벡터 파일은 영구 삭제 때 지움
     assert newer not in env.storage.objects
     ev = sse(ca, {"scope": "library", "question": "학업 스트레스 수면 stress"})
     assert all(c["paper_id"] == other for c in ev[-1]["citations"])
@@ -289,6 +290,7 @@ def test_scope_boundaries_between_users(env, project):
     ca.delete(f"/api/collections/{cid}")
     assert sql(project, "select count(*) from paperlab.chat_sessions where collection_id = %s", (cid,))[0][0] == 0
     ca.delete(f"/api/papers/{pa}")
+    ca.post("/api/trash/purge", json={"ids": [pa]})  # 6단계: 휴지통 동안은 행이 남고 verify가 거름
     assert sql(project, "select paper_id from paperlab.manuscript_citations where manuscript_id = %s", (mid2,)) == [(None,)]
 
 

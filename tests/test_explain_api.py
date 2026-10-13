@@ -529,6 +529,7 @@ def test_delete_paper_and_pdf_change_cleanup(env, project):
     assert wait_job(env, ca, jid)["status"] == "succeeded"
     key = sql(project, "select tr_key from paperlab.translations where paper_id = %s", (pid,))[0][0]
     assert ca.delete(f"/api/papers/{pid}").status_code == 200
+    assert ca.post("/api/trash/purge", json={"ids": [pid]}).json() == {"purged": 1}  # 6단계: 휴지통 → 영구 삭제
     assert sql(project, "select (select count(*) from paperlab.translations where paper_id = %s) + "
                         "(select count(*) from paperlab.explanations where paper_id = %s)", (pid, pid))[0][0] == 0
     assert key not in env.storage.objects

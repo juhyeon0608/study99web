@@ -204,6 +204,8 @@ def test_migration_files_follow_naming():
 # ---------------------------------------------------------------- 정적 검사
 SYSTEM_TABLES = {"allowed_emails", "schema_migrations"}
 SHARED_TABLES = {"external_works", "citation_edges"}  # 인용 그래프 공용 캐시 (citation-graph 명세 8.4 · AC-G20)
+# 사용자 권한이 일부러 좁은 개인 표: 6단계 묘비는 security definer 트리거만 쓰고 사용자는 읽기 · 180일 정리만
+NARROW_GRANTS = {"sync_tombstones": "grant select, delete on paperlab.sync_tombstones to authenticated;"}
 
 
 def test_every_table_has_rls_and_policy_in_same_file():
@@ -230,7 +232,7 @@ def test_every_table_has_rls_and_policy_in_same_file():
                                  r"using \(\(select auth\.uid\(\)\) = user_id\) with check \(\(select auth\.uid\(\)\) = user_id\);",
                                  text), (name, table)
                 assert re.search(r"^\s+user_id\s+uuid", body, re.M), (name, table)
-                assert f"grant select, insert, update, delete on paperlab.{table} to authenticated;" in text
+                assert NARROW_GRANTS.get(table, f"grant select, insert, update, delete on paperlab.{table} to authenticated;")                     in text, (name, table)
     assert tables >= 20
 
 

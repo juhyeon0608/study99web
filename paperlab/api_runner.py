@@ -192,7 +192,7 @@ class ApiRunner:
             return self._run_translate(job_id, uid, guide)
         with self._tx(uid) as lib:
             job = jobs.claim_api(lib, job_id, guide)
-            if not job:
+            if not job or jobs.paper_trashed(lib, job):  # 6단계 K-39: 휴지통 논문 작업은 cancelled
                 return
             settings = self.settings_loader(lib, uid)
             lang = settings.get("summary_language") or "한국어"

@@ -137,7 +137,8 @@ function createStatusWindow({ icon, session }) {
   wc.on('will-navigate', (event) => event.preventDefault());
   wc.on('will-attach-webview', (event) => event.preventDefault());
   wc.on('before-input-event', (event, input) => {
-    if (input.type === 'keyDown' && input.key === 'Escape') { win.hide(); event.preventDefault(); }
+    // 창 안 대화상자(동기화 미리보기 · 확인)가 열려 있으면 Esc 는 대화상자의 것(디자인 6단계 4.3 · 11.1)
+    if (input.type === 'keyDown' && input.key === 'Escape' && !win.paperlabDialogOpen) { win.hide(); event.preventDefault(); }
   });
   devKeys(wc);
   return win;

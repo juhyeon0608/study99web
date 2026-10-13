@@ -27,7 +27,7 @@ module.exports = {
   productName: 'PaperLab',
   copyright: 'PaperLab',
   directories: { output: 'dist', buildResources: 'build' },
-  files: ['package.json', 'main/**/*', 'preload/**/*', 'worker/**/*', 'lib/**/*', 'ui/**/*'],
+  files: ['package.json', 'main/**/*', 'preload/**/*', 'worker/**/*', 'sync/**/*', 'lib/**/*', 'ui/**/*'],
   extraResources: [{ from: 'build', to: 'icons', filter: ['icon.ico', 'tray-*.ico'] }],
   extraMetadata: { paperlabServer: server },
   asar: true,
@@ -53,6 +53,7 @@ module.exports = {
     createStartMenuShortcut: true,
     shortcutName: 'PaperLab',
     artifactName: 'PaperLab-Setup-${version}.${ext}',
+    include: 'build/installer.nsh', // 제거할 때 동기화 설치 ID 지움(업데이트 때는 남김 — 6단계 K-33)
   },
   publish: [{ provider: 'generic', url: `${server}/downloads/` }],
 };

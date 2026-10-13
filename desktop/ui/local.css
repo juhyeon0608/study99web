@@ -7,3 +7,53 @@
 .local-page [data-update-line] { margin-bottom: 8px; }
 .local-foot { margin-top: 12px; }
 .local-head:focus { outline: none; }
+/* ---- 6단계 폴더 동기화 (docs/design/phase6-folder-sync-ui.md) — 이 PC 상태 "폴더 동기화" 구역 · 창 안 대화상자 ---- */
+.sync-card .item-meta.sync-root { font-size: 12px; overflow-wrap: anywhere; word-break: normal; }
+.sync-card .status-line .grow { overflow-wrap: anywhere; }
+.sync-card > .item-meta.sync-note { color: var(--text-3); }
+.sync-card .progress { margin: 0 2px; }
+.sync-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.sync-actions > .grow { flex: 1; }
+.sync-section > .notice { margin-bottom: 8px; }
+.sync-section > .status-line { margin: 8px 0; }
+.sync-section > .check, .sync-archive { margin-top: 8px; }
+.sync-archive { font-size: 12px; color: var(--text-2); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+/* 맞추지 못한 파일 · 최근 알림 (펼침) */
+.sync-more { margin-top: 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.sync-more > summary { padding: 8px 12px; cursor: pointer; font-size: 13px; font-weight: 600; }
+.sync-more > summary .chip { margin-left: 6px; }
+.sync-more[open] > summary { border-bottom: 1px solid var(--border); }
+.sync-reasons { list-style: none; margin: 0; padding: 4px 12px 10px; }
+.sync-reasons > li { padding: 8px 0 0; }
+.sync-reasons > li + li { border-top: 1px solid var(--border); margin-top: 8px; }
+.sync-reason { margin: 0; font-size: 12.5px; font-weight: 600; word-break: keep-all; }
+.sync-files { list-style: none; margin: 4px 0 0; padding: 0; font-size: 12px; line-height: 1.6; color: var(--text-2); }
+.sync-files > li { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.sync-files > li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sync-files .btn.sm { height: 22px; padding: 0 7px; font-size: 11.5px; }
+/* 창 안 대화상자: 네이티브 <dialog>(초점 가둠 · Esc = cancel)에 기존 .modal 모양 */
+dialog.modal { padding: 0; border: 0; color: var(--text); width: min(560px, calc(100vw - 24px)); max-height: calc(100vh - 24px); }
+dialog.modal[open] { display: flex; }
+dialog.modal:not([open]) { display: none; }
+dialog.modal::backdrop { background: rgba(15, 18, 25, .45); }
+dialog.modal .modal-head h3:focus { outline: none; }
+.sync-dialog .modal-body > p { margin: 0 0 10px; font-size: 13px; line-height: 1.6; word-break: keep-all; }
+.sync-dialog .modal-body > .notice { margin: 10px 0; }
+.sync-dialog .modal-foot { flex-wrap: wrap; }
+.sync-path { font-size: 12px; color: var(--text-2); overflow-wrap: anywhere; }
+.sync-plan { width: 100%; border-collapse: collapse; margin: 6px 0 4px; font-size: 13px; }
+.sync-plan th { padding: 7px 0; text-align: left; font-weight: 550; }
+.sync-plan td { padding: 7px 0 7px 10px; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sync-plan td.muted { font-size: 12px; }
+.sync-plan tr + tr > * { border-top: 1px solid var(--border); }
+.sync-choice { margin: 12px 0 0; padding: 0; border: 0; min-width: 0; }
+.sync-choice > legend { margin: 0 0 6px; padding: 0; font-size: 12px; font-weight: 700; color: var(--text-3); }
+.sync-choice .check { align-items: flex-start; line-height: 1.5; }
+.sync-choice .check + .check { margin-top: 6px; }
+.sync-choice .check input { margin-top: 3px; }
+.sync-room { margin: 10px 0 0; font-size: 12px; line-height: 1.7; color: var(--text-2); font-variant-numeric: tabular-nums; }
+.sync-file-list {
+  margin: 6px 0 0; padding: 6px 10px; list-style: none; max-height: 9.6em; overflow-y: auto; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface-2); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere;
+}
+.sync-file-list > li.muted { font-style: normal; }

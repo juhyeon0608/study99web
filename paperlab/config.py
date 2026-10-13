@@ -54,6 +54,18 @@ PLAIN_KEYS = tuple(k for k in DEFAULT_SETTINGS if k not in SECRET_KEYS)
 
 DEFAULT_ENV_FILE = Path.home() / ".paperlab" / "cloud.env"
 STORAGE_LIMIT_DEFAULT = 10 * 1024 ** 3  # R2 무료 10GB (명세 7.6, 가정)
+# 6단계 K-30 · K-46: 사용자당 동기화 올리기 상한(내 PDF 총량 기준 — 휴지통 포함) · DB 무료 한도. cloud.env에서 MB로 바꿈
+SYNC_USER_CAP_DEFAULT = 2 * 1024 ** 3   # PAPERLAB_SYNC_USER_CAP_MB
+DB_LIMIT_DEFAULT = 500 * 1024 ** 2      # PAPERLAB_DB_LIMIT_MB (Supabase 무료 500MB)
+
+
+def _mb(env: dict, name: str, default: int) -> int:
+    """cloud.env의 MB 값 → 바이트. 비었거나 틀리면 기본값"""
+    try:
+        v = float(str(env.get(name) or "").strip())
+    except ValueError:
+        return default
+    return int(v * 1024 ** 2) if v > 0 else default
 STORAGE_BACKENDS = ("r2", "supabase", "fake")
 R2_VARS = ("R2_ACCOUNT_ID", "R2_BUCKET", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY")
 
@@ -224,6 +236,8 @@ class ServerConfig:
     storage_backend: str = "r2"
     r2: dict = field(default_factory=dict)
     storage_limit_bytes: int = STORAGE_LIMIT_DEFAULT
+    sync_user_cap_bytes: int = SYNC_USER_CAP_DEFAULT
+    db_limit_bytes: int = DB_LIMIT_DEFAULT
     db_pool_timeout: float = 30.0
     # 공개 주소의 출처 (https://호스트) — Origin · Host 검사 기준 (명세 6.5, 팀장 결정 S2). 비면 다른 출처 요청은 모두 거부
     public_url: str = ""
@@ -280,6 +294,8 @@ class ServerConfig:
             public_url=parse_public_url(env["PAPERLAB_PUBLIC_URL"]),
             allowlist_enabled=(env.get("PAPERLAB_ALLOWLIST") or "on").strip().lower() != "off",
             local_port=port,
+            sync_user_cap_bytes=_mb(env, "PAPERLAB_SYNC_USER_CAP_MB", SYNC_USER_CAP_DEFAULT),
+            db_limit_bytes=_mb(env, "PAPERLAB_DB_LIMIT_MB", DB_LIMIT_DEFAULT),
             kci_api_key=(env.get("KCI_API_KEY") or "").strip(),
             riss_api_key=(env.get("RISS_API_KEY") or "").strip(),
         )

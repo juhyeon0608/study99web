@@ -11,6 +11,7 @@ import { renderDiscover } from "./discover.js";
 import { closeGraph, renderGraph, resetGraphMemory } from "./graph.js";
 import { flushLibrary, loadPapers, renderLibrary } from "./library.js";
 import { closeJobs, renderJobs, startJobBadge, stopJobBadge } from "./jobs.js";
+import { closeTrash, renderTrash } from "./trash.js";
 import { closeReader, flushReader, openReader, stopSummaries } from "./reader.js";
 import { resetRefMemory } from "./refpane.js";
 import { closeWriter, composeDialog, flushWriter, openManuscript, renderWriteList, unsavedDraft } from "./writing.js";
@@ -471,6 +472,8 @@ function openAccountMenu(btn, e, left) {
     { label: "로그아웃", action: logout },
   ];
   // 좁은 화면(사이드바 숨김)에서는 "작업 (n)" · "AI 질문" 항목 (디자인 9.1, 3단계 팀장 결정 — 시안 8장)
+  // 6단계 SW-1: 좁은 화면에서는 "휴지통 (n)"을 "작업" 다음에
+  if (!left) items.unshift({ label: `휴지통${state.stats.trash ? ` (${state.stats.trash})` : ""}`, action: () => { location.hash = "#/trash"; } });
   if (!left) items.unshift({ label: `작업${state.stats.jobs ? ` (${state.stats.jobs})` : ""}`, action: () => { location.hash = "#/jobs"; } });
   if (!left) items.unshift({ label: "AI 질문", action: () => { location.hash = scopeHash(scopeFromFilter(state.filter)); } });
   const dk = window.paperlabDesktop;
@@ -531,7 +534,7 @@ function drawMeter() {
   const x = usageInfo(u);
   const w = Math.min(100, x.pct);
   meter.dataset.level = x.level;
-  meter.title = `모든 사용자가 함께 쓰는 저장 공간이에요 · 내 PDF ${x.mine}`;
+  meter.title = `모든 사용자가 함께 쓰는 저장 공간이에요 · 내 PDF ${x.mine}${x.trash ? ` · 휴지통 ${x.trash}` : ""}`;
   $("[data-storage-text]", meter).textContent = `${x.used} / ${x.limit}`;
   const bar = $(".usage-bar", meter);
   bar.setAttribute("aria-valuenow", w);
@@ -647,7 +650,7 @@ function renderSidebar() {
   for (const t of state.tags) {
     const isActive = state.view === "library" && state.filter.kind === "tag" && state.filter.id === t.id;
     const row = el(`<div class="tree-row"><button class="nav-item ${isActive ? "active" : ""}">
-      <span class="tag-dot" style="${t.color ? `background:${esc(t.color)}` : ""}"></span><span class="label">${esc(t.name)}</span><span class="count">${t.count || ""}</span></button>
+      <span class="tag-dot"${t.name === "충돌 사본" && !t.color ? ' data-tag-kind="conflict"' : ""} style="${t.color ? `background:${esc(t.color)}` : ""}"></span><span class="label">${esc(t.name)}</span><span class="count">${t.count || ""}</span></button>
       <span class="menu-wrap"><button class="icon-btn small row-menu" title="메뉴" aria-label="‘${esc(t.name)}’ 태그 메뉴">⋯</button></span></div>`);
     $(".nav-item", row).onclick = () => setFilter({ kind: "tag", id: t.id });
     $(".row-menu", row).onclick = (e) => {
@@ -789,6 +792,8 @@ async function deleteFolder(f, kidCount) {
     const what = n && kidCount ? `안의 논문 ${n}편과 하위 폴더는` : n ? `안의 논문 ${n}편은` : "하위 폴더는";
     msg = `‘${f.name}’ 폴더를 삭제할까요? ${what} ${top ? "폴더 밖으로" : "상위 폴더로"} 옮겨져요.`;
   }
+  // 6단계 9장: 폴더 동기화를 켠 PC가 있으면 한 줄 더
+  if (state.stats && state.stats.sync_on) msg += " 폴더 동기화를 쓰는 PC에서도 같은 폴더가 없어지고 파일은 위 폴더로 옮겨져요.";
   if (!(await confirmDialog(msg, { ok: "삭제", danger: true }))) return;
   try {
     const r = await api.del(`/api/folders/${f.id}`);
@@ -864,6 +869,15 @@ async function route() {
     return renderJobs(main);
   }
   closeJobs();
+  if (hash.startsWith("#/trash")) { // 6단계 휴지통 (SW-1)
+    closeWriter();
+    closeGraph();
+    app.classList.remove("reading");
+    state.view = "trash";
+    renderSidebar();
+    return renderTrash(main);
+  }
+  closeTrash();
   if (/^#\/graph(\/|$)/.test(hash)) {
     // 인용 그래프: 읽기 화면처럼 사이드바를 숨기고 전체 폭 (디자인 GD-1). 사이드바 메뉴 항목은 없음(K-12)
     closeWriter();

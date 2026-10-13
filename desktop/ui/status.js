@@ -228,6 +228,7 @@
     S = s;
     drawBanner();
     drawConnect();
+    if (window.PaperLabStatusSync) window.PaperLabStatusSync.draw(s);
     drawRunning();
     drawEngines();
     drawUpdate();

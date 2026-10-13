@@ -147,7 +147,7 @@ def test_fetch_pdf_license_rules(cloud, web):
     u = cloud.user()
     c = cloud.client(u)
     key = lambda pid: f"users/{u.id}/papers/{pid}.pdf"  # noqa: E731
-    puts = lambda: [k for op, k in cloud.storage.log if op == "put"]  # noqa: E731
+    puts = lambda: [k for op, k in cloud.storage.log if op == "copy"]  # noqa: E731 — 6단계: 임시 키 → 최종 키 복사(QA D9b)
     D = {n: doi(n) for n in ("ccby", "nolic", "other", "pubspec", "mixed", "crossref", "landing", "none")}
     web.works[D["ccby"]] = oa_work(D["ccby"], loc("https://files.example.org/ccby.pdf", "cc-by"))
     web.works[D["nolic"]] = oa_work(D["nolic"], loc("https://pub.example.org/nolic.pdf"))

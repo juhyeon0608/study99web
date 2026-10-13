@@ -238,7 +238,10 @@ def list_rows(lib, paper_id: int) -> list[dict]:
 
 
 def delete(lib, eid: int) -> bool:
-    return bool(lib._x("delete from paperlab.explanations where user_id = %s and id = %s", (lib.uid, eid)).rowcount)
+    """휴지통 논문의 카드는 지우지 않는다(없음 — RLS 이중 방어와 같은 조건을 코드에도, 6단계 K-39)"""
+    return bool(lib._x("delete from paperlab.explanations e where e.user_id = %s and e.id = %s and exists "
+                       "(select 1 from paperlab.papers p where p.id = e.paper_id and p.user_id = e.user_id)",
+                       (lib.uid, eid)).rowcount)
 
 
 def bbox(rects: list) -> list | None:

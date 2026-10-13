@@ -1,6 +1,6 @@
 # PaperLab 서버 PC 설치 안내서
 
-- 작성: 기획팀 · 2026-10-07 (개발팀 구현 스크립트 · 명령과 대조해 개정 — 13절. 안내서와 스크립트 동작이 다르면 그 단계에서 **멈추고 팀장에게 알립니다**). 2026-10-13: 5단계(국내 DB) `cloud.env` 새 변수 · 키 신청 · 녹화 도구 · 반영 순서를 14절에 추가(5절 · 11절 · 12절 · 13절에 줄 추가). 2026-10-13 후속: 14.3절 녹화 도구 문구(이메일 모양은 가려 저장, 키 문자열일 때만 멈춤)
+- 작성: 기획팀 · 2026-10-07 (개발팀 구현 스크립트 · 명령과 대조해 개정 — 13절. 안내서와 스크립트 동작이 다르면 그 단계에서 **멈추고 팀장에게 알립니다**). 2026-10-13: 5단계(국내 DB) `cloud.env` 새 변수 · 키 신청 · 녹화 도구 · 반영 순서를 14절에 추가(5절 · 11절 · 12절 · 13절에 줄 추가). 2026-10-13 후속: 14.3절 녹화 도구 문구(이메일 모양은 가려 저장, 키 문자열일 때만 멈춤). 2026-10-14: 6단계(폴더 동기화 · 휴지통) **반영 순서 · 관리자 작업 · 새 설정값을 15절에 추가**(5절 · 13절에 줄 추가, 11절에는 이미 설정값 줄이 있음)
 - 근거: [1단계 명세](../../docs/specs/phase1-cloud.md) 9장(서버 실행) · 13장(배포 · 운영), 사용자 결정 Q14(2026-10-07)
 - 읽는 사람: **서버 PC(`KIMJUHYEON`)에 설치한 Claude Code**와 관리자. 사람이 손으로 해야 하는 단계는 **[사용자]** 로 표시했습니다 — Claude Code는 그 단계에서 사용자에게 부탁하고 끝날 때까지 기다립니다.
 
@@ -120,6 +120,7 @@ tailscale version
    - (필요할 때만) `PAPERLAB_PG_DUMP=…` (4절)
    - (선택 — 2단계) `PAPERLAB_RELEASES_DIR=…` PC 앱 설치 파일 배포 폴더. 없으면 기본값 `D:\PaperLab\releases`
    - (선택 — 5단계 국내 DB 검색) `KCI_API_KEY=…` · `RISS_API_KEY=…` 한 줄씩. **없으면(또는 비어 있으면) 그 소스만 꺼질 뿐 서버는 그대로 뜹니다.** 키 값은 **채팅에 적지 말고 메모장으로 파일에 직접** 넣습니다. 신청 · 설명은 14절
+   - (선택 — 6단계 폴더 동기화) `PAPERLAB_SYNC_USER_CAP_MB=…`(사용자당 동기화 올리기 상한, 기본 2048) · `PAPERLAB_DB_LIMIT_MB=…`(Supabase DB 한도, 기본 500). **없으면 기본값으로 동작**하고 값은 비밀이 아니지만 파일은 5절 규칙대로 직접 고칩니다. 설명 · 반영 순서는 15절
    - (품질 검증을 이 PC에서 할 때만 — 질문 Q-S7) `SUPABASE_TEST_*` 4줄은 그대로 둠, 아니면 지움
    - `SUPABASE_APP_DB_URL`은 **비워 둡니다**(설치 스크립트가 채움)
 4. Claude Code 확인(값을 보지 않음):
@@ -266,6 +267,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 특정 커밋으로 되돌리기 | `update.ps1 -Ref <커밋>` — 옛 커밋으로 갈 때는 마이그레이션을 하지 않음(DB 마이그레이션은 되돌리지 않음) |
 | `cloud.env`를 고친 뒤 | `update.ps1 -RestartOnly` (코드는 그대로, 서버만 다시 시작 → 상태 확인) |
 | KCI · RISS 키 넣기 · 바꾸기(5단계) | **[사용자]** 가 메모장으로 `cloud.env`의 `KCI_API_KEY` · `RISS_API_KEY` 줄을 고침(값은 채팅에 적지 않음) → `update.ps1 -RestartOnly`. 확인: 로그인해서 논문 찾기의 소스 목록에서 그 소스의 "(키 등록 전)" 표시가 사라졌는지(`serve --check`는 이 두 변수를 점검하지 않음). 자세한 내용 14절 |
+| 폴더 동기화 한도 바꾸기(6단계) | `cloud.env`에 `PAPERLAB_SYNC_USER_CAP_MB=2048`(사용자당 동기화 올리기 상한 — 내 PDF 총량 · 휴지통 포함, 기본 2048) · `PAPERLAB_DB_LIMIT_MB=500`(DB 한도 — 90%를 넘으면 동기화 새 논문 올리기를 막음, 기본 500) → `update.ps1 -RestartOnly`. DB 크기 확인 · PGroonga 정리는 `.venv\Scripts\python -m paperlab.admin maintain`(전 · 후 크기만 출력) |
 | PC 앱 설치 파일 처음 만들기 · 지난 빌드 실패 뒤 다시 | `update.ps1 -BuildDesktop` — 새 커밋이 없어도 8번 빌드만 함(그 버전 파일이 이미 `releases`에 있으면 WARN만). 결과는 `update.log`의 "데스크톱 앱 빌드 성공: 버전 … · sha256 …" |
 | 사용자 추가 · 빼기 | **[사용자]** Google Cloud 콘솔 → OAuth 동의 화면 → 테스트 사용자에서 추가 · 삭제(서버 재시작 필요 없음). 뺄 때는 Supabase 대시보드 Users에서 그 사용자도 삭제 |
 | 서버만 다시 시작 | `Stop-ScheduledTask "PaperLab Server"; Start-ScheduledTask "PaperLab Server"` |
@@ -348,6 +350,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | `python -m paperlab.admin pg-dump-check` | `pg_dump` 주 버전 ≥ DB 서버 주 버전인지(앱 역할 주소로 버전만 읽음) |
 | `python -m paperlab.admin rag-model [--download] [--dir <폴더>]` | 3단계 임베딩 모델 파일 확인(SHA-256 — 없거나 틀리면 종료 코드 2) · `--download`면 Hugging Face 공식 저장소(고정 커밋)에서 받음 |
 | `python -m paperlab.admin rag-reindex --all` | 모든 논문을 색인 대기로(3단계 10.3절) |
+| `python -m paperlab.admin maintain` | 6단계 DB 정리: `extensions.pgroonga_vacuum()` 실행 + **전 · 후 `pg_database_size` 출력**(관리자 주소 — 테스트 표지 DB는 거부). 15.3절 |
 | `python -m paperlab.admin orphans [--delete]` | DB에 없는 R2 PDF와 벡터 파일(`users/*/rag/*.bin`) 찾기 · 지우기 |
 | `python -m paperlab.admin latest-backup [--max-hours 36]` | R2의 가장 최근 백업 날짜(없거나 기한 넘으면 종료 코드 2) |
 | `tools/record_extsources.py [--env-file <경로>] [--only kci,riss,epmc,oc,openalex]` | 5단계 녹화 도구 — **관리자가 키로 한 번** 실행(14절). 서버 PC 설치 · 업데이트와 무관 |
@@ -411,3 +414,55 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 - 수동으로 나눠 할 때: `.venv\Scripts\python -m paperlab.migrate` → `update.ps1 -RestartOnly`. 순서를 거꾸로(코드가 먼저 돌고 마이그레이션이 나중에) 하지 않습니다.
 - 마이그레이션은 **되돌리지 않습니다**(11절). 문제가 생겨 `update.ps1 -Ref <옛 커밋>`으로 코드만 되돌려도 새 열 · 새 허용 값은 DB에 남지만 옛 코드와 호환됩니다.
 - 설치 후 확인(9절)에는 변경이 없습니다. 반영 뒤 사람이 화면으로 보는 항목(명세 AC-585 · 586)은 팀장 · 품질팀 몫입니다.
+
+## 15. 6단계 폴더 동기화 · 휴지통 — 새 설정값 · 반영 순서 · 관리자 작업
+
+근거: [6단계 명세](../../docs/specs/phase6-folder-sync.md) 13 · 14 · 16.5 · 22장. **상태: 구현 완료(검증 중)** — 품질팀 검증이 끝나고 팀장이 승인 · 푸시를 알린 뒤에 11절 `update.ps1`로 반영합니다. 이 절의 DB 확인은 **관리자(사람)** 가 하고, Claude Code는 0절 4번대로 운영 DB에 직접 SQL을 보내지 않습니다(정해진 관리 명령만).
+
+### 15.1 새 설정값 (`cloud.env` — 선택)
+
+| 변수 | 뜻 | 기본값 | 없으면 |
+|---|---|---|---|
+| `PAPERLAB_SYNC_USER_CAP_MB` | **사용자당 동기화 올리기 상한**(MB). 기준 = 그 사용자의 PDF 총량(내 PDF + 휴지통 PDF). **동기화 올리기에만** 적용(웹 업로드는 기존 R2 95% 규칙만). 5명이 R2 무료 10GB를 나눠 쓰는 근사값 | 2048 (= 2GB) | 기본값 |
+| `PAPERLAB_DB_LIMIT_MB` | **Supabase DB 한도**(MB). 이 값의 **90%**를 넘으면 동기화로 새 논문을 올리지 못함(첫 연결 미리보기 "DB 예산"의 기준). Supabase Pro로 올리면 그에 맞게 키움 | 500 (무료 한도) | 기본값 |
+
+- 값은 **메모장으로 직접** 넣습니다(5절 방식 — 비밀값이 아니어도 `cloud.env`는 Claude Code가 읽지 않음). 비었거나 숫자가 아니면 기본값으로 동작합니다. 바꾼 뒤 `update.ps1 -RestartOnly`(11절 "폴더 동기화 한도 바꾸기" 줄과 같음).
+- `serve --check`는 이 두 변수를 점검하지 않습니다(없어도 문제 아님).
+- 1,000편(약 3GB)을 가진 사용자는 기본 2GB에 걸리므로, 관리자가 사용자와 합의해 `PAPERLAB_SYNC_USER_CAP_MB`를 올립니다(R2 10GB · 사용자 수를 같이 보고).
+
+### 15.2 반영 순서 (6단계 코드를 서버 PC에 올릴 때)
+
+이 변경에는 **DB 마이그레이션 `20261015000001_folder_sync.sql`**(`papers` · `folders` 새 열, 변경 로그 트리거 · 묘비, 휴지통 RLS 정책, 새 표 3개 `sync_tombstones` · `sync_devices` · `sync_ops`, **앱 역할 `paperlab_app`의 `idle_in_transaction_session_timeout = '60s'`**)이 들어 있어 **DB가 먼저 바뀐 뒤에 새 코드가 실행**되어야 합니다. 새 코드가 `deleted_at` · `sync_xid` 같은 새 열을 읽고 쓰기 때문입니다(5단계 14.4절과 같은 원칙).
+
+1. **마이그레이션 `20261015000001`** — `update.ps1`이 코드 파일을 받은 뒤 `paperlab.migrate`(관리자 연결)로 적용합니다(11절 "업데이트 동작" 4번). 앱 역할 설정(`alter role … set`)도 이 단계에서 걸립니다. 두 번 돌려도 안전합니다. 여기서 실패하면 코드를 옛 커밋으로 되돌리고 서버는 옛 코드로 계속 돕니다.
+2. **새 코드로 서버 다시 시작** — 마이그레이션이 끝난 **뒤에야** `PaperLab Server`가 새 코드로 뜹니다(5번 상태 확인에서 `/api/health`의 커밋이 새 값이어야 통과).
+3. **앱 역할 idle 60s 적용 확인**(관리자 — 15.3절 1번). 서버가 뜬 뒤 한 번.
+4. (선택) 설정값 넣기 → `update.ps1 -RestartOnly`(15.1절).
+5. **PC 앱 0.3.0 배포** — 같은 반영에서 `desktop\`이 바뀌었으므로 `update.ps1` 8번이 설치 파일을 빌드해 `releases`에 둡니다(`desktop\package.json` 버전 0.3.0). 사용자 PC의 앱은 자동 업데이트로 올라오고, **동기화 워커 API는 앱 0.3.0 미만이면 426**(앱이 "업데이트가 필요해요"를 보임). 그 버전이 이미 `releases`에 있으면 빌드하지 않고 WARN만 남김(11절 8번 — 개발팀에 버전 요청). 동기화는 사용자가 앱에서 폴더를 고르고 [시작]을 눌러야 켜집니다(자동으로 켜지지 않음).
+
+- 수동으로 나눠 할 때: `.venv\Scripts\python -m paperlab.migrate` → `update.ps1 -RestartOnly`. 순서를 거꾸로(코드가 먼저 돌고 마이그레이션이 나중에) 하지 않습니다.
+- 마이그레이션은 **되돌리지 않습니다**(11절). `update.ps1 -Ref <옛 커밋>`으로 코드만 되돌리면 새 열 · 표는 DB에 남지만, 옛 코드는 휴지통을 모르므로 **이미 휴지통에 있는 논문은 옛 코드에서 보이지 않고**(데이터는 DB · R2에 남음) 옛 코드의 [삭제]는 다시 바로 지우는 방식입니다. 새 코드로 다시 올리면 돌아옵니다.
+- 설치 후 확인(9절) 항목에는 변경이 없습니다.
+
+### 15.3 관리자 작업 (사람이 하는 일 — 반영 뒤)
+
+1. **앱 역할 `idle_in_transaction_session_timeout = '60s'`가 운영에서 적용됐는지 확인.** 이유: 이 값이 0(무제한)이면 트랜잭션을 연 채 쉬는 연결 하나가 변경 피드 기준(`pg_snapshot_xmin`)을 붙잡아 **모든 사용자의 동기화 피드가 멈춥니다**. 확인: **[사용자]** 가 Supabase 대시보드 SQL Editor에서 읽기만 하는 `select rolconfig from pg_roles where rolname = 'paperlab_app';`를 실행해 `idle_in_transaction_session_timeout=60s`가 있는지 봅니다(결과에 비밀 없음 — 보고할 때 이 한 줄만). **확인 필요**: 운영 풀러 접속(`paperlab_app.<ref>`) 세션에서 실제 값이 `60s`인지(`show idle_in_transaction_session_timeout`)는 앱 역할 주소로 접속해야 보이는데 **이를 보여 주는 관리 명령이 아직 없음** — 팀장에게 확인 방법을 묻습니다(명세 AC-6D1).
+2. **운영 DB 크기와 PGroonga(Groonga) 파일 크기 구성 확인.** 시험 DB는 논문 0편인데도 약 366MB(그중 Groonga 약 349MB)였고, 첫 할당 약 55MB에 더해 편당 약 0.26MB가 늘어납니다. 운영도 비슷하면 한도 500MB의 90%(450MB)까지 남는 양이 약 84MB(약 320편)입니다. 확인: Supabase 대시보드의 DB 사용량(또는 15.3절 3번 `admin maintain`이 출력하는 전 · 후 크기). **숫자만** 팀장에게 보고합니다. 450MB를 넘기게 되면 Supabase Pro($25/월) 전환 여부는 **사용자 확인**(PLAN 7 · 11장).
+3. **`admin maintain` 실행**(필요할 때): `D:\PaperLab\study99web`에서
+   ```powershell
+   .venv\Scripts\python -m paperlab.admin maintain
+   ```
+   `pgroonga_vacuum()`을 실행하고 "DB 정리(pgroonga_vacuum): {전}MB → {후}MB"를 출력합니다. **언제**: 사용자가 휴지통에서 논문을 많이 영구 삭제한 뒤(행을 지워도 Groonga 파일은 줄지 않고 이 명령으로만 돌아옴), 또는 DB가 한도에 가까울 때. 관리자 주소(`SUPABASE_DB_URL`)를 쓰고 **테스트 표지가 붙은 DB는 거부**합니다. 서버 요청 경로에서는 자동으로 돌지 않습니다. 실행 시간 · 실행 중 영향은 아직 실측하지 않았으므로 처음에는 사용자가 적은 때에 하고, 출력(전 · 후 크기)을 팀장에게 보고합니다.
+4. **휴지통 정리**: 30일이 지난 휴지통 논문은 그 사용자가 서버를 쓸 때(앱 PC가 켜져 있으면 하루 안에) 자동으로 영구 삭제됩니다. 아무도 접속하지 않은 사용자의 휴지통은 남을 수 있으며 별도 관리 명령(`purge-trash`)은 만들지 않았습니다.
+5. **앱 설치 ID 동작은 사용자 PC 실측 몫**(관리자 · 품질팀, 시험용 계정으로): 앱 자동 업데이트 뒤에는 동기화 설정이 그대로 이어지고, 제거 후 새로 설치하면 꺼짐으로 시작하는지(레지스트리 `HKCU\Software\PaperLab\InstallId` — 명세 7.3절 · 21.4절 S-5 (f)). 실제 논문 폴더 · 실제 사용자 계정으로는 시험하지 않습니다.
+
+### 15.4 문제 해결 (6단계)
+
+| 증상 | 확인 | 조치 |
+|---|---|---|
+| 사용자 앱이 "업데이트가 필요해요"(동기화) | 앱 버전이 0.3.0 미만이면 동기화 API가 426 | 앱 자동 업데이트를 기다리거나 `/downloads/`의 새 설치 파일 · `releases`에 0.3.0이 있는지(`update.log`) |
+| 동기화 상태 "올리기 멈춤 — 서재 데이터베이스 공간" | DB 크기(15.3절 2번), `PAPERLAB_DB_LIMIT_MB` | 15.3절 3번 `admin maintain`, 그래도 부족하면 Pro 전환 판단(사용자 확인) |
+| "올리기 멈춤 — 내 올리기 한도" | 그 사용자의 PDF 총량(휴지통 포함) | 사용자에게 휴지통 비우기 안내 또는 `PAPERLAB_SYNC_USER_CAP_MB` 조정(15.1절) |
+| "올리기 멈춤 — 서재 저장 공간" | R2 사용량(95%에서 업로드를 막는 기존 규칙 — 사용자 화면의 저장 공간 막대) | 필요 없는 논문 영구 삭제 안내, 한도 판단은 1단계 M9 |
+| 서버 로그에 `sync feed xmin stalled`(숫자만 있는 WARN) | 다른 연결이 트랜잭션을 연 채 쉬는 중 — 피드가 새 변경을 못 줌(응답은 정상) | 15.3절 1번을 다시 확인, 계속되면 팀장에게 WARN 줄(숫자만)과 함께 보고 |
+| 마이그레이션 단계에서 업데이트가 되돌림 | `update.log`(11절 4번) | 12절 해당 줄 — 팀장 보고 |

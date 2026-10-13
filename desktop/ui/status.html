@@ -19,6 +19,10 @@
     <div data-connect></div>
     <div data-pair-flash></div>
 
+    <!-- 6단계 폴더 동기화 (디자인 phase6-folder-sync-ui.md 0.1 · 2장 — "연결" 바로 다음) -->
+    <div class="section-title" id="sec-sync">폴더 동기화</div>
+    <div class="sync-section" data-sync aria-labelledby="sec-sync"></div>
+
     <div class="section-title" id="sec-running">실행 중인 작업</div>
     <ul class="item-list" data-running aria-labelledby="sec-running"></ul>
 
@@ -39,6 +43,10 @@
     <label class="check"><input type="checkbox" data-notify /> 창이 숨어 있을 때 작업 완료 · 실패 알림 보이기</label>
     <div class="row local-foot"><button type="button" class="btn sm" data-logs>로그 폴더 열기</button><span class="grow"></span><span class="small muted" data-version></span></div>
   </main>
+  <dialog class="modal sync-dialog" id="sync-preview" aria-labelledby="sync-preview-title"></dialog>
+  <dialog class="modal sync-dialog" id="sync-confirm" aria-labelledby="sync-confirm-title"></dialog>
+  <script src="sync-look.js"></script>
+  <script src="status-sync.js"></script>
   <script src="status.js"></script>
 </body>
 </html>

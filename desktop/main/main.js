@@ -15,6 +15,8 @@ const { isAuthorizeUrl, parseCallback, findDeepLink, LOGIN_WAIT_MS } = require('
 const { createUpdater } = require('./updater');
 const ipc = require('./ipc');
 const { createApi } = require('../worker/api-client');
+const { createSyncHost } = require('./sync-host');
+const syncLook = require('../ui/sync-look');
 
 const KIND = { summary: '요약', chat: '대화', write: '글쓰기' };
 const DATA_NAME = app.isPackaged ? 'PaperLab' : 'PaperLab-dev'; // 개발 실행은 설치본과 데이터를 섞지 않음
@@ -41,6 +43,7 @@ const S = {
 let log;
 let store;
 let updater;
+let sync; // 폴더 동기화(6단계) — main/sync-host.js
 const limiter = createOpenLimiter();
 
 if (!app.requestSingleInstanceLock()) {
@@ -84,6 +87,11 @@ async function boot() {
   ipc.register(controller, { serverOrigin: S.server, log });
   createTray();
   startWorker();
+  sync = createSyncHost({
+    utilityProcess, dialog, shell, store, log, serverUrl: S.server, userData, appVersion: app.getVersion(), isPackaged: app.isPackaged,
+    readToken: () => store.readToken(), onChange: () => refreshUi(), balloon, onUpdateRequired: () => updater && updater.check(),
+  });
+  sync.start();
   updater = createUpdater({ isPackaged: app.isPackaged, log, onChange: onUpdate });
   S.update = updater.state();
   updater.start();
@@ -138,6 +146,7 @@ function onWorkerMessage(m) {
     refreshUi();
   } else if (m.type === 'token-invalid') {
     store.clearToken();
+    if (sync) sync.token(null);
     store.set({ deviceId: null, accountHint: '' });
     if (m.code === 'device_revoked') balloon('PaperLab', '이 PC 연결이 해지됐어요. 다시 쓰려면 이 PC 상태에서 연결해 주세요.', { always: true });
     refreshUi();
@@ -221,8 +230,9 @@ function showOffline(detail) {
   if (S.win && !S.win.isDestroyed()) S.win.loadURL('app://ui/offline.html');
 }
 
-function showStatusWindow({ focusPair = false } = {}) {
+function showStatusWindow({ focusPair = false, focusSync = '' } = {}) {
   S.focusPair = focusPair;
+  if (focusSync && sync) sync.focusOn(focusSync);
   if (!S.statusWin || S.statusWin.isDestroyed()) {
     S.statusWin = createStatusWindow({ icon: icon('icon.ico'), session: session.defaultSession });
     S.statusWin.on('close', (e) => { if (!S.quitting) { e.preventDefault(); S.statusWin.hide(); } });
@@ -294,6 +304,7 @@ async function pair(code) {
   S.noSafeStorage = !store.saveToken(r.token);
   store.set({ deviceId: r.device_id, deviceName: r.name || '', accountHint: r.account_hint || '' });
   toWorker({ type: 'token', token: r.token });
+  if (sync) sync.token(r.token);
   log.info('이 PC 연결됨', { device_id: r.device_id, saved: S.noSafeStorage ? 'memory' : 'dpapi' });
   refreshUi();
   return { ok: true, deviceName: r.name || '' };
@@ -331,7 +342,7 @@ async function restartNow(skipConfirm = false) {
     if (r.response !== 1) return;
   }
   S.quitting = true;
-  await stopWorker();
+  await Promise.all([stopWorker(), sync ? sync.stop() : null]);
   updater.installNow();
 }
 
@@ -359,31 +370,53 @@ function createTray() {
   S.tray = new Tray(icon('tray-idle.ico'));
   S.tray.on('click', () => showAppWindow());
   S.tray.on('double-click', () => showAppWindow());
-  S.tray.on('balloon-click', () => showStatusWindow());
+  S.tray.on('balloon-click', () => showStatusWindow({ focusSync: S.balloonFocus || '' }));
   updateTray();
+}
+
+/** 워커 + 폴더 동기화를 합친 트레이 모양(디자인 6단계 7.1 — 위에서부터 첫 번째) */
+function trayWithSync() {
+  const look = trayLook();
+  const st = sync ? sync.state() : { state: 'off' };
+  const line2 = syncLook.syncTrayLine(st);
+  const extra = syncLook.syncTrayIcon(st);
+  let icon = look.icon;
+  if (extra === 'error') icon = 'error';
+  else if (extra === 'running' && icon !== 'error') icon = 'running';
+  const tip = `${look.tip}\n${line2.replace('폴더 동기화 · ', '폴더 동기화: ')}`.slice(0, 127);
+  return { ...look, icon, tip, line2, sync: st.state };
 }
 
 function updateTray() {
   if (!S.tray) return;
-  const look = trayLook();
+  const look = trayWithSync();
   const ws = S.worker.workerState;
   const pairedNow = paired();
   const ready = S.update.state === 'ready';
-  const key = JSON.stringify([look, ws, pairedNow, ready, S.update.version]);
+  const ss = sync ? sync.settings() : { enabled: false };
+  const key = JSON.stringify([look, ws, pairedNow, ready, S.update.version, ss.enabled, ss.paused]);
   if (key === trayKey) return;
   trayKey = key;
   S.tray.setImage(icon(`tray-${look.icon}.ico`));
   S.tray.setToolTip(look.tip);
   const items = [
     { label: look.line, enabled: false },
+    { label: look.line2, enabled: false },
     { type: 'separator' },
     { label: 'PaperLab 열기', click: () => showAppWindow() },
     { label: '이 PC 상태', click: () => showStatusWindow() },
   ];
+  if (look.sync === 'waiting_confirm' || look.sync === 'preview') {
+    items.push({ label: '확인이 필요해요…', click: () => showStatusWindow({ focusSync: look.sync === 'preview' ? 'preview' : 'confirm' }) });
+  }
   if (!pairedNow) items.push({ label: '코드로 연결…', click: () => showStatusWindow({ focusPair: true }) });
   items.push({ type: 'separator' },
-    { label: '작업 받기 일시 중지', type: 'checkbox', checked: !!store.get('worker').paused, enabled: pairedNow, click: (mi) => setPaused(mi.checked) },
-    { type: 'separator' },
+    { label: '작업 받기 일시 중지', type: 'checkbox', checked: !!store.get('worker').paused, enabled: pairedNow, click: (mi) => setPaused(mi.checked) });
+  if (ss.enabled && look.sync !== 'off') {
+    items.push({ label: '동기화 일시 중지', type: 'checkbox', checked: !!ss.paused, click: (mi) => sync.action('sync-pause', mi.checked) },
+      { label: '동기화 폴더 열기', click: () => sync.action('sync-open-folder') });
+  }
+  items.push({ type: 'separator' },
     ready ? { label: `업데이트 설치하고 다시 시작 (${S.update.version})`, click: () => restartNow() }
       : { label: '업데이트 확인', click: () => trayCheckUpdate() },
     { label: '로그 폴더 열기', click: () => openLogs() },
@@ -400,10 +433,13 @@ async function trayCheckUpdate() {
   else if (u.state === 'failed' || u.state === 'corrupt') balloon('PaperLab', '업데이트를 확인하지 못했어요 — 서버에 연결할 수 없어요', { always: true });
 }
 
-/** 트레이 알림: 앱 창이 숨었을 때만 · 설정에서 끌 수 있음(첫 숨김 · 업데이트 · 해지는 늘) */
-function balloon(title, content, { always = false } = {}) {
+/** 트레이 알림: 앱 창이 숨었을 때만 · 설정에서 끌 수 있음(첫 숨김 · 업데이트 · 해지는 늘).
+ *  동기화 알림(sync)은 "동기화 알림" 설정을 따로 따름, 멈춤 · 확인 필요(always)는 앱 창이 앞에 있어도 보임(디자인 6단계 7.4) */
+function balloon(title, content, { always = false, sync: isSync = false, focus = '' } = {}) {
   if (!S.tray) return;
-  if (!always && (!store.get('notify') || (S.win && !S.win.isDestroyed() && S.win.isVisible() && !S.win.isMinimized()))) return;
+  const enabled = isSync ? store.get('sync').notify : store.get('notify');
+  if (!always && (!enabled || (S.win && !S.win.isDestroyed() && S.win.isVisible() && !S.win.isMinimized()))) return;
+  S.balloonFocus = isSync ? (['local_delete', 'remote_delete', 'root_anomaly'].includes(focus) ? 'confirm' : focus === 'preview_ready' ? 'preview' : 'sync') : '';
   try { S.tray.displayBalloon({ title, content, iconType: 'info' }); } catch { /* 알림을 못 띄우는 환경 */ }
 }
 
@@ -415,7 +451,7 @@ async function quitApp() {
     if (r.response !== 0) return;
   }
   S.quitting = true;
-  await stopWorker();
+  await Promise.all([stopWorker(), sync ? sync.stop() : null]);
   app.quit();
 }
 
@@ -445,7 +481,7 @@ function localState() {
     appVersion: app.getVersion(), paired: paired(), deviceId: store.get('deviceId'), deviceName: store.get('deviceName'),
     accountHint: store.get('accountHint'), worker: S.worker, settings: store.get('worker'), update: S.update,
     autoStart: store.get('autoStart'), notify: store.get('notify'), banner: banner(), offlineDetail: S.offlineDetail,
-    focusPair: S.focusPair, packaged: app.isPackaged,
+    focusPair: S.focusPair, packaged: app.isPackaged, sync: sync ? sync.localState() : null,
   };
 }
 
@@ -470,6 +506,8 @@ function setWorkerSettings(patch) {
 
 async function localAction(name, arg, sender) {
   const owner = [S.statusWin, S.win].find((w) => w && !w.isDestroyed() && w.webContents === sender);
+  if (name === 'sync-dialog') { if (owner) owner.paperlabDialogOpen = arg === true; return true; }
+  if (name.startsWith('sync-')) return sync ? sync.action(name, arg, owner) : null;
   switch (name) {
     case 'setup-check': return checkServer();
     case 'setup-start': {
@@ -493,6 +531,7 @@ async function localAction(name, arg, sender) {
       store.clearToken();
       store.set({ deviceId: null, accountHint: '' });
       toWorker({ type: 'token', token: null });
+      if (sync) sync.token(null);
       log.info('이 PC에서 연결 정보를 지움');
       refreshUi();
       return true;
@@ -533,6 +572,6 @@ async function localAction(name, arg, sender) {
 
 const controller = {
   info, pair, startGoogleLogin, localState, localAction,
-  nudge: () => toWorker({ type: 'nudge' }),
+  nudge: () => { toWorker({ type: 'nudge' }); if (sync) sync.nudge(); },
   showStatusWindow: () => showStatusWindow(),
 };

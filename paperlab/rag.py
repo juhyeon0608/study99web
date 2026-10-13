@@ -543,6 +543,9 @@ def page_slices(lib, items: list[dict]) -> dict[tuple, str]:
 def ask_request(lib, params: dict, history: list[dict], lang: str) -> tuple[str, str]:
     """범위 질문 (시스템, 프롬프트) — API · CLI 같은 프롬프트(11.3절). 조각 글은 page_texts에서 위치로 잘라 온다"""
     sources = params.get("sources") or []
+    # 질문 뒤 휴지통으로 간 논문의 출처는 뺀다(제목 · 글이 프롬프트에 새지 않게 — 6단계 K-39)
+    live = set(lib.paper_ids([s["paper_id"] for s in sources]))
+    sources = [s for s in sources if s["paper_id"] in live]
     pages = page_slices(lib, sources)
     blocks = []
     for s in sources:

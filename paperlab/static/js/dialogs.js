@@ -11,6 +11,7 @@ import {
 } from "./ui.js";
 import { substituteText } from "./sourcemeta.js";
 import { actions, refreshAll, refreshUsage, state } from "./state.js";
+import { restoreFromTrash } from "./trash.js";
 
 export const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
 const ICON_ALERT = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5v5.5M12 16.5v.01"/></svg>`;
@@ -116,7 +117,43 @@ export function usageInfo(u) {
   const level = ["ok", "warn", "full"].includes(u.level) ? u.level : "ok";
   const msg = level === "warn" ? `저장 공간 ${pct}% 사용 중 (${used} / ${limit}) · 관리자에게 알려 주세요.`
     : level === "full" ? `저장 공간이 거의 찼어요 (${pct}%). PDF를 더 올릴 수 없어요. 관리자에게 알려 주세요.` : "";
-  return { pct, used, limit, mine: fmtBytes(u.mine_bytes), level, msg };
+  return { pct, used, limit, mine: fmtBytes(u.mine_bytes), trash: u.trash_bytes ? fmtBytes(u.trash_bytes) : "", level, msg };
+}
+
+// 6단계 SW-3: 연결된 PC 카드의 "폴더 동기화" 줄 → {text, tone} (켠 적 없으면 null — 디자인 10.1절)
+export function syncWebLine(d) {
+  const s = d.sync;
+  if (!s || d.revoked) return null;
+  const c = s.counts || {};
+  const last = s.last_sync_at ? `마지막 동기화 ${fmtAgo(s.last_sync_at)}` : "";
+  const tail = c.problems > 0 ? ` · 맞추지 못한 파일 ${c.problems}개` : "";
+  if (!s.enabled || s.state === "off") return { text: "꺼짐 — 이 PC에서 동기화 폴더를 고르지 않았어요", tone: "" };
+  if (!d.online) return { text: `${last || "마지막 동기화 기록 없음"} (PC 꺼짐)`, tone: "" };
+  const warn = (t) => ({ text: t + tail, tone: "warn" });
+  const plain = (t) => ({ text: t + tail, tone: "" });
+  const join = (...xs) => xs.filter(Boolean).join(" · ");
+  switch (s.state) {
+    case "idle": return plain(join("✓ 최신", last, s.root_label ? `‘${s.root_label}’ 폴더` : "", c.files != null ? `파일 ${c.files}개` : ""));
+    case "scanning": case "syncing":
+      return plain(join(`↻ 맞추는 중 (${(c.pending_up || 0) + (c.pending_down || 0)}개 남음)`, last));
+    case "preview": return warn("처음 맞추기 확인을 기다려요 — 이 PC에서 확인해 주세요");
+    case "paused": return plain(join("❙❙ 일시 중지", last));
+    case "waiting_confirm": return warn(join(`! 멈춤 — 이 PC에서 확인이 필요해요 (파일 ${c.waiting_confirm || 0}개 지우기)`, last));
+    case "root_missing": return warn("! 멈춤 — 이 PC에서 동기화 폴더를 찾을 수 없어요");
+    case "offline": return plain(join("서버 연결을 기다리는 중", last));
+    case "storage_full":
+      return warn(c.reason === "sync_quota" ? "! 올리기 멈춤 — 이 PC의 올리기 한도에 닿았어요"
+        : c.reason === "db" ? "! 올리기 멈춤 — 서재 데이터베이스 공간이 모자라요" : "! 올리기 멈춤 — 서재 저장 공간이 모자라요");
+    case "update_required": return warn("! 멈춤 — 앱 업데이트가 필요해요");
+    case "account_mismatch": return warn("! 멈춤 — 다른 계정의 폴더예요");
+    default: return null;
+  }
+}
+
+// 열린 대화상자를 모두 닫고 휴지통 화면으로 (설정 "계정"의 [휴지통 보기] — SW-5)
+function openTrash() {
+  for (const b of [...document.querySelectorAll(".modal-backdrop")].reverse()) { const x = $("[data-close]", b); if (x) x.click(); }
+  location.hash = "#/trash";
 }
 
 // 설정 창 · 업로드 창의 큰 사용량 묶음
@@ -124,11 +161,19 @@ export function usageBlock(u, { hint = true, notice = true, level = null } = {})
   const x = usageInfo(u);
   const lv = level || x.level;
   const w = Math.min(100, x.pct);
+  const node = usageNode(x, lv, w, hint, notice);
+  const t = $("[data-open-trash]", node);
+  if (t) t.onclick = openTrash;
+  return node;
+}
+
+function usageNode(x, lv, w, hint, notice) {
   return el(`<div class="usage-block" data-usage data-level="${lv}">
-    <div class="usage-head"><span>저장 공간</span><span class="usage-num" data-usage-text>전체 ${esc(x.used)} / ${esc(x.limit)} · 내 PDF ${esc(x.mine)}</span></div>
+    <div class="usage-head"><span>저장 공간</span><span class="usage-num" data-usage-text>전체 ${esc(x.used)} / ${esc(x.limit)} · 내 PDF ${esc(x.mine)}${x.trash ? ` · 휴지통 ${esc(x.trash)}` : ""}</span></div>
     <div class="usage-bar lg" role="meter" aria-label="저장 공간" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${w}"
       aria-valuetext="${esc(x.limit)} 중 ${esc(x.used)} 사용"><span style="width:${w}%"></span></div>
     ${hint ? `<div class="hint">PDF와 DB 백업이 함께 쓰는 공간이에요(모든 사용자 합계). 80%를 넘으면 알려 드리고, 95%를 넘으면 PDF를 더 올릴 수 없어요.</div>` : ""}
+    ${hint && x.trash ? `<div class="usage-trash" data-usage-trash><span>휴지통의 PDF도 저장 공간을 써요. 비우면 바로 줄어요.</span><button type="button" class="btn sm ghost" data-open-trash>휴지통 보기</button></div>` : ""}
     ${notice ? `<div class="notice ${x.msg ? "" : "hidden"}" data-tone="${lv === "full" ? "danger" : "warn"}" data-usage-msg>${lv === "full" ? ICON_ALERT : ICON_WARN}<div>${esc(x.msg)}</div></div>` : ""}
   </div>`);
 }
@@ -598,6 +643,11 @@ function pcSection(body, getDevices, setDevices) {
           <button type="button" class="btn sm danger" data-device-revoke aria-label="${esc(d.name)} 연결 해지">연결 해지</button></span>`}</div>
       ${d.revoked ? "" : `<div class="chips" aria-label="엔진">${engines}</div>`}
       <p class="item-meta">${esc(state_ === "revoked" ? lead : meta.join(" · "))}</p></li>`);
+    const sl = syncWebLine(d);
+    if (sl) {
+      const line = el(`<p class="item-meta sync-line" data-sync-state="${esc(d.sync.state)}"${sl.tone ? ` data-tone="${sl.tone}"` : ""}><b>폴더 동기화</b> ${esc(sl.text)}</p>`);
+      card.appendChild(line);
+    }
     if (!d.revoked) {
       $("[data-device-rename]", card).onclick = async () => {
         const name = await promptDialog("PC 이름", { value: d.name, ok: "바꾸기" });
@@ -825,6 +875,12 @@ function previewCard(item, done) {
   return card;
 }
 
+// 6단계 SW-8(K-40): 같은 논문이 휴지통에 있음 — 새로 만들지 않고 [되살리기]
+function trashedDuplicate(p) {
+  toast(`휴지통에 같은 논문이 있어요${p && p.title ? ` — ‘${p.title}’` : ""}`, "",
+    { action: { label: "되살리기", onClick: () => restoreFromTrash([p.id]) } });
+}
+
 // 서재에 추가 (현재 보고 있는 컬렉션이 있으면 그 안에)
 export async function addPaper(item, { downloadPdf = false } = {}) {
   const payload = { ...item, download_pdf: downloadPdf && !!item.pdf_url };
@@ -834,6 +890,7 @@ export async function addPaper(item, { downloadPdf = false } = {}) {
   if (state.view === "library" && state.filter.kind === "folder") payload.folder_id = state.filter.id;
   try {
     const r = await api.post("/api/papers", payload, { allowConflict: true });
+    if (r.conflict && r.trashed) { trashedDuplicate(r.paper); return null; }
     if (r.conflict) { toast("이미 서재에 있는 논문이에요"); return r.paper; }
     // 대신 받기(5단계 사용자 결정): 보낸 주소 대신 같은 논문의 무료 공개본을 받았으면 그렇게 알림
     toast(r.warning || (r.via === "substitute" ? `서재에 추가하고 ${substituteText(r.license)}` : "서재에 추가했어요"),
@@ -903,6 +960,7 @@ export function editPaperDialog(paper = null) {
         if (state.filter.kind === "collection") fd.collection_id = state.filter.id;
         if (state.filter.kind === "folder") fd.folder_id = state.filter.id;
         const r = await api.post("/api/papers", fd, { allowConflict: true });
+        if (r.conflict && r.trashed) return trashedDuplicate(r.paper);
         if (r.conflict) return toast("같은 논문이 이미 서재에 있어요", "error");
         state.activeId = r.paper.id;
         toast("추가했어요", "success");
@@ -1093,6 +1151,8 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
         it.title = (r.paper && r.paper.title) || "";
         it.msg = `${it.file.name} · ${replace ? "PDF를 바꿨어요" : "PDF를 붙였어요"}`;
         it.warnings = r.warnings || [];
+        // 6단계 SW-7 · K-34: 이 교체로 전체 번역을 지웠으면 바로 알림
+        if (r.translation_cleared) toast("PDF를 바꿨어요. PDF가 바뀌어 번역을 지웠어요.", "", { duration: 8000 });
       } else {
         const r = await api.post(`/api/uploads/${encodeURIComponent(slot.upload_id)}/complete`,
           { name: it.file.name, lookup: true, ...into });
@@ -1100,6 +1160,7 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
         it.id = r.id;
         it.title = r.title || "";
         it.state = r.duplicate ? "duplicate" : "done";
+        if (r.trashed) trashedDuplicate({ id: r.id, title: r.title });
         it.msg = r.duplicate ? `${r.file || it.file.name} · ${r.note || "이미 서재에 있어요"}`
           : `${r.file || it.file.name} · ${r.note || `정보 출처: ${r.matched_by}`}`;
         it.warnings = r.warnings || [];

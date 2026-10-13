@@ -524,6 +524,11 @@ async function drawPaper() {
       ${off ? `<p class="small" id="xt-off-why" style="margin-top:8px">PDF 글자를 읽을 수 없는 논문이에요(스캔본).</p>` : ""}</div>`);
     $("[data-xt-start]", cta).onclick = () => (off ? null : startDialog());
     if (ACTIVE(job)) cta.prepend(trStatus(job));
+    // 6단계 SW-7(K-28): PDF가 바뀌어 전체 번역을 지웠으면 안내 — 새로 번역을 시작하면 서버가 표시를 비워 사라짐
+    if (s.tr.translation_cleared_at) {
+      cta.prepend(el(`<div class="notice" data-tone="info" data-tr-cleared><div><b>PDF가 바뀌어 번역을 지웠어요.</b>
+        다시 번역하려면 [전체 번역 시작…]을 눌러 주세요.</div></div>`));
+    }
     b.appendChild(cta);
     return;
   }

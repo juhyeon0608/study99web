@@ -206,12 +206,21 @@ def run_check(tx, rag, uid: str, mid: int, content: str, has_route: bool) -> dic
     return stats
 
 
+def _visible(lib, rows: dict) -> dict:
+    """휴지통 · 지운 논문을 가리키는 인용 행은 뺀다 (6단계 — 이 표는 RLS 이중 방어 정책 대신 여기서 거름: 검증 upsert가
+    숨은 행과 겹치면 42501이라. 행은 남겨 두고, 되살린 뒤 다시 검증하면 그대로 쓰거나 다시 판정)"""
+    ids = [r["paper_id"] for r in rows.values() if r["paper_id"]]
+    live = set(lib.paper_ids(ids)) if ids else set()  # 인용 행이 없으면 DB 왕복 없음
+    return {k: r for k, r in rows.items() if not r["paper_id"] or r["paper_id"] in live}
+
+
 def view(lib, mid: int, content: str) -> dict:
     """GET …/verify (12.4절): 지금 원고로 다시 나누어 해시로 맞춘 목록"""
     cl = claims(content)
     rows = {r["claim_hash"]: r for r in lib._all(
         "select claim_hash, paper_id, verdict, method, reason, evidence from paperlab.manuscript_citations "
         "where user_id = %s and manuscript_id = %s", (lib.uid, mid))}
+    rows = _visible(lib, rows)
     ev_items = [{"paper_id": r["paper_id"], "page": e["page"]} for r in rows.values() if r["paper_id"]
                 for e in r["evidence"] or [] if e.get("page")]
     pages = page_slices(lib, ev_items)
@@ -272,6 +281,7 @@ def build_request(lib, job: dict, lang: str) -> tuple[str, str, list[int], int]:
     rows = [r for r in lib._all("select id, claim_hash, citekey, paper_id, evidence from paperlab.manuscript_citations "
                                 "where user_id = %s and manuscript_id = %s and verdict = 'pending' order by checked_at, id",
                                 (lib.uid, mid)) if r["claim_hash"] in current]
+    rows = list(_visible(lib, {r["id"]: r for r in rows}).values())
     batch, remaining = rows[:MAX_AI_CLAIMS], max(0, len(rows) - MAX_AI_CLAIMS)
     if not batch:
         raise ai.AIError("확인할 문장이 없어요", "bad_request")

@@ -7,10 +7,20 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { normalizeSettings } = require('../worker/worker');
 
+// 폴더 동기화 설정(명세 15.1 · 7.3 K-33): 루트는 미리보기 [시작]에서만 저장, 그때의 설치 ID 를 함께. 비밀 아님
+const SYNC_DEFAULTS = { enabled: false, root: '', installId: '', previousRoot: '', paused: false, notify: true };
+function normalizeSync(s = {}) {
+  const o = s && typeof s === 'object' ? s : {};
+  const str = (v) => (typeof v === 'string' ? v.slice(0, 1024) : '');
+  return { enabled: o.enabled === true && !!str(o.root), root: str(o.root), installId: str(o.installId).slice(0, 64), previousRoot: str(o.previousRoot),
+    paused: o.paused === true, notify: o.notify !== false };
+}
+
 const DEFAULTS = {
   setupDone: false, autoStart: true, notify: true, trayHintShown: false,
   deviceId: null, deviceName: '', accountHint: '', bounds: null,
   worker: normalizeSettings({}),
+  sync: { ...SYNC_DEFAULTS },
 };
 
 class Store {
@@ -24,6 +34,7 @@ class Store {
     try { data = JSON.parse(fs.readFileSync(this.file, 'utf8')); } catch { data = {}; }
     this.data = { ...DEFAULTS, ...(data && typeof data === 'object' ? data : {}) };
     this.data.worker = normalizeSettings(this.data.worker);
+    this.data.sync = normalizeSync(this.data.sync);
   }
 
   get(k) { return this.data[k]; }
@@ -31,6 +42,7 @@ class Store {
   set(patch) {
     Object.assign(this.data, patch);
     if (patch.worker) this.data.worker = normalizeSettings(patch.worker);
+    if (patch.sync) this.data.sync = normalizeSync(patch.sync);
     fs.mkdirSync(this.dir, { recursive: true });
     const tmp = `${this.file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf8');
@@ -62,4 +74,4 @@ class Store {
   }
 }
 
-module.exports = { Store, DEFAULTS };
+module.exports = { Store, DEFAULTS, normalizeSync };

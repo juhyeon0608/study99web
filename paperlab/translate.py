@@ -231,6 +231,9 @@ def row_by_id(lib, tid, lock: bool = False) -> dict | None:
 
 
 def create_row(lib, paper_id: int, lang: str, state: str, refs_from, include_refs: bool, sha: str) -> dict:
+    """새 전체 번역 행. 6단계 K-28: "PDF가 바뀌어 번역을 지웠어요" 표시(translation_cleared_at)를 비운다"""
+    lib._x("update paperlab.papers set translation_cleared_at = null where id = %s and user_id = %s "
+           "and translation_cleared_at is not null", (paper_id, lib.uid))
     return lib._one(f"insert into paperlab.translations (user_id, paper_id, lang, tr_key, pdf_sha256, page_state, "
                     f"refs_from, include_refs) values (%s, %s, %s, %s, %s, %s, %s, %s) returning {_ROW}",
                     (lib.uid, paper_id, lang, tr_key(lib.uid, paper_id), sha or "", state, refs_from, include_refs))
@@ -284,6 +287,8 @@ def prepare_chunk(lib, job: dict) -> tuple[list[int], str, str] | None:
     """잡은 직후(API · CLI 공용): 묶음을 정해 params.chunk에 적고 (쪽, 시스템, 프롬프트). 할 쪽이 없거나 행이 없으면 작업을 끝내고 None"""
     from . import jobs
     params = job["params"] or {}
+    if jobs.paper_trashed(lib, job):
+        return None
     row = row_by_id(lib, params.get("translation_id"))
     if not row:
         gone(lib, job)
@@ -336,6 +341,8 @@ def finish_chunk(tx, us: UserStorage, job_id: int, token: str, good: dict[int, s
     from . import jobs
     with tx() as lib:
         job = jobs.lock_leased(lib, job_id, token, device_id)
+        if jobs.paper_trashed(lib, job):
+            return "cancelled"
         row = row_by_id(lib, (job["params"] or {}).get("translation_id"))
         if not row:
             return gone(lib, job)
@@ -355,6 +362,8 @@ def finish_chunk(tx, us: UserStorage, job_id: int, token: str, good: dict[int, s
             if not lib._one("select lease_until > now() as ok from paperlab.jobs where id = %s and user_id = %s",
                             (job_id, lib.uid))["ok"]:
                 raise jobs.LeaseLost()
+            if jobs.paper_trashed(lib, job):
+                return "cancelled"
             cur = row_by_id(lib, row["id"], lock=True)
             if not cur:
                 return gone(lib, job)

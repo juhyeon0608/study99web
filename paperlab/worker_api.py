@@ -185,7 +185,8 @@ def register(app: FastAPI, db: Database, allowlist, ws: WorkerState, guide, runn
                 return gate
             return {"device_id": d["id"], "name": d["name"], "account_hint": jobs.mask_email(d["email"]),
                     "min_protocol": jobs.MIN_PROTOCOL, "min_app_version": jobs.MIN_APP_VERSION,
-                    "poll": {"idle_s": jobs.POLL_IDLE_S, "active_s": jobs.POLL_ACTIVE_S}, "server_time": iso(now_dt())}
+                    "poll": {"idle_s": jobs.POLL_IDLE_S, "active_s": jobs.POLL_ACTIVE_S}, "server_time": iso(now_dt()),
+                    "features": ["worker", "sync"]}  # 6단계: 이 서버는 폴더 동기화 API가 있음
         return handle(request, work)
 
     @app.post("/api/worker/claim")

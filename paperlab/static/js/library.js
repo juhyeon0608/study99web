@@ -10,6 +10,7 @@ import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTa
 import { openGraph } from "./graph.js";
 import { OC_FAILED_TEXT, licenseLabel, oaOpenLabel, substituteText, viaHtml } from "./sourcemeta.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
+import { restoreFromTrash } from "./trash.js";
 import {
   $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
   copyText, popupMenu, promptDialog, renderMarkdown, safeUrl, toast,
@@ -182,7 +183,7 @@ function paperRow(p) {
       <div class="paper-sub">${esc(authorsShort(p.authors))}${p.venue ? ` · <span class="venue">${esc(p.venue)}</span>` : ""}${p.year ? ` · ${p.year}` : ""}</div>
       <div class="paper-meta">
         <span class="badge-status ${p.status}">${esc(state.meta.statuses[p.status] || p.status)}</span>
-        ${p.tags.map((t) => `<span class="chip" ${t.color ? `style="color:${esc(t.color)}"` : ""}>#${esc(t.name)}</span>`).join("")}
+        ${p.tags.map((t) => `<span class="chip"${tagKind(t)} ${t.color ? `style="color:${esc(t.color)}"` : ""}>#${esc(t.name)}</span>`).join("")}
         ${p.has_summary ? `<span class="chip accent">AI 요약</span>` : ""}
         ${p.annotation_count ? `<span class="chip">하이라이트 ${p.annotation_count}</span>` : ""}
       </div>
@@ -248,16 +249,31 @@ export function openPaper(p) {
   else { setActive(p.id); toast("PDF가 없는 논문이에요. 상세 패널에서 무료 PDF를 찾거나 첨부해 주세요."); }
 }
 
+// 6단계 U-2 · SW-2: [삭제]는 휴지통으로(30일). 되돌릴 수 있으므로 확인 버튼은 primary(AD-3) + 토스트 [되돌리기]
 async function deletePapers(ids) {
-  const msg = ids.length === 1 ? "이 논문을 서재에서 삭제할까요? PDF·하이라이트·노트도 함께 지워져요." : `${ids.length}편을 삭제할까요? PDF·하이라이트·노트도 함께 지워져요.`;
-  if (!(await confirmDialog(msg, { ok: "삭제", danger: true }))) return;
-  if (ids.length === 1) await api.del(`/api/papers/${ids[0]}`);
+  const n = ids.length;
+  let msg = "휴지통으로 옮겨요. 30일 안에 되살릴 수 있어요.";
+  if (state.stats && state.stats.sync_on) {
+    msg += " 폴더 동기화를 쓰는 PC의 파일도 Windows 휴지통으로 가요." + (n >= 10 ? " 그 PC에서 한 번 더 확인을 물어요." : "");
+  }
+  const title = n === 1 ? "이 논문을 휴지통으로 옮길까요?" : `${n}편을 휴지통으로 옮길까요?`;
+  if (!(await confirmDialog(msg, { ok: "휴지통으로 옮기기", title }))) return;
+  if (n === 1) await api.del(`/api/papers/${ids[0]}`);
   else await api.post("/api/papers/bulk", { ids, action: "delete" });
   state.selected.clear();
-  toast("삭제했어요");
+  toast(n === 1 ? "휴지통으로 옮겼어요" : `${n}편을 휴지통으로 옮겼어요`, "",
+    { action: { label: "되돌리기", attr: "data-toast-undo", onClick: () => restoreFromTrash(ids, "되돌렸어요") } });
   refreshAll();
   refreshUsage();
 }
+
+// 충돌 사본 파일 이름 → 원래 이름 (못 떼면 "") — SW-6
+export function conflictOriginal(fileName) {
+  const m = String(fileName || "").match(/^(.*) \(충돌 사본 [^()]*\)(\.pdf)$/i);
+  return m ? m[1] + m[2] : "";
+}
+
+export const tagKind = (t) => (t.name === "충돌 사본" && !t.color ? ' data-tag-kind="conflict"' : "");
 
 function bulkBar() {
   const ids = [...state.selected];
@@ -269,7 +285,7 @@ function bulkBar() {
     <span class="menu-wrap"><button class="btn sm" data-status>상태 ▾</button></span>
     <button class="btn sm" data-star>★ 즐겨찾기</button>
     <button class="btn sm" data-bib>참고문헌 목록</button>
-    <button class="btn sm danger" data-del>삭제</button>
+    <button class="btn sm danger" data-del>휴지통으로</button>
     <span class="spacer"></span><button class="btn sm ghost" data-clear>선택 해제</button></div>`);
   const bulk = async (action, value) => { await api.post("/api/papers/bulk", { ids, action, value }); refreshAll(); };
   $("[data-col]", bar).onclick = (e) => {
@@ -342,13 +358,18 @@ async function renderDetail() {
     </div>
     <div class="inha-after-slot" data-inha-after role="status"></div>
     <div class="oa-after-slot" data-oa-after role="status"></div>
+    ${p.translation_cleared_at ? `<div class="notice detail-note" data-tone="info" data-tr-cleared><div><b>PDF가 바뀌어 번역을 지웠어요.</b>
+      다시 번역하려면 읽기 화면의 설명·번역 → 전체 번역에서 [전체 번역 시작…]을 눌러 주세요.</div></div>` : ""}
+    ${p.tags.some((t) => t.name === "충돌 사본") ? `<div class="notice detail-note" data-tone="info" data-conflict-copy><div><b>충돌 사본이에요.</b>
+      같은 PDF를 두 곳에서 고쳐서 남겨 둔 다른 쪽 내용이에요.${conflictOriginal(p.file_name)
+        ? ` 원래 파일은 같은 폴더의 ‘${esc(conflictOriginal(p.file_name))}’이에요.` : ""} 필요 없으면 휴지통으로 옮겨 주세요.</div></div>` : ""}
     <div data-issues></div>
     <div class="row" style="gap:14px;flex-wrap:wrap">
       <div class="seg" data-status>${Object.entries(state.meta.statuses).map(([k, v]) => `<button data-v="${k}" class="${p.status === k ? "active" : ""}">${v}</button>`).join("")}</div>
       <div class="rating" title="중요도">${[1, 2, 3, 4, 5].map((n) => `<button data-r="${n}" class="${p.rating >= n ? "on" : ""}">★</button>`).join("")}</div>
     </div>
     <div class="section-title">태그</div>
-    <div class="tag-input">${p.tags.map((t) => `<span class="chip">#${esc(t.name)}<button data-untag="${esc(t.name)}">✕</button></span>`).join("")}
+    <div class="tag-input">${p.tags.map((t) => `<span class="chip"${tagKind(t)}>#${esc(t.name)}<button data-untag="${esc(t.name)}">✕</button></span>`).join("")}
       <input placeholder="태그 입력 후 Enter" list="tag-suggest"><datalist id="tag-suggest">${state.tags.map((t) => `<option value="${esc(t.name)}">`).join("")}</datalist></div>
     <div class="section-title">폴더</div>
     <div class="folder-line" data-folder-line></div>
@@ -441,7 +462,7 @@ async function renderDetail() {
         ...(inha ? [{ label: INHA.buttons.view, sub: "새 탭", action: () => openExternal(inha, { returnFocus: moreBtn }) }] : [])] : []),
       { label: "하이라이트·노트 내보내기 (.md)", action: () => exportAnnotations(p.id, p.title) },
       "-",
-      { label: "삭제", danger: true, action: () => deletePapers([p.id]) },
+      { label: "휴지통으로 옮기기", danger: true, action: () => deletePapers([p.id]) },
     ]);
   };
   $$("[data-status] button", inner).forEach((b) => (b.onclick = async () => { await api.patch(`/api/papers/${p.id}`, { status: b.dataset.v }); reload(); }));
@@ -506,6 +527,7 @@ function infoView(p, ids) {
     ${p.keywords && p.keywords.length ? `<div class="section-title">키워드</div><div class="chips">${p.keywords.map((k) => `<span class="chip">${esc(k)}</span>`).join("")}</div>` : ""}
     <dl class="kv">
       ${ids}
+      ${p.has_pdf && p.file_name ? `<dt>파일 이름</dt><dd data-file-name title="PC 폴더 동기화에서 쓰는 이름이에요. 이름은 PC에서 바꿔 주세요.">${esc(p.file_name)}</dd>` : ""}
       <dt>유형</dt><dd>${esc(state.meta.item_types[p.item_type] || p.item_type)}</dd>
       ${p.publisher ? `<dt>출판사</dt><dd>${esc(p.publisher)}</dd>` : ""}
       ${p.cited_by_count != null ? `<dt>피인용</dt><dd>${fmtNum(p.cited_by_count)}회</dd>` : ""}

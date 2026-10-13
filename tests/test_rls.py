@@ -378,15 +378,18 @@ def test_storage_keys_ignore_injected_paths(ab, cloud):
 
 
 def test_delete_removes_pdf_even_if_storage_fails(cloud):
-    """AC-41"""
+    """AC-41 (6단계: [삭제]는 휴지통 — PDF는 영구 삭제 때 지움, AC-641 · 643)"""
     u = cloud.user()
     c = cloud.client(u)
     p1 = cloud.upload(c, make_pdf(title="One Paper Title For Delete", doi=""))["id"]
     p2 = cloud.upload(c, make_pdf(title="Two Paper Title For Delete", doi=""))["id"]
     assert c.delete(f"/api/papers/{p1}").status_code == 200
+    assert f"users/{u.id}/papers/{p1}.pdf" in cloud.storage.objects
+    assert c.post("/api/trash/purge", json={"ids": [p1]}).json() == {"purged": 1}
     assert f"users/{u.id}/papers/{p1}.pdf" not in cloud.storage.objects
     cloud.storage.fail_delete = True
     assert c.post("/api/papers/bulk", json={"ids": [p2], "action": "delete"}).status_code == 200
+    assert c.post("/api/trash/empty").json() == {"purged": 1}
     assert c.get(f"/api/papers/{p2}").status_code == 404
 
 

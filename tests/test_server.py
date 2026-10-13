@@ -104,7 +104,7 @@ def test_add_from_search_with_pdf_download(cloud, client):
     assert r.status_code == 200 and r.json()["paper"]["has_pdf"]
     pid = r.json()["paper"]["id"]
     uid = client.get("/api/me").json()["user_id"]
-    assert ("put", f"users/{uid}/papers/{pid}.pdf") in cloud.storage.log
+    assert ("copy", f"users/{uid}/papers/{pid}.pdf") in cloud.storage.log  # 6단계: 임시 키에 올린 뒤 최종 키로 복사(QA D9b)
     assert client.get("/api/search", params={"q": "attention"}).json()["items"][0]["in_library"] == pid
     assert client.post("/api/papers", json=item).status_code == 409
     p2 = client.post("/api/papers", json={"title": "No pdf yet paper", "pdf_url": "https://arxiv.org/pdf/2101.00001"}).json()["paper"]
@@ -123,6 +123,7 @@ def test_cite_export_import(client):
     bib = client.post("/api/export", json={"ids": [pid], "format": "bibtex"}).text
     assert "@inproceedings{vaswani2017attention" in bib
     client.delete(f"/api/papers/{pid}")
+    client.post("/api/trash/empty")  # 6단계: 휴지통에 있으면 가져오기가 건너뜀(K-40)
     r = client.post("/api/import", files={"file": ("lib.bib", bib.encode(), "text/plain")}).json()
     assert r == {"added": 1, "skipped": 0, "total": 1}
     again = client.post("/api/import", files={"file": ("lib.bib", bib.encode(), "text/plain")}).json()

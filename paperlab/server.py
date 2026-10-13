@@ -20,6 +20,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 from urllib.parse import quote
 
@@ -33,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__, citations, compose, csl_style, doc_formats, downloads, explain, find, format_import, jobs, \
-    pdf, rag, translate, verify, worker_api, writer
+    pdf, rag, sync, translate, verify, worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
@@ -42,7 +43,8 @@ from . import extsources
 from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
-from .db import Database, DBUnavailable, Library, NotFoundError, folder_name_problem
+from .db import (SYNC_OPS_DAYS, TOMBSTONE_DAYS, TRASH_DAYS, Database, DBUnavailable, Library, NotFoundError,
+                 folder_name_problem)
 from . import citegraph as cg
 from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, FIELDS_META, WARNINGS as GRAPH_WARNINGS, BadSeed, Flights,
                           GraphBuilder, GraphError, GraphGate, lookup_dois, paper_view, parse_openalex_id, parse_recommend_request,
@@ -71,6 +73,8 @@ MAX_UPLOAD_FILES = 20
 COMPOSE_MAX = 30 * 1024 * 1024  # 30MB 유지 (명세 7.5, 팀장 결정 S8 — Funnel 대역폭 제한 · 변경 최소)
 STYLE_MAX = 2 * 1024 * 1024
 WARN_LEVEL, FULL_LEVEL = 0.80, 0.95
+# 6단계 K-46 DB 예산: 무료 한도의 90%, 편당 증가 추정 · 첫 PGroonga 할당 (스파이크 S-5 (e) 실측 — 가정값)
+DB_LEVEL, DB_PER_PAPER, DB_FIRST_ALLOC = 0.90, int(0.26 * 1024 ** 2), 55 * 1024 ** 2
 HEALTH_DB_TIMEOUT = 4.0  # /api/health?deep=1 의 DB 연결 대기 · 문 실행 제한(초)
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
 CSP = "img-src 'self' data: blob: https://*.googleusercontent.com; form-action 'self'"
@@ -85,6 +89,7 @@ _REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 BAD_HOST = {"detail": "허용되지 않은 호스트", "code": "bad_host"}
 AUTH_REQUIRED = {"detail": "로그인이 필요해요", "code": "auth_required"}
 NOT_ALLOWED = {"detail": "허용되지 않은 계정이에요", "code": "not_allowed"}
+TRASHED_DUP = "휴지통에 같은 논문이 있어요"
 DB_UNAVAILABLE = {"detail": "데이터베이스에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.", "code": "db_unavailable"}
 
 
@@ -417,10 +422,11 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if job_id:
             runner.enqueue(job_id, str(claims["sub"]))
 
-    def pdf_changed(ctx: RequestCtx, pid: int, old_rag: str) -> None:
+    def pdf_changed(ctx: RequestCtx, pid: int, old_rag: str) -> bool:
         """PDF를 붙이거나 바꾼 커밋 뒤: 옛 벡터 파일 지우기 · 캐시에서 빼기 → 다시 색인 (8.4절).
         4단계 K-11: 같은 트랜잭션에서 전체 번역 행을 지우고(선택 기록은 남김) 대기 중 번역 작업은 취소 — 파일은 커밋 뒤.
-        실행 중인 번역 작업은 다음 반영 때 행이 없어 cancelled(6.3절 9번)"""
+        실행 중인 번역 작업은 다음 반영 때 행이 없어 cancelled(6.3절 9번).
+        6단계 K-28: 전체 번역을 지웠으면 papers.translation_cleared_at을 적고 True(웹 안내 · 응답 translation_cleared)"""
         ctx.after_commit.append(lambda: rg.forget(ctx.uid, pid, old_rag))
         ctx.after_commit.append(lambda: ensure_index(ctx.claims))
         old_tr = translate.delete_row(ctx.lib, pid)
@@ -428,22 +434,75 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                    "lease_until = null, progress = '{}'::jsonb, finished_at = now(), updated_at = now() where user_id = %s "
                    "and paper_id = %s and kind = 'translate_paper' and status = 'queued'", (translate.PDF_CHANGED, ctx.uid, pid))
         if old_tr:
+            ctx.lib._x("update paperlab.papers set translation_cleared_at = now() where id = %s and user_id = %s",
+                       (pid, ctx.uid))
             ctx.after_commit.append(lambda: ctx.storage.delete_quietly(old_tr))
+        return bool(old_tr)
 
     def store_pdf(ctx: RequestCtx, pid: int, data: bytes) -> pdf.PdfInfo:
-        """서버가 받은 PDF(URL에서 받기)를 최종 키에 바로 올리고 본문을 저장한다."""
+        """서버가 받은 PDF(URL에서 받기)를 임시 키를 거쳐 최종 키에 올리고 본문을 저장한다.
+        추출 · R2 올리기 동안 DB 트랜잭션을 잡지 않는다(F9 — 6단계 앱 역할 idle_in_transaction 60초). 그 사이 지워졌으면 404"""
+        ctx.release()
         info = pdf.extract(data)
-        key = ctx.storage.paper_key(pid)
-        ctx.storage.put(key, data)
-        pdf_changed(ctx, pid, ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(), len(data)))
+        # 임시 키에 먼저 올리고(트랜잭션 밖), 논문 행을 잠근 트랜잭션 안에서 최종 키로 복사 — 그 사이 휴지통으로 간
+        # 논문의 PDF를 덮어쓰지 않게(QA D9b: 휴지통 보내기도 같은 행을 for update로 잠금 · RLS가 휴지통 행을 숨김)
+        incoming = ctx.storage.incoming_key(new_upload_id())
+        ctx.storage.put(incoming, data)
+        if not ctx.lib._one("select 1 as x from paperlab.papers where id = %s and user_id = %s for update",
+                            (pid, ctx.uid)):
+            ctx.storage.delete_quietly(incoming)
+            raise HTTPException(404, "논문을 찾을 수 없어요")
+        attach_from_incoming(ctx, pid, incoming, data, info)  # 파일 이름은 `{저자} {연도} - {제목}.pdf`(8.2절)
         return info
 
-    def attach_from_incoming(ctx: RequestCtx, pid: int, incoming: str, data: bytes, info: pdf.PdfInfo) -> None:
-        """임시 파일을 최종 키로 복사하고 DB에 기록. 임시 파일은 커밋 뒤에 지운다."""
+    def attach_from_incoming(ctx: RequestCtx, pid: int, incoming: str, data: bytes, info: pdf.PdfInfo, *,
+                             name: str = "", device_id: int | None = None, content_at=None) -> bool:
+        """임시 파일을 최종 키로 복사하고 DB에 기록. 임시 파일은 커밋 뒤에 지운다. → 전체 번역을 지웠는지(K-28).
+        name: 올린 파일 이름(PC 파일 이름이 비었을 때만 씀), device_id · content_at: 동기화 올리기(10.1절)"""
         key = ctx.storage.paper_key(pid)
         ctx.storage.storage.copy(ctx.storage.check(incoming), ctx.storage.check(key))
-        pdf_changed(ctx, pid, ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(), len(data)))
+        cleared = pdf_changed(ctx, pid, ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(),
+                                                        len(data), device_id, content_at))
+        ctx.lib.ensure_file_name(pid, name)
         ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
+        return cleared
+
+    def trash_papers(ctx: RequestCtx, ids: list[int], by: str = "web") -> int:
+        """휴지통으로 (6단계 11장 — 웹 [삭제] · 여러 개 삭제 · 기기 file.delete). 저장소 파일은 그대로, 커밋 뒤 캐시에서만 뺀다"""
+        for pid in ids:
+            info = ctx.lib.pdf_info(pid)
+            if info and info["pdf_key"]:
+                ctx.storage.check(info["pdf_key"])  # 남의 경로면 StorageKeyError → 404 (지금 삭제와 같은 검사)
+        moved = ctx.lib.trash_papers(ids, by)
+        for m in moved:
+            ctx.after_commit.append(lambda p=m["id"]: rg.forget(ctx.uid, p, ""))
+        if moved:
+            log.info(f"papers trashed n={len(moved)} by={by.split(':')[0]}")
+        return len(moved)
+
+    def purge_papers(ctx: RequestCtx, ids: list[int]) -> int:
+        """영구 삭제(휴지통 논문만): 행 삭제(하위 표 연쇄 · 묘비 트리거) → 커밋 뒤 R2 PDF · 벡터 · 번역 파일 삭제 · 캐시에서 빼기"""
+        n = 0
+        for pid in ids:
+            gone = ctx.lib.purge_paper(pid)
+            if not gone:
+                continue
+            n += 1
+            for k in (gone["pdf_key"], gone["tr_key"]):
+                if k:
+                    ctx.storage.check(k)
+                    ctx.after_commit.append(lambda k=k: ctx.storage.delete_quietly(k))
+            ctx.after_commit.append(lambda p=pid, k=gone["rag_key"]: rg.forget(ctx.uid, p, k))
+        if n:
+            log.info(f"papers purged n={n}")
+        return n
+
+    def dup_reply(dup: dict) -> dict:
+        """중복 응답. 휴지통에 있는 논문이면 trashed: true + 안내(SW-8 — 화면이 [되살리기])"""
+        if dup.get("trashed"):
+            return {"duplicate": True, "trashed": True, "detail": TRASHED_DUP,
+                    "paper": {"id": dup["id"], "title": dup["title"]}}
+        return {"duplicate": True, "paper": dup}
 
     def mark_library(ctx: RequestCtx, items: list[dict]) -> list[dict]:
         for it in items:
@@ -488,17 +547,46 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             meta["authors"] = [split_name(a) for a in re.split(r"\s*(?:;|,| and )\s*", info.meta_author) if a]
         return meta, "PDF 정보만 사용"
 
-    def usage(ctx: RequestCtx) -> dict:
+    def storage_used() -> int:
         with db.system_tx("storage usage") as conn:
-            # 사용자 구분 없는 합계만
+            # 사용자 구분 없는 합계만 (휴지통 PDF도 R2에 있으므로 포함 — system_tx는 RLS 밖)
             total = conn.execute("select coalesce(sum(pdf_size), 0)::bigint as n from paperlab.papers "
                                  "where pdf_key <> ''").fetchone()["n"]
-        used = int(total) + st.backup_sizes.get()
+        return int(total) + st.backup_sizes.get()
+
+    def usage(ctx: RequestCtx) -> dict:
+        used = storage_used()
         limit = int(config.storage_limit_bytes)
         frac = used / limit if limit else 1.0
         level = "full" if frac >= FULL_LEVEL else "warn" if frac >= WARN_LEVEL else "ok"
         return {"backend": ctx.storage.backend, "used_bytes": used, "limit_bytes": limit,
-                "mine_bytes": int(ctx.lib.mine_pdf_bytes()), "level": level}
+                "mine_bytes": int(ctx.lib.mine_pdf_bytes()), "trash_bytes": int(ctx.lib.trash_bytes()), "level": level}
+
+    def sync_budget(ctx: RequestCtx) -> dict:
+        """6단계 K-30 동기화 올리기 예산 = max(0, min(R2 한도 95% − 서버 측 합계, 사용자 상한 − 내 PDF 총량(휴지통 포함)))"""
+        storage_left = int(config.storage_limit_bytes * FULL_LEVEL) - storage_used()
+        trash = int(ctx.lib.trash_bytes())
+        cap = int(config.sync_user_cap_bytes)
+        user_left = cap - int(ctx.lib.mine_pdf_bytes()) - trash
+        return {"upload_budget_bytes": max(0, min(storage_left, user_left)),
+                "upload_budget_limit": "storage" if storage_left <= user_left else "user",
+                "user_cap_bytes": cap, "trash_bytes": trash, "storage_left": storage_left, "user_left": user_left}
+
+    db_size_cache: dict = {}
+
+    def db_budget() -> dict:
+        """6단계 K-46 DB 예산(snapshot 첫 쪽 db · files/add db_full). pg_database_size는 1분 캐시"""
+        now_m = time.monotonic()
+        if not db_size_cache or now_m - db_size_cache["at"] > 60:
+            with db.system_tx("db size") as conn:
+                r = conn.execute("select pg_database_size(current_database())::bigint as size, "
+                                 "exists (select 1 from paperlab.page_texts) as allocated").fetchone()
+            db_size_cache.update(at=now_m, size=int(r["size"]), allocated=bool(r["allocated"]))
+        limit = int(config.db_limit_bytes)
+        size = db_size_cache["size"]
+        first = 0 if db_size_cache["allocated"] else DB_FIRST_ALLOC
+        return {"size_bytes": size, "limit_bytes": limit, "per_paper_bytes": DB_PER_PAPER,
+                "first_alloc_bytes": DB_FIRST_ALLOC, "budget_bytes": max(0, int(limit * DB_LEVEL) - size - first)}
 
     def ensure_space(ctx: RequestCtx) -> None:
         if usage(ctx)["level"] == "full":
@@ -624,6 +712,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         jobs.expire(ctx.lib)
         if ws.should_sweep(ctx.uid):
             jobs.sweep(ctx.lib)
+            # 6단계 K-10: 휴지통 30일 정리(한 번에 200편 — 사용자 권한, service role 없음) · 묘비 180일 · 멱등 기록 7일
+            purge_papers(ctx, ctx.lib.trashed_ids(older_than_days=TRASH_DAYS, limit=200))
+            ctx.lib._x("delete from paperlab.sync_tombstones where user_id = %s and created_at < now() - "
+                       "make_interval(days => %s)", (ctx.uid, TOMBSTONE_DAYS))
+            ctx.lib._x("delete from paperlab.sync_ops where user_id = %s and created_at < now() - make_interval(days => %s)",
+                       (ctx.uid, SYNC_OPS_DAYS))
             ctx.after_commit.append(lambda: ensure_index(ctx.claims))  # 3단계 10.1절 — 놓친 색인을 이어서
 
     def route_for(ctx: RequestCtx, kind: str) -> list[dict]:
@@ -661,6 +755,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     @app.post("/api/jobs/{job_id}/retry")
     def retry_job(job_id: int, ctx: RequestCtx = Ctx):
         src = jobs.retry_source(ctx.lib, job_id)
+        if src["paper_id"] is not None:
+            need_paper(ctx, src["paper_id"])  # 6단계 K-39: 휴지통 논문 작업은 다시 시도하지 않음(404)
         if src["kind"] == "index":  # 색인은 엔진 경로가 없음 — 대기 논문이 있으면 새 색인 작업 (3단계 10.1절)
             new_id = rg.ensure_index_job(ctx.lib)
             if new_id:
@@ -678,6 +774,34 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     def list_devices(ctx: RequestCtx = Ctx):
         maintain(ctx)
         return [jobs.device_view(d) for d in jobs.device_rows(ctx.lib)]
+
+    # ------------------------------------------------------------- 휴지통 (6단계 11장 · 14.2절)
+    def trash_ids(data: dict) -> list[int]:
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 200 or not all(jobs.valid_id(i) for i in ids):
+            raise HTTPException(400, "ids는 논문 번호 1~200개예요")
+        return ids
+
+    @app.get("/api/trash")
+    def trash_list(ctx: RequestCtx = Ctx):
+        maintain(ctx)
+        items = ctx.lib.list_trash()
+        return {"items": items, "total_bytes": sum(i["pdf_size"] or 0 for i in items)}
+
+    @app.post("/api/trash/restore")
+    def trash_restore(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        out = ctx.lib.restore_papers(trash_ids(data))
+        if out["restored"]:
+            ctx.after_commit.append(lambda: ensure_index(ctx.claims))
+        return {"restored": out["restored"], "renamed": out["renamed"], "to_root": out["to_root"]}
+
+    @app.post("/api/trash/purge")
+    def trash_purge(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        return {"purged": purge_papers(ctx, ctx.lib.trashed_ids(trash_ids(data)))}
+
+    @app.post("/api/trash/empty")
+    def trash_empty(ctx: RequestCtx = Ctx):
+        return {"purged": purge_papers(ctx, ctx.lib.trashed_ids())}
 
     @app.post("/api/devices/pair-codes")
     def pair_code(ctx: RequestCtx = Ctx):
@@ -716,9 +840,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             raise HTTPException(400, "제목이 필요해요")
         lib = ctx.lib
         if not data.get("allow_duplicate"):
-            dup = lib.find_duplicate(data.get("doi", ""), data.get("arxiv_id", ""), data.get("title", ""))
+            dup = lib.find_duplicate(data.get("doi", ""), data.get("arxiv_id", ""), data.get("title", ""), include_trash=True)
             if dup:
-                return JSONResponse({"duplicate": True, "paper": dup}, status_code=409)
+                return JSONResponse(dup_reply(dup), status_code=409)
         cid = own_collection(ctx, data.get("collection_id"))
         fid = own_folder(ctx, data.get("folder_id"))
         pid = lib.add_paper(data)
@@ -860,10 +984,14 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             collection_id = None
         if folder_id and not lib.has_folder(folder_id):
             folder_id = None
-        dup = lib.find_duplicate(meta_.get("doi", ""), meta_.get("arxiv_id", ""), meta_.get("title", ""))
+        dup = lib.find_duplicate(meta_.get("doi", ""), meta_.get("arxiv_id", ""), meta_.get("title", ""), include_trash=True)
+        if dup and dup.get("trashed"):  # 6단계 K-40: 휴지통에 같은 논문 — 새로 만들지 않고 [되살리기] 안내 (SW-8)
+            ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
+            return {"file": name, "id": dup["id"], "title": dup["title"], "duplicate": True, "trashed": True,
+                    "note": TRASHED_DUP}
         if dup:
             if not dup["has_pdf"]:
-                attach_from_incoming(ctx, dup["id"], incoming, raw, info)
+                attach_from_incoming(ctx, dup["id"], incoming, raw, info, name=name)
                 result = {"file": name, "id": dup["id"], "title": dup["title"], "matched_by": matched_by,
                           "note": "이미 있는 논문에 PDF를 붙였어요"}
             else:
@@ -874,11 +1002,11 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 lib.set_paper_collections([dup["id"]], collection_id, True)
             return result
         pid = lib.add_paper(meta_)
-        attach_from_incoming(ctx, pid, incoming, raw, info)
-        if collection_id:
-            lib.set_paper_collections([pid], collection_id, True)
         if folder_id:
             lib.move_papers_to_folder([pid], folder_id)
+        attach_from_incoming(ctx, pid, incoming, raw, info, name=name)
+        if collection_id:
+            lib.set_paper_collections([pid], collection_id, True)
         return {"file": name, "id": pid, "title": meta_["title"], "matched_by": matched_by, "warnings": info.warnings}
 
     @app.get("/api/papers/{pid}")
@@ -897,29 +1025,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             ctx.lib.set_paper_tags(pid, data["tags"] or [])
         return ctx.lib.get_paper(pid)
 
-    def delete_papers(ctx: RequestCtx, ids: list[int]) -> int:
-        """DB에서 지우고, 커밋이 끝난 뒤 저장소 PDF · 벡터 파일을 지우고 캐시에서 뺀다(실패해도 응답은 성공 — 로그만)."""
-        n = 0
-        for pid in ids:
-            info = ctx.lib.pdf_info(pid)
-            if not info:
-                continue
-            if info["pdf_key"]:
-                ctx.storage.check(info["pdf_key"])  # 남의 경로면 StorageKeyError → 404
-            gone = ctx.lib.delete_paper(pid)
-            if not gone:
-                continue
-            n += 1
-            if gone["pdf_key"]:
-                ctx.after_commit.append(lambda k=gone["pdf_key"]: ctx.storage.delete_quietly(k))
-            if gone["tr_key"]:  # 4단계 8.2절 — 번역 행은 외래 키로 함께 지워짐, 파일은 커밋 뒤
-                ctx.after_commit.append(lambda k=gone["tr_key"]: ctx.storage.delete_quietly(k))
-            ctx.after_commit.append(lambda p=pid, k=gone["rag_key"]: rg.forget(ctx.uid, p, k))
-        return n
-
     @app.delete("/api/papers/{pid}")
     def delete_paper(pid: int, ctx: RequestCtx = Ctx):
-        if not delete_papers(ctx, [pid]):
+        """6단계 U-2: 웹 [삭제]는 휴지통으로(30일 — 영구 삭제는 /api/trash/purge · 30일 정리). 응답 모양 그대로"""
+        if not trash_papers(ctx, [pid]):
             raise HTTPException(404, "논문을 찾을 수 없어요")
         return {"ok": True}
 
@@ -933,7 +1042,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         ids = lib.paper_ids(ids)
         action, value = data.get("action"), data.get("value")
         if action == "delete":
-            delete_papers(ctx, ids)
+            trash_papers(ctx, ids)
         elif action in ("add_collection", "remove_collection"):
             if not str(value or "").isdigit():
                 raise HTTPException(400, "컬렉션을 골라 주세요")
@@ -994,8 +1103,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             ctx.storage.delete_quietly(incoming)
             raise HTTPException(400, f"PDF를 열 수 없어요: {e}") from e
         need_paper(ctx, pid)  # 그 사이 지워졌으면 404 (임시 파일은 수명 주기 규칙이 정리)
-        attach_from_incoming(ctx, pid, incoming, raw, info)
-        return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings}
+        cleared = attach_from_incoming(ctx, pid, incoming, raw, info, name=str(data.get("name") or ""))
+        # 6단계 K-34: 이 교체로 전체 번역을 지웠는지 (웹 토스트 "PDF가 바뀌어 번역을 지웠어요")
+        return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings, "translation_cleared": cleared}
 
     @app.post("/api/papers/{pid}/fetch-pdf")
     def fetch_pdf(pid: int, ctx: RequestCtx = Ctx):
@@ -1022,6 +1132,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         need_paper(ctx, pid)  # 새 트랜잭션: 그 사이 지워졌으면 404
         try:
             info = store_pdf(ctx, pid, data)
+        except HTTPException:
+            raise
         except StorageError as e:
             raise HTTPException(502, "PDF를 저장하지 못했어요") from e
         except Exception as e:  # noqa: BLE001 - 손상된 PDF
@@ -1654,8 +1766,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             if not it.get("title"):
                 skipped += 1
                 continue
-            if lib.find_duplicate(it.get("doi", ""), it.get("arxiv_id", ""), it["title"]):
-                skipped += 1
+            if lib.find_duplicate(it.get("doi", ""), it.get("arxiv_id", ""), it["title"], include_trash=True):
+                skipped += 1  # 휴지통에 같은 논문이 있어도 새로 만들지 않음 (6단계 K-40)
                 continue
             pid = lib.add_paper(it)
             if cid:
@@ -2065,14 +2177,16 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.get("/api/papers/{pid}/translation")
     def translation_get(pid: int, ctx: RequestCtx = Ctx):
-        """번역 메타 + 끝난(d) 쪽 글 + 진행 중이거나 마지막 작업 + 시작 창 예상. 파일 키는 RLS 행의 tr_key뿐(8.2절)"""
-        need_paper(ctx, pid)
+        """번역 메타 + 끝난(d) 쪽 글 + 진행 중이거나 마지막 작업 + 시작 창 예상. 파일 키는 RLS 행의 tr_key뿐(8.2절).
+        6단계 SW-7: PDF가 바뀌어 전체 번역을 지운 시각(translation_cleared_at — 번역 행이 없을 때 안내)"""
+        p = need_paper(ctx, pid)
         maintain(ctx)
         row = translate.row_for(ctx.lib, pid)
         texts = ctx.lib.page_texts(pid)
         lang = row["lang"] if row else ctx.settings.get("translate_language")
         out = {"translation": translate.view(row) if row else None, "job": tr_job(ctx, pid),
-               "estimate": translate.estimate(texts, lang) if any(t.strip() for t in texts) else None}
+               "estimate": translate.estimate(texts, lang) if any(t.strip() for t in texts) else None,
+               "translation_cleared_at": p.get("translation_cleared_at")}
         if row:
             ctx.release()  # R2 읽기 동안 DB 연결을 잡지 않는다 (F9)
             try:
@@ -2652,6 +2766,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             return Response(data, media_type="application/pdf", headers={"Cache-Control": "no-store"})
 
     worker_api.register(app, db, allowlist, ws, guide, runner)
+    # 6단계 폴더 동기화 /api/worker/sync/* (기기 토큰 — 요청 하나 = RequestCtx 하나, 같은 업로드 · 첨부 도우미를 씀)
+    sync.register(app, st, SimpleNamespace(
+        ctx=lambda claims: RequestCtx(st, claims), maintain=maintain, read_incoming=read_incoming,
+        attach_from_incoming=attach_from_incoming, pdf_changed=pdf_changed, metadata_from_pdf=metadata_from_pdf,
+        sync_budget=sync_budget, db_budget=db_budget, ensure_index=ensure_index, allowlist=allowlist, ws=ws,
+        trash_papers=trash_papers))
 
     # -------------------------------------------------------------- static
     @app.get("/")

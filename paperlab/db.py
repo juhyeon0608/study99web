@@ -15,6 +15,7 @@ import logging
 import re
 import threading
 import time
+import unicodedata
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Iterator
@@ -47,7 +48,8 @@ SORTS = {
     "first_author": "lower(p.authors -> 0 ->> 'family') collate \"C\" asc nulls first, p.id",
 }
 # 응답에서 빼는 내부 열
-_HIDDEN_PAPER_COLS = ("user_id", "pdf_key", "title_norm", "rag_key", "rag_version")
+_HIDDEN_PAPER_COLS = ("user_id", "pdf_key", "title_norm", "rag_key", "rag_version", "sync_rev", "sync_xid",
+                      "deleted_by", "deleted_folder_path", "content_device_id")
 SEARCH_LIMIT = 1000
 # PGroonga 연산자는 extensions 스키마에 있다 (search_path에 기대지 않음)
 PGRN_MATCH = "operator(extensions.&@)"
@@ -69,6 +71,86 @@ def folder_name_problem(name: str) -> str:
     if _WINDOWS_RESERVED.fullmatch(name):
         return "CON · PRN · AUX · NUL · COM1~9 · LPT1~9는 폴더 이름으로 쓸 수 없어요 (Windows 예약 이름)"
     return ""
+
+
+# ---------------------------------------------------------------- PC 파일 이름 (6단계 8.2 · 10.3절)
+FILE_NAME_MAX = 200
+GEN_NAME_MAX = 120   # 서버가 만드는 이름 전체 길이 (가정)
+COPY_DEVICE_MAX = 30
+TRASH_DAYS, TOMBSTONE_DAYS, SYNC_OPS_DAYS = 30, 180, 7
+_BAD_NAME_CHARS = re.compile(r'[/\\:*?"<>|\x00-\x1f\x7f-\x9f  ]')
+FILE_NAME_RE = re.compile(r'[^/\\:*?"<>|\x00-\x1f\x7f-\x9f  ]{5,200}')
+KST = timezone(timedelta(hours=9))
+PAPER_TRASHED = "논문을 휴지통으로 옮겨 작업을 멈췄어요"
+
+
+def file_name_problem(name: str) -> str:
+    """PC 파일 이름을 쓸 수 없으면 이유, 괜찮으면 '' (폴더 이름 규칙 + .pdf로 끝남 + 200자 이하 — 8.2절)"""
+    if not FILE_NAME_RE.fullmatch(name or "") or not name.lower().endswith(".pdf"):
+        return '파일 이름은 200자 이하의 .pdf 이름이고 / \\ : * ? " < > | 와 제어 문자는 쓸 수 없어요'
+    if name.startswith((" ", ".")) or _WINDOWS_RESERVED.fullmatch(name):
+        return "이 파일 이름은 쓸 수 없어요 (Windows 예약 이름 · 점이나 공백으로 시작)"
+    return ""
+
+
+def _tidy(text: str) -> str:
+    text = _BAD_NAME_CHARS.sub(" ", unicodedata.normalize("NFC", text or ""))
+    return re.sub(r"\s+", " ", text).strip().strip(". ")
+
+
+def _fit(stem: str, tail: str, limit: int = FILE_NAME_MAX) -> str:
+    """stem + tail이 limit자 안에 들어가게 stem만 줄인다"""
+    return (stem[:max(1, limit - len(tail))].rstrip(". ") or "paper") + tail
+
+
+def _not_reserved(name: str) -> str:
+    return "_" + name if _WINDOWS_RESERVED.fullmatch(name) else name
+
+
+def clean_file_name(raw: str) -> str:
+    """올린 파일 이름 → PC 파일 이름: 경로 부분 제거 · NFC · 금지 문자는 공백 · .pdf로 끝나게. 못 만들면 ''"""
+    base = re.split(r"[/\\]", str(raw or ""))[-1]
+    stem = _tidy(re.sub(r"\.pdf$", "", base.strip(), flags=re.I))
+    if not stem:
+        return ""
+    name = _not_reserved(_fit(stem, ".pdf"))
+    return "" if file_name_problem(name) else name
+
+
+def generated_file_name(paper: dict) -> str:
+    """`{첫 저자 성} {연도} - {제목}.pdf` (전체 120자 안, 비면 paper-{id}.pdf, 예약 이름이면 앞에 _ — 8.2절)"""
+    authors = paper.get("authors") if isinstance(paper.get("authors"), list) else []
+    first = authors[0] if authors and isinstance(authors[0], dict) else {}
+    head = " ".join(x for x in (_tidy(str(first.get("family") or first.get("literal") or "")),
+                                str(paper.get("year") or "")) if x)
+    title = _tidy(str(paper.get("title") or ""))
+    stem = _tidy((f"{head} - {title}" if head and title else head or title)[:GEN_NAME_MAX - 4])
+    name = _not_reserved(stem + ".pdf") if stem else ""
+    return name if name and not file_name_problem(name) else f"paper-{paper.get('id')}.pdf"
+
+
+def numbered_name(name: str, n: int) -> str:
+    """`이름 (n).pdf` — 서버 안 작업(웹 이동 · 되살리기 · 폴더 삭제)의 겹침 (K-8)"""
+    return _fit(name[:-4], f" ({n}){name[-4:]}")
+
+
+def copy_name(name: str, device: str, day: str, n: int = 1) -> str:
+    """`{원래 이름} (충돌 사본 {PC 이름} {YYYY-MM-DD}[ n]).pdf` — 200자를 넘으면 원래 이름 부분만 줄임 (10.3절 · K-7)"""
+    dev = _BAD_NAME_CHARS.sub("", unicodedata.normalize("NFC", device or "")).strip()[:COPY_DEVICE_MAX].strip() or "PC"
+    stem = name[:-4] if name.lower().endswith(".pdf") else name
+    return _fit(stem, f" (충돌 사본 {dev} {day}{f' {n}' if n > 1 else ''}).pdf")
+
+
+def kst_day(value: datetime | None = None) -> str:
+    """한국 날짜 (사본 이름 — 사용자 모두 국내, 10.3절)"""
+    return (value or datetime.now(timezone.utc)).astimezone(KST).strftime("%Y-%m-%d")
+
+
+def deleted_by_label(deleted_by: str, device_name: str | None) -> str:
+    """지운 곳 표시: 웹 → "웹", device:<id> → 그 기기 이름 (없어진 기기면 "PC") — K-34"""
+    if deleted_by in ("", "web"):
+        return "웹"
+    return device_name or "PC"
 
 
 def actor_claims(uid: str, actor: str) -> dict:
@@ -252,6 +334,21 @@ class Library:
     def _all(self, sql: str, params=None) -> list[dict]:
         return self._x(sql, params).fetchall()
 
+    @contextmanager
+    def trash_tx(self) -> Iterator["Library"]:
+        """휴지통 논문도 보이게(트랜잭션 설정 paperlab.trash = 'on' — hide_trashed 정책). 휴지통으로 보내기 · 되살리기 ·
+        영구 삭제 · PDF 교체 · 휴지통 목록 · 동기화 피드만 이 안에서. 끝나면 다시 끈다(같은 요청의 다른 질의는 그대로 숨김)"""
+        depth = getattr(self, "_trash_depth", 0)
+        if not depth:
+            self._x("select set_config('paperlab.trash', 'on', true)")
+        self._trash_depth = depth + 1
+        try:
+            yield self
+        finally:
+            self._trash_depth = depth
+            if not depth and self.conn.info.transaction_status == psycopg.pq.TransactionStatus.INTRANS:
+                self._x("select set_config('paperlab.trash', '', true)")
+
     def _paper_view(self, row: dict, detail: bool = False) -> dict:
         p = _row(row)
         p["has_pdf"] = bool(p.get("pdf_key"))
@@ -298,8 +395,19 @@ class Library:
                          "where id = %s and user_id = %s", (paper_id, self.uid))
 
     def find_duplicate(self, doi: str = "", arxiv_id: str = "", title: str = "",
-                       exclude_id: int | None = None) -> dict | None:
-        """내 서재 안에서만: DOI 정규화 일치 → arXiv 일치 → 정규화 제목(12자 이상) 일치"""
+                       exclude_id: int | None = None, include_trash: bool = False) -> dict | None:
+        """내 서재 안에서만: DOI 정규화 일치 → arXiv 일치 → 정규화 제목(12자 이상) 일치.
+        include_trash: 살아 있는 논문에 없으면 휴지통도 본다(가져오기 중복 — 찾으면 "trashed": True, 6단계 팀장 결정 3)"""
+        found = self._find_duplicate(doi, arxiv_id, title, exclude_id)
+        if found or not include_trash:
+            return found
+        with self.trash_tx():
+            found = self._find_duplicate(doi, arxiv_id, title, exclude_id)
+        if found:
+            found["trashed"] = True
+        return found
+
+    def _find_duplicate(self, doi: str, arxiv_id: str, title: str, exclude_id: int | None) -> dict | None:
         doi = normalize_doi(doi)
         arxiv_id = (arxiv_id or "").strip()
         norm = normalize_title(title)
@@ -392,11 +500,14 @@ class Library:
         return pid
 
     def _make_citekey(self, data: dict, pid: int) -> str:
-        """같은 키가 **내 서재에** 있으면 a, b, …, z, aa… 를 덧붙인다"""
+        """같은 키가 **내 서재에**(휴지통 포함 — 되살릴 때 겹치지 않게) 있으면 a, b, …, z, aa… 를 덧붙인다"""
         base = make_citekey(data)
+        with self.trash_tx():
+            taken = {r["citekey"] for r in self._all(
+                "select citekey from paperlab.papers where user_id = %s and left(citekey, %s) = %s and id <> %s",
+                (self.uid, len(base), base, pid))}
         key, n = base, 0
-        while self._one("select 1 as x from paperlab.papers where user_id = %s and citekey = %s and id <> %s",
-                        (self.uid, key, pid)):
+        while key in taken:
             n += 1
             key = base + chr(ord("a") + (n - 1) % 26) * ((n - 1) // 26 + 1)
         return key
@@ -411,14 +522,17 @@ class Library:
                 {**fields, "_id": paper_id, "_uid": self.uid})
         self._reindex(paper_id)
 
-    def set_pdf(self, paper_id: int, key: str, page_texts: list[str], sha256: str = "", size: int | None = None) -> str:
+    def set_pdf(self, paper_id: int, key: str, page_texts: list[str], sha256: str = "", size: int | None = None,
+                device_id: int | None = None, content_at: datetime | None = None) -> str:
         """PDF를 붙이거나 바꾼다. 같은 트랜잭션에서 벡터 파일 포인터를 비운다(3단계 8.4절) → 옛 rag_key('' = 없음).
-        커밋 뒤 호출하는 쪽이 옛 파일 삭제 · 캐시에서 빼기 · 색인 작업(ensure_index_job)을 한다"""
+        커밋 뒤 호출하는 쪽이 옛 파일 삭제 · 캐시에서 빼기 · 색인 작업(ensure_index_job)을 한다.
+        6단계: 지금 내용의 수정 시각(없으면 지금 — 웹 · 서버) · 올린 기기(없으면 웹)도 같이 적는다(10.1절)"""
         old = self._one("select rag_key from paperlab.papers where id = %s and user_id = %s for update",
                         (paper_id, self.uid))
         self._x("update paperlab.papers set pdf_key = %s, pdf_sha256 = %s, pdf_size = %s, page_count = %s, "
-                "rag_key = '', rag_version = '', updated_at = %s where id = %s and user_id = %s",
-                (key, sha256, size, len(page_texts) or None, now_dt(), paper_id, self.uid))
+                "rag_key = '', rag_version = '', updated_at = %s, content_at = coalesce(%s, now()), content_device_id = %s "
+                "where id = %s and user_id = %s",
+                (key, sha256, size, len(page_texts) or None, now_dt(), content_at, device_id, paper_id, self.uid))
         self._x("delete from paperlab.page_texts where paper_id = %s and user_id = %s", (paper_id, self.uid))
         if page_texts:
             with self.conn.cursor() as cur:
@@ -571,11 +685,23 @@ class Library:
                                        (self.uid,))["n"]
         row["summaries"] = self._one("select count(*)::int as n from paperlab.ai_summaries where user_id = %s",
                                      (self.uid,))["n"]
+        with self.trash_tx():  # 6단계 K-34: 휴지통 편수(사이드바) · 폴더 동기화를 켠 기기가 있는지(삭제 확인 문구)
+            row.update(self._one(
+                "select (select count(*) from paperlab.papers where user_id = %(u)s and deleted_at is not null)::int as trash, "
+                "exists (select 1 from paperlab.sync_devices s join paperlab.devices d on d.id = s.device_id "
+                "  and d.user_id = s.user_id where s.user_id = %(u)s and s.enabled and d.revoked_at is null) as sync_on",
+                {"u": self.uid}))
         return dict(row)
 
     def mine_pdf_bytes(self) -> int:
+        """살아 있는 내 논문의 PDF 합계 (휴지통은 RLS로 빠짐 — trash_bytes)"""
         return self._one("select coalesce(sum(pdf_size), 0)::bigint as n from paperlab.papers "
                          "where user_id = %s and pdf_key <> ''", (self.uid,))["n"]
+
+    def trash_bytes(self) -> int:
+        with self.trash_tx():
+            return self._one("select coalesce(sum(pdf_size), 0)::bigint as n from paperlab.papers "
+                             "where user_id = %s and pdf_key <> '' and deleted_at is not null", (self.uid,))["n"]
 
     # ------------------------------------------------------------- collections
     def list_collections(self) -> list[dict]:
@@ -689,8 +815,11 @@ class Library:
         if not row:
             raise NotFoundError("폴더를 찾을 수 없어요")
         parent = row["parent_id"]
-        moved_papers = self._x("update paperlab.papers set folder_id = %s where folder_id = %s and user_id = %s",
-                               (parent, fid, self.uid)).rowcount
+        moving = self._all("select id, file_name from paperlab.papers where folder_id = %s and user_id = %s order by id",
+                           (fid, self.uid))
+        for r in moving:  # 부모에 같은 PC 파일 이름이 있으면 ` (2)` (6단계 14.3절)
+            self.place_paper(r["id"], parent, r["file_name"])
+        moved_papers = len(moving)
         children = self._all("select id, name from paperlab.folders where parent_id = %s and user_id = %s order by id",
                              (fid, self.uid))
         taken = {r["name"].lower() for r in self._all(
@@ -710,11 +839,162 @@ class Library:
         return {"moved_papers": moved_papers, "moved_folders": len(children)}
 
     def move_papers_to_folder(self, paper_ids: Iterable[int], folder_id: int | None) -> int:
+        """옮기는 쪽 PC 파일 이름이 대상 폴더에서 겹치면 ` (2)`를 붙인다 (6단계 14.3절 — 유일 색인 위반 500 방지)"""
         if folder_id is not None and not self.has_folder(folder_id):
             raise ValueError("폴더를 찾을 수 없어요")
         ids = self.paper_ids(paper_ids)
-        return self._x("update paperlab.papers set folder_id = %s, updated_at = %s where user_id = %s and id = any(%s)",
-                       (folder_id, now_dt(), self.uid, ids)).rowcount
+        for r in self._all("select id, file_name from paperlab.papers where user_id = %s and id = any(%s) "
+                           "and folder_id is distinct from %s order by id", (self.uid, ids, folder_id)):
+            self.place_paper(r["id"], folder_id, r["file_name"])
+        return self._x("update paperlab.papers set updated_at = %s where user_id = %s and id = any(%s)",
+                       (now_dt(), self.uid, ids)).rowcount
+
+    # ------------------------------------------------------- PC 파일 이름 (6단계 8.2절)
+    def names_in(self, folder_id: int | None, exclude: int | None = None) -> set[str]:
+        """그 폴더의 살아 있는 논문 file_name (소문자 — DB 부분 유일 색인과 같은 lower())"""
+        return {r["n"] for r in self._all(
+            "select lower(file_name) as n from paperlab.papers where user_id = %s and coalesce(folder_id, 0) = "
+            "coalesce(%s, 0) and file_name <> '' and deleted_at is null and id is distinct from %s",
+            (self.uid, folder_id, exclude))}
+
+    def free_name(self, folder_id: int | None, name: str, exclude: int | None = None,
+                  copy_of: tuple[str, str] | None = None) -> str:
+        """겹치지 않는 이름. copy_of=(PC 이름, 날짜)면 사본 형식(K-8 — 들어오는 쪽), 아니면 ` (2)`(서버 안 작업)"""
+        taken = self.names_in(folder_id, exclude)
+        if name.lower() not in taken:
+            return name
+        n = 1 if copy_of else 2
+        while True:
+            cand = copy_name(name, copy_of[0], copy_of[1], n) if copy_of else numbered_name(name, n)
+            if cand.lower() not in taken:
+                return cand
+            n += 1
+
+    def place_paper(self, paper_id: int, folder_id: int | None, file_name: str,
+                    copy_of: tuple[str, str] | None = None) -> str:
+        """논문을 (폴더, 이름)으로 옮긴다 — 이름이 겹치면 free_name 규칙 → 최종 이름"""
+        name = self.free_name(folder_id, file_name, paper_id, copy_of) if file_name else ""
+        self._x("update paperlab.papers set folder_id = %s, file_name = %s where id = %s and user_id = %s",
+                (folder_id, name, paper_id, self.uid))
+        return name
+
+    def ensure_file_name(self, paper_id: int, hint: str = "") -> str:
+        """이름이 빈 PDF 논문에 이름을 정한다(올린 이름 → 없으면 `{저자} {연도} - {제목}.pdf`) → 지금 이름"""
+        p = self._one("select id, file_name, folder_id, title, authors, year, pdf_key from paperlab.papers "
+                      "where id = %s and user_id = %s", (paper_id, self.uid))
+        if not p or p["file_name"] or not p["pdf_key"]:
+            return (p or {}).get("file_name") or ""
+        return self.place_paper(paper_id, p["folder_id"], clean_file_name(hint) or generated_file_name(p))
+
+    def name_all_files(self) -> int:
+        """이름이 빈 PDF 논문 전부에 이름을(6단계 전부터 있던 논문 — 첫 스냅숏 때, 8.2절) → 정한 수"""
+        rows = self._all("select id from paperlab.papers where user_id = %s and pdf_key <> '' and file_name = '' "
+                         "order by id", (self.uid,))
+        for r in rows:
+            self.ensure_file_name(r["id"])
+        return len(rows)
+
+    def folder_path(self, folder_id: int | None) -> str:
+        """폴더 경로 "A/B" (휴지통 표시용 — 폴더 이름에는 / 가 없음). 500자 안"""
+        names, seen = [], set()
+        while folder_id is not None and folder_id not in seen:
+            seen.add(folder_id)
+            row = self._one("select name, parent_id from paperlab.folders where id = %s and user_id = %s",
+                            (folder_id, self.uid))
+            if not row:
+                break
+            names.append(row["name"])
+            folder_id = row["parent_id"]
+        return "/".join(reversed(names))[:500]
+
+    # ------------------------------------------------------------ 휴지통 (11장)
+    def trash_papers(self, ids: Iterable[int], by: str) -> list[dict]:
+        """휴지통으로(deleted_at). 같은 트랜잭션에서 그 논문의 대기 · 실행 중 작업 취소(paper_trashed).
+        R2 PDF · 벡터 · 번역 파일은 지우지 않는다(되살리기). → 옮긴 논문 [{id, rag_key}] (커밋 뒤 캐시에서 빼기)"""
+        ids = self.paper_ids(ids)
+        out = []
+        with self.trash_tx():
+            for pid in ids:
+                row = self._one("select folder_id, rag_key from paperlab.papers where id = %s and user_id = %s "
+                                "and deleted_at is null for update", (pid, self.uid))
+                if not row:
+                    continue
+                self._x("update paperlab.papers set deleted_at = now(), deleted_by = %s, deleted_folder_path = %s "
+                        "where id = %s and user_id = %s", (by, self.folder_path(row["folder_id"]), pid, self.uid))
+                out.append({"id": pid, "rag_key": row["rag_key"]})
+            if out:
+                self._x("update paperlab.jobs set status = 'cancelled', error_code = 'paper_trashed', error = %s, "
+                        "lease_token = null, lease_until = null, progress = '{}'::jsonb, finished_at = now(), "
+                        "updated_at = now() where user_id = %s and paper_id = any(%s) and status in ('queued', 'running')",
+                        (PAPER_TRASHED, self.uid, [x["id"] for x in out]))
+        return out
+
+    def restore_papers(self, ids: Iterable[int], places: dict | None = None) -> dict:
+        """되살리기(K-25): 원래 폴더가 남아 있으면 거기(폴더를 지웠으면 외래 키가 비워 둠 → 폴더 없음), 이름이 겹치면 ` (2)`.
+        places = {id: (folder_id, file_name, copy_of)} — 동기화 files/add가 정한 자리(겹치면 K-8 사본 이름).
+        → {restored, renamed: [{id, file_name}], to_root(원래 폴더가 없어 루트로 간 편수), ids}"""
+        ids = [int(i) for i in ids]
+        out = {"restored": 0, "renamed": [], "to_root": 0, "ids": []}
+        with self.trash_tx():
+            rows = self._all("select id, folder_id, file_name, deleted_folder_path from paperlab.papers where user_id = %s "
+                             "and id = any(%s) and deleted_at is not null order by deleted_at, id for update",
+                             (self.uid, ids))
+            for r in rows:
+                folder, name, copy_of = (places or {}).get(r["id"]) or (r["folder_id"], r["file_name"], None)
+                if folder is not None and not self.has_folder(folder):
+                    folder = None
+                final = self.free_name(folder, name, r["id"], copy_of) if name else ""
+                self._x("update paperlab.papers set deleted_at = null, deleted_by = '', deleted_folder_path = '', "
+                        "folder_id = %s, file_name = %s, updated_at = now() where id = %s and user_id = %s",
+                        (folder, final, r["id"], self.uid))
+                out["restored"] += 1
+                out["ids"].append(r["id"])
+                if final != name:
+                    out["renamed"].append({"id": r["id"], "file_name": final})
+                if folder is None and r["deleted_folder_path"] and not places:
+                    out["to_root"] += 1
+        return out
+
+    def trashed_ids(self, ids: Iterable[int] | None = None, older_than_days: int | None = None,
+                    limit: int = 100000) -> list[int]:
+        """휴지통 논문 id (ids 중에서 · 오래된 것 — 30일 정리)"""
+        where, params = ["user_id = %(u)s", "deleted_at is not null"], {"u": self.uid, "lim": limit}
+        if ids is not None:
+            where.append("id = any(%(ids)s)")
+            params["ids"] = [int(i) for i in ids]
+        if older_than_days is not None:
+            where.append("deleted_at < now() - make_interval(days => %(d)s)")
+            params["d"] = older_than_days
+        with self.trash_tx():
+            return [r["id"] for r in self._all(f"select id from paperlab.papers where {' and '.join(where)} "
+                                               "order by deleted_at, id limit %(lim)s", params)]
+
+    def purge_paper(self, paper_id: int) -> dict | None:
+        """영구 삭제(휴지통 논문만) → 저장소 키 {"pdf_key", "rag_key", "tr_key"}. 하위 표는 외래 키로 함께, 묘비는 트리거"""
+        with self.trash_tx():
+            return self._one("with t as (select tr_key from paperlab.translations where paper_id = %(id)s "
+                             "and user_id = %(uid)s) delete from paperlab.papers where id = %(id)s and user_id = %(uid)s "
+                             "and deleted_at is not null returning pdf_key, rag_key, coalesce((select tr_key from t), '') "
+                             "as tr_key", {"id": paper_id, "uid": self.uid})
+
+    def list_trash(self) -> list[dict]:
+        with self.trash_tx():
+            rows = self._all(
+                "select p.id, p.title, p.authors, p.year, p.file_name, p.deleted_folder_path, p.deleted_at, p.deleted_by, "
+                "p.pdf_size, p.pdf_key <> '' as has_pdf, d.name as device_name from paperlab.papers p "
+                "left join paperlab.devices d on p.deleted_by = 'device:' || d.id::text and d.user_id = p.user_id "
+                "where p.user_id = %s and p.deleted_at is not null order by p.deleted_at desc, p.id desc", (self.uid,))
+        out = []
+        for r in rows:
+            item = _row(r)
+            item["purge_at"] = iso(r["deleted_at"] + timedelta(days=TRASH_DAYS))
+            item["deleted_by_label"] = deleted_by_label(r["deleted_by"], r["device_name"])
+            item["pdf_size"] = (r["pdf_size"] or 0) if r["has_pdf"] else 0
+            item["authors"] = r["authors"] if isinstance(r["authors"], list) else []
+            for k in ("deleted_by", "device_name", "has_pdf"):
+                item.pop(k)
+            out.append(item)
+        return out
 
     # -------------------------------------------------------------------- tags
     def list_tags(self) -> list[dict]:
@@ -879,9 +1159,16 @@ class Library:
         session = self._scope_session(scope, sid, create=False)
         if session is None:
             return []
-        return [_row(r) for r in self._all(
+        rows = [_row(r) for r in self._all(
             "select id, role, content, citations, created_at from paperlab.chat_messages "
             "where session_id = %s and user_id = %s order by id", (session, self.uid))]
+        # 출처는 메시지에 저장된 값 — 휴지통 · 지운 논문의 출처(제목 · 글 조각)는 빼고 보낸다 (6단계 누출 방지)
+        cited = [c.get("paper_id") for r in rows for c in (r["citations"] or []) if isinstance(c, dict)]
+        live = set(self.paper_ids([i for i in cited if isinstance(i, int) and not isinstance(i, bool)]))
+        for r in rows:
+            if isinstance(r["citations"], list):
+                r["citations"] = [c for c in r["citations"] if isinstance(c, dict) and c.get("paper_id") in live]
+        return rows
 
     def add_scope_message(self, scope: str, sid: int | None, role: str, content: str, citations: list | None = None) -> int:
         session = self._scope_session(scope, sid, create=True)

@@ -21,10 +21,26 @@ export function debounce(fn, ms) {
 }
 
 // duration(ms)을 주지 않으면 보통 3.2초 · 오류 6초. 긴 안내는 8초로 띄운다
-export function toast(msg, type = "", { duration } = {}) {
-  const t = el(`<div class="toast ${type}">${esc(msg)}</div>`);
+// action: {label, onClick} — 토스트 안 버튼(6단계 [되돌리기], K-35). 버튼이 있으면 마우스가 위에 있거나
+// 버튼에 초점이 있는 동안은 닫지 않는다. 없으면 지금과 같다
+export function toast(msg, type = "", { duration, action } = {}) {
+  const t = el(action ? `<div class="toast ${type}"><span>${esc(msg)}</span></div>` : `<div class="toast ${type}">${esc(msg)}</div>`);
   $("#toasts").appendChild(t);
-  setTimeout(() => t.remove(), duration || (type === "error" ? 6000 : 3200));
+  const ms = duration || (action ? 8000 : type === "error" ? 6000 : 3200);
+  if (!action) {
+    setTimeout(() => t.remove(), ms);
+    return t;
+  }
+  const b = el(`<button type="button" class="toast-action">${esc(action.label)}</button>`);
+  if (action.attr) b.setAttribute(action.attr, "");
+  b.onclick = () => { t.remove(); action.onClick && action.onClick(); };
+  t.appendChild(b);
+  let timer;
+  const arm = () => { clearTimeout(timer); timer = setTimeout(() => t.matches(":hover") || t.contains(document.activeElement) ? arm() : t.remove(), ms); };
+  t.addEventListener("mouseleave", arm);
+  b.addEventListener("blur", arm);
+  arm();
+  return t;
 }
 
 export function errorToast(e) {
@@ -67,7 +83,8 @@ export function modal({ title, body = "", foot = null, wide = false, onClose = n
 
 export const modalOpen = () => openModals > 0;
 
-export function confirmDialog(message, { ok = "확인", danger = false, title = "확인" } = {}) {
+// focus: "cancel"이면 처음 초점을 [취소]에(되돌릴 수 없는 동작 — K-35). 기본은 지금처럼 확인 버튼
+export function confirmDialog(message, { ok = "확인", danger = false, title = "확인", focus = "ok" } = {}) {
   return new Promise((resolve) => {
     const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button>
       <button class="btn ${danger ? "primary danger-fill" : "primary"}" data-yes>${esc(ok)}</button></div>`);
@@ -75,7 +92,7 @@ export function confirmDialog(message, { ok = "확인", danger = false, title = 
     const m = modal({ title, body: `<p style="margin:4px 0 8px">${esc(message)}</p>`, foot, onClose: () => resolve(result) });
     $("[data-no]", foot).onclick = () => m.close();
     $("[data-yes]", foot).onclick = () => { result = true; m.close(); };
-    setTimeout(() => $("[data-yes]", foot).focus(), 40);
+    setTimeout(() => $(focus === "cancel" ? "[data-no]" : "[data-yes]", foot).focus(), 40);
   });
 }
 

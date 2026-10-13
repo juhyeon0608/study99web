@@ -6,6 +6,7 @@
 - jobs.test.mjs: 2단계 작업 상태 문구 · 경로 단계 · 기한 · 계정 가림 (docs/design/phase2-worker-electron-ui.md 5장)
 - ask.test.mjs: 3단계 AI 질문 주소 · 색인 상태 · 찾기 단계 · 인용 검증 표시 (docs/design/phase3-ask-ui.md)
 - sources.test.mjs: 5단계 소스 표 · 비활성 이유 · 오류 문구 · 라이선스 이름 · OpenCitations 줄 (docs/design/phase5-korean-db-ui.md)
+- trash.test.mjs: 6단계 휴지통 남은 날 · 연결된 PC 동기화 줄 · 충돌 사본 (docs/design/phase6-folder-sync-ui.md 8 · 10장)
 - explain.test.mjs: 4단계 SVG 순수 함수 · 쪽 상태 문구 · 시작 창 예상 · 코드 검사 (docs/specs/phase4-explain-translate.md 7.3 · 13장)
 - Node가 없거나 너무 오래되면(20.10 미만) 건너뛴다(skip) — AC-8.
 - 경로에 한글 · 공백이 있어도 되게 셸을 거치지 않고 리스트 인자로 부른다.
@@ -23,7 +24,8 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 MIN_NODE = (20, 10)  # --test-reporter · String.isWellFormed · --experimental-detect-module
 DETECT_DEFAULT = (22, 7)  # 이 버전부터 package.json 없는 .js의 ES 모듈 문법을 기본으로 알아봄
-MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8, "explain": 12, "sources": 10}  # 너무 적게 통과하면(테스트가 사라짐) 실패
+MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8, "explain": 12, "sources": 10,
+            "trash": 4}  # trash: 6단계 휴지통 · 동기화 웹 문구  # 너무 적게 통과하면(테스트가 사라짐) 실패
 
 
 def _node_version(node: str) -> tuple[int, ...] | None:
