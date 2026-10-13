@@ -21,8 +21,8 @@ import httpx
 
 from xml.parsers import expat
 
-from .sources import (RateLimiter, SourceError, UpstreamError, _empty, get_with_retry, is_arxiv_url, pick_oa_location,
-                      server_fetch_allowed, split_name)
+from .sources import (RateLimiter, SourceError, UpstreamError, _empty, _openlink, get_with_retry, is_arxiv_url,
+                      pick_oa_location, server_fetch_allowed, split_name)
 
 # 14장 호스트 상수 (바뀌면 여기 한 곳)
 KCI_HOST = "open.kci.go.kr"
@@ -402,23 +402,48 @@ def cache_locations(row) -> list[dict] | None:
     return [{"pdf_url": pdf, "landing_url": landing, "license": row["oa_license"], "version": ""}]
 
 
+def substitute(arxiv_id: str, locs) -> dict | None:
+    """대신 받기(사용자 결정 2026-10-13): 보낸 주소가 규칙에 맞지 않을 때 같은 논문의 ② arXiv PDF(arXiv 번호, 또는 OpenAlex 위치 중
+    arXiv 주소) → ③ 허용 라이선스 OpenAlex 위치. openlink 주소는 후보에서 뺀다. → {"fetch", "license", "via"} | None"""
+    locs = [x for x in locs or [] if x.get("pdf_url") and not _openlink(x["pdf_url"])]
+    if arxiv_id:
+        return {"fetch": f"https://arxiv.org/pdf/{arxiv_id}", "license": "", "via": "substitute"}
+    arx = next((x for x in locs if is_arxiv_url(x["pdf_url"])), None)
+    if arx:
+        return {"fetch": arx["pdf_url"], "license": arx.get("license") or "", "via": "substitute"}
+    ok = next((x for x in locs if server_fetch_allowed(x.get("license"))), None)
+    return {"fetch": ok["pdf_url"], "license": ok["license"], "via": "substitute"} if ok else None
+
+
+# arXiv 번호 형식(새 2101.00001 · 옛 hep-th/9901001, 판 번호 선택) — 형식이 아니면 번호 없음으로 (승인자 L-1)
+ARXIV_ID_RE = re.compile(r"(?:\d{4}\.\d{4,5}|[a-z\-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?", re.I)
+
+
 def plan_pdf(sources, url: str, arxiv_id: str, doi: str, cached: list[dict] | None) -> dict | None:
-    """받을 PDF를 서버가 정한다(8.3절 · 팀장 결정 D1). → {"fetch": 주소, "license"} | {"open_url", "open_kind"} | None(없음).
-    url = 서재 pdf_url 또는 [PDF 포함 추가]가 보낸 주소. 서버가 받는 것은 둘뿐: (a) arXiv 주소 (b) 그 DOI의 OpenAlex 위치 중
-    허용 라이선스 위치와 글자 그대로 같은 주소. 그 밖 주소(S2 · Crossref · 사용자가 넣은 주소 · 변형)는 모두 새 탭.
+    """받을 PDF를 서버가 정한다(8.3절 · 팀장 결정 D1 · 사용자 결정 "대신 받기").
+    → {"fetch": 주소, "license"[, "via": "substitute"]} | {"open_url", "open_kind"} | None(없음).
+    url = 서재 pdf_url 또는 [PDF 포함 추가]가 보낸 주소. 서버가 받는 것: ① arXiv 주소 또는 그 DOI의 허용 라이선스 OpenAlex 위치와
+    글자 그대로 같은 주소, 아니면 같은 논문의 ② arXiv PDF ③ 허용 라이선스 위치를 대신. 셋 다 없으면 원래 주소를 새 탭으로.
     sources.oa_locations · crossref_pdf_link는 외부 호출(SourceError면 호출 쪽이 실패 처리)."""
+    arxiv_id = (arxiv_id or "").strip()
+    if not ARXIV_ID_RE.fullmatch(arxiv_id):
+        arxiv_id = ""
     url = (url or "").strip()
     if not re.match(r"https?://", url, re.I):
         url = ""  # http/https가 아닌 주소는 받지도 새 탭으로 내주지도 않음
     if url:
         if is_arxiv_url(url):  # 경계 ② — arXiv는 지금처럼 받음(U-3 예외)
             return {"fetch": url, "license": ""}
+        locs = []
         if doi:
             hit = match_location(cached, url) if cached else None
-            loc = hit if hit and server_fetch_allowed(hit.get("license")) else match_location(sources.oa_locations(doi), url)
+            if hit and server_fetch_allowed(hit.get("license")):
+                return {"fetch": url, "license": hit["license"]}
+            locs = sources.oa_locations(doi)
+            loc = match_location(locs, url)
             if loc and server_fetch_allowed(loc.get("license")):
                 return {"fetch": url, "license": loc["license"]}
-        return {"open_url": url, "open_kind": "pdf"}
+        return substitute(arxiv_id, locs) or {"open_url": url, "open_kind": "pdf"}
     if arxiv_id:
         return {"fetch": f"https://arxiv.org/pdf/{arxiv_id}", "license": ""}
     if doi:

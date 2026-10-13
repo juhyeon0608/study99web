@@ -70,6 +70,12 @@ describe("무료 PDF · OpenCitations (4 · 5장)", () => {
     assert.equal(S.oaOpenLabel("landing"), "무료 원문 페이지 열기");
   });
 
+  test("대신 받기 토스트", () => {
+    assert.equal(S.substituteText("cc-by"), "같은 논문의 무료 공개본(라이선스 CC BY)을 받았어요");
+    assert.equal(S.substituteText(""), "같은 논문의 무료 공개본을 받았어요");
+    assert.equal(S.substituteText("other-oa"), "같은 논문의 무료 공개본을 받았어요");
+  });
+
   test("OpenCitations 기준 줄", () => {
     assert.equal(S.viaLine({ total: 3 }), null);
     assert.equal(S.viaHtml(null), "");

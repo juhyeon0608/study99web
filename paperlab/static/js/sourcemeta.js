@@ -127,5 +127,11 @@ export function viaHtml(res) {
 export const OC_FAILED_TEXT ="OpenAlex에 참고문헌 정보가 없고, OpenCitations도 응답하지 않았어요. 잠시 후 다시 시도해 주세요.";
 export const OC_CHIP_TITLE = "OpenCitations(CC0) 참고문헌 자료예요";
 
+// 대신 받기 토스트(사용자 결정 2026-10-13): 서재 주소 대신 같은 논문의 무료 공개본(arXiv · 허용 라이선스 위치)을 받았을 때
+export function substituteText(license) {
+  const lic = licenseLabel(license);
+  return `같은 논문의 무료 공개본${lic ? `(라이선스 ${lic})` : ""}을 받았어요`;
+}
+
 // 무료 PDF 새 탭 버튼 글자 (4.2절)
 export const oaOpenLabel = (kind) => (kind === "landing" ? "무료 원문 페이지 열기" : "무료 PDF 열기");

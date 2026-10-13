@@ -181,7 +181,7 @@ RISS는 키를 받으면 쓸 수 있어요. 지금은 아래 ‘학교 DB에서 
 
 | 상태 | 서버 응답 | 버튼 · 글 |
 |---|---|---|
-| **① 서버가 받음** | 카드: `pdf_url` 있음, 또는 `oa/lookup`의 `server_fetch: true` / 서재: `fetch-pdf` → `{paper}` | 카드 [PDF 포함 추가] + 라이선스 칩 / 서재 바로 저장 |
+| **① 서버가 받음** | 카드: `pdf_url` 있음, 또는 `oa/lookup`의 `server_fetch: true` / 서재: `fetch-pdf` → `{paper}`(대신 받았으면 `via: "substitute"` 포함) | 카드 [PDF 포함 추가] + 라이선스 칩 / 서재 바로 저장(대신 받았으면 4.1절 토스트) |
 | **② 새 탭으로 열기** | 카드: `oa_open_url`, 또는 `server_fetch: false` / 서재: `{open_url, reason: "license_unknown"}` | [무료 PDF 열기 ↗] + 안내 "직접 받아 [PDF 첨부]로" |
 | **③ 없음** | `oa: null` / 404 | "무료 PDF 없음" |
 
@@ -191,6 +191,11 @@ RISS는 키를 받으면 쓸 수 있어요. 지금은 아래 ‘학교 DB에서 
 - arXiv(`pdf_url`이 arxiv.org)는 라이선스 칩 없이 지금 그대로 "[PDF] arxiv.org" 링크 + [PDF 포함 추가].
 - 검색 결과에 처음부터 `pdf_url`이 있는 카드(OpenAlex · 허용 라이선스)는 지금 모양 그대로(칩 없음 — 카드에 라이선스 값이 없음).
 - 서재: 토스트 "무료 PDF를 받아 저장했어요" — 응답에 `license`가 있으면 "무료 PDF를 받아 저장했어요 (CC BY)"(확인 필요 3번).
+- **대신 받았을 때**(응답 `via: "substitute"` — 서재 주소가 규칙에 맞지 않아 같은 논문의 arXiv · 허용 라이선스 공개본을 받음, 사용자 결정 2026-10-13): 토스트 문구는 `sourcemeta.substituteText(license)` 하나.
+  - 서재 [PDF 받기]: "같은 논문의 무료 공개본(라이선스 CC BY)을 받았어요"
+  - 라이선스 이름이 없으면(arXiv 번호로 받음 · 빈 값 · `other-oa` 등 이름표 없는 값) 괄호를 뺌: "같은 논문의 무료 공개본을 받았어요"
+  - 논문 찾기 [PDF 포함 추가]: "서재에 추가하고 같은 논문의 무료 공개본(라이선스 CC BY)을 받았어요" (괄호 규칙 같음)
+  - 왜 "같은 논문의 무료 공개본"인가: 사용자가 넣은 주소의 파일이 아니라 **다른 주소의 파일**이라는 점을 알려 주려고. 종류 `success`. `via`가 없는 일반 저장 문구는 위 그대로.
 
 ### 4.2 ② 새 탭으로 열기 — 라이선스 미확인
 - 버튼: `a.btn.sm`(서재는 `a.btn.primary`) "무료 PDF 열기" + `extMark("새 탭에서 열림 · 직접 받아 올려야 해요")`. `open_kind`가 `landing`이면 "무료 원문 페이지 열기"(확인 필요 3번).
@@ -307,7 +312,7 @@ Krizhevsky A, Sutskever I · NeurIPS · 2012 · 인용 120,000
 | `reader.js` | 252행 문구만 |
 | `graphmath.js` · `graph.js` | `WARN_TEXT` · `INFO_CODES`에 `oc_failed`, `oc_failed`+`s2_failed` 합치기, 출처 줄(5.2절) |
 | 순수 모듈(새, 이름 자유) | `SOURCE_META`(이름 · 설명 · 묶음 · 지원 정렬/필터 · 체크 상자 글자 · 출처 줄) · `sourceLimits` · `licenseLabel` · `searchErrorView` — `tests/js/sources.test.mjs`(AC-581) |
-| `dialogs.js` | **변경 없음**(U-1) |
+| `dialogs.js` | [PDF 포함 추가] 대신 받기 토스트만 변경(4.1절 — "서재에 추가하고 " + `substituteText`). 설정 창은 변경 없음(U-1) |
 
 ## 9. 확인 결과 · 못 한 것
 - 정적 시험 페이지: scratchpad `p5/index.html`(저장소 밖 — 소스 선택 · 이유 줄 · 처음 안내 · KCI/RISS/EPMC 카드 · 세 무료 PDF 상태 · 출처 줄 · EPMC 쪽 넘기기 · 오류 상자 · 서재 상세 · OpenCitations 줄)을 로컬 서버로 띄워 **1280 · 900 · 375px × 밝은 · 어두운 테마** 확인. 375px `scrollWidth = 375`(넘침 0개), 머리 양옆 16px, 소스 선택 161px · [AI로 찾기]가 같은 줄.

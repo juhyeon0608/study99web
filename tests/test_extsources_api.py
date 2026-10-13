@@ -181,12 +181,20 @@ def test_fetch_pdf_license_rules(cloud, web):
     pid = _paper(c, doi=D["ccby"], pdf_url="https://files.example.org/ccby.pdf")
     assert c.post(f"/api/papers/{pid}/fetch-pdf").json()["license"] == "cc-by" and key(pid) in puts()
     for d, url in ((D["nolic"], "https://pub.example.org/nolic.pdf"), (D["nolic"], "https://mine.example.org/own.pdf"),
-                   (D["ccby"], "https://pdfs.semanticscholar.org/aa/bb.pdf"), (D["crossref"], "https://pub.example.org/cr.pdf"),
-                   (D["ccby"], "https://files.example.org/ccby.pdf?dl=1"), (D["ccby"], "http://files.example.org/ccby.pdf"),
-                   ("", "https://mine.example.org/nodoi.pdf")):
+                   (D["crossref"], "https://pub.example.org/cr.pdf"), ("", "https://mine.example.org/nodoi.pdf")):
         pid = _paper(c, doi=d, pdf_url=url)
         r = c.post(f"/api/papers/{pid}/fetch-pdf").json()
         assert r == {"open_url": url, "open_kind": "pdf", "reason": "license_unknown"} and key(pid) not in puts(), url
+    # 대신 받기(사용자 결정): 같은 DOI에 허용 위치가 있으면 그것을, arXiv 번호가 있으면 arXiv를 받음 — 보낸 주소로는 요청 0회
+    for url in ("https://pdfs.semanticscholar.org/aa/bb.pdf", "https://files.example.org/ccby.pdf?dl=1",
+                "http://files.example.org/ccby.pdf"):
+        pid = _paper(c, doi=D["ccby"], pdf_url=url)
+        r = c.post(f"/api/papers/{pid}/fetch-pdf").json()
+        assert r["via"] == "substitute" and r["license"] == "cc-by" and key(pid) in puts(), url
+        assert r["paper"]["pdf_url"] == "https://files.example.org/ccby.pdf"
+    pid = _paper(c, doi=D["nolic"], arxiv_id="2101.00003", pdf_url="https://pdfs.semanticscholar.org/cc/dd.pdf")
+    r = c.post(f"/api/papers/{pid}/fetch-pdf").json()
+    assert r["via"] == "substitute" and r["paper"]["pdf_url"] == "https://arxiv.org/pdf/2101.00003"
     assert not [h for h in web.hosts() if h in ("mine.example.org", "pdfs.semanticscholar.org")]
     # arXiv(경계 ② — U-3 예외): pdf_url이 arxiv.org · arXiv 번호
     pid = _paper(c, doi=D["nolic"], pdf_url="https://arxiv.org/pdf/2101.00001")
@@ -218,10 +226,19 @@ def test_add_paper_rejudges_pdf_url(cloud, web):
     r = c.post("/api/papers", json={"title": "Openlink attempt", "pdf_url": "https://www-x-com-ssl.openlink.inha.ac.kr/a.pdf",
                                     "download_pdf": True}).json()
     assert r["paper"]["has_pdf"] is False and r["warning"]
-    for url in ("https://pdfs.semanticscholar.org/x.pdf", "https://files.example.org/add-cc.pdf?x=1"):  # D1: 그 밖 주소
+    for url in ("https://pdfs.semanticscholar.org/x.pdf", "https://files.example.org/add-cc.pdf?x=1"):  # 그 밖 주소 → 대신 받기
         r = c.post("/api/papers", json={"title": f"Rejudge {url}", "doi": d2, "pdf_url": url, "download_pdf": True,
                                         "allow_duplicate": True}).json()
-        assert r["paper"]["has_pdf"] is False and r["open_url"] == url, url
+        assert r["paper"]["has_pdf"] is True and r["via"] == "substitute" and r["license"] == "cc-by", url
+        assert r["paper"]["pdf_url"] == "https://files.example.org/add-cc.pdf" and "open_url" not in r
+    r = c.post("/api/papers", json={"title": "Rejudge arxiv number", "doi": d1, "arxiv_id": "2101.00004",
+                                    "pdf_url": "https://pdfs.semanticscholar.org/y.pdf", "download_pdf": True,
+                                    "allow_duplicate": True}).json()
+    assert r["paper"]["has_pdf"] is True and r["via"] == "substitute" and r["license"] == ""  # DOI 허용 위치 없음 → arXiv
+    r = c.post("/api/papers", json={"title": "Rejudge nothing", "doi": d1, "pdf_url": "https://pdfs.semanticscholar.org/z.pdf",
+                                    "download_pdf": True, "allow_duplicate": True}).json()
+    assert r["paper"]["has_pdf"] is False and r["open_url"] == "https://pdfs.semanticscholar.org/z.pdf"
+    assert "pdfs.semanticscholar.org" not in web.hosts()
     r = c.post("/api/papers", json={"title": "Rejudge ftp", "pdf_url": "ftp://files.example.org/a.pdf",
                                     "download_pdf": True}).json()  # plan_pdf None → TypeError 아님
     assert r["paper"]["has_pdf"] is False and "찾지 못했어요" in r["warning"] and "open_url" not in r

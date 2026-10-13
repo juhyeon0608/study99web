@@ -9,6 +9,7 @@ import { COMPANY, fmtAgo, fmtClock } from "./jobs.js";
 import {
   $, $$, authorsShort, avatarEl, confirmDialog, copyText, el, errorToast, esc, fmtBytes, modal, pickFiles, promptDialog, toast,
 } from "./ui.js";
+import { substituteText } from "./sourcemeta.js";
 import { actions, refreshAll, refreshUsage, state } from "./state.js";
 
 export const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
@@ -834,7 +835,9 @@ export async function addPaper(item, { downloadPdf = false } = {}) {
   try {
     const r = await api.post("/api/papers", payload, { allowConflict: true });
     if (r.conflict) { toast("이미 서재에 있는 논문이에요"); return r.paper; }
-    toast(r.warning || "서재에 추가했어요", r.warning ? "" : "success");
+    // 대신 받기(5단계 사용자 결정): 보낸 주소 대신 같은 논문의 무료 공개본을 받았으면 그렇게 알림
+    toast(r.warning || (r.via === "substitute" ? `서재에 추가하고 ${substituteText(r.license)}` : "서재에 추가했어요"),
+      r.warning ? "" : "success");
     refreshAll();
     return r.paper;
   } catch (e) { errorToast(e); return null; }

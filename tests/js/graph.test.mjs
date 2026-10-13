@@ -127,6 +127,11 @@ test("toModel: 응답 → 화면 모델", () => {
   assert.deepEqual(shown, ["W100", "W107", "W108", "W109", "W110", "W111"]);
   assert.ok(m.nodes.every((n) => n.yb === "none" || (n.yb >= 0 && n.yb <= 4)));
   assert.equal(gm.toModel({ nodes: [], edges: [] }).nodes.length, 0);
+  // 5단계(승인자 L3): 씨앗 참고문헌 보강 출처 — S2로 채움 · OpenCitations로 채움 · 보강 없음
+  assert.equal(gm.toModel({ ...sampleGraph(6), refs_via: "s2" }).refsVia, "s2");
+  assert.equal(gm.toModel({ ...sampleGraph(6), refs_via: "opencitations" }).refsVia, "opencitations");
+  assert.equal(m.refsVia, "");
+  assert.deepEqual(gm.groupNotices([{ code: "oc_failed" }]).map((x) => [x.tone, x.code]), [["info", "oc_failed"]]);
 });
 
 test("seedFromResult · scholarQuery · relation 문구", () => {

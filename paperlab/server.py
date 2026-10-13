@@ -736,7 +736,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             sources = ctx.sources
             ctx.release()  # 논문을 먼저 커밋하고, PDF를 받는 동안 DB 연결을 잡지 않는다 (F9)
             try:
-                plan = extsources.plan_pdf(sources, data["pdf_url"], "", doi, cached)
+                arxiv_id = data.get("arxiv_id") if isinstance(data.get("arxiv_id"), str) else ""
+                plan = extsources.plan_pdf(sources, data["pdf_url"], arxiv_id.strip(), doi, cached)
                 if plan is None:  # http(s) 아닌 주소 · 위치 없음
                     raise SourceError("무료 PDF를 찾지 못했어요")
                 if "open_url" in plan:
@@ -747,6 +748,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 if ctx.lib.pdf_info(pid) is None:  # 그 사이 지워짐
                     raise HTTPException(404, "논문을 찾을 수 없어요")
                 store_pdf(ctx, pid, raw)
+                if plan.get("via"):  # 대신 받음 — 실제로 받은 주소 · 라이선스 (사용자 결정 2026-10-13)
+                    ctx.lib.update_paper(pid, {"pdf_url": plan["fetch"]})
+                    extra = {"via": plan["via"], "license": plan["license"]}
             except SourceError as e:
                 warning = f"논문은 추가했지만 PDF는 받지 못했어요: {e}"
             except HTTPException:
@@ -1023,7 +1027,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         except Exception as e:  # noqa: BLE001 - 손상된 PDF
             raise HTTPException(400, f"PDF를 열 수 없어요: {e}") from e
         ctx.lib.update_paper(pid, {"pdf_url": url})
-        return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings, "license": plan.get("license") or ""}
+        out = {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings, "license": plan.get("license") or ""}
+        if plan.get("via"):
+            out["via"] = plan["via"]  # 서재 주소 대신 같은 논문의 무료 공개본을 받음
+        return out
 
     @app.post("/api/papers/{pid}/refresh")
     def refresh_metadata(pid: int, data: dict = Body(default={}), ctx: RequestCtx = Ctx):

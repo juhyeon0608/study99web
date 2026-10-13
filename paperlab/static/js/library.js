@@ -8,7 +8,7 @@ import {
 } from "./dialogs.js";
 import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
 import { openGraph } from "./graph.js";
-import { OC_FAILED_TEXT, licenseLabel, oaOpenLabel, viaHtml } from "./sourcemeta.js";
+import { OC_FAILED_TEXT, licenseLabel, oaOpenLabel, substituteText, viaHtml } from "./sourcemeta.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
 import {
   $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
@@ -405,7 +405,7 @@ async function renderDetail() {
       return a.focus();
     }
     const lic = licenseLabel(r && r.license); // ① 서버가 받아 저장
-    toast(`무료 PDF를 받아 저장했어요${lic ? ` (${lic})` : ""}`, "success");
+    toast(r && r.via === "substitute" ? substituteText(r.license) : `무료 PDF를 받아 저장했어요${lic ? ` (${lic})` : ""}`, "success");
     reload();
     refreshUsage();
   };

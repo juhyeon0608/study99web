@@ -441,10 +441,14 @@ def test_plan_pdf_order():
     # 허용 라이선스 위치와 글자 그대로 같을 때만 받음
     assert ex.plan_pdf(FakeOA([cc]), cc["pdf_url"], "", D, None) == {"fetch": cc["pdf_url"], "license": "cc-by"}
     assert ex.plan_pdf(FakeOA([nolic]), nolic["pdf_url"], "", D, None) == {"open_url": nolic["pdf_url"], "open_kind": "pdf"}
-    # 그 밖 주소는 모두 새 탭: S2 · Crossref 주소, 사용자가 넣은 주소, ? 붙인 변형, http 변형, DOI 없음
-    for url in ("https://pdfs.semanticscholar.org/ab/cd.pdf", "https://pub.example.org/cr.pdf", "https://mine.example/x.pdf",
-                cc["pdf_url"] + "?download=1", cc["pdf_url"].replace("https://", "http://")):
-        assert ex.plan_pdf(FakeOA([cc]), url, "", D, None) == {"open_url": url, "open_kind": "pdf"}, url
+    # 그 밖 주소(S2 · Crossref · 사용자가 넣은 주소 · ? 변형 · http 변형)는 받지 않음 — 같은 논문의 무료 공개본이 있으면
+    # 그것을 대신 받고(사용자 결정 "대신 받기"), 없으면 원래 주소를 새 탭으로
+    others = ("https://pdfs.semanticscholar.org/ab/cd.pdf", "https://pub.example.org/cr.pdf", "https://mine.example/x.pdf",
+              cc["pdf_url"] + "?download=1", cc["pdf_url"].replace("https://", "http://"))
+    for url in others:
+        assert ex.plan_pdf(FakeOA([nolic, cc]), url, "", D, None) == \
+            {"fetch": cc["pdf_url"], "license": "cc-by", "via": "substitute"}, url
+        assert ex.plan_pdf(FakeOA([nolic]), url, "", D, None) == {"open_url": url, "open_kind": "pdf"}, url
     f = FakeOA([cc])
     assert ex.plan_pdf(f, cc["pdf_url"], "", "", None) == {"open_url": cc["pdf_url"], "open_kind": "pdf"} and f.calls == []
     # 캐시: 허용 위치와 같은 주소면 캐시로(조회 0회), 아니면 OpenAlex 위치 전부를 봄
@@ -454,6 +458,10 @@ def test_plan_pdf_order():
     assert ex.plan_pdf(f, cc["pdf_url"], "", D, [nolic])["fetch"] == cc["pdf_url"] and f.calls == ["oa"]
     # 2. arXiv 번호
     assert ex.plan_pdf(FakeOA(), "", "2101.00001", D, None) == {"fetch": "https://arxiv.org/pdf/2101.00001", "license": ""}
+    assert ex.plan_pdf(FakeOA(), "", "hep-th/9901001v2", D, None)["fetch"] == "https://arxiv.org/pdf/hep-th/9901001v2"
+    for bad in ("@evil.com/x", "//evil.com", "2101.00001#@evil.com", "../x", "2101.00001x", "2101.00001/../x", "1234"):  # 승인자 L-1: 형식 밖이면 번호 없음
+        assert ex.plan_pdf(FakeOA(), "", bad, "", None) is None, bad
+        assert ex.plan_pdf(FakeOA([nolic]), nolic["pdf_url"], bad, D, None) == {"open_url": nolic["pdf_url"], "open_kind": "pdf"}, bad
     # 3. DOI: 캐시 → OpenAlex → 판정, Crossref link는 새 탭만, 모두 없으면 None
     f = FakeOA([nolic, cc])
     assert ex.plan_pdf(f, "", "", D, None) == {"fetch": cc["pdf_url"], "license": "cc-by"}
@@ -466,6 +474,22 @@ def test_plan_pdf_order():
     assert ex.plan_pdf(FakeOA(), "", "", "", None) is None
     with pytest.raises(sources.SourceError):
         ex.plan_pdf(FakeOA(fail=True), "", "", D, None)
+
+
+def test_plan_pdf_substitute():
+    """대신 받기 순서: ② arXiv(번호 · OpenAlex의 arXiv 위치) → ③ 허용 라이선스 위치, openlink 위치는 후보에서 뺌, 없으면 새 탭"""
+    D, s2 = "10.99999/plt5-sub", "https://pdfs.semanticscholar.org/aa/bb.pdf"
+    cc = loc("https://repo.example.org/cc.pdf", "cc-by-nc")
+    arx = loc("https://arxiv.org/pdf/2101.00009v2")
+    sub = lambda u, lic: {"fetch": u, "license": lic, "via": "substitute"}  # noqa: E731
+    assert ex.plan_pdf(FakeOA([cc]), s2, "", D, None) == sub(cc["pdf_url"], "cc-by-nc")  # S2 + 허용 위치
+    assert ex.plan_pdf(FakeOA([cc]), s2, "2101.00001", D, None) == sub("https://arxiv.org/pdf/2101.00001", "")  # S2 + arXiv 번호
+    assert ex.plan_pdf(FakeOA([cc, arx]), s2, "", D, None) == sub(arx["pdf_url"], "")  # arXiv 위치가 허용 위치보다 먼저
+    assert ex.plan_pdf(FakeOA([]), s2, "2101.00001", "", None) == sub("https://arxiv.org/pdf/2101.00001", "")  # DOI 없어도
+    assert ex.plan_pdf(FakeOA([loc("https://p.example/n.pdf")]), s2, "", D, None) == {"open_url": s2, "open_kind": "pdf"}
+    bad = loc("https://www-x-com-ssl.openlink.inha.ac.kr/a.pdf", "cc-by")
+    assert ex.plan_pdf(FakeOA([bad]), s2, "", D, None) == {"open_url": s2, "open_kind": "pdf"}  # openlink 위치 제외
+    assert ex.substitute("", [bad, loc("https://www.openlink.inha.ac.kr.evil/x.pdf", "cc0")])["fetch"].endswith("evil/x.pdf")
 
 
 def test_cache_locations():

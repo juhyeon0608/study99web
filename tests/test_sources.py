@@ -190,6 +190,21 @@ def test_redirects_only_within_same_host():
     assert seen[-1].endswith("/works/10.1/here")
 
 
+def test_lookup_doi_strict_doi_check():
+    """승인자 L2: 등록자 번호 3자리 · 10자리 · '10.1000.10/' 꼴은 요청 0회로 거부, 정상 DOI는 경로 한 조각으로 인코딩"""
+    seen = []
+    s = _mock_sources(lambda r: seen.append(r) or httpx.Response(404))
+    for bad in ("10.123/abc", "10.1234567890/abc", "10.1000.10/abc", "10.1234/a/../b"):
+        with pytest.raises(sources.SourceError):
+            s.lookup_doi(bad)
+    assert seen == []
+    with pytest.raises(sources.SourceError):
+        s.lookup_doi("10.1234/a?b#c")
+    raw = {r.url.raw_path.decode() for r in seen}
+    assert raw == {"/works/10.1234/a%3Fb%23c", "/works/doi:10.1234/a%3Fb%23c"}
+    assert sources.doi_path("10.123456789/X") == "10.123456789/x"
+
+
 def test_rate_limit_message():
     s = _mock_sources(lambda r: httpx.Response(429))
     with pytest.raises(sources.SourceError, match="요청 한도"):
