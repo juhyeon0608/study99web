@@ -29,9 +29,10 @@ EDGE_CAP = {"references": 500, "related": 20, "cited_by_top": 100, "cited_by_rec
 
 WORK_COLS = ("openalex_no", "doi", "arxiv_id", "title", "title_norm", "authors", "author_count", "year", "issued", "venue",
              "publisher", "volume", "issue", "pages", "item_type", "language", "url", "pdf_url", "is_oa",
-             "cited_by_count", "reference_count", "abstract", "meta_on", "abstract_on")
+             "cited_by_count", "reference_count", "abstract", "meta_on", "abstract_on", "oa_license")
 META_KEYS = ("doi", "arxiv_id", "title", "authors", "author_count", "year", "issued", "venue", "publisher", "volume",
-             "issue", "pages", "item_type", "language", "url", "pdf_url", "is_oa", "cited_by_count", "reference_count")
+             "issue", "pages", "item_type", "language", "url", "pdf_url", "is_oa", "cited_by_count", "reference_count",
+             "oa_license")
 
 
 def fresh(day: date | None, days: int, today: date) -> bool:
@@ -93,6 +94,14 @@ def read_by_doi(conn, dois) -> dict[str, int]:
     return out
 
 
+def read_oa(conn, doi: str) -> dict | None:
+    """무료 PDF 판정용(5단계 8.1절): 그 DOI의 OpenAlex 작품 행(피인용이 큰 것)의 pdf_url · url · is_oa · oa_license. 읽기만"""
+    if not doi:
+        return None
+    return conn.execute("select pdf_url, url, is_oa, oa_license from paperlab.external_works where doi = %s "
+                        "order by cited_by_count desc, openalex_no limit 1", (doi,)).fetchone()
+
+
 def read_citers(conn, targets, today: date, per_sort: int) -> list[int]:
     """캐시 안에서 targets 중 하나라도 참고문헌에 가진 작품(참고문헌 · 서지가 유효한 것)
     — 피인용 많은 순 per_sort편 ∪ 최신순 per_sort편 (D 단계를 캐시에서 다시 만들기 — graph_build 참고)"""
@@ -121,7 +130,8 @@ on conflict (openalex_no) do update set
   pdf_url = excluded.pdf_url, is_oa = excluded.is_oa, cited_by_count = excluded.cited_by_count,
   reference_count = excluded.reference_count, meta_on = excluded.meta_on,
   abstract = coalesce(excluded.abstract, paperlab.external_works.abstract),
-  abstract_on = case when excluded.abstract is null then paperlab.external_works.abstract_on else excluded.abstract_on end
+  abstract_on = case when excluded.abstract is null then paperlab.external_works.abstract_on else excluded.abstract_on end,
+  oa_license = coalesce(excluded.oa_license, paperlab.external_works.oa_license)
 """
 
 _UPSERT_EDGE = """
@@ -142,7 +152,7 @@ def work_params(w: dict, today: date) -> tuple:
             w.get("issue") or "", w.get("pages") or "", w.get("item_type") or "article", w.get("language") or "",
             w.get("url") or "", w.get("pdf_url") or "", bool(w.get("is_oa")), int(w.get("cited_by_count") or 0),
             int(w.get("reference_count") or 0), None if abstract is None else abstract[:5000], today,
-            None if abstract is None else today)
+            None if abstract is None else today, None if w.get("oa_license") is None else str(w["oa_license"])[:100])
 
 
 def edge_params(e: dict, today: date) -> tuple:

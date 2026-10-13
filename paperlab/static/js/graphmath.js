@@ -32,6 +32,7 @@ export const WARN_TEXT = {
   abstracts_failed: "일부 논문의 초록을 받지 못했어요.",
   stale_cache: "일부 정보가 오래됐을 수 있어요.",
   s2_failed: "Semantic Scholar가 응답하지 않아 참고문헌을 보강하지 못했어요.",
+  oc_s2_failed: "OpenCitations와 Semantic Scholar가 응답하지 않아 참고문헌을 보강하지 못했어요.",
 };
 const INFO_CODES = ["weak_citation_data", "truncated"];
 const SEPARATE_CODES = ["upstream_limited", "resize_failed"];
@@ -259,6 +260,7 @@ export function toModel(graph) {
     derivative: (graph && graph.derivative) || [],
     warnings: (graph && graph.warnings) || [],
     stats: (graph && graph.stats) || {},
+    refsVia: (graph && graph.refs_via) || "",
     hasRelated: edges.some((e) => e.kind === "related"),
     hasNoYear: nodes.some((n) => n.yb === "none"),
   };
@@ -269,12 +271,18 @@ export const edgeWidth = (w) => 1 + 3 * Math.max(0, Math.min(1, w || 0));
 export const edgeOpacity = (w) => 0.3 + 0.55 * Math.max(0, Math.min(1, w || 0));
 
 // 경고 묶기 (디자인 8.2): [{tone, code, head, items:[문구], settings}]
+// 5단계 AD-8: oc_failed만(S2가 채움)이면 info, oc_failed + s2_failed면 warn 한 줄로 합침(s2_failed 줄은 따로 내지 않음)
 export function groupNotices(warnings) {
   const fail = [];
   const info = [];
   const separate = [];
+  const codes = new Set((warnings || []).map((w) => w.code));
+  const both = codes.has("oc_failed") && codes.has("s2_failed");
   for (const w of warnings || []) {
-    if (SEPARATE_CODES.includes(w.code)) separate.push(w);
+    if (w.code === "oc_failed" && !both) info.push(w);
+    else if (w.code === "oc_failed") fail.push(WARN_TEXT.oc_s2_failed);
+    else if (w.code === "s2_failed" && both) continue;
+    else if (SEPARATE_CODES.includes(w.code)) separate.push(w);
     else if (INFO_CODES.includes(w.code)) info.push(w);
     else fail.push(WARN_TEXT[w.code] || String(w.message || ""));
   }

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 손 픽스처: KCI 키 오류("등록되지 않은 key") — 실제 오류 응답 모양은 키 발급 뒤 녹화로 확인 -->
+<MetaData>
+  <inputData>
+    <apiCode>articleSearch</apiCode>
+    <title>딥러닝</title>
+  </inputData>
+  <outputData>
+    <result>
+      <resultMsg>등록되지 않은 key 입니다.</resultMsg>
+    </result>
+  </outputData>
+</MetaData>

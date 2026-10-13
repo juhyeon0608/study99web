@@ -21,6 +21,7 @@ from paperlab.db import normalize_title
 
 OA = "api.openalex.org"
 S2 = "api.semanticscholar.org"
+OC = "api.opencitations.net"
 
 
 class FakeClock:
@@ -119,6 +120,7 @@ class World:
         add(self.S2SEED, "Seed Without OpenAlex References Indexed", 2020, 50, refs=[], related=[],
             doi=f"10.5555/s2seed.{b}")
         self.s2_refs = {f"10.5555/s2seed.{b}": [f"10.5555/r{i}.{b}" for i in range(10)] + ["10.9999/unknown.doi"]}
+        self.oc_refs: dict[str, list[str]] = {}  # 5단계: OpenCitations가 아는 참고문헌 DOI (없으면 404)
         # 큰 씨앗
         for i, r in enumerate(self.BIGR):
             add(r, f"Big Reference Item {i} Survey Entry", 2000 + i % 20, i, refs=self.X[:3])
@@ -185,6 +187,8 @@ class FakeUpstream:
         host, path, params = request.url.host, request.url.path, request.url.params
         if host == S2:
             return "s2"
+        if host == OC:
+            return "oc"
         if host != OA:
             return "other"
         if path.startswith("/works/W"):
@@ -218,6 +222,8 @@ class FakeUpstream:
                 return out
         if info["kind"] == "s2":
             return self._s2(info)
+        if info["kind"] == "oc":
+            return self._oc(info)
         if info["kind"] == "other":
             return httpx.Response(404)
         return self._oa(info)
@@ -240,6 +246,16 @@ class FakeUpstream:
         if refs is None:
             return httpx.Response(404)
         return httpx.Response(200, json={"data": [{"citedPaper": {"externalIds": {"DOI": d}}} for d in refs]})
+
+    def _oc(self, info) -> httpx.Response:
+        prefix = "/index/v2/references/doi:"
+        if not info["path"].startswith(prefix):
+            return httpx.Response(404)
+        refs = self.world.oc_refs.get(info["path"][len(prefix):])
+        if refs is None:
+            return httpx.Response(404)
+        return httpx.Response(200, json=[{"oci": f"x-{i}", "citing": "omid:br/1", "cited": f"omid:br/{i} doi:{d}"}
+                                         for i, d in enumerate(refs)])
 
     def _oa(self, info) -> httpx.Response:
         w = self.world

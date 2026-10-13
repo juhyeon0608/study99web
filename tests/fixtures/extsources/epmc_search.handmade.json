@@ -1,0 +1,31 @@
+{
+  "_fixture": "손 픽스처 — Europe PMC REST search(format=json, resultType=core) 공식 필드 이름으로 만든 가상 응답. 녹화본(epmc_search.json)이 생기면 바꿈",
+  "version": "6.9",
+  "hitCount": 2,
+  "nextCursorMark": "AoJwgK7Bk4wDKDQwNzM0NjU0",
+  "request": {"queryString": "deep learning", "resultType": "core", "cursorMark": "*", "pageSize": 20, "sort": ""},
+  "resultList": {
+    "result": [
+      {
+        "id": "40734654", "source": "MED", "pmid": "40734654", "pmcid": "PMC9999999",
+        "doi": "10.99999/EPMC.2024.001",
+        "title": "Deep learning for &lt;i&gt;retinal&lt;/i&gt; imaging &amp; screening",
+        "authorString": "Smith JA, Doe B, van der Berg K.",
+        "journalInfo": {"issue": "4", "volume": "12", "journal": {"title": "Journal of Imaginary Ophthalmology"}},
+        "pubYear": "2024", "pageInfo": "e101",
+        "abstractText": "<h4>Background</h4>We trained a &lt;b&gt;model&lt;/b&gt; on fundus photographs.",
+        "isOpenAccess": "Y", "citedByCount": 7, "hasPDF": "Y",
+        "license": "cc by",
+        "fullTextUrlList": {"fullTextUrl": [{"availability": "Open access", "documentStyle": "pdf", "site": "Europe_PMC",
+                                              "url": "https://europepmc.org/articles/PMC9999999?pdf=render"}]}
+      },
+      {
+        "id": "12345678901234567890123", "source": "evil source",
+        "title": "Second imaginary result without journal info",
+        "authorString": "Kim H.",
+        "journalTitle": "Imaginary Medicine", "journalVolume": "3", "issue": "1",
+        "pubYear": "2019", "isOpenAccess": "N", "citedByCount": 0
+      }
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+[
+  {"oci": "06101-06102", "citing": "omid:br/0610 doi:10.99999/seed pmid:1", "cited": "omid:br/06102 doi:10.99999/REF.A pmid:2",
+   "creation": "2020-01", "timespan": "P3Y", "journal_sc": "no", "author_sc": "no"},
+  {"oci": "06101-06103", "citing": "omid:br/0610 doi:10.99999/seed", "cited": "omid:br/06103 doi:10.99999/ref.b",
+   "creation": "2020-01", "timespan": "P1Y", "journal_sc": "no", "author_sc": "yes"},
+  {"oci": "06101-06104", "citing": "omid:br/0610 doi:10.99999/seed", "cited": "10.99999/ref.c", "creation": "2020-01"},
+  {"oci": "06101-06105", "citing": "omid:br/0610", "cited": "omid:br/06105 pmid:99", "creation": "2020-01"},
+  {"oci": "06101-06106", "citing": "omid:br/0610", "cited": "doi:10.99999/ref.a", "creation": "2020-01"},
+  "not-an-object"
+]

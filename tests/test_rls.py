@@ -282,6 +282,40 @@ def test_shared_cache_constraints(project):
             raise psycopg.Rollback()
 
 
+def test_phase5_cache_columns(project):
+    """5단계 AC-561 · 562: 마이그레이션 두 번째는 할 일 없음, external_works.oa_license(≤100자 · null · '' 허용),
+    source는 'openalex'만, citation_edges.source에 'opencitations' 추가 · 'foo' 거부. authenticated는 oa_license도 쓰지 못함"""
+    assert apply_migrations(project.admin_db, target="test") == []
+    no = 9_990_000_000 + uuid.uuid4().int % 9_000_000
+    bad = [
+        ("insert into paperlab.external_works (openalex_no, title, oa_license, meta_on) values (%s, 't', repeat('x', 101), current_date)", (no,)),
+        ("insert into paperlab.external_works (openalex_no, title, source, meta_on) values (%s, 't', 'unpaywall', current_date)", (no,)),
+        ("insert into paperlab.external_works (openalex_no, title, source, meta_on) values (%s, 't', 'kci', current_date)", (no,)),
+        ("insert into paperlab.citation_edges (work_no, relation, nos, total, source, fetched_on) "
+         "values (%s, 'references', '{}', 0, 'foo', current_date)", (no,)),
+    ]
+    with admin(project) as conn:
+        for sql, params in bad:
+            with pytest.raises(psycopg.errors.CheckViolation):
+                with conn.transaction():
+                    conn.execute(sql, params)
+        with conn.transaction():  # 허용 값 (되돌림)
+            for i, lic in enumerate((None, "", "cc-by", "x" * 100)):
+                conn.execute("insert into paperlab.external_works (openalex_no, title, oa_license, meta_on) "
+                             "values (%s, 't', %s, current_date)", (no + i, lic))
+            conn.execute("insert into paperlab.citation_edges (work_no, relation, nos, total, source, fetched_on) "
+                         "values (%s, 'references', '{1}', 1, 'opencitations', current_date)", (no,))
+            raise psycopg.Rollback()
+    with psycopg.connect(project.app_db, autocommit=True, prepare_threshold=None) as conn:
+        with conn.transaction():
+            conn.execute("set local role authenticated")
+            conn.execute("select set_config('request.jwt.claims', %s, true)", (_claims(str(uuid.uuid4())),))
+            conn.execute("select oa_license from paperlab.external_works limit 1")
+            with pytest.raises(psycopg.errors.InsufficientPrivilege):
+                with conn.transaction():
+                    conn.execute("update paperlab.external_works set oa_license = 'cc-by' where openalex_no = %s", (no,))
+
+
 def test_shared_cache_admin_commands(project):
     """AC-G43(자동 부분): cache-stats는 숫자 · 날짜만, cache-prune은 서지를 받은 날이 오래된 것부터 지움"""
     from paperlab.admin import cache_prune, cache_stats
@@ -604,18 +638,27 @@ def test_logs_have_no_secrets(cloud, caplog):
 
 
 def test_ssrf_blocked_via_api(cloud):
-    """품질팀 F3: 사용자 pdf_url이 내부 주소면 연결하지 않고 같은 문구"""
-    from paperlab.sources import PDF_FETCH_FAILED, Sources
-    cloud.app.state.sources_factory = lambda get: Sources(get, resolver=lambda h, p: ["10.0.0.7"])
+    """품질팀 F3: 사용자 pdf_url이 내부 주소면 연결하지 않음. 5단계 D1부터는 사용자가 넣은 주소를 서버가 받지 않으므로
+    (arXiv · 허용 라이선스 OpenAlex 위치만) 새 탭 주소로 돌려주거나(http/https) 없음(그 밖) — 어느 쪽도 연결 0회"""
+    import httpx
+
+    from paperlab.sources import Sources
+    seen = []
+    cloud.app.state.sources_factory = lambda get: Sources(
+        get, resolver=lambda h, p: seen.append(h) or ["10.0.0.7"],
+        transport=httpx.MockTransport(lambda r: seen.append(r) or httpx.Response(404)))
     c = cloud.client(cloud.user())
     r = c.post("/api/papers", json={"title": "SSRF probe paper", "pdf_url": "http://169.254.169.254/latest/meta-data/",
                                     "download_pdf": True}).json()
-    assert PDF_FETCH_FAILED in r["warning"] and r["paper"]["has_pdf"] is False
+    assert r["paper"]["has_pdf"] is False and r["warning"]
     pid = r["paper"]["id"]
-    for url in ("http://127.0.0.1:5432/", "http://internal.example/x.pdf", "file:///etc/passwd"):
+    for url in ("http://127.0.0.1:5432/", "http://internal.example/x.pdf"):
         c.patch(f"/api/papers/{pid}", json={"pdf_url": url})
         res = c.post(f"/api/papers/{pid}/fetch-pdf")
-        assert res.status_code == 502 and res.json()["detail"] == PDF_FETCH_FAILED, url
+        assert res.status_code == 200 and res.json()["open_url"] == url, url
+    c.patch(f"/api/papers/{pid}", json={"pdf_url": "file:///etc/passwd"})
+    assert c.post(f"/api/papers/{pid}/fetch-pdf").status_code == 404
+    assert seen == []
 
 
 def test_complete_cleans_incoming_when_validation_fails(cloud):

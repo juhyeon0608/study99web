@@ -67,7 +67,7 @@
 | ② | 드래그 쉬운 설명 + 도식 | 읽기 화면에서 드래그한 문장·영역을 쉽게 풀고 **SVG 도식**을 그림, 필요하면 codex로 이미지 생성 | `ai/explain.py` | 4 |
 | ③ | 번역 | **선택 번역** + **논문 전체 번역**(쪽 단위 병렬), 결과는 원고(작성기 문서)로 저장 | `ai/translate.py` | 4 |
 | ④ | 여러 AI 엔진 라우팅 | claude · codex · gemini **CLI + API**, **작업별 엔진** 지정, 폴백 | `ai/router.py` · `providers.py` · `cli.py` · `pool.py` · `config/ai_profiles.json` | 2 |
-| ⑤ | 국내 DB · 기관 연동 | **KCI · RISS · Europe PMC · OpenCitations · Unpaywall** 검색·보강, **학교 프록시 링크**(자격증명은 다루지 않음) | `external/`(kci · riss · europepmc · opencitations · unpaywall · proxy) | 5 (**학교 프록시 링크는 1A** — 인하대 openlink) |
+| ⑤ | 국내 DB · 기관 연동 | **KCI · RISS(키를 받으면) · Europe PMC · OpenCitations** 검색·보강, 무료 PDF는 OpenAlex 정보로(Unpaywall은 쓰지 않음 — 사용자 결정 2026-10-13), **학교 프록시 링크**(자격증명은 다루지 않음) | `external/`(kci · riss · europepmc · opencitations · proxy) | 5 (**학교 프록시 링크는 1A** — 인하대 openlink) |
 | ⑥ | 인용 그래프 | Connected Papers 방식(씨앗 → 참고문헌·피인용·관련 논문 → 유사도 그래프) | `graph/`(builder · coupling · similarity) | **1B** (개정 — 5에서 앞당김) |
 
 ### 새 기능 (1st My paper에 없음)
@@ -282,10 +282,12 @@
 
 (개정 2026-10-07, 사용자 결정: **학교 프록시 링크는 1A단계로, 인용 그래프(⑥)는 1B단계로 앞당김** — 이 단계에서 뺌)
 
+(개정 2026-10-13, **사용자 결정** — [명세](docs/specs/phase5-korean-db.md) 16장: **Unpaywall을 쓰지 않음**(무료 PDF 정보는 OpenAlex 것만), KCI · RISS 키는 공용 키 하나, RISS 키를 못 받으면 RISS는 1A 검색 바로가기만, 무료 PDF는 라이선스가 확인된 것만 서버가 받음)
+
 - **목표**: 국내 논문 검색과 오픈 액세스 찾기.
-- **범위**: KCI · RISS · Europe PMC 검색, OpenCitations 인용 관계, Unpaywall 무료 PDF, 가져온 공개 서지·인용 관계는 **공용 캐시**(`external_works` · `citation_edges`, 사용자 결정 — 1B단계에서 만든 것을 함께 씀)에 저장해 사용자끼리 다시 받지 않게 함 — 누가 조회했는지는 남기지 않고, 서재에 넣은 논문·PDF·메모는 각자의 개인 데이터로 따로 저장. KCI · RISS로 찾은 논문에도 1A의 "인하대에서 보기"를 붙임
-- **완료 기준**: 검색 화면에서 KCI·RISS를 고를 수 있고 서재 추가가 됨 · DOI가 있는 논문에서 Unpaywall 무료 PDF를 받음
-- **미정**: KCI·RISS API 키 발급 주체(사용자별/공용). (학교 프록시 주소 형식은 1A 명세 5장에서 확인 — 이 단계 미정에서 뺌)
+- **범위**: KCI · RISS(키를 받으면) · Europe PMC 검색, OpenCitations 인용 관계, **OpenAlex 무료 PDF 정보**(`best_oa_location` / `oa_locations`의 `pdf_url` · `license`)로 **라이선스가 확인된 것(CC · 퍼블릭 도메인)만 서버가 받고 나머지는 새 탭으로 엶**(기존 [PDF 받기]에도 같은 규칙 — 프록시 · openlink 호스트는 쓰지 않음). ~~Unpaywall 무료 PDF~~ — **삭제(사용자 결정 2026-10-13)**. 공용 캐시(`external_works` · `citation_edges`, 사용자 결정 — 1B단계에서 만든 것을 함께 씀)에는 **DOI로 다시 찾는 것만** 새로 저장(OpenCitations 참고문헌 · 인용 관계) — OpenAlex 무료 PDF 정보는 1B 캐시에 이미 있는 작품 행을 읽어 씀. KCI · RISS · Europe PMC 검색 결과 목록은 캐시하지 않음. 누가 조회했는지는 남기지 않고, 서재에 넣은 논문·PDF·메모는 각자의 개인 데이터로 따로 저장. KCI · RISS로 찾은 논문에도 1A의 "인하대에서 보기"를 붙임
+- **완료 기준**: 검색 화면에서 KCI를 고를 수 있고 서재 추가가 됨 · **RISS 검색은 키를 받으면** 같은 방식으로 됨(키가 없으면 RISS는 1A 검색 바로가기만, 목록에서는 비활성) · DOI가 있는 논문에서 **OpenAlex 무료 PDF 정보로, 라이선스 규칙에 따라 받거나(CC · 퍼블릭 도메인) 새 탭으로 엶**
+- **미정**: (없음 — KCI·RISS API 키 발급 주체는 공용 키 하나로 해결, P9). 남은 것은 관리자의 키 신청 결과와 개발팀 첫 주 실측(OpenAlex `license` 실제 값 목록). (학교 프록시 주소 형식은 1A 명세 5장에서 확인 — 이 단계 미정에서 뺌)
 
 ### 6단계 — 폴더 양방향 동기화(⑧)
 
@@ -347,7 +349,7 @@
 | P15 | 1A 인하대 프록시: IU-1 · IU-5 · IK-1~IK-10은 **결정됨**. 남은 IU-2(로그인 상태 DOI) · IU-3(KISS 검색 주소) · IU-4(Scholar 도서관 링크) · IU-6(미구독 사이트 화면)은 **배포 뒤 사용자 수동 확인**(M-2 · M-3 · M-15 · M-16) → [1A 명세](docs/specs/inha-proxy.md) 15장 | 1A 배포 뒤 |
 | ~~P16~~ | ~~1B 인용 그래프 명세~~ → **해결**(2026-10-07): [명세](docs/specs/citation-graph.md) 작성, 사용자 U-1(그래프 기록 안 함) · 팀장 K-1~K-16 결정. 구현 때 실측 항목만 남음(명세 14.3절) | — |
 | ~~P17~~ | ~~3단계 AI로 찾기 세부~~ → **해결**(2026-10-08, 팀장 K-3 · K-9~K-13): 화면 `#/ask`, 검색어 3 · 소스별 20편 · 요약 8편, 임베딩 유사도 선별, 결과 저장 안 함(24시간), 공용 캐시 안 씀 — [3단계 명세](docs/specs/phase3-rag-verify-search.md). R2 벡터 파일 · 캐시 결정 K-16~K-21도 확정 | — |
-| P9 | KCI·RISS API 키를 사용자마다 받을지, 하나를 같이 쓸지 | 5단계 전 |
+| ~~P9~~ | ~~KCI·RISS API 키를 사용자마다 받을지, 하나를 같이 쓸지~~ → **해결**(2026-10-13, 사용자 결정 U-1): **공용 키 하나**, 관리자가 신청해 서버 PC `cloud.env`(`KCI_API_KEY` · `RISS_API_KEY`)에 둠. RISS 키를 못 받으면 RISS는 1A 검색 바로가기만(U-2) — [5단계 명세](docs/specs/phase5-korean-db.md) 16장 | — |
 | P10 | 0단계 양식 기능의 질문들 | 0단계 개발 전 → [명세 12장](docs/specs/doc-formats.md#12-미정-사항--사용자-확인-질문) |
 | ~~P12~~ | ~~Electron 앱 세부~~ → **해결**(사용자 결정 U3~U6: 이름 PaperLab · 지금 아이콘 · 사용자별 설치 · 관리자 PC 바로가기도 교체, 자동 시작 + 트레이, 자동 받고 종료 때 설치, 서버 주소 내장 / 팀장 결정 K10: 시스템 브라우저 + `paperlab://` 딥 링크 + PKCE) | — |
 | ~~P11~~ | ~~PDF 업로드 방식~~ → **해결**(2026-10-07, 팀장 결정): 서명 업로드 주소로 브라우저가 직접 올리고 서버가 사용자 권한으로 읽어 추출 | — |

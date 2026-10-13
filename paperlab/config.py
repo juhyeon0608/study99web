@@ -73,6 +73,8 @@ _SIG_RE = re.compile(r"(X-Amz-(?:Signature|Credential|Security-Token)=)[^&\s]+",
 # API 키(Anthropic · OpenAI · Google) · 기기 토큰 (2단계 9.5 · 13.8절). sk-는 실제 키 모양(단어 경계 + 20자 이상)만
 _KEY_RES = (re.compile(r"\b(sk-ant-)[A-Za-z0-9_\-]{6,}"), re.compile(r"\b(sk-)[A-Za-z0-9_\-]{20,}"),
             re.compile(r"\b(AIza)[A-Za-z0-9_\-]{6,}"), re.compile(r"\b(pld1\.)[A-Za-z0-9_.\-]{6,}"))
+# 쿼리 값으로 가는 키 · 이메일 (5단계 K-17 — KCI · RISS 공용 키는 key= 쿼리)
+_QUERY_SECRET_RE = re.compile(r"([?&](?:key|api_key|apikey|email|mailto)=)[^&\s#\"']+", re.I)
 
 
 def redact(text: str) -> str:
@@ -80,6 +82,7 @@ def redact(text: str) -> str:
     text = _URL_CRED_RE.sub(r"\1***@", str(text))
     text = _KV_PASSWORD_RE.sub(r"\1***", text)
     text = _SIG_RE.sub(r"\1***", text)
+    text = _QUERY_SECRET_RE.sub(r"\1***", text)
     for rx in _KEY_RES:
         text = rx.sub(r"\1***", text)
     return text
@@ -228,6 +231,9 @@ class ServerConfig:
     allowlist_enabled: bool = True
     # 서버가 여는 127.0.0.1 포트 (Host 허용 목록의 127.0.0.1:포트 · localhost:포트)
     local_port: int = DEFAULT_PORT
+    # 5단계 공용 검색 키(U-1 · K-13). 없으면 그 소스만 꺼짐 — 서버 시작은 막지 않음. repr에 값을 넣지 않음
+    kci_api_key: str = field(default="", repr=False)
+    riss_api_key: str = field(default="", repr=False)
 
     @property
     def issuer(self) -> str:
@@ -274,6 +280,8 @@ class ServerConfig:
             public_url=parse_public_url(env["PAPERLAB_PUBLIC_URL"]),
             allowlist_enabled=(env.get("PAPERLAB_ALLOWLIST") or "on").strip().lower() != "off",
             local_port=port,
+            kci_api_key=(env.get("KCI_API_KEY") or "").strip(),
+            riss_api_key=(env.get("RISS_API_KEY") or "").strip(),
         )
 
 

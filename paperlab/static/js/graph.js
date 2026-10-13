@@ -437,7 +437,9 @@ function showGraph(graph, { first }) {
 function drawFoot() {
   const st = g.model.stats || {};
   $("[data-foot-count]", g.view).textContent = `후보 ${fmt(st.candidates || g.model.nodes.length)}편 중 ${g.model.nodes.length}편`;
-  $("[data-foot-src]", g.view).textContent = `OpenAlex 기준 · ${st.built_on || ""}`;
+  // 씨앗 참고문헌을 OpenCitations로 채웠으면 출처에 함께 (5단계 9.3절 · 팀장 결정 5)
+  const src = g.model.refsVia === "opencitations" ? "OpenAlex · OpenCitations" : "OpenAlex";
+  $("[data-foot-src]", g.view).textContent = `${src} 기준 · ${st.built_on || ""}`;
 }
 
 function drawNotices() {
@@ -454,6 +456,11 @@ function drawNotices() {
       const parts = [];
       if (n.infos.includes("weak_citation_data")) parts.push("이 논문 주변은 인용 정보가 적어 주제 유사도로 보강했어요. <b>점선</b>은 인용 근거 없이 주제만 비슷한 연결이에요. (국문 논문은 OpenAlex 인용 정보가 적은 편이에요.)");
       if (n.infos.includes("truncated")) parts.push("참고문헌이 많아 앞의 300편만 비교했어요.");
+      if (n.infos.includes("oc_failed")) { // D6: S2가 실제로 채웠을 때만 "채웠어요", 아니면 서버 문구
+        const ocw = g.model.warnings.find((w) => w.code === "oc_failed");
+        parts.push(esc(g.model.refsVia === "s2" ? "OpenCitations가 응답하지 않아 Semantic Scholar 자료로 참고문헌을 채웠어요."
+          : (ocw && ocw.message) || "OpenCitations가 응답하지 않아 참고문헌을 보강하지 못했어요."));
+      }
       body = `<div>${parts.join(" ")}</div>`;
     } else if (n.code === "upstream_limited") {
       body = `<div>OpenAlex 하루 사용량을 다 써서 저장돼 있던 정보로만 그렸어요(한국 시간 오전 9시에 초기화). 설정에서 OpenAlex API 키를 넣으면 한도가 10배가 돼요.

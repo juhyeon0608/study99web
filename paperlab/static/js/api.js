@@ -4,7 +4,7 @@ import { accessToken, refreshToken } from "./auth.js";
 
 // 원래 오래 걸리는 요청: 3초 넘어도 "서버에 연결하는 중" 띠를 띄우지 않는다
 // (PDF 추출 · URL에서 받기 · compose · 워드/한글 내보내기 · 외부 학술 DB 조회)
-const LONG_RE = /^\/api\/(uploads\/[^/]+\/complete|papers\/\d+\/(pdf\/complete|fetch-pdf|refresh|related)|compose\/|export-document|search|related|resolve)\b/;
+const LONG_RE = /^\/api\/(uploads\/[^/]+\/complete|papers\/\d+\/(pdf\/complete|fetch-pdf|refresh|related)|compose\/|export-document|search|related|resolve|oa\/lookup)\b/;
 
 let live = false; // 로그인을 마치고 화면을 쓰는 중인지 (시작 중에는 띠 · 만료 처리 대신 오류를 그대로 던진다)
 const hooks = { expired: null, denied: null, retry: null };

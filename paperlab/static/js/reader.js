@@ -249,7 +249,7 @@ function drawPdfMissing() {
   R.pagesEl.innerHTML = `<div class="empty pdf-missing">
     <h3>PDF가 없어요</h3>
     <p>${target ? "인하대에서 논문을 열어 PDF를 받은 뒤 [PDF 첨부]로 올려 주세요."
-      : "PDF 파일이 있으면 [PDF 첨부]로 올려 주세요. 무료 PDF는 서재 상세 패널의 [PDF 받기]로 찾을 수 있어요."}</p>
+      : "PDF 파일이 있으면 [PDF 첨부]로 올려 주세요. 무료 PDF는 서재 상세 패널의 [무료 PDF 찾기]로 찾을 수 있어요."}</p>
     <div class="empty-actions">
       ${target ? `<a class="btn primary" href="${esc(target)}" target="_blank" rel="noopener noreferrer" data-inha-open>${esc(INHA.buttons.view)}${EXT_MARK}</a>` : ""}
       <button type="button" class="btn${target ? "" : " primary"}" data-attach>PDF 첨부</button>

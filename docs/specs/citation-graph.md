@@ -8,6 +8,7 @@
 - 개정 2026-10-07 (구현 반영 — 개발팀이 명세와 다르게 처리한 15개 항목, **팀장 승인**): ① D 단계 저장 · 계산 방식(8.3절) ② OpenAlex가 돌려주지 않는 번호는 제목 빈 행으로 30일(8.2절) ③ 이전 · 이후 연구에서 씨앗 제외(6.7절) ④ 제목 합치기는 정규화 제목 12자 이상(6.2절) ⑤ 예비 점수 0은 D 대상 제외 · 씨앗 `score` = null(6.5 · 9.3절) ⑥ E 단계에서 세 크기 모두 미리 받기(최대 2회, 7.3절) ⑦ 마이그레이션 `20261008000002_citation_cache.sql`(8.7절) ⑧ AC-G20 ③ 열 이름 규칙 ⑨ S2 404는 경고 없음 · 재시도는 연결 오류 · 429 · 5xx만 1회(7.5절) ⑩ OpenAlex 키는 `api_key` 쿼리(7.4절) ⑪ K-6 확대 — 사용자 이메일은 Crossref에만(7.4절) ⑫ 서재 씨앗의 형식이 틀린 칸은 버림(6.1 · 9.5절) ⑬ 시작되지 않은 대기 자리는 30초 뒤 비움(9.4절) ⑭ JS 래퍼 `tests/test_graph_js.py` 따로(12장) ⑮ `truncated`는 참고문헌 300편 초과 때(6.2 · 9.3절). 새 모듈 `paperlab/graph_build.py`(15장)
 - 개정 2026-10-07 (품질팀 문서 정합 — 팀장 요청): ⑫ 서재 씨앗의 칸이 모두 틀리면 400 `bad_seed`로 통일(6.1절), 합쳐진(merged) 씨앗 번호 처리(6.1절 6번 · 9.5절 · AC-G35a), S2 경로 = 퍼센트 인코딩 + `.`/`..` 조각 거부(9.5절 · AC-G35), 그래프 로그에 `result`(9.6절), 같은 씨앗 합치기 때 첫 요청자의 OpenAlex 키 사용(M-2 수용 — 9.4절), 수용 위험 M-9 · M-10(13장), 화면 메모리는 로그아웃 때 비움(M-5 — 8.1 · 8.6절)
 - 개정 2026-10-08 (1C 구현 반영 — 팀장 결정 Q-1): 공용 캐시 관계에 **`cited_by_top_c`**(C 단계 피인용 상위 목록 — 1C 추천이 쓰고, 사용자 결정 I-1에 따라 그래프도 씀) 추가. 7.6절 TTL 30일 · 8.3절 관계 표 · 상한 100 · 그래프의 재사용 규칙 · 8.4절 SQL · 8.7절 마이그레이션 `20261008000003_citation_edges_top_c.sql`. 결정 기록 14.4절
+- 개정 2026-10-13 (5단계 구현 반영 — 팀장 요청, [5단계 명세](phase5-korean-db.md) 9.3 · 10.2 · 16.4절): ① **씨앗 참고문헌 보강 순서를 "OpenCitations 먼저, 0편이거나 실패하면 S2"로** 고침(3 · 6.8 · 7.3절 · AC-G18) ② 경고 code 표(9.3절)에 **`oc_failed`** 추가 ③ 그래프 아래 **출처 줄을 "OpenAlex · OpenCitations 기준"**(씨앗 참고문헌을 OpenCitations로 채웠을 때 — 응답 `refs_via: "opencitations"`, 10.2절) ④ 공용 캐시 `citation_edges.source`에 `opencitations` 추가(8.3 · 8.7절). 코드: `paperlab/graph_build.py` `_s2_augment` · `WARNINGS`
 - 표기: **확정** = 사용자 결정, **팀장 원칙** = 팀장이 이미 정한 원칙(PLAN · 1단계 명세), **기획팀 추천** = 팀장 결정 전 안(14.2절 `K-…` — 2026-10-07 모두 확정), **가정** = 기획팀 임시값(구현 · 실측으로 조정), **미정(사용자)** = 14.1절 `U-…`, **확인 필요** = 외부 서비스 사실을 공식 문서로 다 확인하지 못함(개발팀이 첫 작업 때 실측하고 이 문서를 고침).
 
 ---
@@ -40,13 +41,13 @@
 3. **진행 표시**: 요청 안 스트리밍(SSE) 진행 이벤트(9.2절 — K-2).
 4. **공용 캐시**: `external_works`(서지) · `citation_edges`(관계 목록) 새 표, RLS(읽기 = 로그인 사용자, 쓰기 = 서버 `system_tx`만), 유효 기간(TTL), 크기 점검 · 정리 명령(8장).
 5. **그래프 화면**: 힘 기반 배치(클라이언트), 노드 크기 = 피인용 수, 색 = 연도, 선 굵기 = 유사도, 확대 · 이동, 노드 패널(정보 · 서재 추가 · 인용 · 인하대에서 보기 · Google Scholar · 이 논문으로 새 그래프), 이전 · 이후 연구 탭, 목록 보기(접근성), 크기 선택(20 · 40 · 80편)(10장).
-6. **Semantic Scholar 보강(조건부)**: 씨앗이 OpenAlex에서 참고문헌이 0편이고 DOI가 있을 때만 S2 참고문헌 1회(7.3절 — K-7).
+6. **참고문헌 보강(조건부)**: 씨앗이 OpenAlex에서 참고문헌이 0편이고 DOI가 있을 때만 **OpenCitations 참고문헌 1회 → 0편이거나 실패하면 Semantic Scholar 참고문헌 1회**(7.3절 — K-7, 5단계에서 OpenCitations를 앞에 둠).
 7. **자동 테스트**: 가짜 OpenAlex · S2 응답으로 알고리즘 · API · 캐시 재사용 · RLS · 로그 검사(11 · 12장).
 
 ### 안 하는 것 (범위 밖)
 - **그래프 저장 · 기록**: 내가 만든 그래프 목록을 서버에 남기지 않음(**확정 — 사용자 결정 U-1 ①**). 매번 다시 계산(캐시 덕분에 빠름).
 - 인용 방향 그래프 모드(1st My paper `mode=citation`), 2단계 이상 깊이 확장, 여러 씨앗 합친 그래프, 그래프 내보내기(이미지 · 파일), 노드 끌어 옮기기, 그래프 공유.
-- **OpenCitations · KCI · RISS · Unpaywall** — 5단계(그때 같은 공용 캐시 표를 늘려 씀 — 8.7절). (기획팀 추천 K-14)
+- **OpenCitations · KCI · RISS** — 5단계(그때 같은 공용 캐시 표를 늘려 씀 — 8.7절). (기획팀 추천 K-14) Unpaywall은 쓰지 않음(5단계 사용자 결정 U-4).
 - 기존 상세 패널 "인용 관계" 탭 · 찾기 화면의 피인용/참고문헌/관련 목록(`/api/papers/{id}/related` · `/api/related`)은 **그대로**(캐시를 쓰도록 바꾸지 않음 — 나중에 합칠 수 있음).
 - 임베딩(의미) 유사도 — 3단계 임베딩 모델 뒤에 재검토.
 - 캐시를 사용자에게 목록으로 보여 주는 화면 · API(조회 기록이 드러날 수 있어 만들지 않음).
@@ -167,7 +168,7 @@ Connected Papers 정의(16장): 이전 연구 = 그래프 논문들이 **공통�
 ### 6.8 인용 정보가 적은 논문 (국문 등)
 - 1st My paper 실측(한국어 인용 상위 25편): 참고문헌 있음 36%, 관련 논문 있음 100%(영어는 참고문헌 84%). 그래서 6.4절 폴백(`related`)을 둡니다. 화면에서는 **점선**, 범례 "주제 유사(인용 근거 없음)".
 - 고른 노드의 선 가운데 `related`가 **절반 넘으면** 경고 `weak_citation_data` "이 논문 주변은 인용 정보가 적어 주제 유사도로 보강했어요."
-- 씨앗의 OpenAlex 참고문헌이 0편이면 7.3절 S2 보강(K-7)을 먼저 시도.
+- 씨앗의 OpenAlex 참고문헌이 0편이면 7.3절 참고문헌 보강(K-7 — **OpenCitations 먼저, 0편이거나 실패하면 S2**)을 먼저 시도.
 - KCI 같은 국내 DB 인용 정보는 5단계.
 
 ### 6.9 수치 (기획팀 추천 K-8 · K-9 — 코드 상수 한 곳 `citegraph.py`, 가정)
@@ -224,9 +225,10 @@ Connected Papers 정의(16장): 이전 연구 = 그래프 논문들이 **공통�
 | C 피인용 | `filter=cites:W<seed>&sort=cited_by_count:desc&per_page=100` | 목록 | 1 |
 | D 함께 인용 | `filter=cites:W…\|…(50값)` × 정렬 2가지 | 목록 | 2 |
 | E 마무리 | **세 크기(20 · 40 · 80) 모두의** 노드 + 이전 · 이후 연구 중 **초록 · 서지가 캐시에 없는 것**만 미리 `filter=openalex:…`(100개씩) — 크기를 바꿔도 다시 받지 않게(구현 반영 ⑥, AC-G13) | 목록 | **최대 2** |
-| S2 보강(조건부) | S2 `GET /paper/DOI:<doi>/references?fields=externalIds&limit=1000` 1회 + OpenAlex `filter=doi:…` ≤ 2회 | S2 + 목록 | ≤ 1 + 2 |
+| 참고문헌 보강(조건부 — **OpenCitations 먼저**, 5단계) | OpenCitations `GET /index/v2/references/doi:<doi>` 1회(토큰 없음) + OpenAlex `filter=doi:…` ≤ 2회. **0편이거나 실패(404 제외)하면 아래 S2로**, OpenCitations가 채웠으면 S2는 부르지 않음 | OpenCitations + 목록 | ≤ 1 + 2 |
+| 참고문헌 보강 — S2(OpenCitations가 0편 · 실패일 때만) | S2 `GET /paper/DOI:<doi>/references?fields=externalIds&limit=1000` 1회 + OpenAlex `filter=doi:…` ≤ 2회 | S2 + 목록 | ≤ 1 + 2 |
 
-- **상한 `MAX_LIST_CALLS = 12`**(목록 · 검색 합계). 넘을 일이 생기면 남은 단계를 건너뛰고 부분 결과 + 경고.
+- **상한 `MAX_LIST_CALLS = 12`**(목록 · 검색 합계). 넘을 일이 생기면 남은 단계를 건너뛰고 부분 결과 + 경고. OpenCitations로 채운 경우 · S2로 채운 경우 · 둘 다 부른 경우(OpenCitations 결과가 OpenAlex에 한 편도 없을 때) 모두 같은 상한 12 안에서 처리(5단계 AC-553).
 - 비용: 목록 12회 = 약 $0.0012 → 키 없이도 하루 약 80번, 키가 있으면 약 800번의 "처음 만드는" 그래프. **캐시가 유효하면 0회**(AC-G12).
 - `select`로 필요한 필드만 받음: A~D는 초록(`abstract_inverted_index` — 큼) **빼고**, E에서만 초록 포함. 필드 목록은 지금 `norm_openalex`가 쓰는 것 + `referenced_works` · `referenced_works_count` · `related_works`.
 - 묶음 조회 필터 이름: 지금 코드가 쓰는 `openalex:`(1st My paper는 `openalex_id:`) — 어느 쪽이 공식 · 현행인지 **확인 필요**(AC-G40).
@@ -303,7 +305,7 @@ Connected Papers 정의(16장): 이전 연구 = 그래프 논문들이 **공통�
 | `nos` | bigint[] not null | 상대 작품 번호 목록. `references` 최대 500, `related` 최대 20, `cited_by_*`(`cited_by_top_c` 포함) 최대 100 (`cardinality` 검사 제약) |
 | `total` | integer not null | 출처가 알려 준 전체 수(예: 참고문헌 812편 중 500편 저장 → 812) |
 | `truncated` | boolean not null default false | |
-| `source` | text not null default `'openalex'` | `check (source in ('openalex','s2'))` — S2 보강으로 만든 참고문헌 목록은 `s2` |
+| `source` | text not null default `'openalex'` | `check (source in ('openalex','s2','opencitations'))` — S2 보강으로 만든 참고문헌 목록은 `s2`, OpenCitations 보강은 `opencitations`(5단계 `20261014000001_external_sources.sql`가 `opencitations`를 더함 — 1B 마이그레이션 때는 `('openalex','s2')`) |
 | `fetched_on` | date not null | |
 | PK | `(work_no, relation)` | |
 
@@ -386,6 +388,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 - **1C 추가 `supabase/migrations/20261008000003_citation_edges_top_c.sql`**(팀장 결정 Q-1, 2026-10-08): `citation_edges_relation_check`를 지우고 `cited_by_top_c`를 더한 같은 이름의 검사 제약으로 다시 만듦(8.4절). **검사 제약만** 바꿈 — 기존 행 · 색인 · RLS · 권한 · 배열 상한 검사는 그대로. 새 표 · 열 없음.
 - 1단계 명세 2장 "공용 표 = 5단계에서 같은 스키마에 `shared_` 접두어 또는 별도 스키마"는 PLAN 개정(1B 앞당김)과 K-4에 따라 **1B · 같은 스키마 · PLAN 이름**으로 바뀜(1단계 명세 문구 정리는 기획팀 후속 — 15장).
 - 5단계(OpenCitations · KCI)가 OpenAlex 번호 없는 작품을 넣을 때: `external_works`에 출처별 식별자 열 · 검사를 늘리고, `citation_edges`에 그 키 체계용 열을 추가하는 **새 마이그레이션**(5단계 명세).
+- **5단계 구현(2026-10-13)**: 실제로 들어간 것은 **`20261014000001_external_sources.sql`** 하나 — `external_works.oa_license`(무료 PDF 라이선스, nullable) 열 + `citation_edges_source_check`에 `opencitations` 추가. OpenAlex 번호 없는 작품용 키 · 열은 **만들지 않았고**(OpenCitations 결과는 OpenAlex 번호가 있을 때만 캐시, KCI · RISS는 캐시 안 함 — 5단계 명세 10장) 1B 업서트가 `oa_license`를 함께 씀.
 
 ## 9. 서버 API
 
@@ -470,13 +473,15 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 | `cocite_failed` | D 단계(함께 인용 `cites:` 묶음) 실패 | 주황 묶음 |
 | `abstracts_failed` | E 단계(초록 · 이전 연구 서지) 실패 — 초록 없이 표시 | 주황 묶음 |
 | `stale_cache` | 유효 기간이 지난 캐시를 다시 받지 못해 오래된 정보로 그림 | 주황 묶음 |
+| **`oc_failed`**(5단계 신규 — 2026-10-13) | **OpenCitations 보강**(7.3절, K-7)이 실패 — 연결 오류 · 429 · 5xx(1번 재시도 뒤에도) · 시간 초과 · 그 밖의 오류 응답. **404(그 DOI를 모름)는 경고하지 않음.** 실패해도 **이어서 S2 보강을 시도**하므로(S2도 실패하면 `s2_failed`가 함께 붙음), 서버 문구는 "OpenCitations가 응답하지 않아 참고문헌을 보강하지 못했어요."(D6, 2026-10-13 후속 — 앞서는 "…Semantic Scholar로 시도했어요."). S2가 실제로 채웠는지는 응답 `refs_via`(`"s2"`)로 구분해 화면이 문구를 고름. 추천(1C) 응답은 보강을 하지 않아 이 code를 내보내지 않음 | 알림 톤 info — `oc_failed`만 있을 때, `refs_via`가 `"s2"`(S2가 실제로 채움)이면 "OpenCitations가 응답하지 않아 Semantic Scholar 자료로 참고문헌을 채웠어요.", 아니면 서버 문구 그대로, `s2_failed`도 함께면 주황 한 줄로 합침 "OpenCitations와 Semantic Scholar가 응답하지 않아 참고문헌을 보강하지 못했어요."([5단계 디자인](../design/phase5-korean-db-ui.md) 5.2절 · AD-8) |
 | **`s2_failed`**(신규) | S2 보강(7.3절, K-7) 호출이 실패 — 연결 오류 · 429 · 5xx(1번 재시도 뒤에도) · 시간 초과. S2 키 유무와 무관. 보강 없이 계속. **S2 404(그 DOI를 모름)는 경고하지 않음**(구현 반영 ⑨) | 주황 묶음 |
 | **`upstream_limited`**(경고로 쓸 때 — 신규 확정) | **OpenAlex 하루 사용량 초과**(429 + `X-RateLimit-Remaining: 0`, 7.5절)로 그 뒤 단계를 받지 못해 **캐시에 있던 정보 + 그때까지 받은 것으로만** 그림. 캐시로도 못 그리면 같은 이름의 `error` | 주황 따로 + [설정 열기] |
 | `weak_citation_data` | 고른 노드의 선 중 `related`(주제 유사)가 절반 넘음(6.8절) | 파랑 |
 | `truncated` | 씨앗 참고문헌이 **300편을 넘어**(`MAX_SEED_REFS`) 앞의 300편만 비교(6.2절, 구현 반영 ⑮ — 정확히 300편이면 띄우지 않음) | 파랑 |
 | (`resize_failed`) | **서버가 보내지 않음** — 화면 전용(크기 바꾸기 요청 실패 시 이전 그래프 유지) | 주황 따로 |
 
-- S2 하루 · 초당 한도 초과는 `upstream_limited`가 아니라 **`s2_failed`**(`upstream_limited`는 OpenAlex 전용).
+- S2 하루 · 초당 한도 초과는 `upstream_limited`가 아니라 **`s2_failed`**(`upstream_limited`는 OpenAlex 전용). OpenCitations 한도 · 오류도 마찬가지로 **`oc_failed`**.
+- **`refs_via`**(5단계, 응답 최상위 선택 필드): 씨앗의 참고문헌 목록을 보강으로 채웠으면 그 출처 — `"opencitations"` 또는 `"s2"`(D6, 2026-10-13 후속). 없으면 필드 자체가 없음(= OpenAlex 기준). 화면 아래 출처 줄 문구(`opencitations`일 때만 "OpenAlex · OpenCitations 기준" — 10.2절)와 `oc_failed` 안내 문구를 고르는 데 씀: 서버 `oc_failed` 문구는 "OpenCitations가 응답하지 않아 참고문헌을 보강하지 못했어요."이고, 화면은 `refs_via`가 `"s2"`일 때만 "OpenCitations가 응답하지 않아 Semantic Scholar 자료로 참고문헌을 채웠어요."라고 씀.
 
 ### 9.4 동시성 · 서버 PC 부하 (기획팀 추천 K-11)
 - **서버 전체 동시 2개**(세마포어), 대기 최대 4개(대기 중 `wait` 진행 이벤트, 최대 20초 기다리면 `error` `graph_queue_full`), **사용자당 1개**(9.1절 429). 구현은 `graph_build.GraphGate`.
@@ -520,7 +525,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 - 위 줄: [← 돌아가기](들어온 화면으로) · 씨앗 제목(70자 넘으면 줄임) · 크기 [20 | 40 | 80] · [그래프 | 목록] 전환 · 범례 열기.
 - 가운데: 그래프 영역(확대 · 이동 · [+] [−] [맞춤] 버튼).
 - 오른쪽 패널(좁은 화면에서는 아래로): 탭 **[논문 정보 | 이전 연구 | 이후 연구]**. 처음에는 씨앗 정보.
-- 아래 작은 글씨: "후보 512편 중 40편 · OpenAlex 기준 · 2026-10-07" + 경고(있을 때).
+- 아래 작은 글씨: "후보 512편 중 40편 · OpenAlex 기준 · 2026-10-07" + 경고(있을 때). **씨앗 참고문헌을 OpenCitations로 채웠으면(응답 `refs_via: "opencitations"`) "OpenAlex · OpenCitations 기준 · 2026-10-07"**(5단계 — 코드 `graph.js`; `refs_via`가 없으면 지금 그대로).
 
 ### 10.3 노드 · 선 표현
 | 요소 | 규칙 |
@@ -596,7 +601,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 - **AC-G15** 부분 실패: D 단계 호출이 500 → `done`이 오고 `warnings`에 `cocite_failed`, 노드는 있음. A 단계 4번 중 1번 실패 → `refs_partial`. 씨앗 조회 실패 → `error` `upstream_unavailable` 또는 `seed_not_found`. 실패 전에 받은 작품은 캐시에 남음.
 - **AC-G16** 기한: 가짜 서버가 응답을 20초 늦추면(시계 주입) 호출 하나는 15초에 끊기고, 전체 45초 기한에서 `partial` 경고와 함께 `done`.
 - **AC-G17** 429: `Retry-After: 2` → 1번 재시도. `X-RateLimit-Remaining: 0` 429 → 재시도 없음, 캐시로 못 그리면 `error` `upstream_limited`(7.5절 문구), 캐시로 그릴 수 있으면 `done` + 경고 `upstream_limited`. 모든 경고 `code`가 9.3절 표 안의 이름이고 `message`가 비어 있지 않은 한국어 문장(식별자 · 주소 없음).
-- **AC-G18** S2 보강: 씨앗의 OpenAlex `referenced_works`가 비고 DOI가 있으면 가짜 S2 `references` 1회 + OpenAlex `doi:` 필터로 참고문헌을 채움, `citation_edges.source = 's2'`. 사용자 S2 키가 있으면 `x-api-key` 헤더, 없으면 없음. S2가 연결 오류 · 429 · 5xx면 1번 재시도 뒤에도 실패할 때(또는 시간 초과) 건너뛰고 경고 `s2_failed`(`upstream_limited` 아님). S2 404 → 재시도 · 경고 없이 건너뜀(구현 반영 ⑨).
+- **AC-G18** 참고문헌 보강(5단계 개정 — **OpenCitations 먼저, 0편이거나 실패하면 S2**; 5단계 AC-553): 씨앗의 OpenAlex `referenced_works`가 비고 DOI가 있으면 가짜 OpenCitations `references` 1회 + OpenAlex `doi:` 필터로 참고문헌을 채우고 `citation_edges.source = 'opencitations'` · 응답 `refs_via: "opencitations"` · S2 호출 0회. OpenCitations가 0편이거나 실패(404 제외 — 실패는 경고 `oc_failed`)면 아래 S2 보강. S2 보강: 가짜 S2 `references` 1회 + OpenAlex `doi:` 필터로 참고문헌을 채움, `citation_edges.source = 's2'`. 사용자 S2 키가 있으면 `x-api-key` 헤더, 없으면 없음. S2가 연결 오류 · 429 · 5xx면 1번 재시도 뒤에도 실패할 때(또는 시간 초과) 건너뛰고 경고 `s2_failed`(`upstream_limited` 아님). S2 404 → 재시도 · 경고 없이 건너뜀(구현 반영 ⑨).
 - **AC-G19** 키 · 이메일: 사용자 A가 `openalex_api_key`를 저장했으면 A의 그래프 요청에만 `api_key`가 붙고, B(키 없음)의 요청엔 없음. 사용자 `contact_email`을 설정해 두어도 **그래프 경로의 모든 외부 요청에 `mailto` 매개변수가 없고 User-Agent에 `@`가 없음**. (구현 반영 ⑩ · ⑪) OpenAlex 키는 `api_key` 쿼리로 감. 검색 · 조회 경로에서도 이메일은 Crossref 요청에만 있고 OpenAlex · arXiv · S2 · PDF 받기 요청에는 없음.
 
 ### C. 저장 · RLS · 개인정보 (`tests/test_rls.py` 개정 + 신규)
@@ -629,7 +634,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 - **AC-G43** `admin cache-stats`가 크기 · 행 수만 출력(번호 · 제목 없음), `cache-prune --max-mb <작은 값>`이 오래된 것부터 지우고 다음 그래프 요청이 정상(다시 받음).
 
 ### G. [수동] 화면 확인 (품질팀 · 사용자)
-- **M-G01** 씨앗: ① 영어 대표 논문(예: DOI `10.48550/arXiv.1706.03762`) ② DOI 있는 국문 학술지 논문 하나(품질팀이 고름) ③ OpenAlex 참고문헌이 없는 논문 → 각각 그래프가 그려지고, ②는 점선 · 경고, ③은 S2 보강 또는 빈 상태 문구.
+- **M-G01** 씨앗: ① 영어 대표 논문(예: DOI `10.48550/arXiv.1706.03762`) ② DOI 있는 국문 학술지 논문 하나(품질팀이 고름) ③ OpenAlex 참고문헌이 없는 논문 → 각각 그래프가 그려지고, ②는 점선 · 경고, ③은 OpenCitations(→ S2) 보강 또는 빈 상태 문구(OpenCitations로 채워지면 출처 줄이 "OpenAlex · OpenCitations 기준").
 - **M-G02** 노드 크기가 피인용 순서와 맞고(가장 큰 원 = 가장 많이 인용), 색이 연도 순서(최근이 진함)이며 범례 숫자와 맞음. 다크 모드에서도 구분됨.
 - **M-G03** 비슷한 논문끼리 모여 보임(사람 판단). 이상하면 6.9절 가중치를 바꿔 다시 보고(팀장에게 수치 제안).
 - **M-G04** 노드 클릭 → 패널 버튼 6종 동작: 서재 추가(서재에 나타남) · PDF 포함 추가 · 인용 창 · 인하대에서 보기(1A 안내 · 새 탭) · Scholar(새 탭) · 새 그래프.
@@ -681,7 +686,7 @@ revoke all on paperlab.external_works, paperlab.citation_edges from anon, public
 | **K-4** | 표 위치 · 이름 | ① `paperlab` 스키마 + PLAN 이름 ② 별도 스키마(`paperlab_shared`) ③ `shared_` 접두어 | **①** — Data API 비노출이 그대로 적용, 마이그레이션 · 권한 · 백업 경로가 하나. AC-20 검사에 예외 + 별도 검사(AC-G20) |
 | **K-5** | OpenAlex 키 | ① 요청한 사용자 키 → 없으면 키 없이 ② 공용 서버 키(새 환경 변수 `OPENALEX_API_KEY`) ③ 둘 다(사용자 키 → 서버 키 → 없이) | **①로 시작**, 운영 중 `upstream_limited`가 잦으면 ③(새 변수는 "변수 이름 고정" 원칙의 예외라 그때 팀장 결정 + 사용자에게 키 발급 요청) |
 | **K-6** | 기존 검색 · 조회의 OpenAlex `mailto`(사용자 `contact_email`) | ① 1B에서 함께 없앰 ② 그대로 | **①** — OpenAlex가 2026-02부터 무시(공식), 사용자 이메일만 외부로 나감. **확대(구현 반영 ⑪, 팀장 승인)**: 사용자 이메일은 **Crossref에만**, arXiv · S2 · 주소에서 PDF 받기에서도 뺌(7.4절) |
-| **K-7** | Semantic Scholar 보강 | ① 씨앗 참고문헌 0편 + DOI 있을 때만 S2 1회 ② 쓰지 않음 ③ 항상 S2도 함께 | **①** — 비용 · 429 위험 작고, 참고문헌 없는 씨앗에서 그래프가 텅 비는 것을 줄임 |
+| **K-7** | Semantic Scholar 보강 | ① 씨앗 참고문헌 0편 + DOI 있을 때만 S2 1회 ② 쓰지 않음 ③ 항상 S2도 함께 | **①** — 비용 · 429 위험 작고, 참고문헌 없는 씨앗에서 그래프가 텅 비는 것을 줄임. **2026-10-13 5단계에서 확장**: 같은 조건에서 **OpenCitations(키 없이 분당 180회)를 먼저** 부르고 0편이거나 실패하면 S2(5단계 K-7) |
 | **K-8** | 그래프 크기 | 기본 40, 선택 20 · 40 · 80 / 기본 60(1st My paper) / 선택 없이 고정 | **기본 40 + 화면 선택 20 · 40 · 80**(외부 호출 없이 바뀜) |
 | **K-9** | 유사도 · 수치 | 6.9절 표(1st My paper 실측값) | **6.9절 그대로 시작**, M-G03 실측 후 개발팀이 조정안 보고 |
 | **K-10** | TTL · 시각 단위 | 7.6절 표, 날짜 단위 | **7.6절 그대로** |

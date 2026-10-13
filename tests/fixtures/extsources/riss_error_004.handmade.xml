@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 손 픽스처: 키 없이 부르면 HTTP 200 + Error 004(1st My paper 실측 모양 — 공식 아님) -->
+<record>
+  <head>
+    <totalcount>0</totalcount>
+    <Error>004</Error>
+    <ErrorMessage>인증 오류</ErrorMessage>
+  </head>
+</record>

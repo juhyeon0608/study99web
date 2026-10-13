@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 손 픽스처: 공식 API 명세 표의 riss.stype(학술지명) 칸을 쓰는 응답 꼴. RISS 키를 받으면 녹화본으로 바꿈 -->
+<record>
+  <head>
+    <totalcount>1</totalcount>
+    <Error>0</Error>
+  </head>
+  <metadata>
+    <riss.title>명세 칸 이름으로 만든 가상 논문</riss.title>
+    <riss.author>이영희, 박민수 / 최지훈</riss.author>
+    <riss.publisher>가상학회</riss.publisher>
+    <riss.pubdate>2019</riss.pubdate>
+    <riss.stype>가상학술지</riss.stype>
+    <riss.reg>KCI등재후보</riss.reg>
+    <url>http://www.riss.kr/link?id=A106543210</url>
+  </metadata>
+</record>

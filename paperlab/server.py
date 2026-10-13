@@ -38,16 +38,18 @@ from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
 from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
-from .citecache import PgStore
+from . import extsources
+from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
 from .db import Database, DBUnavailable, Library, NotFoundError, folder_name_problem
 from . import citegraph as cg
-from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, WARNINGS as GRAPH_WARNINGS, BadSeed, Flights, GraphBuilder,
-                          GraphError, GraphGate, parse_openalex_id, parse_recommend_request,
+from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, FIELDS_META, WARNINGS as GRAPH_WARNINGS, BadSeed, Flights,
+                          GraphBuilder, GraphError, GraphGate, lookup_dois, paper_view, parse_openalex_id, parse_recommend_request,
                           parse_request as parse_graph_request, seed_from_paper)
 from .manuscripts import TEMPLATES
-from .sources import GraphCancelled, GraphSources, SourceError, Sources, detect_identifier, merge
+from .sources import (GraphCancelled, GraphSources, SourceError, Sources, UpstreamError, check_doi, detect_identifier,
+                      merge)
 from .storage import (MAX_PDF_BYTES, BackupSizeCache, FakeStorage, NotFound, Storage, StorageError, StorageKeyError,
                       UserStorage, create_storage, is_upload_id, new_upload_id)
 
@@ -259,6 +261,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     st.sources_factory = sources_factory or (lambda get: Sources(get))
     st.ai_factory = ai_factory or (lambda get: AIService(get))
     st.backup_sizes = BackupSizeCache(store)
+    # 5단계 KCI · RISS · Europe PMC 검색(공용 키 — U-1). 테스트는 transport를 넣은 것으로 바꿈
+    st.ext = extsources.ExtSources(config.kci_api_key, config.riss_api_key)
+    st.ext_busy = {}  # 사용자당 외부 검색 동시 수(메모리만 — 11장)
+    st.ext_lock = threading.Lock()
     st.compose_store = {}
     st.compose_lock = threading.Lock()
     # 2단계: 작업 큐 · 연결된 PC · 설치 파일 (명세 2단계 7 · 8 · 13.7.1 · 15장)
@@ -444,6 +450,19 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             dup = ctx.lib.find_duplicate(it.get("doi", ""), it.get("arxiv_id", ""), it.get("title", ""))
             it["in_library"] = dup["id"] if dup else None
         return items
+
+    def safe_doi(value) -> str:
+        try:
+            return check_doi(value) if value else ""
+        except ValueError:
+            return ""
+
+    def oa_cached(ctx: RequestCtx, doi: str) -> list[dict] | None:
+        """1B 공용 캐시의 그 DOI 작품 행으로 만든 무료 PDF 위치(oa_license가 null이면 None — 8.1절). 외부 호출 전에(DB 연결 안)"""
+        return extsources.cache_locations(read_oa(ctx.lib.conn, doi)) if doi else None
+
+    def open_reply(plan: dict) -> dict:
+        return {"open_url": plan["open_url"], "open_kind": plan["open_kind"], "reason": "license_unknown"}
 
     def metadata_from_pdf(ctx: RequestCtx, info: pdf.PdfInfo) -> tuple[dict, str]:
         """PDF에서 찾은 식별자로 메타데이터를 채운다. (메타데이터, 출처 설명)"""
@@ -709,12 +728,22 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             lib.move_papers_to_folder([pid], fid)
         if data.get("tags"):
             lib.set_paper_tags(pid, data["tags"])
-        warning = ""
-        if data.get("download_pdf") and data.get("pdf_url"):
+        warning, extra = "", {}
+        if data.get("download_pdf") and isinstance(data.get("pdf_url"), str) and data["pdf_url"].strip():
+            # 5단계 K-11 보강(팀장 결정 1): 보낸 pdf_url을 그대로 받지 않고 서버가 8.3절 판정을 다시 함
+            doi = safe_doi(data.get("doi"))
+            cached = oa_cached(ctx, doi)
             sources = ctx.sources
             ctx.release()  # 논문을 먼저 커밋하고, PDF를 받는 동안 DB 연결을 잡지 않는다 (F9)
             try:
-                raw = sources.download_pdf(data["pdf_url"])
+                plan = extsources.plan_pdf(sources, data["pdf_url"], "", doi, cached)
+                if plan is None:  # http(s) 아닌 주소 · 위치 없음
+                    raise SourceError("무료 PDF를 찾지 못했어요")
+                if "open_url" in plan:
+                    extra = open_reply(plan)
+                    raise SourceError("라이선스를 확인하지 못해 PaperLab이 대신 받지 않았어요. 상세 패널의 "
+                                      "[무료 PDF 찾기]로 직접 받은 뒤 [PDF 첨부]로 올려 주세요.")
+                raw = sources.download_pdf(plan["fetch"])
                 if ctx.lib.pdf_info(pid) is None:  # 그 사이 지워짐
                     raise HTTPException(404, "논문을 찾을 수 없어요")
                 store_pdf(ctx, pid, raw)
@@ -726,7 +755,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 raise
             except Exception as e:  # noqa: BLE001 - 손상된 PDF · 저장소 오류
                 warning = f"논문은 추가했지만 PDF는 저장하지 못했어요: {type(e).__name__}"
-        return {"paper": ctx.lib.get_paper(pid), "warning": warning}
+        return {"paper": ctx.lib.get_paper(pid), "warning": warning, **extra}
 
     @app.post("/api/resolve")
     def resolve(data: dict = Body(...), ctx: RequestCtx = Ctx):
@@ -966,19 +995,22 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.post("/api/papers/{pid}/fetch-pdf")
     def fetch_pdf(pid: int, ctx: RequestCtx = Ctx):
+        """5단계 8.3절 순서: 서재 pdf_url(arXiv · OpenAlex 위치 라이선스 · 경계 ①) → arXiv 번호 → DOI(캐시 → OpenAlex) 판정.
+        라이선스가 확인된 것만 서버가 받고(U-3), 그 밖은 새 탭 주소를 돌려준다(200). 클라이언트가 보낸 주소는 쓰지 않음(K-11)"""
         p = need_paper(ctx, pid)
+        doi = safe_doi(p.get("doi"))
+        cached = oa_cached(ctx, doi)
         sources = ctx.sources
         ctx.release()  # 외부 조회 · PDF 받기 동안 DB 연결을 잡지 않는다 (F9)
-        url = p.get("pdf_url")
-        if not url and p.get("arxiv_id"):
-            url = f"https://arxiv.org/pdf/{p['arxiv_id']}"
-        if not url and p.get("doi"):
-            try:
-                url = sources.lookup_doi(p["doi"]).get("pdf_url")
-            except SourceError:
-                url = ""
-        if not url:
+        try:
+            plan = extsources.plan_pdf(sources, p.get("pdf_url") or "", p.get("arxiv_id") or "", doi, cached)
+        except SourceError as e:
+            raise HTTPException(502, "무료 PDF 정보를 확인하지 못했어요. 잠시 후 다시 시도해 주세요.") from e
+        if not plan:
             raise HTTPException(404, "무료로 받을 수 있는 PDF를 찾지 못했어요. 직접 파일을 첨부해 주세요.")
+        if "open_url" in plan:
+            return open_reply(plan)
+        url = plan["fetch"]
         try:
             data = sources.download_pdf(url)
         except SourceError as e:
@@ -991,7 +1023,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         except Exception as e:  # noqa: BLE001 - 손상된 PDF
             raise HTTPException(400, f"PDF를 열 수 없어요: {e}") from e
         ctx.lib.update_paper(pid, {"pdf_url": url})
-        return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings}
+        return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings, "license": plan.get("license") or ""}
 
     @app.post("/api/papers/{pid}/refresh")
     def refresh_metadata(pid: int, data: dict = Body(default={}), ctx: RequestCtx = Ctx):
@@ -1025,17 +1057,72 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         out["cite_issues"] = citations.citation_issues(out)
         return out
 
+    def oc_references(ctx: RequestCtx, doi: str, res: dict, page: int) -> dict:
+        """OpenAlex 참고문헌이 0편이고 DOI가 있을 때 OpenCitations로 보강 (5단계 9.2절 · K-7 · K-8).
+        씨앗에 OpenAlex 번호가 있으면 결과를 1B 공용 캐시(citation_edges, source 'opencitations')에 두고 다음엔 다시 부르지 않음.
+        OpenAlex references 행(편수 있음)이 이미 있으면 쓰지 않음. OpenCitations 실패는 warnings oc_failed(0편과 구분)"""
+        try:
+            no = parse_openalex_id(res.get("openalex_id")) if res.get("openalex_id") else None
+        except BadSeed:
+            no = None
+        keys = ctx.settings
+        src = st.graph_sources_factory(keys.get("openalex_api_key") or "", keys.get("semantic_scholar_api_key") or "")
+        store, today = PgStore(db, ctx.claims), st.graph_today()
+        edge = store.edges([no], ["references"]).get((no, "references")) if no else None
+        try:
+            if edge and edge["source"] == "opencitations" and cache_fresh(edge["fetched_on"], TTL_REFERENCES, today):
+                nos, total = list(edge["nos"]), int(edge["total"])
+                rows = {n: r for n, r in store.works(nos).items() if r.get("title")}
+                missing = [n for n in nos if n not in rows][:200]
+                for i in range(0, len(missing), 100):  # OpenAlex 묶음 ≤ 2회
+                    rows.update({r["no"]: r for r in src.works(missing[i:i + 100], FIELDS_META)})
+            else:
+                try:
+                    dois = src.oc_reference_dois(doi)
+                except UpstreamError as e:
+                    if e.status != 404:
+                        return dict(res, warnings=[{"code": "oc_failed"}])
+                    dois = []
+                valid, found = lookup_dois(src, dois, FIELDS_META)  # OpenAlex doi: 필터 ≤ 2회 (그래프와 같은 함수)
+                rows = {r["no"]: r for r in found.values() if r["no"] != no}
+                nos, total = list(dict.fromkeys(found[d]["no"] for d in valid if d in found and found[d]["no"] != no)), \
+                    len(valid)
+                if no and not (edge and edge["source"] == "openalex" and edge["nos"]):
+                    store.write(list(rows.values()), [{"work_no": no, "relation": "references", "nos": nos,
+                                                       "total": total, "source": "opencitations"}], today)
+        except UpstreamError:
+            return dict(res, warnings=[{"code": "refs_partial"}])
+        order = sorted((n for n in nos if n in rows), key=lambda n: -(rows[n].get("cited_by_count") or 0))
+        if not order:
+            return res
+        items = [paper_view(rows[n]) for n in order[(page - 1) * 20: page * 20]]
+        return {"items": items, "total": len(order), "openalex_id": res.get("openalex_id") or "",
+                "via": "opencitations", "unresolved": max(0, total - len(order)), "warnings": []}
+
+    def related_for(ctx: RequestCtx, paper: dict, kind: str, page: int) -> dict:
+        sources = ctx.sources
+        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다 (F9)
+        doi = safe_doi(paper.get("doi")) if kind == "references" else ""
+        err = None
+        try:
+            res = sources.related(paper, kind, page)
+        except SourceError as e:
+            if not doi:
+                raise HTTPException(404, str(e)) from e
+            res, err = {"items": [], "total": 0, "openalex_id": ""}, e  # OpenAlex가 모르는 논문도 OpenCitations는 알 수 있음
+        if doi and not res["items"] and not res.get("total"):
+            res = oc_references(ctx, doi, res, page)
+            if err and not res.get("via") and not res.get("warnings"):
+                raise HTTPException(404, str(err)) from err
+        res.setdefault("warnings", [])
+        return res
+
     @app.get("/api/papers/{pid}/related")
     def related(pid: int, kind: str = "cited_by", page: int = 1, ctx: RequestCtx = Ctx):
         p = need_paper(ctx, pid)
         if kind not in ("cited_by", "references", "related"):
             raise HTTPException(400, "kind는 cited_by, references, related 중 하나예요")
-        sources = ctx.sources
-        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다 (F9)
-        try:
-            res = sources.related(p, kind, page)
-        except SourceError as e:
-            raise HTTPException(404, str(e)) from e
+        res = related_for(ctx, p, kind, max(1, page))
         if res.get("openalex_id") and not p.get("openalex_id"):
             ctx.lib.update_paper(pid, {"openalex_id": res["openalex_id"]})
         res["items"] = mark_library(ctx, res["items"])
@@ -1047,12 +1134,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         kind = data.get("kind", "cited_by")
         if kind not in ("cited_by", "references", "related"):
             raise HTTPException(400, "kind는 cited_by, references, related 중 하나예요")
-        sources = ctx.sources
-        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다 (F9)
-        try:
-            res = sources.related(data.get("paper") or {}, kind, int(data.get("page") or 1))
-        except SourceError as e:
-            raise HTTPException(404, str(e)) from e
+        paper = data.get("paper") if isinstance(data.get("paper"), dict) else {}
+        res = related_for(ctx, paper, kind, max(1, int(data.get("page") or 1)))
         res["items"] = mark_library(ctx, res["items"])
         return res
 
@@ -1576,8 +1659,11 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     # ------------------------------------------------------------- search
     @app.get("/api/search")
     def search(q: str, source: str = "openalex", page: int = 1, year_from: int | None = None,
-               year_to: int | None = None, sort: str = "relevance", oa: bool = False, ctx: RequestCtx = Ctx):
+               year_to: int | None = None, sort: str = "relevance", oa: bool = False, cursor: str = "",
+               ctx: RequestCtx = Ctx):
         kind, value = detect_identifier(q)
+        if kind not in ("doi", "arxiv", "openalex") and source in extsources.EXT_SOURCES:
+            return ext_search(ctx, q, source, page, year_from, year_to, sort, oa, cursor)
         sources = ctx.sources
         ctx.release()  # 외부 검색 동안 DB 연결을 잡지 않는다 (F9)
         try:
@@ -1589,6 +1675,63 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             raise HTTPException(502, str(e)) from e
         res["items"] = mark_library(ctx, res["items"])
         return res
+
+    def ext_search(ctx: RequestCtx, q, source, page, year_from, year_to, sort, oa, cursor):
+        """5단계 KCI · RISS · Europe PMC (6장). 결과 · 검색어는 저장하지 않음(U-5). 오류는 code로(문구에 주소 · 키 없음)"""
+        uid = ctx.uid
+        with st.ext_lock:
+            if st.ext_busy.get(uid, 0) >= 2:  # 사용자당 동시 2개(11장 — 가정)
+                return JSONResponse({"detail": "앞의 검색이 아직 끝나지 않았어요.", "code": "search_busy"}, status_code=429)
+            st.ext_busy[uid] = st.ext_busy.get(uid, 0) + 1
+        ctx.release()
+        try:
+            res = st.ext.search(source, q, page, year_from, year_to, sort, oa, cursor)
+        except extsources.ExtError as e:
+            return JSONResponse({"detail": str(e), "code": e.code}, status_code=e.status)
+        finally:
+            with st.ext_lock:
+                st.ext_busy[uid] -= 1
+                if not st.ext_busy[uid]:
+                    del st.ext_busy[uid]
+        res["items"] = mark_library(ctx, res["items"])
+        return res
+
+    @app.get("/api/sources")
+    def ext_sources_status(ctx: RequestCtx = Ctx):
+        """소스별 쓸 수 있는지만 (키 값은 돌려주지 않음 — AC-504)"""
+        return st.ext.status()
+
+    @app.post("/api/oa/lookup")
+    async def oa_lookup(request: Request, ctx: RequestCtx = Ctx):
+        """OpenAlex 무료 PDF 정보(8.1절 — 1B 캐시 행 → 없으면 OpenAlex 1회, 결과는 캐시에 쓰지 않음). DOI는 본문으로만.
+        본문은 small_json(4KB — chunked도 그 이상 읽지 않음)"""
+        try:
+            data = await small_json(request)
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            return JSONResponse({"detail": "요청이 올바르지 않아요.", "code": "bad_request"}, status_code=400)
+        return await run_in_threadpool(oa_lookup_work, ctx, data)
+
+    def oa_lookup_work(ctx: RequestCtx, data: dict):
+        doi = safe_doi(data.get("doi"))
+        if not doi:
+            return JSONResponse({"detail": "DOI 형식이 올바르지 않아요.", "code": "bad_doi"}, status_code=400)
+        cached = oa_cached(ctx, doi)
+        sources = ctx.sources
+        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다 (F9)
+        if cached is None:
+            try:
+                locs = sources.oa_locations(doi)
+            except SourceError:
+                return JSONResponse({"detail": "OpenAlex에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.",
+                                     "code": "upstream_unavailable"}, status_code=502)
+        pick = extsources.pick_oa_location(cached if cached is not None else locs)
+        oa = None if not pick else {"pdf_url": pick["pdf_url"] if pick["server_fetch"] else "",
+                                    "landing_url": pick["landing_url"], "license": pick["license"],
+                                    "version": pick["version"], "server_fetch": pick["server_fetch"],
+                                    "open_url": pick["open_url"], "open_kind": pick["open_kind"]}
+        return {"oa": oa, "cached": cached is not None}
 
     # ------------------------------------------------------------------ AI
     def context_for(ctx: RequestCtx, p: dict, with_pdf: bool = True) -> PaperContext:

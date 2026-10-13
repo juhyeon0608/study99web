@@ -1,6 +1,6 @@
 # PaperLab 서버 PC 설치 안내서
 
-- 작성: 기획팀 · 2026-10-07 (개발팀 구현 스크립트 · 명령과 대조해 개정 — 13절. 안내서와 스크립트 동작이 다르면 그 단계에서 **멈추고 팀장에게 알립니다**)
+- 작성: 기획팀 · 2026-10-07 (개발팀 구현 스크립트 · 명령과 대조해 개정 — 13절. 안내서와 스크립트 동작이 다르면 그 단계에서 **멈추고 팀장에게 알립니다**). 2026-10-13: 5단계(국내 DB) `cloud.env` 새 변수 · 키 신청 · 녹화 도구 · 반영 순서를 14절에 추가(5절 · 11절 · 12절 · 13절에 줄 추가). 2026-10-13 후속: 14.3절 녹화 도구 문구(이메일 모양은 가려 저장, 키 문자열일 때만 멈춤)
 - 근거: [1단계 명세](../../docs/specs/phase1-cloud.md) 9장(서버 실행) · 13장(배포 · 운영), 사용자 결정 Q14(2026-10-07)
 - 읽는 사람: **서버 PC(`KIMJUHYEON`)에 설치한 Claude Code**와 관리자. 사람이 손으로 해야 하는 단계는 **[사용자]** 로 표시했습니다 — Claude Code는 그 단계에서 사용자에게 부탁하고 끝날 때까지 기다립니다.
 
@@ -119,6 +119,7 @@ tailscale version
      `PAPERLAB_ALLOWLIST=off`가 없으면 서버는 허용 목록을 켠 것으로 보고, `ALLOWED_EMAILS`가 없으니 **서버는 뜨지만 모든 로그인 사용자가 403("허용되지 않은 계정")** 을 받습니다(시작 로그 · `serve --check`에 경고 줄 — 팀장 결정). 값은 `on`/`off`만(대소문자 무관) — 그 밖의 값이면 시작 거부. `PAPERLAB_PUBLIC_URL`은 `server.json`의 `public_url`과 같아야 합니다.
    - (필요할 때만) `PAPERLAB_PG_DUMP=…` (4절)
    - (선택 — 2단계) `PAPERLAB_RELEASES_DIR=…` PC 앱 설치 파일 배포 폴더. 없으면 기본값 `D:\PaperLab\releases`
+   - (선택 — 5단계 국내 DB 검색) `KCI_API_KEY=…` · `RISS_API_KEY=…` 한 줄씩. **없으면(또는 비어 있으면) 그 소스만 꺼질 뿐 서버는 그대로 뜹니다.** 키 값은 **채팅에 적지 말고 메모장으로 파일에 직접** 넣습니다. 신청 · 설명은 14절
    - (품질 검증을 이 PC에서 할 때만 — 질문 Q-S7) `SUPABASE_TEST_*` 4줄은 그대로 둠, 아니면 지움
    - `SUPABASE_APP_DB_URL`은 **비워 둡니다**(설치 스크립트가 채움)
 4. Claude Code 확인(값을 보지 않음):
@@ -264,6 +265,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 새 버전 반영 | 팀장이 승인 · 푸시를 알리면 `powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1` (아래 "업데이트 동작"). 먼저 `-DryRun`으로 반영할 커밋을 볼 수 있음(**`git fetch`만 함** — 원격 추적 브랜치 · `FETCH_HEAD` · 객체 · 태그 갱신, 작업 폴더 · HEAD · 브랜치 · 서버 · 로그는 그대로. 미리 fetch할 필요 없음), `-Yes`는 확인 질문 생략 |
 | 특정 커밋으로 되돌리기 | `update.ps1 -Ref <커밋>` — 옛 커밋으로 갈 때는 마이그레이션을 하지 않음(DB 마이그레이션은 되돌리지 않음) |
 | `cloud.env`를 고친 뒤 | `update.ps1 -RestartOnly` (코드는 그대로, 서버만 다시 시작 → 상태 확인) |
+| KCI · RISS 키 넣기 · 바꾸기(5단계) | **[사용자]** 가 메모장으로 `cloud.env`의 `KCI_API_KEY` · `RISS_API_KEY` 줄을 고침(값은 채팅에 적지 않음) → `update.ps1 -RestartOnly`. 확인: 로그인해서 논문 찾기의 소스 목록에서 그 소스의 "(키 등록 전)" 표시가 사라졌는지(`serve --check`는 이 두 변수를 점검하지 않음). 자세한 내용 14절 |
 | PC 앱 설치 파일 처음 만들기 · 지난 빌드 실패 뒤 다시 | `update.ps1 -BuildDesktop` — 새 커밋이 없어도 8번 빌드만 함(그 버전 파일이 이미 `releases`에 있으면 WARN만). 결과는 `update.log`의 "데스크톱 앱 빌드 성공: 버전 … · sha256 …" |
 | 사용자 추가 · 빼기 | **[사용자]** Google Cloud 콘솔 → OAuth 동의 화면 → 테스트 사용자에서 추가 · 삭제(서버 재시작 필요 없음). 뺄 때는 Supabase 대시보드 Users에서 그 사용자도 삭제 |
 | 서버만 다시 시작 | `Stop-ScheduledTask "PaperLab Server"; Start-ScheduledTask "PaperLab Server"` |
@@ -320,6 +322,8 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | `update.log`에 "데스크톱 앱 빌드 실패(…)" WARN | 같은 줄의 단계 · 이유, 적힌 `desktop-build-<시각>.log`(마지막 줄들) | 서버 업데이트는 정상(이전 설치 파일 그대로). 인터넷 끊김 · 디스크 부족이면 고친 뒤 `update.ps1 -BuildDesktop`. 그 밖(코드 · 설정 오류)은 빌드 로그 이름과 함께 팀장에게 보고 — 서버 PC에서 고치지 않음 |
 | "버전이 같아 빌드하지 않았어요" WARN | `desktop\package.json`의 `version` | 개발팀에 버전을 올린 커밋을 요청(서버 PC에서 고치지 않음) |
 | "Node.js 22 이상 · npm 이 없어 … 건너뛰어요" WARN | `node -v` · `npm -v` | 4절 Node.js LTS 설치 → `update.ps1 -BuildDesktop` |
+| 논문 찾기에서 KCI · RISS가 "키 등록 전"으로 흐리게 보임 | 그 키 줄이 `cloud.env`에 있는지(**[사용자]** 가 메모장으로 — Claude Code는 내용을 읽지 않음), 넣은 뒤 서버를 다시 시작했는지 | 14절 — 키가 없으면 정상 동작(그 소스만 꺼짐). 넣었다면 `update.ps1 -RestartOnly` |
+| KCI · RISS 검색이 "키가 맞지 않거나 사용기간이 끝났어요"(관리자에게 알려 달라는 문구) | 키 유효기간 · 철자(**[사용자]** 가 신청처에서 확인 — 값은 채팅에 적지 않음) | 새 키를 받아 `cloud.env`에 직접 넣고 `update.ps1 -RestartOnly`. 서버 코드 문제가 아님 |
 | 감시 작업이 계속 재시작 | `watchdog.log`, `D:\PaperLab\tmp\diag-hang-health`가 남아 있는지 | 진단 파일이면 지움(9절 17번). 아니면 `server.log` 확인 · 팀장 보고 |
 | 작업이 로그온 없이 안 돔 | 작업 속성 "사용자가 로그온했는지 여부에 관계없이 실행", 저장된 비밀번호 | `install.ps1 -ReRegisterTasks -SkipFunnel` |
 | 재부팅 뒤 바깥에서 안 열림 | Tailscale 무인 실행(U-2) | U-2 다시 |
@@ -346,3 +350,64 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | `python -m paperlab.admin rag-reindex --all` | 모든 논문을 색인 대기로(3단계 10.3절) |
 | `python -m paperlab.admin orphans [--delete]` | DB에 없는 R2 PDF와 벡터 파일(`users/*/rag/*.bin`) 찾기 · 지우기 |
 | `python -m paperlab.admin latest-backup [--max-hours 36]` | R2의 가장 최근 백업 날짜(없거나 기한 넘으면 종료 코드 2) |
+| `tools/record_extsources.py [--env-file <경로>] [--only kci,riss,epmc,oc,openalex]` | 5단계 녹화 도구 — **관리자가 키로 한 번** 실행(14절). 서버 PC 설치 · 업데이트와 무관 |
+
+## 14. 5단계 국내 DB 검색 — 키 · 녹화 도구 · 반영 순서
+
+근거: [5단계 명세](../../docs/specs/phase5-korean-db.md) 4 · 13 · 14 · 16장. 이 절은 **관리자(사람)가 할 일**이 대부분이라 Claude Code는 안내만 하고 값을 받거나 읽지 않습니다(0절 1 · 2번).
+
+### 14.1 `cloud.env` 새 변수 (선택)
+
+| 변수 | 뜻 | 없으면 |
+|---|---|---|
+| `KCI_API_KEY` | KCI(한국연구재단 학술지 인용색인) Open API 공용 인증키 하나 — 모든 사용자가 같이 씀 | **KCI만 비활성**(논문 찾기 소스 목록에 "KCI (키 등록 전)") |
+| `RISS_API_KEY` | RISS(KERIS) 검색 API 공용 키 하나 | **RISS만 비활성** — 1A의 `[RISS]` 검색 바로가기는 그대로 동작 |
+
+- **둘 다 선택 항목**입니다. 없어도 서버는 정상으로 시작하고, Europe PMC(키 없음)와 기존 소스는 그대로 씁니다. 한쪽만 넣어도 됩니다.
+- **값은 채팅에 적지 않습니다.** **[사용자]** 가 서버 PC에서 메모장으로 `C:\Users\USER\.paperlab\cloud.env`를 열어 `KCI_API_KEY=…` · `RISS_API_KEY=…` 줄을 직접 넣고 저장합니다(5절과 같은 방식). 관리자 PC의 `cloud.env`에도 같은 줄이 있어야 녹화 도구(14.3절)가 키를 읽습니다. Claude Code는 파일을 열지 않고, 확인은 서버를 다시 시작한 뒤 화면에서 합니다.
+- 넣은 뒤: `update.ps1 -RestartOnly` → 로그인해서 **논문 찾기** 소스 목록에서 그 소스의 "(키 등록 전)"이 사라졌는지 봅니다. (`serve --check`는 이 두 변수를 점검하지 않고, `GET /api/sources`는 키 값을 돌려주지 않고 켜짐 · 꺼짐만 돌려줍니다.)
+- 키에는 **사용기간**이 있을 수 있습니다(KCI는 오류 "사용기간이 종료되었습니다" 확인됨). 끝나면 KCI · RISS 검색이 "키가 맞지 않거나 사용기간이 끝났어요"를 보입니다 → 새 키를 받아 같은 줄을 바꾸고 `update.ps1 -RestartOnly`.
+- 키는 요청 주소의 `key=` 쿼리로 가므로 서버 로그 · 오류 문구에는 남기지 않게 되어 있습니다(주소 · 검색어 · 키 없음). 로그를 팀장에게 보고할 때도 키 값은 적지 않습니다.
+- RISS는 `https`를 지원하는지 **아직 확인하지 못했습니다**(14.3절 녹화로 확인). http만 되면 키가 평문으로 가므로 **팀장에게 보고**하고 RISS 키는 넣지 않습니다.
+
+### 14.2 키 신청 (관리자 몫 — Claude Code가 대신 신청하지 않음)
+
+요약이며 정확한 절차 · 서류는 신청 화면에서 확인합니다(명세 4.1 · 4.2 · 16.3절 — 일부는 2차 자료라 **확인 필요**).
+
+| 키 | 어디서 | 요약 |
+|---|---|---|
+| KCI | KCI 포털(kci.go.kr)의 Open API **"키신청"** 메뉴(로그인 뒤 화면) | 회원가입 → 신청서 → 한국연구재단에 공문(2차 자료: kciadmin@nrf.re.kr)이라는 안내가 있음. **개인 발급 가능 여부 · 승인 기간 확인 필요.** 키에 사용기간이 있음 |
+| RISS | RISS API 센터(riss.kr → API 센터) 이용신청 | **심사 후 승인.** 이용 대상 안내가 "비영리 기관(대학)"이라 **개인은 안 될 수 있음.** 못 받으면 **RISS는 1A 검색 바로가기만** 쓰면 됨(사용자 결정 U-2 — 앱은 그대로 동작). 이용 허락 범위 BY-NC-ND(출처 표시, 영리 · 2차 저작 불가) |
+
+- 신청서의 **용도**에 "소규모(3~5명) 연구 그룹 내부 도구에서 검색 결과를 표시하고 개인 서재에 저장"을 적고, 이용 조건에 맞는지 **회신으로 확인**합니다(명세 15장). 확인한 내용(호출 한도 · 사용기간 · 저장 허용 여부)은 팀장에게 알려 명세 4장에 반영합니다.
+- 키는 받는 즉시 **관리자 PC와 서버 PC의 `cloud.env`에 직접** 넣습니다(14.1절). 메일 · 메신저 · 이 대화에 붙이지 않습니다.
+
+### 14.3 녹화 도구 `tools/record_extsources.py` (관리자가 키로 한 번)
+
+자동 테스트는 실제 외부 서비스를 부르지 않고 **저장된 응답 파일(녹화 픽스처)** 만 읽습니다. 지금 KCI · RISS 픽스처는 공식 명세를 본뜬 **손 픽스처**라, 키를 받은 뒤 진짜 응답으로 바꾸고 추정한 값(KCI 응답 칸 이름 · RISS https · OpenAlex `license` 실제 값 · Europe PMC `core` 필드)을 확인하는 데 씁니다(명세 16.3절 · AC-5R3).
+
+```powershell
+# 관리자 PC의 저장소 작업 폴더에서 (서버 PC 저장소에서는 실행하지 않음 — 0절 3번: 이 PC에서 커밋하지 않음)
+.venv\Scripts\python.exe tools\record_extsources.py
+# 일부만: --only kci,riss,epmc,oc,openalex   |  다른 비밀값 파일: --env-file <경로>
+```
+
+- **한 번만, 관리자가 손으로** 실행합니다. 자동 테스트 · CI · 서버 업데이트에서 돌지 않고, Claude Code가 임의로 실행하지 않습니다(실제 KCI · RISS · Europe PMC · OpenCitations · OpenAlex에 요청을 보냄).
+- 키는 `cloud.env`(기본 `%USERPROFILE%\.paperlab\cloud.env`)의 `KCI_API_KEY` · `RISS_API_KEY`에서 읽고 **값은 출력하지 않습니다.** 키가 없는 소스는 건너뜁니다(RISS는 키가 있을 때만). Europe PMC · OpenCitations · OpenAlex는 키가 없어도 받습니다.
+- 정해 둔 질의(국문 2 · 영문 1 · DOI 5편)로 받은 **응답 본문만** `tests\fixtures\extsources\`에 저장하고, 요청 주소 · 헤더는 버립니다. 각 파일 옆 `*.meta.json`에는 받은 날짜 · 소스 · 질의 종류만 있습니다.
+- **결과 픽스처에 키가 들어가지 않습니다**: 본문에 **키 문자열이 있으면** 그 파일은 **저장하지 않고 멈춥니다**(멈추면 팀장에게 알려 주세요 — 어느 파일에서 멈췄는지는 화면에 나옴, 키 값은 안 나옴). **이메일 모양 문자열**(저자 연락처 등)은 멈추지 않고 `redacted@example.invalid`로 바꿔 저장합니다(그래서 픽스처에 이 가짜 주소가 보여도 정상입니다).
+- 끝에 OpenAlex `license` 값별 개수가 출력됩니다(허용 목록 `cc-by` · `cc-by-sa` · `cc-by-nc` · `cc-by-nd` · `cc-by-nc-sa` · `cc-by-nc-nd` · `cc0` · `public-domain` 밖의 값이 있으면 **팀장에게 보고**). 이 출력에는 비밀이 없습니다.
+- 만들어진 파일은 개발팀이 검토해 저장소에 넣습니다. **서버 PC에서는 커밋 · 푸시하지 않습니다.**
+
+### 14.4 반영 순서 (5단계 코드를 서버 PC에 올릴 때)
+
+팀장이 승인 · 푸시를 알리면 11절 `update.ps1`로 반영합니다. 이 변경에는 **DB 마이그레이션 `20261014000001_external_sources.sql`**(공용 캐시 `external_works.oa_license` 열 추가 + `citation_edges` 출처에 `opencitations` 허용)이 들어 있어, **DB가 먼저 바뀐 뒤에 새 코드가 실행되어야** 합니다. 새 코드는 이 열을 읽고 쓰기 때문입니다.
+
+1. **마이그레이션 `20261014000001`** — `update.ps1`이 코드 파일을 받은 뒤 `paperlab.migrate`로 적용합니다(11절 "업데이트 동작" 4번). 새 열은 비어 있어도 되고(null) 옛 코드와도 호환되므로, 이 단계에서 실패해 되돌려도 서버는 옛 코드로 계속 돕니다.
+2. **새 코드로 서버 다시 시작** — 마이그레이션이 끝난 **뒤에야** `PaperLab Server`가 다시 시작해 새 코드로 뜹니다(5번 상태 확인에서 `/api/health`의 커밋이 새 값이어야 통과).
+3. (선택) KCI · RISS 키를 `cloud.env`에 넣고 `update.ps1 -RestartOnly`(14.1절) — 키는 코드 반영과 순서가 상관없습니다. 코드를 먼저 올려 두고 나중에 넣어도 됩니다(그동안 두 소스는 "키 등록 전").
+4. (키를 받은 뒤) 녹화 도구(14.3절) → 개발팀이 픽스처 · 명세 확인 필요 항목 갱신.
+
+- 수동으로 나눠 할 때: `.venv\Scripts\python -m paperlab.migrate` → `update.ps1 -RestartOnly`. 순서를 거꾸로(코드가 먼저 돌고 마이그레이션이 나중에) 하지 않습니다.
+- 마이그레이션은 **되돌리지 않습니다**(11절). 문제가 생겨 `update.ps1 -Ref <옛 커밋>`으로 코드만 되돌려도 새 열 · 새 허용 값은 DB에 남지만 옛 코드와 호환됩니다.
+- 설치 후 확인(9절)에는 변경이 없습니다. 반영 뒤 사람이 화면으로 보는 항목(명세 AC-585 · 586)은 팀장 · 품질팀 몫입니다.

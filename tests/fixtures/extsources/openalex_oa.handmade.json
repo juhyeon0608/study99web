@@ -1,0 +1,46 @@
+{
+  "_fixture": "손 픽스처 — OpenAlex 작품(GET /works/doi:…)의 best_oa_location · oa_locations 꼴. license 실제 값 목록은 녹화로 확인(16.3절 3번)",
+  "cc_by": {
+    "id": "https://openalex.org/W9100000001", "doi": "https://doi.org/10.99999/oa.ccby", "display_name": "CC BY paper",
+    "open_access": {"is_oa": true},
+    "best_oa_location": {"pdf_url": "https://files.example.org/ccby.pdf", "landing_page_url": "https://files.example.org/ccby",
+                         "license": "cc-by", "version": "publishedVersion"},
+    "oa_locations": [{"pdf_url": "https://files.example.org/ccby.pdf", "landing_page_url": "https://files.example.org/ccby",
+                      "license": "cc-by", "version": "publishedVersion"}]
+  },
+  "other_then_cc": {
+    "id": "https://openalex.org/W9100000002", "doi": "https://doi.org/10.99999/oa.mixed", "display_name": "Mixed paper",
+    "open_access": {"is_oa": true},
+    "best_oa_location": {"pdf_url": "https://publisher.example.org/mixed.pdf", "landing_page_url": "https://publisher.example.org/mixed",
+                         "license": "publisher-specific-oa", "version": "publishedVersion"},
+    "oa_locations": [
+      {"pdf_url": "https://publisher.example.org/mixed.pdf", "landing_page_url": "https://publisher.example.org/mixed",
+       "license": "publisher-specific-oa", "version": "publishedVersion"},
+      {"pdf_url": "https://repo.example.org/mixed-accepted.pdf", "landing_page_url": "https://repo.example.org/mixed",
+       "license": "CC-BY-NC", "version": "acceptedVersion"}
+    ]
+  },
+  "no_license": {
+    "id": "https://openalex.org/W9100000003", "doi": "https://doi.org/10.99999/oa.nolic", "display_name": "No license paper",
+    "open_access": {"is_oa": true},
+    "best_oa_location": {"pdf_url": "https://publisher.example.org/nolic.pdf", "landing_page_url": "https://publisher.example.org/nolic",
+                         "license": null, "version": "publishedVersion"},
+    "oa_locations": [{"pdf_url": "https://publisher.example.org/nolic.pdf", "license": null}]
+  },
+  "other_oa": {
+    "id": "https://openalex.org/W9100000004", "doi": "https://doi.org/10.99999/oa.other", "display_name": "Other OA paper",
+    "open_access": {"is_oa": true},
+    "best_oa_location": {"pdf_url": "https://publisher.example.org/other.pdf", "license": "other-oa"},
+    "oa_locations": [{"pdf_url": "https://publisher.example.org/other.pdf", "license": "other-oa"}]
+  },
+  "landing_only": {
+    "id": "https://openalex.org/W9100000005", "doi": "https://doi.org/10.99999/oa.landing", "display_name": "Landing only",
+    "open_access": {"is_oa": true},
+    "best_oa_location": {"pdf_url": null, "landing_page_url": "https://publisher.example.org/landing", "license": "cc-by"},
+    "oa_locations": []
+  },
+  "closed": {
+    "id": "https://openalex.org/W9100000006", "doi": "https://doi.org/10.99999/oa.closed", "display_name": "Closed paper",
+    "open_access": {"is_oa": false}, "best_oa_location": null, "oa_locations": []
+  }
+}

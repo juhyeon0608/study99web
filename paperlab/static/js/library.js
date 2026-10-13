@@ -2,12 +2,13 @@
 
 import { api, downloadBlob, qs, safeFilename } from "./api.js";
 import {
-  EXT_MARK, G5_NOTICE, ICON_GRAPH, SCHOLAR_LIBRARY_NOTE, addByIdentifierDialog, addPaper, bibliographyDialog, bindExtLink,
+  EXT_MARK, G5_NOTICE, ICON_GRAPH, ICON_INFO, ICON_WARN, SCHOLAR_LIBRARY_NOTE, addByIdentifierDialog, addPaper, bibliographyDialog, bindExtLink,
   citeDialog, copySearchQuery, editPaperDialog, exportPapers, folderIcon, folderPath, importDialog, issuesBox,
-  moveToFolderDialog, openExternal, uploadPdfs,
+  extMark, moveToFolderDialog, openExternal, uploadPdfs,
 } from "./dialogs.js";
 import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
 import { openGraph } from "./graph.js";
+import { OC_FAILED_TEXT, licenseLabel, oaOpenLabel, viaHtml } from "./sourcemeta.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
 import {
   $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
@@ -21,6 +22,14 @@ let noteSaver = null;
 let detailToken = 0;
 
 const INHA_OPEN_TITLE = `${INHA.proxyName}(정석학술정보관)로 원문 페이지를 열어요`;
+// 무료 PDF 찾기 (docs/design/phase5-korean-db-ui.md 4장 · AD-3 · AD-9)
+const OA_FIND_TITLE = "무료 PDF를 찾아요. 라이선스가 확인되면 바로 저장하고, 아니면 직접 받을 링크를 드려요.";
+const OA_OPEN_TITLE = "라이선스를 확인하지 못한 PDF예요. 새 탭에서 직접 받아 [PDF 첨부]로 올려 주세요.";
+const oaNotice = (html) => `<div class="notice oa-after" data-tone="info">${ICON_INFO}<div>${html}</div></div>`;
+const OA_AFTER_OPEN = oaNotice("무료 PDF가 있지만 라이선스를 확인하지 못해 PaperLab이 대신 받지 않았어요. <b>[무료 PDF 열기]</b>로 직접 받은 뒤 <b>[PDF 첨부]</b>로 올려 주세요.");
+const oaAfterNone = (inha) => oaNotice(inha
+  ? "무료 PDF를 찾지 못했어요. 학교가 구독하는 논문이면 <b>[인하대에서 보기]</b>에서 받아 <b>[PDF 첨부]</b>로 올려 주세요."
+  : "무료 PDF를 찾지 못했어요. PDF 파일이 있으면 <b>[PDF 첨부]</b>로 올려 주세요.");
 const TITLE_SEARCH_DBS = [["riss", "RISS"], ["dbpia", "DBpia"], ["kiss", "KISS"]];
 
 const SORTS = [["added", "추가한 순"], ["opened", "최근 연 순"], ["year", "연도 (최신)"], ["title", "제목"], ["first_author", "제1저자"], ["cited", "피인용 많은 순"]];
@@ -236,7 +245,7 @@ function onListKey(e) {
 
 export function openPaper(p) {
   if (p.has_pdf) location.hash = `#/read/${p.id}`;
-  else { setActive(p.id); toast("PDF가 없는 논문이에요. 상세 패널에서 PDF를 받거나 첨부해 주세요."); }
+  else { setActive(p.id); toast("PDF가 없는 논문이에요. 상세 패널에서 무료 PDF를 찾거나 첨부해 주세요."); }
 }
 
 async function deletePapers(ids) {
@@ -327,11 +336,12 @@ async function renderDetail() {
     <div class="authors">${esc((p.authors || []).map(authorName).join(", ") || "저자 미상")}</div>
     <div class="venue-line">${esc([venueBits, p.year].filter(Boolean).join(" · "))}</div>
     <div class="actions">
-      ${p.has_pdf ? `<button class="btn primary" data-read>읽기 · AI 요약</button>` : `<button class="btn primary" data-fetch>PDF 받기</button>${inhaBtn}<button class="btn" data-attach>PDF 첨부</button>`}
+      ${p.has_pdf ? `<button class="btn primary" data-read>읽기 · AI 요약</button>` : `${p.doi || p.arxiv_id || p.pdf_url ? `<button class="btn primary" data-fetch title="${esc(OA_FIND_TITLE)}">무료 PDF 찾기</button>` : ""}${inhaBtn}<button class="btn${p.doi || p.arxiv_id || p.pdf_url ? "" : " primary"}" data-attach>PDF 첨부</button>`}
       <button class="btn" data-cite>인용</button>
       <span class="menu-wrap"><button class="btn" data-more>⋯</button></span>
     </div>
     <div class="inha-after-slot" data-inha-after role="status"></div>
+    <div class="oa-after-slot" data-oa-after role="status"></div>
     <div data-issues></div>
     <div class="row" style="gap:14px;flex-wrap:wrap">
       <div class="seg" data-status>${Object.entries(state.meta.statuses).map(([k, v]) => `<button data-v="${k}" class="${p.status === k ? "active" : ""}">${v}</button>`).join("")}</div>
@@ -363,11 +373,41 @@ async function renderDetail() {
   const read = $("[data-read]", inner);
   if (read) read.onclick = () => openPaper(p);
   const fetchBtn = $("[data-fetch]", inner);
+  const oaAfter = $("[data-oa-after]", inner);
   if (fetchBtn) fetchBtn.onclick = async () => {
+    if (fetchBtn.getAttribute("aria-disabled") === "true") { oaAfter.innerHTML = oaAfterNone(!!inha); return; } // ③ 다시 알림만
     fetchBtn.disabled = true;
     fetchBtn.innerHTML = `<span class="spinner"></span> 찾는 중`;
-    try { await api.post(`/api/papers/${p.id}/fetch-pdf`); toast("PDF를 받았어요", "success"); reload(); refreshUsage(); }
-    catch (e) { errorToast(e); fetchBtn.disabled = false; fetchBtn.textContent = "PDF 받기"; }
+    let r;
+    try { r = await api.post(`/api/papers/${p.id}/fetch-pdf`); } catch (e) {
+      fetchBtn.disabled = false;
+      if (e.status === 404) { // ③ 없음 — 패널을 다시 그리면 원래 버튼으로
+        fetchBtn.textContent = "무료 PDF 없음";
+        fetchBtn.setAttribute("aria-disabled", "true");
+        oaAfter.innerHTML = oaAfterNone(!!inha);
+        return fetchBtn.focus();
+      }
+      errorToast(e);
+      fetchBtn.textContent = "무료 PDF 찾기";
+      return;
+    }
+    if (r && r.open_url && !safeUrl(r.open_url)) { // 이상한 주소(http/https 아님): 열지 않고 버튼을 되돌림 (D4)
+      toast("무료 PDF 주소가 올바르지 않아 열 수 없어요. PDF 파일이 있으면 [PDF 첨부]로 올려 주세요.", "error");
+      fetchBtn.disabled = false;
+      fetchBtn.textContent = "무료 PDF 찾기";
+      return;
+    }
+    if (r && r.open_url) { // ② 새 탭 — 링크로 바꾸고 안내(프록시로 감싸지 않음)
+      const a = el(`<a class="btn primary" data-oa-open href="${esc(safeUrl(r.open_url))}" target="_blank" rel="noopener noreferrer"
+        title="${esc(OA_OPEN_TITLE)}">${esc(oaOpenLabel(r.open_kind))}${extMark("새 탭에서 열림 · 직접 받아 올려야 해요")}</a>`);
+      fetchBtn.replaceWith(a);
+      oaAfter.innerHTML = OA_AFTER_OPEN;
+      return a.focus();
+    }
+    const lic = licenseLabel(r && r.license); // ① 서버가 받아 저장
+    toast(`무료 PDF를 받아 저장했어요${lic ? ` (${lic})` : ""}`, "success");
+    reload();
+    refreshUsage();
   };
   const attach = $("[data-attach]", inner);
   if (attach) attach.onclick = () => attachPdf(p.id, false);
@@ -522,11 +562,19 @@ function relatedView(p) {
     const mine = ++seq;
     relatedKind = kind;
     $$(".seg button", v).forEach((b) => b.classList.toggle("active", b.dataset.k === kind));
-    if (page === 1) list.innerHTML = `<div class="status-line" style="margin-top:6px"><span class="spinner"></span> OpenAlex에서 불러오는 중…</div>`;
+    const loading = kind === "references" ? "참고문헌을 불러오는 중… OpenAlex에 없으면 OpenCitations에서 찾아요" : "OpenAlex에서 불러오는 중…";
+    if (page === 1) list.innerHTML = `<div class="status-line" style="margin-top:6px"><span class="spinner"></span> ${loading}</div>`;
     try {
       const res = await api.get(`/api/papers/${p.id}/related${qs({ kind, page })}`);
       if (mine !== seq) return; // 그사이 다른 탭을 눌렀다
-      if (page === 1) list.innerHTML = `<div class="small muted" style="padding:6px 0">${fmtNum(res.total)}편${kind === "cited_by" ? " (피인용 많은 순)" : ""}</div>`;
+      const ocFailed = (res.warnings || []).some((w) => w.code === "oc_failed") && !res.items.length;
+      if (ocFailed && page === 1) { // OpenCitations 실패 — 0편과 구분 (5.2절)
+        list.innerHTML = `<div class="notice" data-tone="warn" data-code="oc_failed">${ICON_WARN}<div>${esc(OC_FAILED_TEXT)}
+          <div class="notice-actions"><button type="button" class="btn sm" data-retry>다시 시도</button></div></div></div>`;
+        $("[data-retry]", list).onclick = () => load("references");
+        return;
+      }
+      if (page === 1) list.innerHTML = viaHtml(res) || `<div class="small muted" style="padding:6px 0">${fmtNum(res.total)}편${kind === "cited_by" ? " (피인용 많은 순)" : ""}</div>`;
       else $(".more", list)?.remove();
       for (const it of res.items) list.appendChild(miniResult(it));
       if (!res.items.length && page === 1) list.appendChild(el(`<p class="small muted">결과가 없어요</p>`));

@@ -139,8 +139,11 @@ def norm_openalex(w: dict) -> dict:
             p["arxiv_id"] = p["arxiv_id"] or m.group(1)
     p["openalex_id"] = (w.get("id") or ids.get("openalex") or "").rsplit("/", 1)[-1]
     p["url"] = loc.get("landing_page_url") or (w.get("doi") or "") or w.get("id") or ""
-    oa = w.get("best_oa_location") or {}
-    p["pdf_url"] = oa.get("pdf_url") or ""
+    # 무료 PDF (5단계 U-3 · 8.3절): 서버가 받을 수 있는 것(허용 라이선스 · arXiv)만 pdf_url, 그 밖 PDF는 새 탭용 oa_open_url
+    pick = pick_oa_location(oa_locations_of(w))
+    p["pdf_url"] = pick["pdf_url"] if pick and pick["server_fetch"] else ""
+    p["oa_open_url"] = pick["open_url"] if pick and not pick["server_fetch"] and pick["open_kind"] == "pdf" else ""
+    p["oa_license"] = _text((w.get("best_oa_location") or {}).get("license"), 100)
     if not p["pdf_url"] and p["arxiv_id"]:
         p["pdf_url"] = f"https://arxiv.org/pdf/{p['arxiv_id']}"
     p["abstract"] = _openalex_abstract(w.get("abstract_inverted_index"))
@@ -189,13 +192,14 @@ def norm_s2(d: dict) -> dict:
     p["arxiv_id"] = ext.get("ArXiv") or ""
     p["s2_id"] = d.get("paperId") or ""
     p["url"] = d.get("url") or ""
-    p["pdf_url"] = (d.get("openAccessPdf") or {}).get("url") or ""
+    # 라이선스를 알 수 없는 주소라 서버가 받지 않고 새 탭으로만 (K-22)
+    p["oa_open_url"] = _http_url((d.get("openAccessPdf") or {}).get("url"))
     p["abstract"] = d.get("abstract") or ""
     p["cited_by_count"] = d.get("citationCount")
     types = d.get("publicationTypes") or []
     p["item_type"] = "conference" if "Conference" in types else ("article" if types else "article")
     p["tldr"] = (d.get("tldr") or {}).get("text") or ""
-    p["is_oa"] = bool(p["pdf_url"])
+    p["is_oa"] = bool(p["oa_open_url"])
     return p
 
 
@@ -232,7 +236,7 @@ def norm_crossref(m: dict) -> dict:
     p["item_type"] = CROSSREF_TYPES.get(m.get("type") or "", "article")
     for link in m.get("link") or []:
         if link.get("content-type") == "application/pdf":
-            p["pdf_url"] = link.get("URL", "")
+            p["oa_open_url"] = _http_url(link.get("URL"))  # 새 탭으로만 (K-22)
             break
     return p
 
@@ -381,18 +385,42 @@ class Sources:
     # ------------------------------------------------------------- lookup
     def lookup_doi(self, doi: str) -> dict:
         try:
-            data = self._get_json(f"{CROSSREF}/works/{doi}")
+            path = doi_path(doi)  # 경로에는 인코딩한 DOI만, '.' · '..' 조각은 보내지 않음 (5단계 8.1절)
+        except ValueError:
+            raise SourceError("DOI 형식이 올바르지 않아요") from None
+        try:
+            data = self._get_json(f"{CROSSREF}/works/{path}")
             p = norm_crossref(data.get("message") or {})
         except SourceError:
             p = None
         try:
-            w = self._get_json(f"{OPENALEX}/works/doi:{doi}", self._openalex_params({}))
+            w = self._get_json(f"{OPENALEX}/works/doi:{path}", self._openalex_params({}))
             oa = norm_openalex(w)
         except SourceError:
             oa = None
         if not p and not oa:
             raise SourceError(f"DOI {doi} 정보를 찾지 못했어요")
         return merge(p or _empty("crossref"), oa) if oa else p
+
+    def oa_locations(self, doi: str) -> list[dict]:
+        """OpenAlex 무료 PDF 위치들(5단계 8.1절 — 클릭 때 1회, 캐시에 쓰지 않음). 모르는 DOI는 [], 연결 실패는 SourceError"""
+        try:
+            w = self._get_json(f"{OPENALEX}/works/doi:{doi_path(doi)}", self._openalex_params({}))
+        except ValueError:
+            return []
+        except SourceError as e:
+            if "404" in str(e):
+                return []
+            raise
+        return oa_locations_of(w)
+
+    def crossref_pdf_link(self, doi: str) -> str:
+        """Crossref link의 PDF 주소 — 라이선스를 알 수 없어 새 탭용으로만 (K-22). 없거나 실패하면 ''"""
+        try:
+            data = self._get_json(f"{CROSSREF}/works/{doi_path(doi)}")
+        except (ValueError, SourceError):
+            return ""
+        return norm_crossref(data.get("message") or {}).get("oa_open_url") or ""
 
     def lookup_arxiv(self, arxiv_id: str) -> dict:
         try:
@@ -536,8 +564,9 @@ class Sources:
 
 PDF_FETCH_FAILED = "PDF를 받지 못했어요. 주소를 확인하거나 직접 파일을 첨부해 주세요."
 MAX_REDIRECTS = 5
-BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal", "instance-data"}
-BLOCKED_SUFFIXES = (".localhost", ".internal", ".local", ".localdomain", ".home.arpa")
+# openlink.inha.ac.kr: 학교 프록시로 서버가 자동으로 받지 않는다 (5단계 8.2절 — 리디렉션 단계마다 같은 검사)
+BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal", "instance-data", "openlink.inha.ac.kr"}
+BLOCKED_SUFFIXES = (".localhost", ".internal", ".local", ".localdomain", ".home.arpa", ".openlink.inha.ac.kr")
 
 
 def _resolve_host(host: str, port: int) -> list[str]:
@@ -576,6 +605,85 @@ def parse_arxiv_feed(xml_text: str) -> dict:
     return {"items": entries, "total": int(total) if total.isdigit() else len(entries)}
 
 
+# ------------------------------------------------- 무료 PDF 판정 (5단계 U-3 · U-4 · 8장 — OpenAlex 정보만)
+# 서버가 받아도 되는 라이선스(허용 목록 — 목록 밖 · 없음은 모두 새 탭). 실제 값 목록은 녹화로 확인(16.3절 3번)
+SERVER_FETCH_LICENSES = frozenset({"cc-by", "cc-by-sa", "cc-by-nc", "cc-by-nd", "cc-by-nc-sa", "cc-by-nc-nd", "cc0",
+                                   "public-domain"})
+_DOI_CHECK_RE = re.compile(r"^10\.\d{4,9}/\S{1,250}$")
+
+
+def server_fetch_allowed(license) -> bool:
+    return isinstance(license, str) and license.strip().lower() in SERVER_FETCH_LICENSES
+
+
+def _host(url: str) -> str:
+    try:
+        return (httpx.URL(url).host or "").lower().rstrip(".")
+    except (httpx.InvalidURL, TypeError, ValueError):
+        return ""
+
+
+def is_arxiv_url(url) -> bool:
+    """arXiv 예외(8.3절 경계 ② — 사용자 결정): 호스트가 arxiv.org인 주소는 라이선스 확인 없이 서버가 받는다"""
+    return isinstance(url, str) and bool(re.match(r"https?://", url, re.I)) and _host(url) in ("arxiv.org", "www.arxiv.org")
+
+
+def _openlink(url: str) -> bool:
+    h = _host(url)
+    return h == "openlink.inha.ac.kr" or h.endswith(".openlink.inha.ac.kr")
+
+
+def check_doi(doi) -> str:
+    """정규화한 DOI. 형식이 틀리거나 '.' · '..' 조각이 있으면 ValueError (요청하지 않음)"""
+    from .db import normalize_doi
+    d = normalize_doi(doi if isinstance(doi, str) else "")
+    if not _DOI_CHECK_RE.match(d) or any(seg in (".", "..") for seg in d.split("/")):
+        raise ValueError("bad doi")
+    return d
+
+
+def doi_path(doi) -> str:
+    """경로 한 조각으로 넣을 DOI ('/'만 살리고 '?' · '#' 등은 퍼센트 인코딩)"""
+    return quote(check_doi(doi), safe="/")
+
+
+def oa_locations_of(w) -> list[dict]:
+    """OpenAlex 작품의 best_oa_location → oa_locations 순 위치 [{pdf_url, landing_url, license, version}].
+    http/https 주소만, openlink 호스트 주소는 버림, 같은 위치는 한 번"""
+    if not isinstance(w, dict):
+        return []
+    out, seen = [], set()
+    raw = [w.get("best_oa_location")] + (w.get("oa_locations") if isinstance(w.get("oa_locations"), list) else [])
+    for loc in raw:
+        if not isinstance(loc, dict):
+            continue
+        pdf, landing = _http_url(loc.get("pdf_url")), _http_url(loc.get("landing_page_url"))
+        pdf, landing = ("" if _openlink(pdf) else pdf), ("" if _openlink(landing) else landing)
+        if not (pdf or landing) or (pdf, landing) in seen:
+            continue
+        seen.add((pdf, landing))
+        out.append({"pdf_url": pdf, "landing_url": landing, "license": _text(loc.get("license"), 100),
+                    "version": _text(loc.get("version"), 100)})
+    return out
+
+
+def pick_oa_location(locs) -> dict | None:
+    """8.1절 위치 고르기: PDF 위치 중 허용 라이선스 → (arXiv 예외) arXiv PDF → 서버가 받음.
+    아니면 첫 PDF 위치(best 우선)를 새 탭용, PDF가 없으면 첫 원문 페이지를 새 탭용. 아무것도 없으면 None"""
+    locs = [x for x in locs or [] if isinstance(x, dict)]
+    pdfs = [x for x in locs if x.get("pdf_url")]
+    chosen = next((x for x in pdfs if server_fetch_allowed(x.get("license"))), None) or \
+        next((x for x in pdfs if is_arxiv_url(x["pdf_url"])), None)
+    if chosen:
+        return {**chosen, "server_fetch": True, "open_url": "", "open_kind": ""}
+    if pdfs:
+        return {**pdfs[0], "server_fetch": False, "open_url": pdfs[0]["pdf_url"], "open_kind": "pdf"}
+    landing = next((x for x in locs if x.get("landing_url")), None)
+    if landing:
+        return {**landing, "server_fetch": False, "open_url": landing["landing_url"], "open_kind": "landing"}
+    return None
+
+
 def merge(base: dict, extra: dict | None) -> dict:
     """base의 빈 필드를 extra로 채운다."""
     if not extra:
@@ -596,6 +704,8 @@ def merge(base: dict, extra: dict | None) -> dict:
 # 리디렉션은 따라가지 않고(3xx = 실패), 응답은 10MB까지, 오류 문구 · 로그는 호스트 + 상태 코드만(주소 · 식별자 없음).
 OPENALEX_HOST = "api.openalex.org"
 S2_HOST = "api.semanticscholar.org"
+OC_HOST = "api.opencitations.net"  # 5단계 9장 — 참고문헌 보강(키 · 토큰 없음, CC0)
+OC = f"https://{OC_HOST}/index/v2"
 GRAPH_UA = f"PaperLab/{__version__}"
 GRAPH_MAX_BYTES = 10 * 1024 * 1024
 GRAPH_TIMEOUT = httpx.Timeout(15.0, connect=5.0)
@@ -660,6 +770,85 @@ class RateLimiter:
 
 OPENALEX_LIMITER = RateLimiter(10)  # 공식 초당 100보다 훨씬 낮게 (7.5절)
 S2_LIMITER = RateLimiter(1)
+OC_LIMITER = RateLimiter(2)  # 공식 IP당 분당 180회보다 낮게 (5단계 14장 — 가정)
+
+
+def strict_get(url: str, params: dict, headers: dict, transport: httpx.BaseTransport | None = None,
+               ua: str = GRAPH_UA) -> tuple[int, httpx.Headers, bytes]:
+    """엄격한 GET 한 번 (1B 9.5절 규칙 — 그래프 · 5단계 외부 소스 공용, K-1): 리디렉션을 따라가지 않고, 2xx 본문은 10MB까지
+    (넘으면 _TooLarge), 시간 제한 연결 5초 · 읽기 15초. 2xx가 아니면 본문을 읽지 않는다"""
+    with httpx.Client(timeout=GRAPH_TIMEOUT, follow_redirects=False, headers={"User-Agent": ua},
+                      transport=transport) as c:
+        with c.stream("GET", url, params=params, headers=headers) as r:
+            if not 200 <= r.status_code < 300:
+                return r.status_code, r.headers, b""
+            length = r.headers.get("content-length") or ""
+            if length.isdigit() and int(length) > GRAPH_MAX_BYTES:
+                raise _TooLarge()
+            buf = bytearray()
+            for chunk in r.iter_bytes():
+                buf.extend(chunk)
+                if len(buf) > GRAPH_MAX_BYTES:
+                    raise _TooLarge()
+            return r.status_code, r.headers, bytes(buf)
+
+
+def log_upstream(host: str, status: int | None) -> None:
+    """외부 오류 로그 한 줄 — 호스트 + 상태만(주소 · 식별자 · 키 없음, 1B 9.6절)"""
+    log.warning(json.dumps({"event": "upstream_error", "host": host, "status": status}))
+
+
+def get_with_retry(host: str, url: str, params: dict, headers: dict, transport=None, sleep=time.sleep,
+                   before=None, on_reply=None) -> tuple[int, bytes]:
+    """strict_get + 공통 재시도(그래프 · 5단계 외부 소스 공용, K-1): 연결 오류 · 5xx는 1초 뒤, 429는 Retry-After(≤5초) 뒤
+    한 번만 더. 그 밖 · 3xx · 크기 초과는 바로 UpstreamError(host, status). before() = 시도마다(속도 제한 · 예산),
+    on_reply(status, headers) = 응답마다(그래프의 하루 한도 — 여기서 예외를 내면 재시도 없음)"""
+    retried = False
+    while True:
+        if before:
+            before()
+        try:
+            status, hdrs, body = strict_get(url, params, headers, transport)
+        except (httpx.ConnectError, httpx.ConnectTimeout):  # 연결 오류만 한 번 더
+            log_upstream(host, None)
+            if not retried:
+                retried = True
+                sleep(1.0)
+                continue
+            raise UpstreamError(host) from None
+        except (httpx.HTTPError, _TooLarge, httpx.InvalidURL):  # 읽기 시간 초과 · 크기 초과 등: 재시도 없음
+            log_upstream(host, None)
+            raise UpstreamError(host) from None
+        if on_reply:
+            on_reply(status, hdrs)
+        if status == 429 or status >= 500:
+            log_upstream(host, status)
+            if not retried:
+                retried = True
+                sleep(_retry_after(hdrs) if status == 429 else 1.0)
+                continue
+            raise UpstreamError(host, status)
+        if not 200 <= status < 300:  # 3xx(리디렉션 따라가지 않음) · 4xx
+            log_upstream(host, status)
+            raise UpstreamError(host, status, location=hdrs.get("location") or "" if 300 <= status < 400 else "")
+        return status, body
+
+
+def parse_oc_references(data, cap: int = MAX_REFS_STORED) -> list[str]:
+    """OpenCitations /references 응답 → 인용한 DOI 목록(소문자 · 중복 없음 · 앞 cap편).
+    cited는 'omid:… doi:10.x/… pmid:…'처럼 여러 식별자를 공백으로 묶은 꼴, 옛 꼴은 DOI 하나"""
+    out: dict[str, None] = {}
+    for item in data if isinstance(data, list) else []:
+        cited = item.get("cited") if isinstance(item, dict) else None
+        if not isinstance(cited, str):
+            continue
+        for tok in cited.lower().split():
+            d = tok.removeprefix("doi:")
+            if d.startswith("10.") and len(d) <= 300:
+                out[d] = None
+        if len(out) >= cap:
+            break
+    return list(out)[:cap]
 
 
 def _text(v, n: int) -> str:
@@ -748,6 +937,10 @@ def graph_work(w, fields) -> dict | None:
     year = p.get("year")
     year = year if isinstance(year, int) and not isinstance(year, bool) and 0 < year < 3000 else None
     ships = w.get("authorships")
+    # 캐시의 pdf_url · oa_license = best_oa_location 그대로(없으면 arXiv 주소) — 서버가 받을지는 읽을 때 판정(K-21 · paper_view)
+    best = w.get("best_oa_location") if isinstance(w.get("best_oa_location"), dict) else {}
+    raw_pdf = _http_url(best.get("pdf_url")) or (p.get("pdf_url") if is_arxiv_url(p.get("pdf_url")) else "")
+    raw_pdf = "" if _openlink(raw_pdf) else raw_pdf
     row = {
         "no": no, "doi": doi, "arxiv_id": _text(p.get("arxiv_id"), 300), "title": _text(p.get("title"), 1000),
         "authors": authors, "author_count": len(ships) if isinstance(ships, list) else len(authors), "year": year,
@@ -755,7 +948,8 @@ def graph_work(w, fields) -> dict | None:
         "publisher": _text(p.get("publisher"), 300), "volume": _text(p.get("volume"), 300),
         "issue": _text(p.get("issue"), 300), "pages": _text(p.get("pages"), 300),
         "item_type": _text(p.get("item_type"), 300) or "article", "language": _text(p.get("language"), 300),
-        "url": _http_url(p.get("url")), "pdf_url": _http_url(p.get("pdf_url")), "is_oa": bool(p.get("is_oa")),
+        "url": _http_url(p.get("url")), "pdf_url": _http_url(raw_pdf), "is_oa": bool(p.get("is_oa")),
+        "oa_license": _text(best.get("license"), 100) if "best_oa_location" in w else None,
         "cited_by_count": _nonneg(w.get("cited_by_count")), "reference_count": _nonneg(w.get("referenced_works_count")),
         "refs": None, "refs_total": 0, "related": None, "abstract": None,
     }
@@ -797,19 +991,22 @@ class GraphSources:
     def __init__(self, openalex_key: str = "", s2_key: str = "", *, transport: httpx.BaseTransport | None = None,
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], None] = time.sleep,
                  oa_limiter: RateLimiter | None = None, s2_limiter: RateLimiter | None = None,
-                 max_list_calls: int = 12, deadline: float | None = None, cancel: threading.Event | None = None):
+                 max_list_calls: int = 12, deadline: float | None = None, cancel: threading.Event | None = None,
+                 oc_limiter: RateLimiter | None = None):
         self.openalex_key = openalex_key or ""
         self.s2_key = s2_key or ""
         self._transport = transport
         self.clock, self._sleep = clock, sleep
         self.oa_limiter = oa_limiter or OPENALEX_LIMITER
         self.s2_limiter = s2_limiter or S2_LIMITER
+        self.oc_limiter = oc_limiter or OC_LIMITER
         self.max_list_calls = max_list_calls
         self.deadline = deadline
         self.cancel = cancel
         self.list_calls = 0
         self.single_calls = 0
         self.s2_calls = 0
+        self.oc_calls = 0
         self.limited = False  # OpenAlex 하루 한도 소진(429 + X-RateLimit-Remaining: 0)
         self.remaining: int | None = None
         self._lock = threading.Lock()
@@ -828,29 +1025,10 @@ class GraphSources:
         with self._lock:
             return max(0, self.max_list_calls - self.list_calls)
 
-    def _log(self, host: str, status: int | None) -> None:
-        log.warning(json.dumps({"event": "upstream_error", "host": host, "status": status}))
+    def _send(self, base: str, host: str, path: str, params: dict, headers: dict, kind: str, want=dict):
+        limiter = {S2_HOST: self.s2_limiter, OC_HOST: self.oc_limiter}.get(host, self.oa_limiter)
 
-    def _fetch(self, url: str, params: dict, headers: dict) -> tuple[int, httpx.Headers, bytes]:
-        with httpx.Client(timeout=GRAPH_TIMEOUT, follow_redirects=False, headers={"User-Agent": GRAPH_UA},
-                          transport=self._transport) as c:
-            with c.stream("GET", url, params=params, headers=headers) as r:
-                if not 200 <= r.status_code < 300:
-                    return r.status_code, r.headers, b""
-                length = r.headers.get("content-length") or ""
-                if length.isdigit() and int(length) > GRAPH_MAX_BYTES:
-                    raise _TooLarge()
-                buf = bytearray()
-                for chunk in r.iter_bytes():
-                    buf.extend(chunk)
-                    if len(buf) > GRAPH_MAX_BYTES:
-                        raise _TooLarge()
-                return r.status_code, r.headers, bytes(buf)
-
-    def _send(self, base: str, host: str, path: str, params: dict, headers: dict, kind: str) -> dict:
-        limiter = self.s2_limiter if host == S2_HOST else self.oa_limiter
-        retried = False
-        while True:
+        def before():
             self.check()
             if host == OPENALEX_HOST and self.limited:
                 raise UpstreamError(host, 429, limited=True)
@@ -861,55 +1039,32 @@ class GraphSources:
                     self.list_calls += 1
                 elif kind == "single":
                     self.single_calls += 1
+                elif kind == "oc":
+                    self.oc_calls += 1
                 else:
                     self.s2_calls += 1
             limiter.acquire()
             self.check()
-            try:
-                status, hdrs, body = self._fetch(base + path, params, headers)
-            except (httpx.ConnectError, httpx.ConnectTimeout):  # 연결 오류만 한 번 더
-                self._log(host, None)
-                if not retried:
-                    retried = True
-                    self._sleep(1.0)
-                    continue
-                raise UpstreamError(host) from None
-            except (httpx.HTTPError, _TooLarge, httpx.InvalidURL):  # 읽기 시간 초과 · 크기 초과 등: 재시도 없음
-                self._log(host, None)
-                raise UpstreamError(host) from None
+
+        def on_reply(status, hdrs):
             rem = (hdrs.get("x-ratelimit-remaining") or "").strip()
             if host == OPENALEX_HOST and rem.isdigit():
                 self.remaining = int(rem)
-            if status == 429:
-                self._log(host, 429)
-                if rem == "0":  # 하루 예산 소진: 재시도하지 않음
-                    if host == OPENALEX_HOST:
-                        self.limited = True
-                    raise UpstreamError(host, 429, limited=host == OPENALEX_HOST)
-                if not retried:
-                    retried = True
-                    self._sleep(_retry_after(hdrs))
-                    continue
-                raise UpstreamError(host, 429)
-            if status >= 500:
-                self._log(host, status)
-                if not retried:
-                    retried = True
-                    self._sleep(1.0)
-                    continue
-                raise UpstreamError(host, status)
-            if not 200 <= status < 300:  # 3xx(리디렉션 따라가지 않음) · 4xx
-                self._log(host, status)
-                raise UpstreamError(host, status, location=hdrs.get("location") or "" if 300 <= status < 400 else "")
-            try:
-                data = json.loads(body)
-            except ValueError:
-                self._log(host, status)
-                raise UpstreamError(host, status) from None
-            if not isinstance(data, dict):
-                self._log(host, status)
-                raise UpstreamError(host, status)
-            return data
+            if status == 429 and rem == "0":  # 하루 예산 소진: 재시도하지 않음
+                log_upstream(host, 429)
+                if host == OPENALEX_HOST:
+                    self.limited = True
+                raise UpstreamError(host, 429, limited=host == OPENALEX_HOST)
+
+        status, body = get_with_retry(host, base + path, params, headers, self._transport, self._sleep, before, on_reply)
+        try:
+            data = json.loads(body)
+        except ValueError:
+            data = None
+        if not isinstance(data, want):
+            log_upstream(host, status)
+            raise UpstreamError(host, status)
+        return data
 
     def _oa(self, path: str, params: dict, kind: str) -> dict:
         params = dict(params)
@@ -999,3 +1154,11 @@ class GraphSources:
             if isinstance(d, str) and d.strip().lower().startswith("10."):
                 out[d.strip().lower()[:300]] = None
         return list(out)
+
+    # ------------------------------------------------------------ OpenCitations (5단계 9장 · K-7)
+    def oc_reference_dois(self, doi: str) -> list[str]:
+        """씨앗 DOI의 참고문헌 DOI 목록(OpenCitations 1회, 토큰 · 인증 헤더 없음). 경로의 DOI는 인코딩, '.' · '..' 조각은 보내지 않음"""
+        if not doi or any(seg in (".", "..") for seg in doi.split("/")):
+            raise UpstreamError(OC_HOST, 400)
+        data = self._send(OC, OC_HOST, f"/references/doi:{quote(doi, safe='/')}", {}, {}, "oc", want=list)
+        return parse_oc_references(data)

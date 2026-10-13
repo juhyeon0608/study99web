@@ -111,7 +111,7 @@ def test_no_email_to_openalex_but_crossref_keeps_it():
     s = sources.Sources(lambda k: settings.get(k, ""), transport=httpx.MockTransport(handler))
     s.search("transformer")
     s.related({"openalex_id": "W2963403868"}, "references")
-    s.lookup_doi("10.1/xyz")
+    s.lookup_doi("10.1234/xyz")
     oa = [r for r in seen if r.url.host == "api.openalex.org"]
     cr = [r for r in seen if r.url.host == "api.crossref.org"]
     assert oa and cr
@@ -152,7 +152,7 @@ def test_email_only_to_crossref_every_path():
     s.lookup_openalex("W2963403868")
     assert s.download_pdf("https://example.org/a.pdf") == b"%PDF-1.4 ok"
     s.search("graphs", source="crossref")
-    s.lookup_doi("10.1/xyz")
+    s.lookup_doi("10.1234/xyz")
     by_host: dict[str, list] = {}
     for r in seen:
         by_host.setdefault(r.headers.get("host", r.url.host).split(":")[0], []).append(r)

@@ -49,6 +49,8 @@ def dev_config(env: dict, app_db_url: str | None = None) -> ServerConfig:
         encryption_key=key,
         allowed_emails=parse_allowed_emails(env.get("PAPERLAB_DEV_ALLOWED_EMAILS", "")),
         storage_backend="fake",
+        kci_api_key=(env.get("KCI_API_KEY") or "").strip(),
+        riss_api_key=(env.get("RISS_API_KEY") or "").strip(),
     )
 
 

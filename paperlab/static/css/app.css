@@ -1567,3 +1567,37 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
   .xt-head { top: -14px; margin: 12px -14px 10px; padding: 8px 14px; }
   .reader.panel-sheet .panel-body { padding: 14px 14px 24px; }
 }
+/* ---------------- 5단계 국내 DB · 기관 연동 (docs/design/phase5-korean-db-ui.md) ---------------- */
+/* 논문 찾기: 필터 줄 아래 안내 한 줄(쓸 수 없는 소스의 이유 · 이 소스가 지원하지 않는 정렬/필터). 꼭 읽을 글이라 --text-2 */
+.discover-note { margin: 8px 0 0; font-size: 12px; line-height: 1.55; color: var(--text-2); word-break: keep-all; overflow-wrap: anywhere; }
+.discover-note + .discover-note { margin-top: 2px; }
+/* 지원하지 않는 '무료 PDF 있는 논문만': 글자도 흐리게 (정렬 버튼은 기존 .seg button:disabled) */
+.discover-filters .check:has(> input:disabled) { color: var(--text-3); cursor: not-allowed; }
+/* 결과 위 알림: 처음 KCI · RISS 안내 · 검색 오류 */
+.discover-results > .notice { max-width: 900px; margin: 12px 0 4px; }
+.discover-results > .notice > .icon-btn { margin: -4px -6px -4px 0; }
+.notice .notice-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+/* 결과 카드: 소스 · 등재 · 원문 공개 배지 줄, 소스 피인용 글, 초록 없음 */
+.result .r-badges { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-top: 5px; }
+.chip.src-chip { font-weight: 650; color: var(--text); background: var(--surface); border-color: var(--border-strong); }
+.result .r-cites { font-size: 12px; color: var(--text-2); }
+.result .r-noabs { margin: 6px 0 0; font-size: 12.5px; color: var(--text-3); }
+/* 무료 PDF: 찾지 못함 글 · 새 탭으로 연 뒤 한 줄 안내 (카드 · 서재 상세) */
+.result .r-actions .oa-none { font-size: 12.5px; color: var(--text-3); }
+.result .notice.oa-after { max-width: 640px; margin-top: 8px; padding: 7px 10px; font-size: 12.5px; }
+.detail .notice.oa-after { margin: -4px 0 14px; }
+/* 카드 묶음 아래 출처 한 줄 */
+.result-src { max-width: 900px; margin: 0; padding: 12px 0 0; font-size: 12px; color: var(--text-3); }
+/* 인용 관계 목록 위 "OpenCitations 기준" 줄 + 설명 */
+.via-line { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 6px 0 2px; font-size: 12px; color: var(--text-3); }
+.via-note { margin: 0 0 4px; font-size: 12px; line-height: 1.55; color: var(--text-3); word-break: keep-all; }
+/* 좁은 화면: 양옆 16px, 검색창은 한 줄 전체 */
+@media (max-width: 560px) {
+  .discover-head { padding: 18px 16px 12px; }
+  .discover-results { padding: 8px 16px 32px; }
+  .discover-bar .searchbox { flex-basis: 100%; }
+  .discover-bar > select.input { flex: 1 1 120px; }
+  /* 좁은 화면에서는 머리(검색 · 필터 · 이유 줄)가 결과와 함께 스크롤 — 머리가 화면을 다 덮어 결과가 안 보이지 않게(D7) */
+  .discover-view { overflow-y: auto; }
+  .discover-view > .discover-results { flex: none; overflow: visible; }
+}

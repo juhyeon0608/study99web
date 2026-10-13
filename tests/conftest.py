@@ -306,6 +306,12 @@ class FakeSources:
     def download_pdf(self, url):
         return make_pdf(title="Downloaded Paper Title Here", doi="")
 
+    def oa_locations(self, doi):  # 5단계 무료 PDF 판정 — OpenAlex 위치 없음(사용자가 넣은 주소는 경계 ①로 받음)
+        return []
+
+    def crossref_pdf_link(self, doi):
+        return ""
+
 
 class FakeAI:
     """가짜 AI (2단계: engine 인자 · 오류 코드). fail = True(거절 — 폴백 없음) | "api_auth" 같은 error_code | False.

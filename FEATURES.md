@@ -98,15 +98,29 @@ Google Scholar처럼 검색하고, 결과를 바로 서재에 담습니다.
 | **Semantic Scholar** | 컴퓨터·생명과학 분야에 강함 |
 | **arXiv** | 최신 프리프린트 원문 |
 | **Crossref** | DOI가 등록된 출판물 |
+| **KCI** *(5단계)* | 한국연구재단 학술지 인용색인 — **국내 학술지 논문**을 **제목으로** 찾음(초록 · KCI등재 표시 · KCI 피인용). 관리자가 KCI 키를 등록해야 쓸 수 있음 |
+| **RISS** *(5단계)* | KERIS 국내 학술논문 — 초록 · DOI는 RISS 화면에서 봄. **RISS 키를 받은 경우에만** 켜짐(못 받으면 아래 *학교 DB에서 찾기*의 [RISS] 바로가기만 씀) |
+| **Europe PMC** *(5단계)* | 생명과학 · 의학 논문(PubMed 포함). 키 없이 바로 씀 |
+
+> **5단계(국내 DB · 기관 연동)는 구현을 마치고 승인을 기다리고 있습니다.** KCI · RISS는 **관리자가 공용 키를 서버에 등록하기 전에는 소스 목록에서 흐리게("키 등록 전") 보이고 고를 수 없습니다.** 사용자별로 키를 넣는 칸은 없습니다.
 
 ### 검색 방법
 - 주제·제목·저자로 검색합니다.
 - **DOI, arXiv ID, arXiv 주소, OpenAlex ID**를 넣으면 그 논문 하나를 바로 찾습니다.
   - 예: `10.1038/nature14539`, `arXiv:1706.03762`, `https://arxiv.org/abs/2303.08774`
 - 필터: **기간**(부터~까지), **정렬**(관련도순·피인용순·최신순), **무료 PDF 있는 논문만**
+- 소스가 지원하지 않는 정렬 · 필터는 **흐리게 눌리지 않고, 이유가 아래 한 줄로 늘 보입니다**(예: "KCI는 피인용순 정렬과 '무료 PDF 있는 논문만'을 지원하지 않아요."). 고른 값이 새 소스에서 지원되지 않으면 관련도순 · 필터 해제로 되돌리고 그 사실을 같은 줄에 알립니다(화면 읽기 프로그램에도 알림).
+
+  | 소스 | 관련도순 | 최신순 | 피인용순 | 무료 PDF만 | 쪽 넘기기 |
+  |---|---|---|---|---|---|
+  | KCI | ○ | ○ | 없음 | 없음 | 쪽 번호 |
+  | RISS | ○ | ○ | 없음 | ○ (글자는 "무료 원문 있는 논문만") | 쪽 번호 |
+  | Europe PMC | ○ | ○ | ○ | ○ ("오픈 액세스 논문만") | [← 이전] [다음 →] 만(전체 쪽 수를 모름) |
+- DOI · arXiv ID · OpenAlex ID를 넣으면 **어느 소스를 골라도** 지금처럼 그 논문 하나를 바로 찾습니다.
 
 ### 검색 결과에서 할 수 있는 일
-- **＋ 서재에 추가** / **PDF 포함 추가** (무료 PDF가 있으면 함께 받음)
+- **＋ 서재에 추가** / **PDF 포함 추가** (무료 PDF가 있고 **라이선스가 확인되면** 함께 받음 — 아래 *무료 PDF 찾기 · 라이선스 규칙*)
+- **무료 PDF 찾기** *(DOI가 있고 PDF 주소가 아직 없는 카드)* — 눌렀을 때만 OpenAlex에서 무료 PDF를 찾아 [PDF 포함 추가] · [무료 PDF 열기 ↗] · "무료 PDF 없음" 중 하나로 그 자리에서 바뀜
 - **인용** — 인용 문구를 바로 복사 (서재에 넣지 않아도 됨)
 - **피인용 N** — 이 논문을 인용한 후속 연구 목록 (피인용 많은 순)
 - **참고문헌** — 이 논문이 인용한 논문 목록
@@ -117,6 +131,36 @@ Google Scholar처럼 검색하고, 결과를 바로 서재에 담습니다.
 - 검색창 옆 **✦ AI로 찾기** — 입력한 글을 질문으로 *AI로 찾기*를 바로 실행합니다(6장).
 
 피인용·참고문헌·관련 논문을 따라가며 연구 흐름을 탐색할 수 있고, **← 검색 결과로**로 돌아옵니다.
+
+### 국내 DB · 생명과학 검색 (KCI · RISS · Europe PMC) — 5단계
+소스에서 **KCI · RISS · Europe PMC**를 고르면 같은 결과 목록에서 국문 논문 · 생명과학 논문을 찾고 서재에 담습니다.
+
+- **카드 모양**(새 소스 3개에만 — 기존 소스 카드는 그대로): 소스 이름표(KCI · RISS · Europe PMC), **KCI등재** · **원문 무료** · **오픈 액세스** 표시, 소스 이름이 붙은 피인용 **글**("KCI 피인용 12" — 버튼이 아니라 글입니다. OpenAlex 인용 목록과 숫자가 달라 헷갈리지 않게), 초록(RISS는 API가 초록 본문을 주지 않아 "제목을 누르면 RISS에서 볼 수 있어요").
+- **버튼**: [＋ 서재에 추가] · [인용] · [인하대에서 보기](가능할 때 — 아래) · **[Google Scholar에서 보기]**(새 소스 카드에만, 새 탭) · [무료 PDF 찾기] · **참고문헌 · 관련 논문 · 그래프는 DOI가 있을 때만**. 제목을 누르면 KCI · RISS · Europe PMC의 그 논문 페이지가 새 탭으로 열립니다.
+- **인하대에서 보기**: KCI는 DOI가 있을 때만(KCI는 무료라 학교 주소 변환이 없음), RISS는 항상, Europe PMC는 DOI가 있으면 DOI 주소로. 서재에 넣은 뒤에도 같습니다.
+- **출처 한 줄**: 결과 아래에 "검색 결과 출처: KCI(한국연구재단)" · "RISS(KERIS)" · "Europe PMC".
+- **처음 KCI · RISS 결과를 볼 때 한 번**: "KCI · RISS 검색은 PaperLab 공용 키로 요청해요. 원문은 각 사이트(또는 인하대에서 보기)에서 직접 받아 [PDF 첨부]로 올려 주세요." — ✕로 닫으면 이 브라우저에서는 다시 안 뜹니다.
+- **원문 PDF는 서버가 받지 않습니다.** KCI · RISS API는 원문 PDF를 주지 않고, 학교 구독 원문을 서버가 대신 받지도 않습니다. 각 사이트에서 직접 받아 [PDF 첨부]로 올리세요.
+- 검색어 · 검색 결과는 서버에 저장하지 않고(공용 캐시에도 넣지 않음), 서버 로그에도 남지 않습니다.
+- 오류 문구: 키 등록 전("관리자가 KCI 키를 등록하면 쓸 수 있어요" · RISS는 "키를 받으면 쓸 수 있어요 — 지금은 [RISS] 바로가기를 써 주세요"), 키가 맞지 않거나 사용기간이 끝남(관리자에게 알려 달라는 문구), 요청이 많아 잠시 막힘, 데이터베이스에 연결할 수 없음, 앞의 검색이 끝나지 않음(검색은 사용자당 동시 2개까지). 화면을 연 채 검색하다 "키 등록 전" 응답을 받으면 새로 고치지 않아도 그 소스가 "(키 등록 전)"으로 흐려지고, 소스가 OpenAlex로 돌아가며 "KCI를 지금 쓸 수 없어 OpenAlex로 바꿨어요."가 이유 줄에 보입니다. 폭 560px 이하(휴대폰) 화면에서는 논문 찾기 화면 전체가 한 번에 스크롤됩니다.
+
+### 무료 PDF 찾기 · 라이선스 규칙 — 5단계
+PDF 받기는 **라이선스를 확인할 수 있는 것만 PaperLab이 대신 받고, 나머지는 새 탭으로 직접 받게** 합니다.
+
+| 상태 | 언제 | 화면 |
+|---|---|---|
+| **① PaperLab이 받아 저장** | OpenAlex가 알려 준 라이선스가 **CC(cc-by · cc-by-sa · cc-by-nc · cc-by-nd · cc-by-nc-sa · cc-by-nc-nd · cc0) 또는 퍼블릭 도메인** | 카드는 [PDF 포함 추가] + **라이선스 칩**(예: CC BY), 서재 상세는 바로 저장되고 "무료 PDF를 받아 저장했어요 (CC BY)" |
+| **② 새 탭으로 열기** | 라이선스가 없거나 `other-oa` · 출판사 고유 라이선스 등 **알 수 없는 값**, 또는 Crossref · Semantic Scholar가 알려 준 주소 | **[무료 PDF 열기 ↗]**(PDF가 아니라 논문 페이지만 있으면 "무료 원문 페이지 열기") + "라이선스를 확인하지 못해 PaperLab이 대신 받지 않아요. 직접 받아 [PDF 첨부]로 올려 주세요." 자동으로 새 탭을 열지 않고 링크를 누르게 합니다. 학교 프록시(openlink)를 거치지 않습니다 |
+| **③ 없음** | 무료 PDF 정보가 없음 | "무료 PDF 없음". 학교가 구독하는 논문이면 [인하대에서 보기] |
+
+- **arXiv는 예외**입니다: arXiv 주소(서재 `pdf_url` · arXiv 번호 · OpenAlex가 알려 준 arxiv.org PDF)는 "누구나 받도록 공개한 저장소"라 지금처럼 PaperLab이 받습니다(사용자 결정). 논문마다 저작권자의 허락 범위가 다를 수 있으며 법률 자문이 아닙니다 — 이용 책임은 사용자에게 있습니다.
+- **서버가 받는 주소는 두 가지뿐**입니다: ① arXiv 주소 ② 그 논문 DOI의 OpenAlex 무료 PDF 위치 중 **라이선스가 허용되는 위치와 글자까지 똑같은 주소**. **그 밖의 주소는 모두 새 탭으로 안내**합니다 — 서재에 있는 Semantic Scholar · Crossref 주소, 사용자가 직접 넣은 주소, 글자를 조금 바꾼 주소(`?…` 붙임, `http` 등) 전부. `http`/`https`가 아닌 주소는 PDF 주소가 없는 것으로 봅니다.
+- **사용자 영향**: PDF 주소를 직접 넣은 논문도 이제 새 탭으로 열리고, **받은 파일을 [PDF 첨부]로 직접 올려야** 합니다(예전에는 PaperLab이 대신 받았습니다).
+- **알려진 한계(나중에 검토)**: 서재의 PDF 주소가 허용 위치가 아닐 때, 같은 DOI에 라이선스가 허용되는 다른 위치가 있어도 PaperLab이 그 위치를 대신 받지 않고 새 탭으로만 안내합니다.
+- **[PDF 포함 추가]도 같은 규칙**: 화면이 보낸 주소를 그대로 믿지 않고 서버가 다시 판정합니다. 통과하지 못하면 **PDF 없이 논문만 추가**하고 "논문은 추가했지만 …라이선스를 확인하지 못해 PaperLab이 대신 받지 않았어요. 상세 패널의 [무료 PDF 찾기]로 직접 받은 뒤 [PDF 첨부]로 올려 주세요" 안내와 열 수 있는 주소를 돌려줍니다.
+- 한 번 클릭 = 논문 한 편. 여러 편을 한꺼번에 받거나 백그라운드에서 자동으로 받지 않습니다. 받은 PDF는 **내 저장 공간에만** 저장되고 다른 사용자와 공유되지 않습니다.
+- 서버는 **학교 프록시(openlink) 주소로는 PDF를 받지 않습니다**(학교 계정 · 자동 다운로드 금지 원칙).
+- Unpaywall은 쓰지 않습니다. 무료 PDF 정보는 OpenAlex 것만 씁니다.
 
 ### 학교 DB에서 찾기 · Google Scholar
 검색창과 필터 아래 **학교 DB에서 찾기** 줄에 `[RISS] [DBpia] [KISS] | [Google Scholar]` 버튼이 있습니다.
@@ -140,7 +184,7 @@ PaperLab 사용자는 모두 인하대 구성원이라, 논문을 **인하대 �
 | 어디에 | 버튼 |
 |---|---|
 | 논문 찾기 결과 카드 | 아래 동작 줄의 **인하대에서 보기** |
-| 서재 상세 패널 — PDF 없는 논문 | **[PDF 받기] [인하대에서 보기] [PDF 첨부]**. 학교를 거쳐 열 주소가 없으면 그 자리에 **[학교 DB에서 제목 검색 ▾]**(논문 제목으로 RISS · DBpia · KISS 검색) |
+| 서재 상세 패널 — PDF 없는 논문 | **[무료 PDF 찾기] [인하대에서 보기] [PDF 첨부]**(5단계에서 [PDF 받기]의 이름을 바꿨고, DOI · arXiv 번호 · PDF 주소 중 하나가 있을 때만 보임). 학교를 거쳐 열 주소가 없으면 그 자리에 **[학교 DB에서 제목 검색 ▾]**(논문 제목으로 RISS · DBpia · KISS 검색) |
 | 서재 상세 패널 — PDF 있는 논문 | **⋯ 메뉴 → 인하대에서 보기** |
 | 읽기 화면 — PDF 없는 논문 | **[인하대에서 보기] [PDF 첨부]** |
 
@@ -161,7 +205,7 @@ PaperLab 사용자는 모두 인하대 구성원이라, 논문을 **인하대 �
 - 학교가 구독하지 않는 사이트면 학교 안내 · 오류 페이지나 출판사의 구매 화면이 뜰 수 있습니다.
 
 ### 인용 그래프 (Connected Papers 방식)
-씨앗 논문 한 편에서 출발해 **주제가 가까운 논문 수십 편을 한 장의 그림**으로 보여 줍니다. 선은 "누가 누구를 인용했나"가 아니라 **얼마나 비슷한가**(같은 문헌을 함께 인용 · 다른 논문들에게 함께 인용됨)를 뜻하고, 비슷한 논문끼리 가까이 모입니다. 데이터는 **OpenAlex** 기준입니다.
+씨앗 논문 한 편에서 출발해 **주제가 가까운 논문 수십 편을 한 장의 그림**으로 보여 줍니다. 선은 "누가 누구를 인용했나"가 아니라 **얼마나 비슷한가**(같은 문헌을 함께 인용 · 다른 논문들에게 함께 인용됨)를 뜻하고, 비슷한 논문끼리 가까이 모입니다. 데이터는 **OpenAlex** 기준이고, 씨앗 논문의 참고문헌이 OpenAlex에 없으면(DOI가 있을 때) **OpenCitations**(→ 안 되면 Semantic Scholar)로 채웁니다. OpenCitations로 채웠으면 그래프 아래 출처 줄이 "OpenAlex · OpenCitations 기준"으로 바뀝니다.
 
 **여는 곳**
 
@@ -228,6 +272,7 @@ PaperLab 사용자는 모두 인하대 구성원이라, 논문을 **인하대 �
 | 알림 | 뜻 |
 |---|---|
 | **일부 정보 없이 그렸어요.** 그래프가 덜 정확할 수 있어요. + 항목 | 아래 중 일부가 실패했지만 있는 정보로 그렸음: "시간이 오래 걸려 일부 단계를 건너뛰었어요." · "참고문헌 일부를 받지 못했어요." · "이 논문을 인용한 논문을 받지 못했어요." · "함께 인용된 논문을 받지 못했어요." · "일부 논문의 초록을 받지 못했어요." · "일부 정보가 오래됐을 수 있어요." · "Semantic Scholar가 응답하지 않아 참고문헌을 보강하지 못했어요." |
+| *(안내 톤)* OpenCitations가 응답하지 않아 Semantic Scholar 자료로 참고문헌을 채웠어요. | 참고문헌 보강에서 OpenCitations가 실패했지만 Semantic Scholar가 **실제로 채웠을 때만** 이 문구가 나옵니다("일부 정보 없이 그렸어요"에 섞지 않음). Semantic Scholar가 채우지 못했으면(0편) 같은 자리에 "OpenCitations가 응답하지 않아 참고문헌을 보강하지 못했어요."가 나옵니다. Semantic Scholar도 실패하면 위 "일부 정보 없이 그렸어요" 안에 "OpenCitations와 Semantic Scholar가 응답하지 않아 참고문헌을 보강하지 못했어요."가 한 줄로 들어감 |
 | 이 논문 주변은 인용 정보가 적어 주제 유사도로 보강했어요. **점선**은 인용 근거 없이 주제만 비슷한 연결이에요. (국문 논문은 OpenAlex 인용 정보가 적은 편이에요.) | 국문 등 인용 정보가 적은 논문 — 점선 연결이 많음 |
 | 참고문헌이 많아 앞의 300편만 비교했어요. | 씨앗 참고문헌이 300편을 넘음 |
 | OpenAlex 하루 사용량을 다 써서 저장돼 있던 정보로만 그렸어요(한국 시간 오전 9시에 초기화). 설정에서 OpenAlex API 키를 넣으면 한도가 10배가 돼요. [설정 열기] | 하루 한도를 넘어 저장된 정보로만 그림 |
@@ -247,7 +292,7 @@ PaperLab 사용자는 모두 인하대 구성원이라, 논문을 **인하대 �
 | 이 논문으로는 그래프를 만들 수 없어요 | DOI · arXiv 번호 · 제목 형식을 알아보지 못함 |
 
 **공용 캐시와 개인정보**
-- 가져온 **공개 서지(제목 · 저자 · DOI · 연도 · 피인용 수 등)와 인용 관계**는 사용자끼리 같이 쓰는 **공용 캐시**에 저장됩니다. 그래서 다른 사람이 이미 본 논문 주변은 외부에서 다시 받지 않고 빠르게 그려집니다(서지 30일 · 참고문헌 180일 등 기간이 지나면 다시 받음).
+- 가져온 **공개 서지(제목 · 저자 · DOI · 연도 · 피인용 수 등)와 인용 관계**는 사용자끼리 같이 쓰는 **공용 캐시**에 저장됩니다. 그래서 다른 사람이 이미 본 논문 주변은 외부에서 다시 받지 않고 빠르게 그려집니다(서지 30일 · 참고문헌 180일 등 기간이 지나면 다시 받음). 5단계부터 **OpenCitations로 채운 참고문헌 목록과 그 서지**, **OpenAlex가 알려 준 무료 PDF 라이선스**도 같은 공용 캐시에 들어갑니다. KCI · RISS · Europe PMC 검색 결과와 검색어는 캐시에 넣지 않습니다.
 - **누가 어떤 논문으로 그래프를 만들었는지는 어디에도 남기지 않습니다**(공용 캐시에 사용자 정보 없음 · 날짜만 기록, 서버 로그에 씨앗 · 논문 번호 · 제목 없음). 만든 그래프도 계정에 저장하지 않고 매번 다시 그립니다(같은 탭에서 뒤로 가기용으로 최근 몇 개만 브라우저 메모리에 두고, 탭을 닫거나 **로그아웃하면 지워집니다** — 디스크에는 저장하지 않음).
 - 내 서재 · PDF · 메모는 공유되지 않습니다. *서재에 있음* 표시는 내 서재로만 계산합니다.
 
@@ -298,7 +343,7 @@ DOI, arXiv ID, 제목(띄어쓰기·기호 무시)이 같으면 같은 논문으
 - 논문을 **끌어서 사이드바의 컬렉션에 놓으면** 그 컬렉션에 들어가고, **폴더에 놓으면** 그 폴더로 옮겨집니다.
 
 ### 상세 패널 (논문을 한 번 클릭)
-- **읽기 · AI 요약** (PDF가 있을 때) / **PDF 받기**(무료 PDF 자동 탐색) · **인하대에서 보기**(학교를 거쳐 원문 페이지 열기 — 3장) · **PDF 첨부** (PDF가 없을 때). 학교를 거쳐 열 주소가 없으면 **인하대에서 보기** 대신 **학교 DB에서 제목 검색 ▾**
+- **읽기 · AI 요약** (PDF가 있을 때) / **무료 PDF 찾기**(OpenAlex 무료 PDF 정보로 탐색 — 라이선스가 확인되면 바로 저장, 아니면 [무료 PDF 열기 ↗] 링크와 "받은 파일은 [PDF 첨부]로" 안내, 없으면 "무료 PDF 없음". 3장 *무료 PDF 찾기 · 라이선스 규칙*) · **인하대에서 보기**(학교를 거쳐 원문 페이지 열기 — 3장) · **PDF 첨부** (PDF가 없을 때). 학교를 거쳐 열 주소가 없으면 **인하대에서 보기** 대신 **학교 DB에서 제목 검색 ▾**
 - **인용** — 인용 창 열기
 - **⋯ 메뉴**: 정보 수정 · 폴더로 이동… · 온라인 정보로 채우기 · PDF 바꾸기 · PDF 파일 열기(새 탭) · 인하대에서 보기(PDF가 있을 때) · 하이라이트·노트 내보내기(.md) · 삭제
 - **읽기 상태**(읽을 예정·읽는 중·다 읽음), **중요도 별점**(1~5)
@@ -308,7 +353,7 @@ DOI, arXiv ID, 제목(띄어쓰기·기호 무시)이 같으면 같은 논문으
 - **인용 정보 점검**: 인용에 필요한 항목(학술지 이름·권·쪽·출판사 등)이 비어 있으면 경고하고, *채우기*(직접 수정)·*온라인에서 찾기*(자동 채움)를 제공합니다.
 - **정보 탭**: 초록, 키워드, DOI·arXiv 링크, **바로가기 — Google Scholar에서 보기**(논문 제목으로, 제목이 없으면 DOI로 Scholar를 새 탭에서 검색), 유형, 피인용 수, 쪽수, **인용 키**와 **[@인용키] 복사** 버튼
 - **노트 탭**: 논문별 마크다운 노트 (자동 저장, 미리보기, 수식 `$...$`)
-- **인용 관계 탭**: 맨 위 **[인용 그래프 보기]**(3장 *인용 그래프*), 이 논문을 인용한 논문 / 참고문헌 / 관련 논문 — 바로 서재에 추가 가능
+- **인용 관계 탭**: 맨 위 **[인용 그래프 보기]**(3장 *인용 그래프*), 이 논문을 인용한 논문 / 참고문헌 / 관련 논문 — 바로 서재에 추가 가능. **참고문헌**은 OpenAlex에 목록이 없고 DOI가 있으면 **OpenCitations**(CC0)로 보강해 "참고문헌 23편 **OpenCitations 기준**" 줄과 "OpenAlex에 참고문헌 정보가 없어 OpenCitations 자료로 채웠어요. 서지를 찾지 못한 N편은 목록에 없어요."가 보입니다. OpenCitations가 응답하지 않으면 "OpenAlex에 참고문헌 정보가 없고, OpenCitations도 응답하지 않았어요" 알림과 [다시 시도]가 나옵니다(논문 찾기의 *참고문헌* 목록도 같음)
 
 ### 폴더와 컬렉션
 논문을 정리하는 방법이 두 가지입니다.
@@ -810,6 +855,7 @@ AI 기능은 **설정 → AI 엔진**에 **본인의 API 키**(Anthropic · Open
 | 새 원고 기본 양식 | 새 원고에 처음 적용할 논문 양식(원고마다 편집 화면 위쪽에서 바꿀 수 있음). 옆 **양식 관리…** 로 양식 관리 창 열기 | 기본 (A4) |
 | 연락처 이메일 | 안내: "Crossref에 이메일을 알려 주면 요청이 우선 처리돼요(OpenAlex에는 보내지 않아요)." — **Crossref에만** 보냅니다. OpenAlex · arXiv · Semantic Scholar · 주소에서 PDF 받기 · 인용 그래프에는 보내지 않습니다 | (없음) |
 | OpenAlex · Semantic Scholar API 키 | 요청 한도를 늘림 (없어도 됨). OpenAlex는 키가 있으면 하루 한도가 10배(검색 · 인용 그래프에 씀). API 키처럼 계정별로 암호화해 저장 | (없음) |
+| KCI · RISS 키 | **설정 창에 입력 칸이 없습니다.** 공용 키 하나를 관리자가 서버 PC의 `cloud.env`(`KCI_API_KEY` · `RISS_API_KEY`)에 등록하면 모든 사용자가 같이 씁니다(3장 *국내 DB · 생명과학 검색*). 등록 전에는 소스 목록에서 "(키 등록 전)" | (없음) |
 | **학교 연결 (인하대)** | **[학교 로그인]** — 정석학술정보관 로그인 화면(`https://lib.inha.ac.kr/login`)을 새 탭으로 엶. 미리 로그인해 두고 싶을 때만 쓰면 됩니다(링크를 누르면 로그인이 필요할 때 자동으로 로그인 화면이 뜸). **[처음 안내 다시 보기]** — *인하대에서 보기* 안내 창을 다시 엶. 아래에 학교 로그인 안내와 Scholar 도서관 링크 팁이 있습니다(3장). 학교 아이디 · 비밀번호를 넣는 칸은 없습니다 | |
 | 계정 | 이름 · 이메일 · **로그아웃**, 저장 공간 사용량(전체 / 내 PDF) | |
 
@@ -876,7 +922,7 @@ PC 앱 설치 파일은 서버의 `/downloads/`에서 로그인 없이 받습니
   - 출처(`Origin`)가 PaperLab 주소와 다른 요청은 거부합니다. 다른 사이트에 API를 열어 주지 않습니다(CORS 없음).
   - 쓰기 요청에는 PaperLab 화면이 붙이는 전용 헤더가 있어야 합니다.
 - PDF는 브라우저가 **10분 동안만 유효한 서명 주소**로 R2에서 직접 받고 올립니다. 서명 주소는 서버 로그에 남기지 않습니다.
-- 서버가 주소에서 PDF를 받을 때(*PDF 받기* · *PDF 포함 추가*)는 `http(s)` 주소이고 그 이름이 **공인 IP로만** 해석될 때만 받습니다. 리디렉션도 단계마다 같은 검사를 합니다(내부망 · 클라우드 메타데이터 주소 접근 차단).
+- 서버가 주소에서 PDF를 받을 때(*PDF 받기* · *PDF 포함 추가*)는 `http(s)` 주소이고 그 이름이 **공인 IP로만** 해석될 때만 받습니다. 리디렉션도 단계마다 같은 검사를 합니다(내부망 · 클라우드 메타데이터 주소 접근 차단). 학교 프록시(`openlink.inha.ac.kr`) 주소는 받지 않습니다. 무료 PDF는 **arXiv 주소와, 그 논문 DOI의 OpenAlex 위치 중 라이선스가 확인된(CC · 퍼블릭 도메인) 위치와 글자까지 같은 주소만** 서버가 받고 나머지(직접 넣은 주소 포함)는 새 탭 링크로 안내하며, 이 판정은 화면이 보낸 주소가 아니라 서버가 OpenAlex 정보로 다시 합니다(3장 *무료 PDF 찾기 · 라이선스 규칙*).
 - AI 답변과 외부 데이터는 화면에 표시하기 전에 걸러(DOMPurify) 악성 코드를 막고, 외부 링크는 `http(s)`만 허용합니다. AI 답 · 마크다운(노트 미리보기 포함)에서는 그림 · 영상 · 폼(입력칸 · 버튼) 태그와 style도 빼서, 답에 섞인 바깥 그림 주소로 읽음 여부가 새거나 가짜 입력 폼이 보이지 않게 합니다. 모든 응답(서버 오류 500 포함)에 `Content-Security-Policy: img-src 'self' data: blob: https://*.googleusercontent.com; form-action 'self'`(구글 프로필 사진만 바깥 그림 허용)을 붙입니다.
 
 ### 비밀값과 로그
@@ -886,7 +932,9 @@ PC 앱 설치 파일은 서버의 `/downloads/`에서 로그인 없이 받습니
 ### 외부로 나가는 데이터
 - 저장: 서재·원고 등은 Supabase(서울 리전), PDF와 백업은 Cloudflare R2에 있습니다. 서버는 관리자의 **서버 PC**에서 돌고 Tailscale Funnel로 공개됩니다(서버 PC에는 사용자 데이터를 저장하지 않음 — 로그에는 계정 id · 요청 경로만, 토큰 · 키 · 본문 · 이메일은 남기지 않음).
 - 논문 검색: 검색어와 DOI 등 식별자 → OpenAlex·arXiv·Semantic Scholar·Crossref. **연락처 이메일은 Crossref에만** 보내고 OpenAlex · arXiv · Semantic Scholar · PDF 받기에는 보내지 않습니다. OpenAlex API 키를 넣었으면 OpenAlex 요청에 그 키가 붙습니다(OpenAlex 쪽에는 내 키 사용량으로 남음).
-- 인용 그래프: 씨앗 논문의 식별자(OpenAlex 번호 · DOI 등)와 주변 논문 번호 → OpenAlex(씨앗 참고문헌이 없을 때만 DOI → Semantic Scholar). 가져온 공개 서지 · 인용 관계는 사용자 공용 캐시(Supabase)에 저장되지만 **누가 조회했는지는 남기지 않습니다**(3장 *인용 그래프*).
+- 국내 DB · 생명과학 검색(5단계): 검색어 → **KCI**(한국연구재단) · **RISS**(KERIS) · **Europe PMC**(EMBL-EBI). KCI · RISS는 **관리자가 등록한 공용 키 하나**로 서버가 요청하므로 그 사이트는 서버 PC의 주소 + 공용 키 + 검색어만 볼 수 있고 누가 검색했는지는 모릅니다. 사용자 이메일 · 개인 키는 보내지 않고, 검색어 · 결과는 서버에 저장하거나 로그에 남기지 않습니다.
+- 인용 관계(5단계): 참고문헌이 OpenAlex에 없을 때만 DOI → **OpenCitations**(키 · 이메일 없음, CC0 자료). 무료 PDF 찾기는 클릭할 때 DOI → OpenAlex(필요하면 Crossref) 1회.
+- 인용 그래프: 씨앗 논문의 식별자(OpenAlex 번호 · DOI 등)와 주변 논문 번호 → OpenAlex(씨앗 참고문헌이 없을 때만 DOI → OpenCitations, 안 되면 Semantic Scholar). 가져온 공개 서지 · 인용 관계는 사용자 공용 캐시(Supabase)에 저장되지만 **누가 조회했는지는 남기지 않습니다**(3장 *인용 그래프*).
 - AI 기능을 쓸 때만: 해당 논문의 PDF(또는 텍스트)·질문·원고 일부 → Anthropic(내 API 키로). AI 질문(서재)은 고른 출처 조각 8개 · 질문, 인용 검증은 문장 · 근거 후보 조각, AI로 찾기는 질문 · 검색된 논문의 서지 · 초록만 보냅니다. 쉬운 설명 · 선택 번역은 고른 글 · 논문 제목 · 그 쪽 앞뒤 글(최대 6,000자, 설명은 초록 앞부분도)만, 전체 번역은 번역할 쪽의 글(PDF 원본 아님)만 보냅니다. 고른 글 · 설명 · 번역문 · 그림은 서버 로그에 남기지 않습니다.
 - **AI 질문의 색인(임베딩)은 서버 PC 안의 무료 모델로** 만들어 본문이 다른 회사로 나가지 않습니다. 조각 벡터는 계정별 R2 파일(`users/{계정}/rag/…`)과 서버 메모리에만 있고(DB에는 넣지 않음), 서버는 사용자 권한 DB 질의로 얻은 내 논문 파일만 읽습니다. AI로 찾기의 검색어는 OpenAlex · Semantic Scholar로 갑니다(연락처 이메일은 보내지 않음). 질문 · 검색어 · 제목은 서버 로그에 남기지 않습니다.
 - 학교 DB · 인하대에서 보기 · Google Scholar 바로가기를 누를 때만: 브라우저가 새 탭으로 그 사이트를 열면서 검색어 · 논문 제목 · DOI · 논문 주소가 그 사이트(인하대 openlink · RISS · DBpia · KISS · 출판사 · Google Scholar)로 갑니다. **PaperLab 서버를 거치지 않고**, 새 탭에는 PaperLab 주소가 넘어가지 않으며(`noopener noreferrer`), 학교 아이디 · 비밀번호는 PaperLab이 받거나 저장하지 않습니다. 학교 로그인 상태는 브라우저와 학교 사이에만 있습니다.
@@ -937,7 +985,8 @@ PC 앱 설치 파일은 서버의 `/downloads/`에서 로그인 없이 받습니
 - **AI 질문**은 본문 글만 씁니다(그림 · 표 · 수식 이미지 없음). 컬렉션 범위는 서재 목록과 같은 직속 논문만(하위 컬렉션 제외). 출처 위치 사각형은 PDF 글 블록을 찾은 경우에만 나오고, 못 찾으면 쪽 이동 + 글 반짝임만 합니다. **AI로 찾기**는 초록 기반 요약이고 연도 · 분야 필터 · KCI · RISS 검색 · 결과 저장은 없습니다. **인용 검증**은 버튼으로만 돌고 편집기 안 글자에는 표시하지 않으며, 워드 · 한글로 올린 문서는 검증하지 않습니다.
 - 검색 결과는 Semantic Scholar 1,000건, OpenAlex 10,000건까지 넘겨 볼 수 있습니다(데이터베이스 제한).
 - **인용 그래프**는 OpenAlex의 인용 정보로 만들어서 **국문 논문은 연결이 적을 수 있습니다**(주제 유사도 점선으로 보강). Connected Papers처럼 수만 편이 아니라 **수백 편 후보**를 비교하므로 완전한 인용 목록이 아닌 탐색 도구로 쓰세요. 공용 캐시가 늘면 같은 씨앗의 그래프가 조금 달라질 수 있습니다. KCI · RISS 인용 정보, 그래프 저장 · 내보내기, 노드 끌어 옮기기는 없습니다.
-- **학교 연결은 인하대만** 됩니다(다른 학교를 고르는 설정 없음). **KISS 바로가기**는 아직 검색 결과가 아니라 첫 페이지를 열고 검색어를 복사합니다. RISS · DBpia · KISS를 PaperLab 안에서 검색하거나 결과를 가져오는 기능, 학교 사이트의 PDF를 자동으로 받아 서재에 붙이는 기능은 없습니다(받은 PDF는 *PDF 첨부*로 올림).
+- **학교 연결은 인하대만** 됩니다(다른 학교를 고르는 설정 없음). **KISS 바로가기**는 아직 검색 결과가 아니라 첫 페이지를 열고 검색어를 복사합니다. DBpia · KISS를 PaperLab 안에서 검색하거나 결과를 가져오는 기능, 학교 사이트 · KCI · RISS의 PDF를 자동으로 받아 서재에 붙이는 기능은 없습니다(받은 PDF는 *PDF 첨부*로 올림). RISS는 **키를 받은 경우에만** PaperLab 안에서 검색됩니다(못 받으면 [RISS] 바로가기만).
+- **5단계(국내 DB)**: KCI는 **제목으로만** 찾고(키워드 검색은 실제 응답 확인 뒤), 피인용순 정렬 · 무료 PDF 필터를 지원하지 않습니다. RISS에는 DOI · 초록 · 피인용 수가 없습니다. KCI · RISS · Europe PMC는 **여러 소스를 한꺼번에 합쳐 검색하지 않고** 한 번에 하나만 검색하며, **AI로 찾기에는 KCI · RISS를 넣지 않았습니다**. Europe PMC는 [이전]/[다음]만 있고 쪽 번호로 건너뛰지 못합니다. KCI · RISS 키는 사용기간이 끝나면 관리자가 새로 등록해야 합니다. KCI 응답 칸 이름(등재 표시 · KCI 피인용) · RISS https 지원 · Europe PMC 일부 필드는 **키를 받은 뒤 실제 응답으로 확인할 예정**입니다(그때까지 KCI 등재 표시나 피인용이 비어 보일 수 있음). 무료 PDF의 라이선스 판정은 OpenAlex가 알려 주는 값에 따르며, 값이 비어 있으면 안전하게 새 탭 링크로 안내합니다. OpenCitations 보강은 DOI가 있는 논문에서만, 목록은 앞 500편까지입니다.
 - 서재는 계정마다 따로이며, 다른 사람과 **공유·협업하는 기능은 없습니다**. 같은 원고를 두 기기에서 동시에 고치면 나중에 저장한 내용이 남습니다(실시간 동시 편집 없음).
 
 ### 클라우드
@@ -1026,6 +1075,7 @@ study99web/
 ├─ supabase/migrations/  SQL 마이그레이션: 확장(PGroonga) · 앱 전용 역할 · 표 · RLS · 검색 색인 · 허용 목록 훅(Before User Created — 선택 기능, 기본 미연결)
 │                        · 20261008000002_citation_cache.sql(인용 그래프 공용 캐시 external_works · citation_edges, GIN 색인, 읽기 = 로그인 사용자 · 쓰기 = system_tx만)
 │                        · 20261008000003_citation_edges_top_c.sql(citation_edges 관계에 cited_by_top_c 추가 — 1C 추천)
+│                        · 20261014000001_external_sources.sql(external_works.oa_license 열 + citation_edges 출처에 opencitations — 5단계. 반영은 이 마이그레이션이 새 코드보다 먼저)
 ├─ paperlab/
 │  ├─ serve.py        운영 서버 실행 (python -m paperlab.serve: cloud.env 검사 · 127.0.0.1:8080 · 프록시 헤더는 127.0.0.1만 신뢰 · 회전 로그, --check 설정 점검)
 │  ├─ __main__.py     개발 서버 (PAPERLAB_DEV=1, 테스트용 Supabase 프로젝트 · 가짜 저장소, 127.0.0.1)
@@ -1038,7 +1088,8 @@ study99web/
 │  ├─ migrate.py      SQL 마이그레이션 적용 (python -m paperlab.migrate)
 │  ├─ admin.py        관리 명령: sync-allowlist · app-role --write-env · rotate-key · orphans · backup · pg-dump-check · latest-backup · mark-test-project · cache-stats · cache-prune
 │  ├─ pdf.py          PyMuPDF: 쪽별 텍스트 추출, DOI·arXiv·제목 인식
-│  ├─ sources.py      OpenAlex · arXiv · Semantic Scholar · Crossref (연락처 이메일은 Crossref에만), 인용 그래프용 OpenAlex 묶음 · cites 조회 · S2 참고문헌(호출 예산 · 기한 · 응답 검증)
+│  ├─ sources.py      OpenAlex · arXiv · Semantic Scholar · Crossref (연락처 이메일은 Crossref에만), 인용 그래프용 OpenAlex 묶음 · cites 조회 · OpenCitations · S2 참고문헌(호출 예산 · 기한 · 응답 검증), 무료 PDF 라이선스 판정(U-3) · openlink 거부
+│  ├─ extsources.py   5단계 국내 DB · 생명과학 검색: KCI · RISS · Europe PMC 호출(공용 키 KCI_API_KEY · RISS_API_KEY — 없으면 그 소스만 꺼짐 · 고정 호스트 · 리디렉션 안 따름 · 10MB · DOCTYPE · ENTITY 거부 — UTF-16도) · 순수 파서 · 무료 PDF 판정 순서(plan_pdf). 판정 함수(server_fetch_allowed · pick_oa_location · parse_oc_references)는 sources.py에 있음
 │  ├─ graph_build.py  인용 그래프 만들기: 씨앗 해석 · 입력 검증 → A~E 단계(캐시 우선, A~C = gather) → 계산, 경고 · 오류 code, GraphGate(동시 2 · 대기 4 · 사용자당 1) · 같은 씨앗 합치기,
 │  │                  원고 인용 기반 추천(recommend — 씨앗마다 gather + 함께 인용은 캐시만 + 결과 초록 1회)
 │  ├─ citegraph.py    인용 그래프 알고리즘(입출력 없음): 중복 합치기 · 서지 결합 + 공동 인용 유사도 · 노드 고르기 · 선 · 이전/이후 연구 · 여러 씨앗 유사도 합산 추천(recommend)
@@ -1052,7 +1103,7 @@ study99web/
 │  ├─ format_import.py 양식 파일(.docx · .dotx · .hwpx)에서 서식 읽기
 │  ├─ compose.py      워드·한글 문서의 [@인용키] → 서식 있는 인용 + 참고문헌
 │  └─ static/         화면 (HTML · CSS · ES 모듈 JS)
-│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state · extlinks · graph · graphmath · refpane · refquote
+│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state · extlinks · sourcemeta(5단계: 소스별 정렬 · 필터 표 · 라이선스 이름 · 오류 문구 — 순수 모듈) · graph · graphmath · refpane · refquote
 │     │               (app: 로그인 게이트 · 계정 메뉴 · 폴더 트리 · 저장 공간 / auth: supabase-js 구글 로그인 · 세션 /
 │     │                api: Bearer 토큰 · 401 갱신 · 503 · 연결 지연 띠 / formats: 양식 관리 창 · 표지 정보 창 /
 │     │                extlinks: 인하대 openlink 프록시 · DOI · 학교 DB 검색 · Google Scholar 주소 만들기 — DOM · 다른 모듈에 기대지 않는 순수 모듈 /
@@ -1060,9 +1111,10 @@ study99web/
 │     │                refpane: 논문 쓰기 화면의 참고 패널(reader.js 임베드 모드 mountPdf · 추천 SSE · 넣기) / refquote: 넣는 인용 글 · 쪽 번호 · 이스케이프 ·
 │     │                인용 표시 해석(parseCitation — writing.js가 가져다 씀) · 직접 인용 모양 상수 QUOTE_STYLE 순수 함수)
 │     └─ vendor/      PDF.js · citeproc-js · CSL 스타일·로케일 · KaTeX · marked · DOMPurify · supabase-js · d3/(d3-force · d3-dispatch · d3-quadtree · d3-timer UMD — 그래프 화면에서만 불러옴)
-├─ docs/              specs/(doc-formats.md · phase1-cloud.md · inha-proxy.md · citation-graph.md · writing-reference-pane.md · phase2-worker-electron.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md · inha-proxy-ui.md · citation-graph-ui.md · writing-reference-pane-ui.md)
+├─ tools/             record_extsources.py(5단계 녹화 도구 — 관리자가 키로 한 번 실행, 응답 본문만 tests/fixtures/extsources/에 저장 · 키 문자열이 있으면 멈춤, 이메일 모양은 redacted@example.invalid로 바꿔 저장 — deploy/server-pc/README.md 14절)
+├─ docs/              specs/(doc-formats.md · phase1-cloud.md · inha-proxy.md · citation-graph.md · writing-reference-pane.md · phase2-worker-electron.md · phase5-korean-db.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md · inha-proxy-ui.md · citation-graph-ui.md · writing-reference-pane-ui.md · phase5-korean-db-ui.md)
 └─ tests/             pytest (DB 테스트는 테스트용 Supabase 프로젝트, golden/ = 기본 (A4) 내보내기 골든 파일, js/ = Node 단위 테스트(extlinks · graph · refquote, codecheck.mjs = 화면 코드 검사 도우미),
-                      fixtures/citegraph/ = 인용 그래프 가짜 OpenAlex · S2 세계)
+                      fixtures/citegraph/ = 인용 그래프 가짜 OpenAlex · S2 세계, fixtures/extsources/ = 5단계 KCI · RISS · Europe PMC · OpenCitations · OpenAlex 응답 픽스처(키 전에는 손 픽스처 — 실제 외부 호출 없음))
 ```
 
 ### 주요 기술
@@ -1098,7 +1150,8 @@ python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file)
 | 논문 | `GET·POST /api/papers` `GET·PATCH·DELETE /api/papers/{id}` `POST /api/papers/bulk` `POST /api/resolve` `POST /api/papers/{id}/open` |
 | 업로드 | `POST /api/uploads` `POST /api/uploads/{upload_id}/complete` |
 | PDF | `GET /api/papers/{id}/pdf-url` `POST /api/papers/{id}/pdf/upload` `POST /api/papers/{id}/pdf/complete` `POST /api/papers/{id}/fetch-pdf` `POST /api/papers/{id}/refresh` |
-| 인용 관계 | `GET /api/papers/{id}/related` `POST /api/related` `GET /api/search` |
+| 인용 관계 | `GET /api/papers/{id}/related` `POST /api/related` `GET /api/search`(`source`에 `kci` · `riss` · `europepmc`, `cursor`는 Europe PMC) |
+| 5단계 국내 DB · 무료 PDF | `GET /api/sources`(소스별 켜짐 여부만 — 키 값은 안 줌) `POST /api/oa/lookup`(DOI는 본문으로만) |
 | 인용 그래프 | `POST /api/graph`(SSE) `POST /api/graph/recommend`(SSE — 원고 인용 기반 추천) |
 | 노트·하이라이트 | `PUT /api/papers/{id}/note` `GET·POST /api/papers/{id}/annotations` `PATCH·DELETE /api/annotations/{id}` `GET /api/annotations/export/{id}` |
 | 폴더 | `GET·POST /api/folders` `PATCH·DELETE /api/folders/{id}` |

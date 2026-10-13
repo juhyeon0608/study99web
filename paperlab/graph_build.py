@@ -26,7 +26,7 @@ from . import citegraph as cg
 from .citecache import TTL_ABSTRACT, TTL_CITED, TTL_META, TTL_REFERENCES, TTL_RELATED, fresh
 from .db import normalize_title
 from .sources import (GRAPH_ABSTRACT_FIELDS, GRAPH_LINK_FIELDS, GRAPH_META_FIELDS, GraphBudget, GraphCancelled,
-                      GraphDeadline, UpstreamError)
+                      GraphDeadline, UpstreamError, is_arxiv_url, server_fetch_allowed)
 
 FIELDS_META = GRAPH_META_FIELDS
 FIELDS_FULL = GRAPH_META_FIELDS + GRAPH_LINK_FIELDS
@@ -54,6 +54,7 @@ WARNINGS = {
     "cocite_failed": "함께 인용된 논문을 받지 못했어요.",
     "abstracts_failed": "일부 논문의 초록을 받지 못했어요.",
     "stale_cache": "일부 정보가 오래됐을 수 있어요.",
+    "oc_failed": "OpenCitations가 응답하지 않아 참고문헌을 보강하지 못했어요.",
     "s2_failed": "Semantic Scholar가 응답하지 않아 참고문헌을 보강하지 못했어요.",
     "upstream_limited": "OpenAlex 하루 사용량을 다 써서 저장돼 있던 정보로만 그렸어요(한국 시간 오전 9시에 초기화). "
                         "설정에서 OpenAlex API 키를 넣으면 한도가 10배가 돼요.",
@@ -216,12 +217,16 @@ def paper_view(row: dict) -> dict:
         arxiv = arxiv or doi.split(".", 2)[2]
         doi = ""
     abstract = row.get("abstract") or ""
+    # 무료 PDF(5단계 U-3): 허용 라이선스 · arXiv만 pdf_url(서버가 받음), 그 밖 PDF는 새 탭용 oa_open_url
+    pdf = row.get("pdf_url") or ""
+    ok = bool(pdf) and (is_arxiv_url(pdf) or server_fetch_allowed(row.get("oa_license")))
     return {
         "source": "openalex", "title": row.get("title") or "", "authors": list(row.get("authors") or []),
         "author_count": int(row.get("author_count") or 0), "year": row.get("year"), "issued": row.get("issued") or "",
         "venue": row.get("venue") or "", "volume": row.get("volume") or "", "issue": row.get("issue") or "",
         "pages": row.get("pages") or "", "publisher": row.get("publisher") or "", "doi": doi, "arxiv_id": arxiv,
-        "openalex_id": f"W{row['no']}", "s2_id": "", "url": row.get("url") or "", "pdf_url": row.get("pdf_url") or "",
+        "openalex_id": f"W{row['no']}", "s2_id": "", "url": row.get("url") or "", "pdf_url": pdf if ok else "",
+        "oa_open_url": "" if ok else pdf, "oa_license": row.get("oa_license") or "",
         "abstract": abstract[:ABSTRACT_OUT], "cited_by_count": int(row.get("cited_by_count") or 0),
         "reference_count": int(row.get("reference_count") or 0), "item_type": row.get("item_type") or "article",
         "keywords": [], "tldr": "", "language": row.get("language") or "", "is_oa": bool(row.get("is_oa")),
@@ -232,11 +237,46 @@ def paper_view(row: dict) -> dict:
 TOMBSTONE = {"doi": "", "arxiv_id": "", "title": "", "authors": [], "author_count": 0, "year": None, "issued": "",
              "venue": "", "publisher": "", "volume": "", "issue": "", "pages": "", "item_type": "article", "language": "",
              "url": "", "pdf_url": "", "is_oa": False, "cited_by_count": 0, "reference_count": 0, "refs": None,
-             "related": None, "abstract": None}
+             "related": None, "abstract": None, "oa_license": None}
 
 
 def _chunks(seq: list, n: int) -> list[list]:
     return [seq[i:i + n] for i in range(0, len(seq), n)]
+
+
+def lookup_dois(src, dois, fields, on_error=None, on_limit=None, stop=lambda: False) -> tuple[list[str], dict[str, dict]]:
+    """참고문헌 DOI 목록 → (검사 · 중복 제거한 앞 S2_MAX_DOIS편, {DOI: OpenAlex 작품 행}) — 그 DOI만 doi: 필터로 묶음 조회
+    (100개씩, ≤ 2회). 그래프 씨앗 보강과 서재 인용 관계 탭(server.oc_references)이 함께 씀.
+    on_error = 묶음 하나 실패(없으면 UpstreamError를 그대로), on_limit = 기한 · 호출 상한(없으면 그대로)"""
+    valid: list[str] = []
+    for d in dois:
+        try:
+            c = clean_doi(d)
+        except BadSeed:
+            continue
+        if c:
+            valid.append(c)
+    valid = list(dict.fromkeys(valid))[:S2_MAX_DOIS]  # total · unresolved도 조회한 범위로 (예전 _send 경로와 같음)
+    by_doi: dict[str, dict] = {}
+    for chunk in _chunks(valid, BATCH):
+        if stop():
+            break
+        try:
+            got = src.works_by_doi(chunk, fields)
+        except UpstreamError:
+            if on_error is None:
+                raise
+            on_error()
+            continue
+        except (GraphDeadline, GraphBudget) as ex:
+            if on_limit is None:
+                raise
+            on_limit(ex)
+            break
+        for r in got:
+            if r["doi"]:
+                by_doi.setdefault(r["doi"], r)
+    return valid, by_doi
 
 
 # ------------------------------------------------------------------ 만들기
@@ -551,56 +591,45 @@ class GraphBuilder:
         return row["no"]
 
     def _s2_augment(self, seed: int) -> None:
-        """씨앗의 OpenAlex 참고문헌이 0편이고 DOI가 있을 때만 S2 참고문헌 1회 (K-7)"""
+        """씨앗의 OpenAlex 참고문헌이 0편이고 DOI가 있을 때만 보강 (K-7): OpenCitations 1회 → 0편이거나 실패면 S2 1회
+        (5단계 9.3절). OpenCitations로 채웠으면 S2를 부르지 않는다"""
         e = self.links.get((seed, "references"))
         row = self.rows.get(seed) or {}
         doi = row.get("doi") or ""
         if (e and e["nos"]) or not doi or self.stop:
             return
-        if e and e.get("source") == "s2" and self._link_fresh(seed, "references"):
+        if e and e.get("source") in ("s2", "opencitations") and self._link_fresh(seed, "references"):
             return  # 지난번 보강 결과(0편)가 아직 유효
         try:
             clean_doi(doi)
         except BadSeed:
             return
-        try:
-            dois = self.src.s2_reference_dois(doi)
-        except UpstreamError as ex:
-            if ex.status != 404:  # 404 = S2도 모르는 논문(실패가 아님)
-                self.warnings.add("s2_failed")
-            return
-        except (GraphDeadline, GraphBudget) as ex:
-            self._limits(ex)
-            return
-        valid = []
-        for d in dois:
-            try:
-                c = clean_doi(d)
-            except BadSeed:
-                continue
-            if c:
-                valid.append(c)
-        valid = list(dict.fromkeys(valid))[:S2_MAX_DOIS]
-        by_doi: dict[str, int] = {}
-        for chunk in _chunks(valid, BATCH):
+        for source, call, fail in (("opencitations", self.src.oc_reference_dois, "oc_failed"),
+                                   ("s2", self.src.s2_reference_dois, "s2_failed")):
             if self.stop:
-                break
+                return
             try:
-                got = self.src.works_by_doi(chunk, FIELDS_FULL)
-            except UpstreamError:
-                self.warnings.add("refs_partial")
+                dois = call(doi)
+            except UpstreamError as ex:
+                if ex.status != 404:  # 404 = 그 서비스도 모르는 논문(실패가 아님)
+                    self.warnings.add(fail)
                 continue
             except (GraphDeadline, GraphBudget) as ex:
                 self._limits(ex)
-                break
-            self._absorb_many(got, True)
-            for r in got:
-                if r["doi"]:
-                    by_doi.setdefault(r["doi"], r["no"])
-        nos = [by_doi[d] for d in valid if d in by_doi]
-        nos = [n for n in dict.fromkeys(nos) if n != seed]
-        self._set_edge(seed, "references", nos[:cg.MAX_REFS_STORED], len(valid), source="s2")
-        self._flush()
+                return
+            nos, total = self._resolve_dois(seed, dois)
+            if nos or source == "s2":
+                self._set_edge(seed, "references", nos[:cg.MAX_REFS_STORED], total, source=source)
+                self._flush()
+                return
+
+    def _resolve_dois(self, seed: int, dois: list[str]) -> tuple[list[int], int]:
+        """DOI 목록 → OpenAlex 번호. (번호들, 검사를 통과한 DOI 수)"""
+        valid, by_doi = lookup_dois(self.src, dois, FIELDS_FULL, on_error=lambda: self.warnings.add("refs_partial"),
+                                    on_limit=self._limits, stop=lambda: self.stop)
+        self._absorb_many(list(by_doi.values()), True)
+        nos = [by_doi[d]["no"] for d in valid if d in by_doi]
+        return [n for n in dict.fromkeys(nos) if n != seed], len(valid)
 
     _c_fetched = False
 
@@ -742,11 +771,15 @@ class GraphBuilder:
         deriv = [{"id": f"W{y}", "count": c, "in_graph": y in nodeset, "paper": paper_view(self.rows[y])}
                  for y, c in lay.derivative if y in self.rows]
         warnings = [{"code": c, "message": WARNINGS[c]} for c in WARNING_ORDER if c in self.warnings]
-        return {
+        out = {
             "seed": f"W{seed}", "size": size, "nodes": nodes, "edges": edges, "prior": prior, "derivative": deriv,
             "warnings": warnings,
             "stats": self._stats(pool.works),
         }
+        ref = self.links.get((seed, "references")) or {}
+        if ref.get("source") in ("opencitations", "s2") and ref.get("nos"):
+            out["refs_via"] = ref["source"]  # 씨앗 참고문헌을 보강으로 채움 — 화면 출처 줄 · oc_failed 문구 (5단계 9.3절)
+        return out
 
     def _stats(self, works) -> dict:
         """응답 stats (그래프 · 추천 공용 — 숫자 · 날짜만)"""

@@ -99,15 +99,19 @@ def test_add_from_search_with_pdf_download(cloud, client):
     """AC-42: URL에서 받은 PDF는 최종 키에 바로"""
     item = client.get("/api/search", params={"q": "attention"}).json()["items"][0]
     assert item["in_library"] is None
-    r = client.post("/api/papers", json={**item, "download_pdf": True, "pdf_url": "https://x/y.pdf"})
+    # 5단계 D1: 서버가 받는 주소는 arXiv · 허용 라이선스 OpenAlex 위치뿐 — 여기서는 arXiv 주소로
+    r = client.post("/api/papers", json={**item, "download_pdf": True, "pdf_url": "https://arxiv.org/pdf/1706.03762"})
     assert r.status_code == 200 and r.json()["paper"]["has_pdf"]
     pid = r.json()["paper"]["id"]
     uid = client.get("/api/me").json()["user_id"]
     assert ("put", f"users/{uid}/papers/{pid}.pdf") in cloud.storage.log
     assert client.get("/api/search", params={"q": "attention"}).json()["items"][0]["in_library"] == pid
     assert client.post("/api/papers", json=item).status_code == 409
-    p2 = client.post("/api/papers", json={"title": "No pdf yet paper", "pdf_url": "https://x/z.pdf"}).json()["paper"]
+    p2 = client.post("/api/papers", json={"title": "No pdf yet paper", "pdf_url": "https://arxiv.org/pdf/2101.00001"}).json()["paper"]
     assert client.post(f"/api/papers/{p2['id']}/fetch-pdf").json()["paper"]["has_pdf"]
+    p3 = client.post("/api/papers", json={"title": "User typed pdf url", "pdf_url": "https://x.example/z.pdf"}).json()["paper"]
+    r = client.post(f"/api/papers/{p3['id']}/fetch-pdf").json()  # 그 밖 주소는 새 탭(D1)
+    assert r == {"open_url": "https://x.example/z.pdf", "open_kind": "pdf", "reason": "license_unknown"}
 
 
 def test_cite_export_import(client):

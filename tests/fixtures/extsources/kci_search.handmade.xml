@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 손 픽스처(K-18): KCI 논문 기본 정보 API(articleSearch) 공식 응답 명세의 필드 이름으로 만든 것. 실제 응답이 아님 —
+     키를 받은 뒤 tools/record_extsources.py 녹화본(kci_search.xml)으로 바꾼다. 원문 · 저자 · DOI는 가상 값 -->
+<MetaData>
+  <inputData>
+    <apiCode>articleSearch</apiCode>
+    <title>딥러닝 의료영상</title>
+    <page>1</page>
+    <displayCount>20</displayCount>
+  </inputData>
+  <outputData>
+    <result>
+      <total>1284</total>
+    </result>
+    <record>
+      <journalInfo>
+        <journal-name>대한가상의료영상학회지</journal-name>
+        <publisher-name>대한가상의료영상학회</publisher-name>
+        <pub-year>2023</pub-year>
+        <pub-mon>03</pub-mon>
+        <volume>84</volume>
+        <issue>2</issue>
+        <kci-registration>KCI등재</kci-registration>
+      </journalInfo>
+      <articleInfo article-id="ART002912345">
+        <orte-open-yn>Y</orte-open-yn>
+        <title-group>
+          <article-title lang="original">합성곱 신경망을 이용한 흉부 X선 영상의 폐결절 자동 검출</article-title>
+          <article-title lang="english">Automatic Detection of Pulmonary Nodules on Chest Radiographs Using CNN</article-title>
+        </title-group>
+        <author-group>
+          <author>김민수(가상대학교)</author>
+          <author>이지은</author>
+          <author>박정호</author>
+        </author-group>
+        <abstract-group>
+          <abstract lang="original">본 연구는 합성곱 신경망(CNN)을 이용하여 흉부 X선 영상에서 폐결절을 자동으로 검출하는 방법을 제안한다.</abstract>
+          <abstract lang="english">This study proposes a CNN-based method.</abstract>
+        </abstract-group>
+        <fpage>101</fpage>
+        <lpage>115</lpage>
+        <doi>10.99999/JKSR.2023.0012</doi>
+        <uci>G704-000000.2023.84.2.001</uci>
+        <citation-count kci="12" wos="3">12</citation-count>
+        <url>https://www.kci.go.kr/kciportal/ci/sereArticleSearch/ciSereArtiView.kci?sereArticleSearchBean.artiId=ART002912345</url>
+      </articleInfo>
+    </record>
+    <record>
+      <journalInfo>
+        <journal-name>가상의료법학</journal-name>
+        <publisher-name>가상의료법학회</publisher-name>
+        <pub-year>2021</pub-year>
+        <pub-mon>11</pub-mon>
+        <volume>22</volume>
+        <issue>4</issue>
+        <kci-registration>KCI등재후보</kci-registration>
+      </journalInfo>
+      <articleInfo article-id="BAD-ID-1">
+        <orte-open-yn>N</orte-open-yn>
+        <title-group>
+          <article-title lang="english">A Study on Legal Liability of Medical AI</article-title>
+        </title-group>
+        <author-group>
+          <author>최현우</author>
+        </author-group>
+        <fpage>1</fpage>
+        <lpage>1</lpage>
+        <doi></doi>
+        <citation-count kci="0" wos="0">0</citation-count>
+        <url>javascript:alert(1)</url>
+      </articleInfo>
+    </record>
+  </outputData>
+</MetaData>

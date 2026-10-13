@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 손 픽스처: KCI 키 사용기간 종료 -->
+<MetaData>
+  <outputData>
+    <result>
+      <resultMsg>사용기간이 종료되었습니다.</resultMsg>
+    </result>
+  </outputData>
+</MetaData>
