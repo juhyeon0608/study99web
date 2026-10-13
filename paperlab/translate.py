@@ -31,8 +31,8 @@ CHUNK_PAGES, CHUNK_CHARS = 3, 9000
 PAGE_CUT = 20000          # 한 쪽 입력 상한 — 넘으면 자르고 안내
 PAGE_OUT_MAX = 30000      # 한 쪽 번역문 상한
 CUT_NOTE = "\n\n(뒷부분이 길어 생략했어요)"
-# 9장 가정값 (AC-P15에서 실측해 고침). 화면 시작 창이 같은 값으로 다시 셈(AD-3) — estimate()가 함께 보냄
-EST = {"chars_per_token": 3.9, "out_ratio": 1.5, "chunk_overhead": 600, "tokens_per_s": 50, "chunk_wait_s": 5,
+# 9장 가정값 — AC-P15 실측(2026-10-13, CLI · 18쪽 14묶음 회귀)으로 고침. 화면 시작 창이 같은 값으로 다시 셈(AD-3) — estimate()가 함께 보냄
+EST = {"chars_per_token": 3.25, "out_ratio": 1.6, "chunk_overhead": 1800, "tokens_per_s": 110, "chunk_wait_s": 5,
        "chunk_pages": CHUNK_PAGES, "chunk_chars": CHUNK_CHARS}
 REFS_RE = re.compile(r"(?im)^[ \t]*(references|bibliography|works cited|literature cited|참\s*고\s*문\s*헌|参考文献|引用文献)[ \t]*$")
 BAD_FILE = "번역 파일이 맞지 않아요 — 번역을 지우고 다시 해 주세요"

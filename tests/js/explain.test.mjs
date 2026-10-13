@@ -92,16 +92,16 @@ describe("쪽 상태 → 문구 (시안 5.4절 · AD-4)", () => {
 });
 
 describe("시작 창 예상 다시 셈 (AD-3)", () => {
-  const k = { chars_per_token: 3.9, out_ratio: 1.5, chunk_overhead: 600, tokens_per_s: 50, chunk_wait_s: 5, chunk_pages: 3, chunk_chars: 9000 };
+  const k = { chars_per_token: 3.25, out_ratio: 1.6, chunk_overhead: 1800, tokens_per_s: 110, chunk_wait_s: 5, chunk_pages: 3, chunk_chars: 9000 };
   const est = { n: 20, refs_from: 18, refs_cut: 0, page_chars: Array(20).fill(3500), page_ko: Array(20).fill(false), k };
   test("서버 translate.estimate와 같은 수 (tests/test_explain.py와 같은 예)", () => {
     const e = X.estimateFor(est);
     assert.equal(e.state, "-".repeat(17) + "srr");
     assert.equal(e.pages, 17);
     assert.equal(e.chunks, 9);
-    assert.ok(e.input >= 18000 && e.input <= 21000, String(e.input));
-    assert.ok(e.output >= 21000 && e.output <= 24000, String(e.output));
-    assert.ok(e.minutes >= 7 && e.minutes <= 9);
+    assert.ok(e.input >= 33000 && e.input <= 36000, String(e.input));
+    assert.ok(e.output >= 28000 && e.output <= 31000, String(e.output));
+    assert.ok(e.minutes >= 5 && e.minutes <= 7);
   });
   test("범위 · 참고문헌 포함 · 언어", () => {
     assert.equal(X.estimateFor(est, { from: 3, to: 5 }).state, "..---" + ".".repeat(15));

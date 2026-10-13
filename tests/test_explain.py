@@ -300,7 +300,7 @@ def test_parse_chunk():
 
 
 def test_estimate_matches_spec_example():
-    """9장 예시: 20쪽(쪽당 약 3,500자, 참고문헌 3쪽 제외 → 17쪽) ≈ 입력 2만 · 출력 2.3만 · 약 8분"""
+    """9장 예시: 20쪽(쪽당 약 3,500자, 참고문헌 3쪽 제외 → 17쪽) ≈ 입력 3.5만 · 출력 2.9만 · 약 6분 (AC-P15 실측 상수)"""
     texts = ["a" * 3500] * 17 + ["b" * 50 + "\nReferences\n" + "c" * 3000] + ["d" * 3500] * 2
     est = translate.estimate(texts, "ko")
     assert est["pages"] == 18 and est["refs_from"] == 18 and est["refs_pages"] == 2
@@ -308,7 +308,7 @@ def test_estimate_matches_spec_example():
     est = translate.estimate(texts, "ko")
     # 묶음 상한 9,000자라 3,500자 쪽은 2쪽씩 → 9묶음 (명세 9장 표의 "7묶음 · 평균 2.5쪽"과 다름 — 보고함)
     assert est["pages"] == 17 and est["chunks"] == 9
-    assert 18000 <= est["input_tokens"] <= 21000 and 21000 <= est["output_tokens"] <= 24000 and 7 <= est["minutes"] <= 9
+    assert 33000 <= est["input_tokens"] <= 36000 and 28000 <= est["output_tokens"] <= 31000 and 5 <= est["minutes"] <= 7
     assert len(est["page_chars"]) == 20 and est["k"]["chunk_pages"] == 3 and est["page_ko"][0] is False
 
 
