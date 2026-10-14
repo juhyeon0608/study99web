@@ -189,7 +189,23 @@ class PaperContext:
         return []
 
     def tagged_text(self) -> str:
-        return "\n\n".join(f'<page number="{i + 1}">\n{t}\n</page>' for i, t in enumerate(self.text_pages()))
+        return "\n\n".join(f'<page number="{i + 1}">\n{fence(t)}\n</page>' for i, t in enumerate(self.text_pages()))
+
+
+# 프롬프트에서 자료를 감싸는 우리 태그 이름 (번역 · 쉬운 설명 · 요약 · 대화 · 글쓰기 · 서재 질문 · AI로 찾기 · 인용 검증)
+_FENCE_RE = re.compile(r"<(/?)(paper|page|context|selection|abstract|sources?|evidence|claim|conversation|text)\b",
+                       re.I)
+
+
+def fence(text) -> str:
+    """자료 안의 우리 태그 모양을 무디게 — 자료(논문 본문 · 제목 · 초록 · 근거 글)가 `</source>` 같은 닫는 태그로 자기 칸을
+    닫고 지시를 끼워 넣지 못하게(프롬프트 주입 방어). `<` 를 `‹` 로 바꾼다. 프롬프트를 만드는 모든 곳이 이 함수 하나를 쓴다"""
+    return _FENCE_RE.sub(lambda m: f"‹{m.group(1)}{m.group(2)}", str(text if text is not None else ""))
+
+
+def fence_attr(text) -> str:
+    """속성 값(title="…")용: fence + 큰따옴표 · 줄바꿈 없앰"""
+    return fence(text).replace('"', "'").replace("\n", " ")
 
 
 def _extract_json(text: str) -> dict:
@@ -215,14 +231,14 @@ def summary_request(ctx: "PaperContext", lang: str) -> tuple[str, str]:
     if not ctx.text_pages():
         raise AIError("이 논문에는 읽을 수 있는 본문이나 초록이 없어요. PDF를 첨부해 주세요.", "bad_request")
     schema = json.dumps(SUMMARY_SCHEMA, ensure_ascii=False)
-    return SUMMARY_SYSTEM, (f"<paper title=\"{ctx.title}\">\n{ctx.tagged_text()}\n</paper>\n\n{SUMMARY_PROMPT.format(lang=lang)}\n\n"
+    return SUMMARY_SYSTEM, (f"<paper title=\"{fence_attr(ctx.title)}\">\n{ctx.tagged_text()}\n</paper>\n\n{SUMMARY_PROMPT.format(lang=lang)}\n\n"
                             f"다른 말 없이 아래 JSON 스키마를 따르는 JSON 객체 하나만 출력하세요.\n{schema}")
 
 
 def chat_request(ctx: "PaperContext", history: list[dict], question: str, lang: str) -> tuple[str, str]:
     convo = "\n\n".join(f"{'사용자' if m['role'] == 'user' else '조수'}: {m['content']}" for m in history)
     return CHAT_SYSTEM.format(lang=lang) + CLI_CITE_RULE, (
-        f"<paper title=\"{ctx.title}\">\n{ctx.tagged_text()}\n</paper>\n\n"
+        f"<paper title=\"{fence_attr(ctx.title)}\">\n{ctx.tagged_text()}\n</paper>\n\n"
         + (f"<conversation>\n{convo}\n</conversation>\n\n" if convo else "") + f"질문: {question}")
 
 
@@ -236,10 +252,10 @@ def write_request(mode: str, text: str, *, instruction: str = "", context: str =
     if sources:
         lines = []
         for s in sources:
-            lines.append(f"<source key=\"{s['key']}\">\n제목: {s.get('title', '')}\n"
-                         f"저자·연도: {s.get('authors', '')} ({s.get('year') or 'n.d.'})\n"
-                         + "\n".join(f"{k}: {v}" for k, v in (("초록", s.get("abstract")), ("요약", s.get("summary")),
-                                                             ("내 메모", s.get("note"))) if v)
+            lines.append(f"<source key=\"{fence_attr(s['key'])}\">\n제목: {fence(s.get('title', ''))}\n"
+                         f"저자·연도: {fence(s.get('authors', ''))} ({fence(s.get('year') or 'n.d.')})\n"
+                         + "\n".join(f"{k}: {fence(v)}" for k, v in (("초록", s.get("abstract")), ("요약", s.get("summary")),
+                                                                    ("내 메모", s.get("note"))) if v)
                          + "\n</source>")
         parts.append("<sources>\n" + "\n".join(lines) + "\n</sources>")
     if context:

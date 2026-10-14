@@ -7,15 +7,17 @@
 
 import { api, streamEvents } from "./api.js";
 import {
-  EXT_MARK, ICON_INFO, ICON_WARN, SCHOLAR_LIBRARY_NOTE, addPaper, bindExtLink, editPaperDialog, issuesBox, settingsDialog,
+  EXT_MARK, SCHOLAR_LIBRARY_NOTE, addPaper, bindExtLink, editPaperDialog, issuesBox, settingsDialog,
 } from "./dialogs.js";
-import { INHA, paperProxyTarget, scholarUrl } from "./extlinks.js";
+import { INHA, INHA_OPEN_TITLE, paperProxyTarget, scholarUrl } from "./extlinks.js";
 import { WARN_TEXT, firstFamily, fmt, scholarQuery, shortTitle, stepStates } from "./graphmath.js";
 import { closeReader, drawSummary, embedPdf, highlightsTab, mountPdf, savePrefs as saveReaderPrefs } from "./reader.js";
 import {
   basisText, citeMark, directQuote, manuscriptSeeds, ownWords, pageLocator, seedSignature, spaced,
 } from "./refquote.js";
-import { $, $$, authorsShort, el, errorToast, esc, modalOpen, safeUrl, toast } from "./ui.js";
+import {
+  $, $$, ICON_INFO, ICON_WARN, authorsShort, el, errorToast, esc, josa, liveSay, modalOpen, safeUrl, store, toast,
+} from "./ui.js";
 
 // 오른쪽에 칸이 붙은 창 (도구 막대 [참고])
 export const ICON_REF = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M14 4v16M16.5 8.5h2M16.5 12h2"/></svg>`;
@@ -24,7 +26,6 @@ const RECENT_MAX = 8;
 const PICK_DELAY = 400; // 닫힌 고르기 상자에서 ↑↓만 눌러도 change가 나는 브라우저 — 칸마다 PDF를 받지 않게(RD-4)
 const NARROW = "(max-width: 1500px)"; // 패널이 열리면 [나란히]에서 미리보기가 숨는 폭(명세 6장)
 const SPLIT_TITLE = "참고 패널을 닫거나 화면을 넓히면 미리보기도 보여요";
-const INHA_OPEN_TITLE = `${INHA.proxyName}(정석학술정보관)로 원문 페이지를 열어요`;
 const TABS = [["pdf", "PDF"], ["notes", "하이라이트·노트"], ["summary", "요약"], ["info", "정보"], ["recs", "추천"]];
 const LOCKED = new Set(["pdf", "notes", "summary"]); // 서재 밖 논문에서 잠기는 탭
 const KIND_TEXT = { coupling: "같은 참고문헌", cocitation: "함께 인용됨", related: "주제가 비슷함(인용 근거 없음)" };
@@ -51,23 +52,19 @@ export function resetRefMemory() {
 }
 
 function prefs() {
-  try {
-    const v = JSON.parse(localStorage.getItem(PREF_KEY) || "{}");
-    return v && typeof v === "object" ? v : {};
-  } catch { return {}; }
+  const v = store.json(PREF_KEY, {});
+  return typeof v === "object" ? v : {};
 }
 function savePrefs(patch) {
-  try { localStorage.setItem(PREF_KEY, JSON.stringify({ ...prefs(), ...patch })); } catch { /* 저장 못 함 */ }
+  store.set(PREF_KEY, { ...prefs(), ...patch });
 }
 // 최근 연 논문: 원고별 서재 논문 id만(최대 8, 새것이 앞 — 10장)
 function loadRecent(mid) {
-  try {
-    const v = JSON.parse(localStorage.getItem(`${PREF_KEY}.recent.${mid}`) || "[]");
-    return Array.isArray(v) ? v.filter((x) => Number.isInteger(x) && x > 0).slice(0, RECENT_MAX) : [];
-  } catch { return []; }
+  const v = store.json(`${PREF_KEY}.recent.${mid}`, []);
+  return Array.isArray(v) ? v.filter((x) => Number.isInteger(x) && x > 0).slice(0, RECENT_MAX) : [];
 }
 function saveRecent() {
-  try { localStorage.setItem(`${PREF_KEY}.recent.${P.mid}`, JSON.stringify(P.recent)); } catch { /* 저장 못 함 */ }
+  store.set(`${PREF_KEY}.recent.${P.mid}`, P.recent);
 }
 
 const visible = (node) => !!(node && node.offsetParent);
@@ -118,10 +115,7 @@ export function refPane(view, aside, hooks) {
 }
 
 function say(msg) {
-  const live = $("[data-ref-live]", P.view);
-  if (!live) return;
-  live.textContent = "";
-  setTimeout(() => { if (live.isConnected) live.textContent = msg; }, 60);
+  liveSay($("[data-ref-live]", P.view), msg);
 }
 
 function layout() {
@@ -190,7 +184,7 @@ function goPending() {
   P.goPage = null;
   setTab("pdf");
   embedPdf(g.page);
-  say(`참고 패널에서 p.${g.page}를 열었어요`);
+  say(`참고 패널에서 ${josa(`p.${Number(g.page)}`, "을/를")} 열었어요`);
 }
 
 // ------------------------------------------------------------------ 틀 · 고르기 상자 · 탭
@@ -329,8 +323,8 @@ function drawEmpty(body) {
 
 function drawError(body) {
   const gone = P.error === "gone";
-  const box = stateBox(body, gone ? "서재에서 이 논문을 찾지 못했어요" : "논문 정보를 불러오지 못했어요",
-    gone ? "삭제됐을 수 있어요. 최근 목록에서도 뺐어요." : "잠시 후 다시 시도해 주세요.",
+  const box = stateBox(body, gone ? "서재에 이 논문이 없어요" : "논문 정보를 불러오지 못했어요",
+    gone ? "휴지통에 있을 수 있어요. 최근 목록에서도 뺐어요." : "잠시 후 다시 시도해 주세요.",
     `${gone ? "" : `<button type="button" class="btn primary" data-ref-retry>다시 시도</button>`}<button type="button" class="btn${gone ? " primary" : ""}" data-ref-browse>다른 논문 고르기</button>`,
     { focus: P.errorFocus });
   const retry = $("[data-ref-retry]", box);
@@ -556,7 +550,7 @@ async function drawInfo(body, tok) {
     <div class="actions"><button type="button" class="btn sm primary" data-ref-insert-key>인용 넣기</button>
       <a class="btn sm" href="#/read/${p.id}" data-ref-read>읽기 화면에서 열기</a></div>
     <div data-issues></div>
-    <dl class="kv"><dt>인용키</dt><dd><code>@${esc(p.citekey)}</code></dd>
+    <dl class="kv"><dt>인용 키</dt><dd><code>@${esc(p.citekey)}</code></dd>
       ${p.doi ? `<dt>DOI</dt><dd><a href="${esc("https://doi.org/" + p.doi)}" target="_blank" rel="noopener noreferrer">${esc(p.doi)}${EXT_MARK}</a></dd>` : ""}
       ${p.pages ? `<dt>쪽</dt><dd>${esc(p.pages)}</dd>` : ""}</dl>
     <div class="section-title">초록</div></div>`);
@@ -566,7 +560,7 @@ async function drawInfo(body, tok) {
   try { // 인용 정보가 빈 경우 경고(채우기 버튼 포함) — 지금 issuesBox 재사용
     const cite = await api.get(`/api/papers/${p.id}/cite`);
     if (P !== me || tok !== P.drawTok) return;
-    const ib = issuesBox(cite.issues, async () => editPaperDialog(await api.get(`/api/papers/${p.id}`)));
+    const ib = issuesBox(cite.issues, () => api.get(`/api/papers/${p.id}`).then(editPaperDialog, errorToast));
     if (ib) $("[data-issues]", box).appendChild(ib);
   } catch { /* 경고 없이 */ }
 }
@@ -594,7 +588,7 @@ function seedKeys(seeds) {
 
 function reasonText(it) {
   const keys = seedKeys(it.seeds);
-  const link = keys.length ? (it.linked > 1 ? `${keys[0]} 외 ${it.linked - 1}편과 연결` : `${keys[0]}와 연결`) : `내 인용 ${it.linked}편과 연결`;
+  const link = keys.length ? (it.linked > 1 ? `${keys[0]} 외 ${it.linked - 1}편과 연결` : `${josa(keys[0], "과/와")} 연결`) : `내 인용 ${it.linked}편과 연결`;
   return `${KIND_TEXT[it.kind] || ""} · ${link}`;
 }
 
@@ -829,7 +823,7 @@ function fillProgress(box, st) {
   }
   const states = stepStates(st.step, REC_STEP_IDS);
   REC_STEP_IDS.forEach((s) => {
-    const li = $(`li[data-step="${s}"]`, box);
+    const li = $(`li[data-step="${CSS.escape(s)}"]`, box);
     const state = states[s];
     li.dataset.state = state;
     if (state === "now") li.setAttribute("aria-current", "step"); else li.removeAttribute("aria-current");
@@ -890,7 +884,7 @@ function noticeCount(st) {
 function drawNotices(box, st, seeds) {
   box.innerHTML = "";
   for (const n of notices(st, seeds)) {
-    const node = el(`<div class="notice" data-tone="${n.tone}" data-code="${n.code}">${n.tone === "info" ? ICON_INFO : ICON_WARN}<div>${n.html}</div>
+    const node = el(`<div class="notice" data-tone="${esc(n.tone)}" data-code="${esc(n.code)}">${n.tone === "info" ? ICON_INFO : ICON_WARN}<div>${n.html}</div>
       ${n.close ? `<button type="button" class="icon-btn small" data-notice-close aria-label="알림 닫기">✕</button>` : ""}</div>`);
     const x = $("[data-notice-close]", node);
     if (x) x.onclick = () => { st.hidden.add(n.code); drawNotices(box, st, currentSeeds()); };
@@ -929,7 +923,7 @@ function recItem(it, cited) {
   const li = el(`<li class="graph-item">
     <button type="button" class="graph-item-btn" data-ref-rec="${esc(it.id)}" ${cur ? `aria-current="true"` : ""}>
       <span class="graph-item-title">${esc(p.title || "제목 없음")}</span><span class="graph-item-sub">${esc(sub)}</span></button>
-    <div class="graph-item-meta"><span class="graph-count" ${keys.length ? `title="${esc(`${keys.join(" · ")} 와 연결`)}"` : ""}>내 인용 ${Number(it.linked) || 0}편과 연결</span><span>· ${esc(KIND_TEXT[it.kind] || "")}</span>
+    <div class="graph-item-meta"><span class="graph-count" ${keys.length ? `title="${esc(`${josa(keys.join(" · "), "과/와")} 연결`)}"` : ""}>내 인용 ${Number(it.linked) || 0}편과 연결</span><span>· ${esc(KIND_TEXT[it.kind] || "")}</span>
       ${lib ? `<span class="chip success">✓ 서재에 있음</span>` : ""}${lib && cited.has(lib) ? `<span class="chip accent">원고에 인용함</span>` : ""}</div>
     <div class="ref-rec-actions">${lib ? `<button type="button" class="btn sm" data-ref-insert-key>인용 넣기</button>`
       : `<button type="button" class="btn sm" data-ref-add>＋ 서재에 추가</button><button type="button" class="btn sm" data-ref-addcite>추가하고 인용</button>`}</div></li>`);

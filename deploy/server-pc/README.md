@@ -1,6 +1,7 @@
 # PaperLab 서버 PC 설치 안내서
 
-- 작성: 기획팀 · 2026-10-07 (개발팀 구현 스크립트 · 명령과 대조해 개정 — 13절. 안내서와 스크립트 동작이 다르면 그 단계에서 **멈추고 팀장에게 알립니다**). 2026-10-13: 5단계(국내 DB) `cloud.env` 새 변수 · 키 신청 · 녹화 도구 · 반영 순서를 14절에 추가(5절 · 11절 · 12절 · 13절에 줄 추가). 2026-10-13 후속: 14.3절 녹화 도구 문구(이메일 모양은 가려 저장, 키 문자열일 때만 멈춤). 2026-10-14: 6단계(폴더 동기화 · 휴지통) **반영 순서 · 관리자 작업 · 새 설정값을 15절에 추가**(5절 · 13절에 줄 추가, 11절에는 이미 설정값 줄이 있음)
+- 작성: 기획팀 · 2026-10-07 (개발팀 구현 스크립트 · 명령과 대조해 개정 — 13절. 안내서와 스크립트 동작이 다르면 그 단계에서 **멈추고 팀장에게 알립니다**). 2026-10-13: 5단계(국내 DB) `cloud.env` 새 변수 · 키 신청 · 녹화 도구 · 반영 순서를 14절에 추가(5절 · 11절 · 12절 · 13절에 줄 추가). 2026-10-13 후속: 14.3절 녹화 도구 문구(이메일 모양은 가려 저장, 키 문자열일 때만 멈춤). 2026-10-14: 6단계(폴더 동기화 · 휴지통) **반영 순서 · 관리자 작업 · 새 설정값을 15절에 추가**(5절 · 13절에 줄 추가, 11절에는 이미 설정값 줄이 있음). 2026-10-14 전체 점검 반영: **처음 반영 때 옛 `update.ps1`이 돈다는 점(D-1) · 여러 단계를 한 번에 올리는 16절 신설 · 업데이트 동작 번호(8 · 9 · 10) 정리 · 수동 반영에 코드 받기 줄 추가 · `PAPERLAB_EMBED_MODEL_DIR` · 되돌리기 주의(앱 0.3.0)**. **2026-10-14 전체 오류 점검 반영**: 마이그레이션 표 잠금 대기 상한 `lock_timeout` 10초(11절 4번 · 12절) · 폴더 통째 지우기 안전 검사 `Remove-PLTree`(13절 `common.ps1` 줄 · 12절)
+- **서버 PC 반영 현황: 2026-10-14 현재 서버 PC는 `f9e748e`(1C)까지 반영, 2a~6단계는 미반영입니다.** 한꺼번에 올리는 순서는 **16절**.
 - 근거: [1단계 명세](../../docs/specs/phase1-cloud.md) 9장(서버 실행) · 13장(배포 · 운영), 사용자 결정 Q14(2026-10-07)
 - 읽는 사람: **서버 PC(`KIMJUHYEON`)에 설치한 Claude Code**와 관리자. 사람이 손으로 해야 하는 단계는 **[사용자]** 로 표시했습니다 — Claude Code는 그 단계에서 사용자에게 부탁하고 끝날 때까지 기다립니다.
 
@@ -119,6 +120,7 @@ tailscale version
      `PAPERLAB_ALLOWLIST=off`가 없으면 서버는 허용 목록을 켠 것으로 보고, `ALLOWED_EMAILS`가 없으니 **서버는 뜨지만 모든 로그인 사용자가 403("허용되지 않은 계정")** 을 받습니다(시작 로그 · `serve --check`에 경고 줄 — 팀장 결정). 값은 `on`/`off`만(대소문자 무관) — 그 밖의 값이면 시작 거부. `PAPERLAB_PUBLIC_URL`은 `server.json`의 `public_url`과 같아야 합니다.
    - (필요할 때만) `PAPERLAB_PG_DUMP=…` (4절)
    - (선택 — 2단계) `PAPERLAB_RELEASES_DIR=…` PC 앱 설치 파일 배포 폴더. 없으면 기본값 `D:\PaperLab\releases`
+   - (선택 — 3단계 AI 질문) `PAPERLAB_EMBED_MODEL_DIR=<폴더>` 임베딩 모델을 놓는 폴더. 없으면 기본값 `D:\PaperLab\models\embeddinggemma-300m`. 아래 11절 "임베딩 모델"
    - (선택 — 5단계 국내 DB 검색) `KCI_API_KEY=…` · `RISS_API_KEY=…` 한 줄씩. **없으면(또는 비어 있으면) 그 소스만 꺼질 뿐 서버는 그대로 뜹니다.** 키 값은 **채팅에 적지 말고 메모장으로 파일에 직접** 넣습니다. 신청 · 설명은 14절
    - (선택 — 6단계 폴더 동기화) `PAPERLAB_SYNC_USER_CAP_MB=…`(사용자당 동기화 올리기 상한, 기본 2048) · `PAPERLAB_DB_LIMIT_MB=…`(Supabase DB 한도, 기본 500). **없으면 기본값으로 동작**하고 값은 비밀이 아니지만 파일은 5절 규칙대로 직접 고칩니다. 설명 · 반영 순서는 15절
    - (품질 검증을 이 PC에서 할 때만 — 질문 Q-S7) `SUPABASE_TEST_*` 4줄은 그대로 둠, 아니면 지움
@@ -263,12 +265,12 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 
 | 하고 싶은 일 | 방법 |
 |---|---|
-| 새 버전 반영 | 팀장이 승인 · 푸시를 알리면 `powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1` (아래 "업데이트 동작"). 먼저 `-DryRun`으로 반영할 커밋을 볼 수 있음(**`git fetch`만 함** — 원격 추적 브랜치 · `FETCH_HEAD` · 객체 · 태그 갱신, 작업 폴더 · HEAD · 브랜치 · 서버 · 로그는 그대로. 미리 fetch할 필요 없음), `-Yes`는 확인 질문 생략 |
-| 특정 커밋으로 되돌리기 | `update.ps1 -Ref <커밋>` — 옛 커밋으로 갈 때는 마이그레이션을 하지 않음(DB 마이그레이션은 되돌리지 않음) |
+| 새 버전 반영 | 팀장이 승인 · 푸시를 알리면 `powershell -ExecutionPolicy Bypass -File deploy\server-pc\update.ps1` (아래 "업데이트 동작"). **서버 PC가 `f9e748e`(1C)처럼 옛 커밋이면 처음 한 번은 옛 `update.ps1`이 끝까지 돌아 `-BuildDesktop`을 모르고 빌드 단계도 없습니다 → `update.ps1 -Yes` 뒤 `update.ps1 -BuildDesktop`을 따로 실행(16절).** 먼저 `-DryRun`으로 반영할 커밋을 볼 수 있음(**`git fetch`만 함** — 원격 추적 브랜치 · `FETCH_HEAD` · 객체 · 태그 갱신, 작업 폴더 · HEAD · 브랜치 · 서버 · 로그는 그대로. 미리 fetch할 필요 없음), `-Yes`는 확인 질문 생략 |
+| 특정 커밋으로 되돌리기 | `update.ps1 -Ref <커밋>` — 옛 커밋으로 갈 때는 마이그레이션을 하지 않음(DB 마이그레이션은 되돌리지 않음). **앱 0.3.0 이상(지금 0.3.1)이 배포된 뒤 `f9e748e`로 되돌리면 앱의 워커와 동기화가 연결되지 않고, 휴지통 논문은 옛 코드에서 보이지 않습니다**(15.2절 · 16절 9번) |
 | `cloud.env`를 고친 뒤 | `update.ps1 -RestartOnly` (코드는 그대로, 서버만 다시 시작 → 상태 확인) |
 | KCI · RISS 키 넣기 · 바꾸기(5단계) | **[사용자]** 가 메모장으로 `cloud.env`의 `KCI_API_KEY` · `RISS_API_KEY` 줄을 고침(값은 채팅에 적지 않음) → `update.ps1 -RestartOnly`. 확인: 로그인해서 논문 찾기의 소스 목록에서 그 소스의 "(키 등록 전)" 표시가 사라졌는지(`serve --check`는 이 두 변수를 점검하지 않음). 자세한 내용 14절 |
 | 폴더 동기화 한도 바꾸기(6단계) | `cloud.env`에 `PAPERLAB_SYNC_USER_CAP_MB=2048`(사용자당 동기화 올리기 상한 — 내 PDF 총량 · 휴지통 포함, 기본 2048) · `PAPERLAB_DB_LIMIT_MB=500`(DB 한도 — 90%를 넘으면 동기화 새 논문 올리기를 막음, 기본 500) → `update.ps1 -RestartOnly`. DB 크기 확인 · PGroonga 정리는 `.venv\Scripts\python -m paperlab.admin maintain`(전 · 후 크기만 출력) |
-| PC 앱 설치 파일 처음 만들기 · 지난 빌드 실패 뒤 다시 | `update.ps1 -BuildDesktop` — 새 커밋이 없어도 8번 빌드만 함(그 버전 파일이 이미 `releases`에 있으면 WARN만). 결과는 `update.log`의 "데스크톱 앱 빌드 성공: 버전 … · sha256 …" |
+| PC 앱 설치 파일 처음 만들기 · 지난 빌드 실패 뒤 다시 | `update.ps1 -BuildDesktop` — 새 커밋이 없어도 9번 빌드만 함(그 버전 파일이 이미 `releases`에 있으면 WARN만). 결과는 `update.log`의 "데스크톱 앱 빌드 성공: 버전 … · sha256 …". **옛 커밋(`f9e748e` 등)에서 처음 올릴 때는 `update.ps1 -Yes`가 끝난 뒤에 실행**합니다 — 새 스크립트가 있어야 이 옵션이 먹습니다(옛 스크립트는 매개변수 오류, 16절) |
 | 사용자 추가 · 빼기 | **[사용자]** Google Cloud 콘솔 → OAuth 동의 화면 → 테스트 사용자에서 추가 · 삭제(서버 재시작 필요 없음). 뺄 때는 Supabase 대시보드 Users에서 그 사용자도 삭제 |
 | 서버만 다시 시작 | `Stop-ScheduledTask "PaperLab Server"; Start-ScheduledTask "PaperLab Server"` |
 | 로그 보기 | `Get-Content D:\PaperLab\logs\server.log -Tail 50` (JSON 한 줄씩 — 토큰 · 키 · 본문은 원래 남지 않음) |
@@ -278,7 +280,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 암호화 키 회전 | 명세 8.3절 순서(서버 멈춤 → `cloud.env` 새 키 → `admin rotate-key` → 서버 시작) |
 | Windows 계정 비밀번호를 바꾼 뒤 | 작업 3개의 저장된 비밀번호도 바꿔야 함 — `install.ps1 -ReRegisterTasks -SkipFunnel`(자격 증명 창에 **[사용자]** 가 새 비밀번호 입력) |
 | 급히 공개를 막기 | `funnel.ps1 off` (서버는 계속 돌지만 바깥에서 못 들어옴) |
-| 임베딩 모델 받기(3단계 AI 질문 · 처음 한 번) | `D:\PaperLab\study99web`에서 서버 계정으로 `.venv\Scripts\python -m paperlab.admin rag-model --download` → `update.ps1 -RestartOnly`. 아래 "임베딩 모델" |
+| 임베딩 모델 받기(3단계 AI 질문 · 처음 한 번) | `D:\PaperLab\study99web`에서 서버 계정으로 `.venv\Scripts\python -m paperlab.admin rag-model --download` → `update.ps1 -RestartOnly`. 아래 "임베딩 모델". **3단계 코드를 반영한 뒤에 받습니다 — 옛 코드(`f9e748e`)에는 `rag-model` 명령이 없습니다** |
 | 색인 처음부터 다시(모델 · 규칙을 바꾼 뒤) | `.venv\Scripts\python -m paperlab.admin rag-reindex --all` — 모든 논문이 '색인 대기'가 되고, 사용자가 AI 질문 화면을 열 때 차례로 다시 색인(옛 벡터 파일은 교체 때 지워짐) |
 | 복원 | `deploy/README.md` 4장 복원 절차 |
 | 제거 | `deploy\server-pc\uninstall.ps1`(작업 삭제 · Funnel 끔, `-DryRun` 가능). 저장소 · `cloud.env`는 **[사용자]** 가 직접 지움 |
@@ -288,13 +290,15 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 1. `git fetch` → 배포 브랜치의 새 커밋 목록 → 확인(`-Yes`면 생략). 새 커밋이 없으면 끝. **`-DryRun`도 이 `git fetch`는 실제로 함**(fetch만 함 — 원격 추적 브랜치 `origin/…` · `FETCH_HEAD` · 객체 · 태그 갱신, 작업 폴더 · HEAD · 브랜치는 그대로) — 그래야 반영할 커밋 목록이 맞음. 그 뒤 단계(코드 반영 · pip · 마이그레이션 · 재시작)는 `[DRY]` 줄로 보여 주기만 하고, `update.log`도 쓰지 않음.
 2. 작업 폴더에 고친 파일이 있거나, 지금 브랜치가 배포 브랜치가 아니거나, 앞으로만 갈 수 없으면(ff-only 불가) **시작하지 않음** → 팀장에게 보고.
 3. 코드 반영(`git merge --ff-only`, `-Ref`면 그 커밋으로) → `pyproject.toml`이 바뀌었으면 `pip install -e .`. **여기서 실패하면**(pip 오류 등) 6번처럼 **옛 커밋으로 되돌리고(`pyproject.toml`이 바뀐 경우 옛 의존성 다시 설치) 서버를 다시 시작 · 확인**, 마이그레이션은 하지 않음. 종료 코드 1.
-4. 마이그레이션(`paperlab.migrate`) → `admin sync-allowlist`. **여기서 실패하면**(DB 오류 · **Supabase 일시정지** 포함) **코드만 옛 커밋으로 되돌리고 서버는 다시 시작하지 않음** — 서버는 옛 코드로 계속 돎. 종료 코드 1.
+4. 마이그레이션(`paperlab.migrate`) → `admin sync-allowlist`. **여기서 실패하면**(DB 오류 · **Supabase 일시정지** 포함) **코드만 옛 커밋으로 되돌리고 서버는 다시 시작하지 않음** — 서버는 옛 코드로 계속 돎. 종료 코드 1. **마이그레이션 파일마다 트랜잭션 안에서 `lock_timeout` 10초가 걸립니다**(2026-10-14): 서버 요청이 잡고 있는 표 잠금을 10초 안에 얻지 못하면 그 파일은 **실패**(그 파일만 롤백 — 기록 없음, 앞서 끝난 파일은 남음)하고 위처럼 **코드가 되돌아갑니다**. 서버가 표 잠금을 오래 기다리며 뒤 요청을 줄 세워 멈추는 것을 막으려는 장치이므로 고장이 아닙니다 — **사용자가 적은 시간(새벽 등)에 `update.ps1`을 다시 실행**합니다(두 번 돌려도 안전).
 5. 서버 작업 다시 시작 → `http://127.0.0.1:8080/api/health?deep=1`이 정상이고 응답의 커밋이 새 커밋인지 60초 동안 확인.
 6. **확인 실패면 자동으로 옛 커밋으로 되돌리고 다시 시작**(마이그레이션은 되돌리지 않음). `deep=1`은 DB까지 보므로 **반영 중 Supabase가 일시정지돼 있으면 이 단계에서도 되돌림**이 일어남 — Supabase를 Restore한 뒤 다시 업데이트. 되돌린 뒤에도 정상이 아니면 오류로 남기고 팀장에게 보고.
 7. **관리자 권한(elevated)으로 실행하면** 시작할 때 WARN 한 줄을 화면과 `update.log`에 남기고 그대로 진행: "관리자 권한으로 실행 중: 새로 받는 파일의 소유자가 Administrators가 되지만, 상속 권한으로 서버 계정이 접근할 수 있어 동작에는 영향이 없습니다. 가능하면 일반 권한 PowerShell에서 실행하세요." **소유자 · 권한은 바꾸지 않음**(`icacls` 쓰지 않음 — 팀장 결정). 일반 권한이면 이 줄도 없음.
-8. **PC 앱 설치 파일 빌드**(2단계 명세 13.7.1절 — 5번 상태 확인까지 **성공한 뒤에만**, 빌드 중에도 서버는 새 코드로 돎): 이번 반영에서 `desktop\`이 바뀌었으면(또는 `-BuildDesktop`) `node` · `npm`(22 이상) 확인 → `desktop\`에서 `npm ci` → `npm run dist`(electron-builder NSIS, **20분 제한** — `-BuildTimeoutSec`). Electron · NSIS · npm 캐시는 `D:\PaperLab\cache\`(첫 빌드만 수백 MB를 받음). 결과는 `releases`(`cloud.env`의 `PAPERLAB_RELEASES_DIR` — 서버가 읽는 폴더와 같은 규칙, 없으면 `D:\PaperLab\releases`)의 `.staging`에서 `latest.yml`의 sha512 · 크기를 실제 `.exe`와 다시 맞춰 본 뒤 `.exe` → `.blockmap` → `release.json`(sha256) → **`latest.yml`(마지막, 교체)** 순서로 옮기고 **최근 3개 버전**만 남김. 빌드 로그 전체는 `D:\PaperLab\logs\desktop-build-<시각>.log`, `update.log`에는 성공 줄(버전 · sha256 · 걸린 초)과 빌드 로그의 서버 주소 한 줄. **빌드는 어느 단계에서 실패해도 WARN만 남기고 이전 설치 파일을 그대로 두며 종료 코드는 서버 결과대로(성공 0)**. `-Ref` · `-RestartOnly` · 6번에서 되돌린 경우에는 빌드하지 않음(앱은 다운그레이드하지 않음). `desktop\`이 바뀌었는데 `desktop\package.json` 버전이 이미 `releases`에 있으면 빌드하지 않고 WARN(같은 버전 이름으로 다른 내용을 내보내지 않음 — 개발팀에 버전을 올려 달라고 보고).
-10. **임베딩 모델 확인**(3단계): 5번 상태 확인까지 성공하면 `admin rag-model`로 모델 파일이 있는지(SHA-256까지) 봄. 없거나 틀리면 **WARN만**(서버는 낱말 검색만으로 동작, 종료 코드 영향 없음) — 아래 "임베딩 모델"대로 받음.
-9. **서버 PC에는 PaperLab PC 앱(워커)을 설치하지 않습니다**(사용자 결정 Q-S3) — 이 PC는 설치 파일을 만들어 `/downloads/`로 내보내기만 합니다.
+8. 결과(옛 → 새 커밋)를 `update.log`에 남김.
+9. **PC 앱 설치 파일 빌드**(2단계 명세 13.7.1절 — 5번 상태 확인까지 **성공한 뒤에만**, 빌드 중에도 서버는 새 코드로 돎): 이번 반영에서 `desktop\`이 바뀌었으면(또는 `-BuildDesktop`) `node` · `npm`(22 이상) 확인 → `desktop\`에서 `npm ci` → `npm run dist`(electron-builder NSIS, **20분 제한** — `-BuildTimeoutSec`). Electron · NSIS · npm 캐시는 `D:\PaperLab\cache\`(첫 빌드만 수백 MB를 받음). 결과는 `releases`(`cloud.env`의 `PAPERLAB_RELEASES_DIR` — 서버가 읽는 폴더와 같은 규칙, 없으면 `D:\PaperLab\releases`)의 `.staging`에서 `latest.yml`의 sha512 · 크기를 실제 `.exe`와 다시 맞춰 본 뒤 `.exe` → `.blockmap` → `release.json`(sha256) → **`latest.yml`(마지막, 교체)** 순서로 옮기고 **최근 3개 버전**만 남김. 빌드 로그 전체는 `D:\PaperLab\logs\desktop-build-<시각>.log`, `update.log`에는 성공 줄(버전 · sha256 · 걸린 초)과 빌드 로그의 서버 주소 한 줄. **빌드는 어느 단계에서 실패해도 WARN만 남기고 이전 설치 파일을 그대로 두며 종료 코드는 서버 결과대로(성공 0)**. `-Ref` · `-RestartOnly` · 6번에서 되돌린 경우에는 빌드하지 않음(앱은 다운그레이드하지 않음). `desktop\`이 바뀌었는데 `desktop\package.json` 버전이 이미 `releases`에 있으면 빌드하지 않고 WARN(같은 버전 이름으로 다른 내용을 내보내지 않음 — 개발팀에 버전을 올려 달라고 보고). **처음 반영 때는 이 단계가 돌지 않습니다**: 서버 PC가 옛 커밋이면 옛 `update.ps1`이 끝까지 돌고(빌드 단계 · `-BuildDesktop` 없음), 그래서 `update.ps1 -Yes` 뒤에 `update.ps1 -BuildDesktop`을 따로 실행합니다(16절).
+10. **임베딩 모델 확인**(3단계): 5번 상태 확인까지 성공하면 `admin rag-model`로 모델 파일이 있는지(SHA-256까지) 봄. 없거나 틀리면 **WARN만**(서버는 낱말 검색만으로 동작, 종료 코드 영향 없음) — 아래 "임베딩 모델"대로 받음. (번호는 스크립트 주석을 따름 — 실제 실행은 10번 확인이 먼저, 9번 빌드가 나중입니다.)
+
+**서버 PC에는 PaperLab PC 앱(워커)을 설치하지 않습니다**(사용자 결정 Q-S3) — 이 PC는 설치 파일을 만들어 `/downloads/`로 내보내기만 합니다.
 
 **임베딩 모델**(3단계 명세 6.3절 — EmbeddingGemma-300M ONNX, 약 330MB)
 
@@ -321,6 +325,8 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | PDF 업로드 · 보기 CORS 오류 | R2 CORS | 10절 2번 |
 | 백업 실패 | `backup.log`(값 없이 오류만), `admin pg-dump-check`, `admin latest-backup` | "pg_dump를 찾지 못했어요" → `PAPERLAB_PG_DUMP`(4절). 버전 오류 → PostgreSQL 클라이언트를 운영 DB 주 버전 이상으로. "SUPABASE_APP_DB_URL 이 비어 있어요" → `admin app-role --write-env --if-missing` |
 | 업데이트가 "마이그레이션 단계"에서 실패 · 되돌림 | `update.log`, Supabase 대시보드 | Supabase 일시정지면 **[사용자]** Restore 후 다시 `update.ps1`. 그 밖이면 팀장에게 보고(서버는 옛 코드로 계속 돎) |
+| 마이그레이션 실패 문구가 "표 잠금을 10s 안에 얻지 못했어요(서버 요청이 잡고 있음 — 잠시 뒤 다시)" | `update.log`의 `paperlab.migrate` 오류 줄 | `lock_timeout` 10초 초과(11절 4번) — 코드는 이미 옛 커밋으로 되돌아가 서버는 정상. **사용자가 적은 시간에 `update.ps1`을 다시** 실행. 같은 곳에서 계속 실패하면 팀장 보고(서버 PC에서 SQL을 직접 보내지 않음) |
+| "정션 · 심볼릭 링크라 지우지 않았어요: …" 오류로 스크립트가 멈춤 | 적힌 경로(`dist` · `.staging` · 설치 `.venv`)가 정션 · 심볼릭 링크인지(`Get-Item <경로> \| Select Attributes`) | `Remove-PLTree`의 안전 장치(13절) — 링크 대상의 내용이 지워지는 것을 막으려고 멈춘 것. 링크를 **직접 확인**하고 필요하면 **[사용자]** 가 링크만 제거한 뒤 다시 실행(링크 안의 내용은 지우지 않음). 팀장 보고 |
 | `update.log`에 "데스크톱 앱 빌드 실패(…)" WARN | 같은 줄의 단계 · 이유, 적힌 `desktop-build-<시각>.log`(마지막 줄들) | 서버 업데이트는 정상(이전 설치 파일 그대로). 인터넷 끊김 · 디스크 부족이면 고친 뒤 `update.ps1 -BuildDesktop`. 그 밖(코드 · 설정 오류)은 빌드 로그 이름과 함께 팀장에게 보고 — 서버 PC에서 고치지 않음 |
 | "버전이 같아 빌드하지 않았어요" WARN | `desktop\package.json`의 `version` | 개발팀에 버전을 올린 커밋을 요청(서버 PC에서 고치지 않음) |
 | "Node.js 22 이상 · npm 이 없어 … 건너뛰어요" WARN | `node -v` · `npm -v` | 4절 Node.js LTS 설치 → `update.ps1 -BuildDesktop` |
@@ -338,11 +344,11 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 파일 · 명령 | 역할 |
 |---|---|
 | `deploy/server-pc/install.ps1` | 7절 전체. **관리자 권한 PowerShell 필요**(아니면 시작 때 멈춤, `-DryRun`은 예외). `-DryRun` · `-EnvFile` · `-RepoUrl` · `-SkipFunnel` · `-PythonVersion` · `-ReRegisterTasks` · `-RecreateVenv` · `-Root` `-AppDir` `-LogDir` `-TmpDir` `-Branch` `-Port` |
-| `deploy/server-pc/update.ps1` | 11절 업데이트 동작 · `-Ref` · `-Yes` · `-RestartOnly` · `-DryRun`(`git fetch`만 함) · `-TimeoutSec`(기본 60) · **`-BuildDesktop`**(8번 PC 앱 빌드만 다시 — 새 커밋 없어도) · `-BuildTimeoutSec`(기본 1200) · `-ReleasesDir` · `-CacheDir`(시험용 — 기본은 `PAPERLAB_RELEASES_DIR` 규칙 · `D:\PaperLab\cache`). 반영 뒤 단계(pip 포함)가 실패하면 옛 커밋으로 되돌림. 관리자 권한으로 돌면 시작할 때 WARN 한 줄만(소유자는 바꾸지 않음 — 11절 7번) |
+| `deploy/server-pc/update.ps1` | 11절 업데이트 동작 · `-Ref` · `-Yes` · `-RestartOnly` · `-DryRun`(`git fetch`만 함) · `-TimeoutSec`(기본 60) · **`-BuildDesktop`**(9번 PC 앱 빌드만 다시 — 새 커밋 없어도. 옛 커밋에서 처음 올릴 때는 `-Yes` 반영이 끝난 뒤에 실행 — 16절) · `-BuildTimeoutSec`(기본 1200) · `-ReleasesDir` · `-CacheDir`(시험용 — 기본은 `PAPERLAB_RELEASES_DIR` 규칙 · `D:\PaperLab\cache`). 반영 뒤 단계(pip 포함)가 실패하면 옛 커밋으로 되돌림. 관리자 권한으로 돌면 시작할 때 WARN 한 줄만(소유자는 바꾸지 않음 — 11절 7번) |
 | `deploy/server-pc/funnel.ps1` | `on`(`tailscale funnel --bg 8080`) · `status` · `off`, `-DryRun`. `tailscale`는 PATH → `Program Files\Tailscale` 순으로 찾음 |
 | `deploy/server-pc/watchdog.ps1` | 5분마다: `/api/health` 3번 연속 실패면 서버 재시작(1시간 3번까지, 넘으면 경고만). 하루 한 번: 공개 주소 · 최근 백업(36시간) · 디스크 여유(시스템 5GB · 데이터 20GB) → `watchdog.log`(1MB × 5). **`-DryRun`은 아무것도 바꾸지 않음**(작업 재시작 없이 `[DRY]` 기록만 — 품질팀 F3, 개발팀 수정). `-SkipDaily` · `-StateFile` · `-MaxRestartsPerHour` 등은 시험용 |
 | `deploy/server-pc/uninstall.ps1` | 작업 삭제 · Funnel 끔(`cloud.env` · 저장소는 지우지 않는다고 알림) |
-| `deploy/server-pc/common.ps1` | 다른 스크립트가 함께 쓰는 함수(설정 읽기 · 로그 · 권한 · 관리자 권한 확인 · 상태 확인) |
+| `deploy/server-pc/common.ps1` | 다른 스크립트가 함께 쓰는 함수(설정 읽기 · 로그 · 권한 · 관리자 권한 확인 · 상태 확인). **폴더 삭제 안전 검사 `Remove-PLTree`**(2026-10-14): 폴더를 통째로 지우는(`-Recurse`) 곳은 이 함수 하나뿐이며(앱 빌드 `dist` · `.staging` · 설치의 `.venv` 다시 만들기), **지울 경로가 정션 · 심볼릭 링크(대상이 없는 정션 포함)면 지우지 않고 멈춥니다**(Windows PowerShell 5.1의 `Remove-Item -Recurse`는 링크를 따라 들어가 대상 폴더의 내용을 지울 수 있음). 없는 경로는 그냥 지나감. 폴더 **안쪽**의 정션은 검사하지 않음(PLAN.md 12장 남은 일 14번 — 수용 여부는 팀장 확인) |
 | `deploy/server-pc/server.json` | 공개 주소 · 포트 · 루트 · 브랜치 · 작업 이름(비밀 없음 — 주소를 두는 한 곳) |
 | `python -m paperlab.serve` | 서버 실행. `--check`(설정 점검, 이름만) · `--before-app-role` · `--log-dir` · `--diag-hang-file`(진단 스위치 — 9절 17번) |
 | `python -m paperlab.admin app-role --write-env [--if-missing]` | 앱 역할 주소를 `cloud.env`에 씀(`--if-missing`: 이미 있으면 그대로) |
@@ -411,13 +417,13 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 3. (선택) KCI · RISS 키를 `cloud.env`에 넣고 `update.ps1 -RestartOnly`(14.1절) — 키는 코드 반영과 순서가 상관없습니다. 코드를 먼저 올려 두고 나중에 넣어도 됩니다(그동안 두 소스는 "키 등록 전").
 4. (키를 받은 뒤) 녹화 도구(14.3절) → 개발팀이 픽스처 · 명세 확인 필요 항목 갱신.
 
-- 수동으로 나눠 할 때: `.venv\Scripts\python -m paperlab.migrate` → `update.ps1 -RestartOnly`. 순서를 거꾸로(코드가 먼저 돌고 마이그레이션이 나중에) 하지 않습니다.
+- 수동으로 나눠 할 때: **새 코드를 먼저 받고**(`git fetch origin claude/paper-program-hrrhl2` → `git merge --ff-only origin/claude/paper-program-hrrhl2` → `.venv\Scripts\python -m pip install -e .`) → `.venv\Scripts\python -m paperlab.migrate` → `update.ps1 -RestartOnly`. 순서를 거꾸로(코드가 먼저 돌고 마이그레이션이 나중에) 하지 않습니다.
 - 마이그레이션은 **되돌리지 않습니다**(11절). 문제가 생겨 `update.ps1 -Ref <옛 커밋>`으로 코드만 되돌려도 새 열 · 새 허용 값은 DB에 남지만 옛 코드와 호환됩니다.
 - 설치 후 확인(9절)에는 변경이 없습니다. 반영 뒤 사람이 화면으로 보는 항목(명세 AC-585 · 586)은 팀장 · 품질팀 몫입니다.
 
 ## 15. 6단계 폴더 동기화 · 휴지통 — 새 설정값 · 반영 순서 · 관리자 작업
 
-근거: [6단계 명세](../../docs/specs/phase6-folder-sync.md) 13 · 14 · 16.5 · 22장. **상태: 구현 완료(검증 중)** — 품질팀 검증이 끝나고 팀장이 승인 · 푸시를 알린 뒤에 11절 `update.ps1`로 반영합니다. 이 절의 DB 확인은 **관리자(사람)** 가 하고, Claude Code는 0절 4번대로 운영 DB에 직접 SQL을 보내지 않습니다(정해진 관리 명령만).
+근거: [6단계 명세](../../docs/specs/phase6-folder-sync.md) 13 · 14 · 16.5 · 22장. **상태: 구현 완료 · 커밋됨(853c81e) — 서버 PC 미반영.** 팀장이 푸시를 알린 뒤에 11절 `update.ps1`로 반영합니다(2a~6단계를 한 번에 올리는 순서는 16절). 이 절의 DB 확인은 **관리자(사람)** 가 하고, Claude Code는 0절 4번대로 운영 DB에 직접 SQL을 보내지 않습니다(정해진 관리 명령만).
 
 ### 15.1 새 설정값 (`cloud.env` — 선택)
 
@@ -438,10 +444,10 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 2. **새 코드로 서버 다시 시작** — 마이그레이션이 끝난 **뒤에야** `PaperLab Server`가 새 코드로 뜹니다(5번 상태 확인에서 `/api/health`의 커밋이 새 값이어야 통과).
 3. **앱 역할 idle 60s 적용 확인**(관리자 — 15.3절 1번). 서버가 뜬 뒤 한 번.
 4. (선택) 설정값 넣기 → `update.ps1 -RestartOnly`(15.1절).
-5. **PC 앱 0.3.0 배포** — 같은 반영에서 `desktop\`이 바뀌었으므로 `update.ps1` 8번이 설치 파일을 빌드해 `releases`에 둡니다(`desktop\package.json` 버전 0.3.0). 사용자 PC의 앱은 자동 업데이트로 올라오고, **동기화 워커 API는 앱 0.3.0 미만이면 426**(앱이 "업데이트가 필요해요"를 보임). 그 버전이 이미 `releases`에 있으면 빌드하지 않고 WARN만 남김(11절 8번 — 개발팀에 버전 요청). 동기화는 사용자가 앱에서 폴더를 고르고 [시작]을 눌러야 켜집니다(자동으로 켜지지 않음).
+5. **PC 앱 배포(0.3.1)** — `update.ps1` 9번(11절)이 설치 파일을 빌드해 `releases`에 둡니다(`desktop\package.json` 버전 0.3.1). **다만 서버 PC가 `f9e748e`(1C) 같은 옛 커밋이면 처음 한 번은 옛 `update.ps1`이 끝까지 돌아 `-BuildDesktop`이 없어(매개변수 오류) 빌드 단계가 없습니다. 그러므로 `update.ps1 -Yes`가 끝난 뒤 `update.ps1 -BuildDesktop`을 따로 실행합니다(이때는 새 스크립트가 돎).** 두 번째 반영부터는 `desktop\`이 바뀌면 `update.ps1` 한 번으로 빌드까지 됩니다. 사용자 PC의 앱은 자동 업데이트로 올라오고, **동기화 워커 API는 앱 0.3.0 미만이면 426**(앱이 "업데이트가 필요해요"를 보임). 그 버전이 이미 `releases`에 있으면 빌드하지 않고 WARN만 남김(11절 9번 — 개발팀에 버전 요청). 동기화는 사용자가 앱에서 폴더를 고르고 [시작]을 눌러야 켜집니다(자동으로 켜지지 않음).
 
-- 수동으로 나눠 할 때: `.venv\Scripts\python -m paperlab.migrate` → `update.ps1 -RestartOnly`. 순서를 거꾸로(코드가 먼저 돌고 마이그레이션이 나중에) 하지 않습니다.
-- 마이그레이션은 **되돌리지 않습니다**(11절). `update.ps1 -Ref <옛 커밋>`으로 코드만 되돌리면 새 열 · 표는 DB에 남지만, 옛 코드는 휴지통을 모르므로 **이미 휴지통에 있는 논문은 옛 코드에서 보이지 않고**(데이터는 DB · R2에 남음) 옛 코드의 [삭제]는 다시 바로 지우는 방식입니다. 새 코드로 다시 올리면 돌아옵니다.
+- 수동으로 나눠 할 때: **새 코드를 먼저 받고**(`git fetch origin claude/paper-program-hrrhl2` → `git merge --ff-only origin/claude/paper-program-hrrhl2` → `.venv\Scripts\python -m pip install -e .`) → `.venv\Scripts\python -m paperlab.migrate` → `update.ps1 -RestartOnly`. 코드를 받지 않고 `migrate`만 돌리면 옛 파일의 마이그레이션 목록으로 실행되어 새 마이그레이션이 적용되지 않습니다. 순서를 거꾸로(코드가 먼저 돌고 마이그레이션이 나중에) 하지 않습니다. 수동 반영은 자동 되돌림이 없고 빌드도 하지 않으므로 앱 설치 파일은 `update.ps1 -BuildDesktop`으로 따로 만듭니다.
+- 마이그레이션은 **되돌리지 않습니다**(11절). `update.ps1 -Ref <옛 커밋>`으로 코드만 되돌리면 새 열 · 표는 DB에 남지만, 옛 코드는 휴지통을 모르므로 **이미 휴지통에 있는 논문은 옛 코드에서 보이지 않고**(데이터는 DB · R2에 남음) 옛 코드의 [삭제]는 다시 바로 지우는 방식입니다. 새 코드로 다시 올리면 돌아옵니다. **앱 0.3.0 이상(지금 0.3.1)이 배포된 뒤 `f9e748e`로 되돌리면 앱의 워커와 동기화가 연결되지 않습니다**(옛 서버 코드에 새 동기화 · 워커 API가 없음) — 앱은 다운그레이드되지 않으므로 사용자 PC의 앱(0.3.0 이상)은 서버를 새 코드로 다시 올릴 때까지 연결 오류를 보입니다.
 - 설치 후 확인(9절) 항목에는 변경이 없습니다.
 
 ### 15.3 관리자 작업 (사람이 하는 일 — 반영 뒤)
@@ -466,3 +472,50 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | "올리기 멈춤 — 서재 저장 공간" | R2 사용량(95%에서 업로드를 막는 기존 규칙 — 사용자 화면의 저장 공간 막대) | 필요 없는 논문 영구 삭제 안내, 한도 판단은 1단계 M9 |
 | 서버 로그에 `sync feed xmin stalled`(숫자만 있는 WARN) | 다른 연결이 트랜잭션을 연 채 쉬는 중 — 피드가 새 변경을 못 줌(응답은 정상) | 15.3절 1번을 다시 확인, 계속되면 팀장에게 WARN 줄(숫자만)과 함께 보고 |
 | 마이그레이션 단계에서 업데이트가 되돌림 | `update.log`(11절 4번) | 12절 해당 줄 — 팀장 보고 |
+
+## 16. 여러 단계를 한 번에 반영(1C → 6단계)
+
+**현황**: 2026-10-14 현재 서버 PC는 `f9e748e`(1C)까지 반영돼 있고, 2a · 2b · 3 · 4 · 5 · 6단계는 미반영입니다. 6단계 커밋(`853c81e`)까지 **한 번에** 올릴 때의 순서입니다. 이 절의 순서는 개별 단계의 반영 절(14.4 · 15.2)과 11절 "업데이트 동작"을 합친 것이며, 각 번호에서 **기대와 다르면 멈추고 팀장에게 보고**합니다.
+
+**이번에 적용되는 마이그레이션 5개**(`paperlab.migrate`가 순서대로 한 번에 적용 — 되돌리지 않음):
+
+| 파일 | 단계 | 내용(요약) |
+|---|---|---|
+| `20261009000001_devices_jobs.sql` | 2a | PC 앱 기기 · 작업 표 |
+| `20261010000001_rag.sql` | 3 | AI 질문 · 인용 검증(대화 · 검증 결과 표, 색인 판 열) |
+| `20261013000001_explain_translate.sql` | 4 | 쉬운 설명 · 번역 표 |
+| `20261014000001_external_sources.sql` | 5 | 공용 캐시 `oa_license` 열, `opencitations` 출처 허용 |
+| `20261015000001_folder_sync.sql` | 6 | 폴더 동기화 · 휴지통 · 앱 역할 `idle_in_transaction_session_timeout = '60s'` |
+
+(`supabase\migrations\` 폴더의 실제 파일명입니다. 2b에는 마이그레이션이 없습니다.)
+
+> **처음 한 번은 옛 `update.ps1`이 돕니다.** `update.ps1`은 서버 PC에 있는 파일이 실행되므로, `f9e748e`에서 시작하면 코드를 받는 그 실행은 **옛 스크립트로 끝까지** 돕니다. 옛 스크립트에는 `-BuildDesktop`이 없어 붙이면 매개변수 오류가 나고, 빌드 · 임베딩 모델 확인 단계도 없습니다. 그래서 **`update.ps1 -Yes`(빌드 없음) → 끝난 뒤 `update.ps1 -BuildDesktop`(이때는 새 스크립트가 돎)** 두 번에 나눕니다. 또 `admin rag-model`은 옛 코드에 없는 명령이라 **반영한 뒤에** 받습니다.
+
+**0. 준비**
+- **사용자가 적은 시간에** 합니다. 반영 중 몇 분 동안 옛 서버가 새 화면 파일(저장소에서 바로 읽음)을 내보내 일부 기능이 오류를 낼 수 있습니다(품질팀 D-5).
+- Supabase가 일시정지 상태가 아닌지 봅니다(대시보드 — 일시정지면 **[사용자]** Restore).
+- `node -v`가 **22 이상**인지 봅니다(4절).
+- D: 드라이브 여유 공간이 **20GB 이상**인지 봅니다(3절 `Get-PSDrive`).
+
+**1. 백업**: `Start-ScheduledTask 'PaperLab Backup'` → 1~2분 뒤 `.venv\Scripts\python -m paperlab.admin latest-backup`이 **오늘(KST) 날짜**인지 확인합니다. 아니면 **멈춥니다**(반영하지 않음). 이 백업이 마이그레이션 뒤 DB 쪽 되돌리기의 유일한 수단입니다(9번).
+
+**2. 미리 보기**: `update.ps1 -DryRun`으로 반영할 커밋 목록을 확인합니다(`f9e748e` 다음부터 `853c81e`까지인지).
+
+**3. 반영**: `update.ps1 -Yes`를 실행합니다. **`-BuildDesktop`은 붙이지 않습니다**(옛 스크립트라 오류). 실패하면 코드가 **자동으로 옛 커밋으로 되돌아갑니다**(마이그레이션은 되돌리지 않음). `D:\PaperLab\logs\update.log`를 확인합니다.
+
+**4. 상태 확인**: `Invoke-RestMethod http://127.0.0.1:8080/api/health?deep=1`이 `ok`이고 `commit` 값이 반영한 커밋(`853c81e`)과 맞는지 확인합니다.
+
+**5. 임베딩 모델**: `.venv\Scripts\python -m paperlab.admin rag-model --download` → `update.ps1 -RestartOnly` → `server.log`에 `"embed": true`가 있는지 확인합니다(11절 "임베딩 모델").
+
+**6. PC 앱 설치 파일**: `update.ps1 -BuildDesktop` → `update.log`에 **"데스크톱 앱 빌드 성공: 버전 0.3.1"** 이 있는지, `releases\latest.yml`이 생겼는지 확인합니다. 로그인해서 설정 → **PC 앱 받기**에서 0.3.1이 보이는지도 봅니다. 첫 빌드는 Electron · NSIS 캐시를 받느라 오래 걸립니다(20분 제한 — 실패하면 11절 · 12절).
+
+**7. 관리자 확인**(15.3절)
+- **[사용자]** Supabase SQL Editor에서 `select rolconfig from pg_roles where rolname='paperlab_app'` → `idle_in_transaction_session_timeout=60s`가 있는지 봅니다.
+- DB 크기를 확인합니다(Supabase 대시보드). 한도 500MB의 90%(450MB)에 가까우면 `.venv\Scripts\python -m paperlab.admin maintain`을 실행합니다(전 · 후 크기만 출력). 450MB를 넘기게 되면 Pro 전환은 **사용자 확인**.
+
+**8. (선택) 키 · 한도 넣기**: `KCI_API_KEY` · `RISS_API_KEY`(14절) · `PAPERLAB_SYNC_USER_CAP_MB` · `PAPERLAB_DB_LIMIT_MB`(15.1절)를 **[사용자]** 가 메모장으로 `cloud.env`에 직접 넣고(값은 채팅에 적지 않음) `update.ps1 -RestartOnly`를 실행합니다.
+
+**9. 되돌리기**
+- `update.ps1 -Ref f9e748e`는 **코드만** 되돌리고 DB는 그대로 둡니다(옛 코드와 호환됨 — 새 열 · 표는 남음).
+- 이때 **휴지통에 있는 논문은 옛 코드에서 보이지 않고**(데이터는 남음), **앱 0.3.0 이상(지금 0.3.1)은 서버에 연결되지 않습니다**(워커 · 동기화 — 앱은 다운그레이드되지 않음, 품질팀 D-11).
+- **DB까지** 되돌리려면 1번 백업으로 복원해야 하는데, **이 복원 절차는 아직 검증되지 않았습니다**(`deploy/README.md` 4장 "(초안)" · 품질팀 D-3). **위험으로 받아들이고**, 그래서 1번 백업 확인이 필수입니다. 복원이 필요한 상황이면 직접 시도하지 말고 팀장에게 보고합니다.

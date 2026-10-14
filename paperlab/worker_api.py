@@ -93,22 +93,9 @@ def register(app: FastAPI, db: Database, allowlist, ws: WorkerState, guide, runn
     @contextmanager
     def device_tx(request: Request):
         """기기 토큰 확인 → (lib, 기기 행) 그 사용자 트랜잭션. 실패는 _Deny"""
-        parsed = jobs.parse_token(bearer_token(request.headers.get("authorization")) or "")
-        if not parsed:
-            raise _Deny(401, DEVICE_AUTH)
-        uid, dev_id, secret = parsed
+        uid, dev_id, secret = device_token(request)
         with db.user_tx(actor_claims(uid, f"device:{dev_id}")) as lib:
-            d = lib._one("select d.*, p.email from paperlab.devices d left join paperlab.profiles p on p.user_id = d.user_id "
-                         "where d.id = %s and d.user_id = %s", (dev_id, uid))
-            if not d or not hmac.compare_digest(d["token_hash"], jobs.sha256_hex(secret)):
-                raise _Deny(401, DEVICE_AUTH)
-            if d["revoked_at"] is not None:
-                raise _Deny(401, DEVICE_REVOKED)
-            try:
-                allowlist.check({"email": d["email"] or ""})
-            except NotAllowed:
-                raise _Deny(403, {"detail": "허용되지 않은 계정이에요", "code": "not_allowed"}) from None
-            request.state.device_id = dev_id
+            d = check_device(lib, request, dev_id, secret, allowlist)
             yield lib, d
 
     def handle(request: Request, fn):
@@ -265,3 +252,28 @@ class _Deny(Exception):
     def __init__(self, status: int, body: dict):
         super().__init__(body.get("code"))
         self.status, self.body = status, body
+
+
+def device_token(request: Request) -> tuple[str, int, str]:
+    """Bearer 기기 토큰 → (uid, device_id, 비밀). 모양이 틀리면 _Deny(401)"""
+    parsed = jobs.parse_token(bearer_token(request.headers.get("authorization")) or "")
+    if not parsed:
+        raise _Deny(401, DEVICE_AUTH)
+    return parsed
+
+
+def check_device(lib, request: Request, dev_id: int, secret: str, allowlist) -> dict:
+    """그 사용자 트랜잭션에서 기기 행 확인(토큰 해시 상수 시간 비교 · 해지 · 허용 목록) → 기기 행(+ email).
+    워커 API(device_tx)와 폴더 동기화(sync.device_ctx) 공용. 실패는 _Deny"""
+    d = lib._one("select d.*, p.email from paperlab.devices d left join paperlab.profiles p on p.user_id = d.user_id "
+                 "where d.id = %s and d.user_id = %s", (dev_id, lib.uid))
+    if not d or not hmac.compare_digest(d["token_hash"], jobs.sha256_hex(secret)):
+        raise _Deny(401, DEVICE_AUTH)
+    if d["revoked_at"] is not None:
+        raise _Deny(401, DEVICE_REVOKED)
+    try:
+        allowlist.check({"email": d["email"] or ""})
+    except NotAllowed:
+        raise _Deny(403, {"detail": "허용되지 않은 계정이에요", "code": "not_allowed"}) from None
+    request.state.device_id = dev_id
+    return d

@@ -29,6 +29,7 @@ function register(ctl, { serverOrigin, log }) {
   cloud('pl:info', () => ctl.info());
   cloud('pl:pair', (code) => ctl.pair(String(code || '').slice(0, 32)));
   cloud('pl:google-login', (url) => ctl.startGoogleLogin(String(url || '').slice(0, 4096)));
+  cloudOn('pl:google-login-cancel', () => ctl.cancelGoogleLogin());
   cloudOn('pl:nudge', () => ctl.nudge());
   cloudOn('pl:open-status', () => ctl.showStatusWindow());
   local('local:state', () => ctl.localState());

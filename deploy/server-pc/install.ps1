@@ -181,7 +181,7 @@ if (Test-Path -LiteralPath $EnvFile) { Set-PLRestrictedAcl -Path $EnvFile -DryRu
 # ---------------------------------------------------------------- 4. 가상환경 · 의존성
 $venv = Join-Path $AppDir '.venv'
 if ($RecreateVenv -and (Test-Path -LiteralPath $venv)) {
-  Invoke-PLStep -DryRun:$DryRun -LogFile $Log -Description "가상환경 지우기(다시 만들기): $venv" -Action { Remove-Item -LiteralPath $venv -Recurse -Force } | Out-Null
+  Invoke-PLStep -DryRun:$DryRun -LogFile $Log -Description "가상환경 지우기(다시 만들기): $venv" -Action { Remove-PLTree -Path $venv } | Out-Null  # 정션 · 심볼릭 링크면 멈춤 (QA D-9)
 }
 if ($RecreateVenv -or -not (Test-Path -LiteralPath $Py)) {
   Invoke-PLStep -DryRun:$DryRun -LogFile $Log -Description "가상환경 만들기: py -$PythonVersion -m venv .venv" -Action {

@@ -16,7 +16,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
+const { run } = require('../lib/run');
 const P = require('./paths');
 const R = require('./reconcile');
 const journal = require('./journal');
@@ -28,12 +28,13 @@ const { nullLogger } = require('../lib/log');
 const API = '/api/worker/sync';
 const TIMING = {
   debounceMs: 2000, stableMs: 2000, stableChecks: 2, writingMs: 10 * 60e3, deleteWaitMs: 5000, massWindowMs: 30e3, reaskMs: 3600e3,
-  rootCheckMs: 30e3, rescanMs: 10 * 60e3, fullMs: 6 * 3600e3, retryBaseMs: 60e3, retryMaxMs: 3600e3, backoffBaseMs: 5000, backoffMaxMs: 300e3,
+  rootCheckMs: 30e3, rootDeepMs: 10 * 60e3, rescanMs: 10 * 60e3, fullMs: 6 * 3600e3, retryBaseMs: 60e3, retryMaxMs: 3600e3, backoffBaseMs: 5000, backoffMaxMs: 300e3,
   statusMs: 50e3, quotaRetryMs: 10 * 60e3, updateRetryMs: 30 * 60e3, pollMs: 60e3, probeStableTries: 30,
 };
 const MASS = { count: 10, ratio: 0.1, min: 3, anomaly: 0.5 };
 const LIMITS = { ops: 20, slots: 10, download: 20, lookup: 200, upload: 2, get: 3, problems: 500, snapshot: 2000, changes: 500 };
 const DISK_SPARE = 1024 ** 3;
+const DEEP_ISSUES = new Set(['drive', 'recycle_off']); // 깊은 확인으로만 알 수 있는 루트 문제
 const TOKEN_RE = /^pld1\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([1-9][0-9]{0,17})\./;
 
 const emptyS = () => ({ folders: new Map(), papers: new Map(), trashed: new Map(), gonePapers: new Set(), goneFolders: new Set() });
@@ -52,9 +53,7 @@ async function pool(items, n, fn) {
 
 function chunks(arr, n) { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; }
 
-function attrib(dir) {
-  return new Promise((resolve) => execFile('attrib.exe', ['+h', dir], { windowsHide: true, timeout: 10000 }, () => resolve()));
-}
+const attrib = (dir) => run('attrib.exe', ['+h', dir], { timeout: 10000 });
 
 function defaultStatfs(p) {
   try { const s = fs.statfsSync(p); return Number(s.bavail) * Number(s.bsize); } catch { return null; }
@@ -111,6 +110,7 @@ class SyncEngine {
     this.lastFullAt = 0;
     this.lastRescan = 0;
     this.lastRootCheck = 0;
+    this.lastDeepCheck = 0;
     this.needFull = true;
     this.dirty = true;
     this.feedDue = 0;
@@ -223,7 +223,7 @@ class SyncEngine {
           for (const [fid, f] of Object.entries(this.J.folders)) if (!keys.has(P.fold(f.rel))) delete this.J.folders[fid];
         }
         this.held = null;
-        this.saveJournal();
+        this.flushJournal();
       }
     } else return false;
     this.log.info('대량 삭제 확인', { choice, n: h.pids.size, kind: h.kind });
@@ -398,7 +398,7 @@ class SyncEngine {
     this.suspended = false;
     this.root = root;
     this.J = journal.fresh({ user_id: this.who.uid, device_id: this.who.deviceId, root, root_id: rootId });
-    this.saveJournal();
+    this.flushJournal();
     this.S = pv.S;
     this.cursor = pv.cursor;
     this.budget = pv.budget;
@@ -494,7 +494,7 @@ class SyncEngine {
       const now = this.now();
       if (this.rootIssue || now - this.lastRootCheck >= this.t.rootCheckMs || !this.lastRootCheck) {
         const was = this.rootIssue;
-        this.rootIssue = await this.checkRootAlive(!this.lastRootCheck || !!was);
+        this.rootIssue = await this.rootCheck(now, was);
         this.lastRootCheck = now;
         if (this.rootIssue) {
           this.closeWatcher();
@@ -541,7 +541,12 @@ class SyncEngine {
 
   onApiError(e) {
     if (e && e.name === 'ApiError') {
-      if (e.status === 401) { this.log.warn('기기 인증 실패 — 동기화 끔', { code: e.code }); this.turnOffLocal(); return; }
+      if (e.status === 401) { // main 에도 알림 — 워커와 같은 token-invalid 길(트레이 · 상태 · 토큰 지우기)
+        this.log.warn('기기 인증 실패 — 동기화 끔', { code: e.code });
+        this.turnOffLocal();
+        this.emit({ type: 'token-invalid', code: e.code || 'device_auth_required' });
+        return;
+      }
       if (e.status === 426) { this.flags.updateRequired = true; this.updateRetryAt = this.now() + this.t.updateRetryMs; this.emit({ type: 'update-required' }); return; }
       if (e.status === 409 && e.code === 'resync_required') { this.needFull = true; this.dirty = true; return; }
       if (e.network || e.status >= 500 || e.status === 429) {
@@ -555,8 +560,21 @@ class SyncEngine {
     this.log.error('동기화 오류', { code: (e && (e.code || e.name)) || 'error' });
   }
 
-  /** '' = 괜찮음 | missing | junction | marker | drive | recycle_off (12.3 · K-43 · Q-5) */
-  async checkRootAlive(deep) {
+  /**
+   * 루트 확인 → '' | 문제 코드. 가벼운 확인(checkRootAlive)은 매번. 깊은 확인(드라이브 종류 · 휴지통 "바로 삭제" — PowerShell)은 처음 · 문제가
+   * 풀리는 순간에 하고, 깊은 확인으로만 아는 문제(drive · recycle_off)가 이어지는 동안은 rootDeepMs(10분)에 한 번만.
+   */
+  async rootCheck(now, was) {
+    const issue = this.checkRootAlive();
+    if (issue) return issue;
+    if (this.lastRootCheck && !was) return '';
+    if (DEEP_ISSUES.has(was) && now - this.lastDeepCheck < this.t.rootDeepMs) return was;
+    this.lastDeepCheck = now;
+    return this.deepRootIssue();
+  }
+
+  /** 가벼운 확인(파일 시스템만): '' = 괜찮음 | missing | junction | marker (12.3 · K-43) */
+  checkRootAlive() {
     let st;
     try { st = fs.lstatSync(this.root); } catch { return 'missing'; }
     if (st.isSymbolicLink()) return 'junction';
@@ -573,10 +591,13 @@ class SyncEngine {
       if (marker.device_id !== this.who.deviceId || (marker.user_id && marker.user_id !== this.who.uid)) return 'marker';
       this.J.root_id = marker.root_id;
     }
-    if (deep) {
-      if ((await this.driveType(this.root)) !== 'Fixed') return 'drive';
-      if ((await this.recycleNuke(this.root)) === 'on') return 'recycle_off';
-    }
+    return '';
+  }
+
+  /** 깊은 확인: '' | drive(고정 디스크 아님) | recycle_off(휴지통 "바로 삭제" — Q-5) */
+  async deepRootIssue() {
+    if ((await this.driveType(this.root)) !== 'Fixed') return 'drive';
+    if ((await this.recycleNuke(this.root)) === 'on') return 'recycle_off';
     return '';
   }
 
@@ -961,8 +982,10 @@ class SyncEngine {
     if (!from) return false;
     if (to.length > P.MAX_PATH || from.length > P.MAX_PATH) { problems.push({ code: to.length > P.MAX_PATH ? 'too_long_down' : 'too_long_local', rel: a.from }); return false; }
     if (!this.isRealDir(path.dirname(to)) || !this.isRealDir(path.dirname(from))) return false;
-    const caseOnly = P.fold(a.from) === P.fold(a.to);
-    if (!caseOnly && fs.existsSync(to)) return false; // 자리에 다른 파일 — 덮어쓰지 않음
+    // 대소문자만 바꾸는 이름 바꾸기: NFC 는 넣지 않음(Windows 는 NFC · NFD 이름을 다른 파일로 봄 — renameSync 가 덮어씀).
+    // 자리에 무언가 있으면 정말 같은 파일일 때만(realpath) 이어감 — 아니면 덮어쓰지 않음
+    const caseOnly = a.from.toLowerCase() === a.to.toLowerCase();
+    if (fs.existsSync(to) && !(caseOnly && sameFile(from, to))) return false;
     try { const st = fs.lstatSync(from); if (!st.isFile()) return false; } catch { return false; }
     try { fs.renameSync(from, to); } catch (e) {
       if (e.code === 'EBUSY' || e.code === 'EPERM' || e.code === 'EACCES') { this.failLater(key, 'busy', a.from); return false; }
@@ -1083,10 +1106,11 @@ class SyncEngine {
     }
     let done = 0;
     for (const a of rest) this.approved.remote.add(a.pid); // 대량 검사를 통과한 것 — 재시도 때 또 세지 않음
-    for (const a of [...approved, ...rest]) {
-      const abs = P.safeJoin(this.root, a.rel, { file: true });
-      if (!abs) continue;
-      const r = await this.trashFile(abs, a.rel, problems);
+    const todo = [...approved, ...rest].map((a) => ({ ...a, abs: P.safeJoin(this.root, a.rel, { file: true }) })).filter((a) => a.abs);
+    const attrs = await this.trashAttrs(todo);
+    for (const a of todo) {
+      const abs = a.abs;
+      const r = await this.trashFile(abs, a.rel, problems, attrs);
       if (r === 'ok' || r === 'archived' || r === 'gone') {
         delete this.J.files[a.pid];
         this.approved.remote.delete(a.pid);
@@ -1112,16 +1136,24 @@ class SyncEngine {
       } catch (e) { this.onApiError(e); this.failLater(key, 'retrying', j.rel); }
     }
     this.held = null;
-    this.saveJournal();
+    this.flushJournal();
   }
 
-  /** Windows 휴지통(main IPC) → 잠김은 지수 대기 재시도, 해석 실패는 문제 목록, 그 밖 실패는 보관함(K-43 · K-27) */
-  async trashFile(abs, rel, problems) {
+  /** 휴지통에 보낼 파일들의 속성을 한 번에(PowerShell 한 번) — [{abs, rel}] 중 재시도 대기 · 없는 파일은 뺌 */
+  async trashAttrs(items) {
+    const list = items.filter((x) => !this.waiting(`trash:${P.fold(x.rel)}`) && fs.existsSync(x.abs)).map((x) => x.abs);
+    return list.length ? this.readAttrs(list) : new Map();
+  }
+
+  /**
+   * Windows 휴지통(main IPC) → 중단(aborted) · 시간 초과(timeout)는 파일을 제자리에 두고 지수 대기 재시도만(횟수 제한 없음, 최대 1시간 간격 —
+   * 사용자 결정 2026-10-14), 해석 실패는 문제 목록, 그 밖 실패(other)만 보관함(K-43 · K-27). attrs = trashAttrs 결과(없으면 이 파일만 읽음)
+   */
+  async trashFile(abs, rel, problems, attrs = null) {
     const key = `trash:${P.fold(rel)}`;
     if (this.waiting(key)) return 'retry';
     try { if (!fs.lstatSync(abs).isFile()) return 'skip'; } catch { return 'gone'; }
-    const attrs = await this.readAttrs([abs]);
-    const a = attrs.get(abs);
+    const a = attrs && attrs.has(abs) ? attrs.get(abs) : (await this.readAttrs([abs])).get(abs);
     if (a > 0 && (a & scanner.ATTR.READONLY)) { problems.push({ code: 'read_only', rel }); return 'skip'; }
     let r;
     try { r = await this.trashFn(abs); } catch { r = { ok: false, reason: 'other' }; }
@@ -1131,7 +1163,8 @@ class SyncEngine {
       return 'ok';
     }
     const reason = (r && r.reason) || 'other';
-    if (reason === 'locked') { this.failLater(key, 'trash_locked', rel); return 'retry'; }
+    if (reason === 'timeout') { this.failLater(key, 'trash_timeout', rel); return 'retry'; } // main 이 아직 보내는 중일 수 있음 — 보관함으로 옮기지 않음
+    if (reason === 'aborted') { this.failLater(key, 'trash_aborted', rel); return 'retry'; } // 몇 번이 이어져도 보관함으로 옮기지 않음
     if (reason === 'parse_failed') { this.failLater(key, 'trash_parse_failed', rel, { base: this.t.retryMaxMs }); return 'retry'; }
     // 보관함: 루트\.paperlab-sync\보관함\YYYY-MM-DD\<상대 경로>(옮기기만 — 지우지 않음)
     const day = path.join(this.root, P.SYNC_DIR, '보관함', kstDate(this.now()));
@@ -1296,6 +1329,7 @@ class SyncEngine {
     let done = 0;
     const tmpDir = path.join(this.root, P.SYNC_DIR, 'tmp');
     try { fs.mkdirSync(tmpDir, { recursive: true }); } catch { return 0; }
+    const replAttrs = await this.trashAttrs(todo.filter((a) => a.replace)); // 바꿀 옛 파일 속성 한 번에
     for (const part of chunks(todo, LIMITS.download)) {
       const r = await this.api.post(`${API}/download`, { ids: part.map((a) => a.pid) });
       const all = Array.isArray(r) ? r : (r && (r.items || r.files)) || [];
@@ -1321,7 +1355,7 @@ class SyncEngine {
         if (a.replace) {
           const old = this.J.files[a.pid];
           if (old && fs.existsSync(a.abs)) {
-            const t = await this.trashFile(a.abs, a.rel, problems); // K-18: 옛 파일은 휴지통 먼저
+            const t = await this.trashFile(a.abs, a.rel, problems, replAttrs); // K-18: 옛 파일은 휴지통 먼저
             if (t !== 'ok' && t !== 'archived' && t !== 'gone') { removeTemp(this.root, tmp); return; }
           }
         } else if (fs.existsSync(a.abs)) { removeTemp(this.root, tmp); return; } // 덮어쓰지 않음
@@ -1352,8 +1386,6 @@ class SyncEngine {
     this.notes = [];
     for (const [kind, names] of by) this.emit({ type: 'notify', kind, n: names.length, names: names.slice(0, 3) });
   }
-
-  saveJournal() { this.flushJournal(); }
 
   flushJournal() {
     if (!this.J || !this.journalFile || this.mode !== 'running') return;
@@ -1425,6 +1457,10 @@ class SyncEngine {
     await this.api.post(`${API}/status`, body);
     this.fullReported = true;
   }
+}
+
+function sameFile(a, b) {
+  try { return fs.realpathSync.native(a) === fs.realpathSync.native(b); } catch { return false; }
 }
 
 function normPaper(p) {

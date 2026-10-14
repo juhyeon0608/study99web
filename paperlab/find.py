@@ -153,8 +153,9 @@ def summary_request(question: str, cands: list[dict]) -> tuple[str, str]:
     for c in cands:
         authors = ", ".join(" ".join(x for x in (a.get("given"), a.get("family"), a.get("literal")) if x)
                             for a in (c.get("authors") or [])[:6])
-        blocks.append(f'<source n="{c["n"]}">\n제목: {c.get("title") or ""}\n저자: {authors}\n연도: {c.get("year") or "n.d."}\n'
-                      f'학술지: {c.get("venue") or ""}\n초록: {(c.get("abstract") or c.get("tldr") or "(없음)")[:2500]}\n</source>')
+        blocks.append(f'<source n="{c["n"]}">\n제목: {ai.fence(c.get("title") or "")}\n저자: {ai.fence(authors)}\n'
+                      f'연도: {ai.fence(c.get("year") or "n.d.")}\n학술지: {ai.fence(c.get("venue") or "")}\n'
+                      f'초록: {ai.fence((c.get("abstract") or c.get("tldr") or "(없음)")[:2500])}\n</source>')
     return SUMMARY_SYSTEM, SUMMARY_PROMPT.format(question=question, sources="\n".join(blocks))
 
 

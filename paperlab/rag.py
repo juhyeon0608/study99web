@@ -27,6 +27,7 @@ import numpy as np
 from psycopg.types.json import Jsonb
 
 from . import pdf
+from .ai import fence, fence_attr
 from .storage import RAG_TYPE, NotFound, StorageError, StorageKeyError, UserStorage, rag_key
 
 log = logging.getLogger("paperlab.rag")
@@ -526,7 +527,7 @@ ASK_SYSTEM = """당신은 연구자의 서재 논문들을 근거로 답하는 �
 
 
 def _attr(v) -> str:
-    return str(v if v is not None else "").replace('"', "'").replace("\n", " ")[:300]
+    return fence_attr(v)[:300]
 
 
 def page_slices(lib, items: list[dict]) -> dict[tuple, str]:
@@ -551,7 +552,7 @@ def ask_request(lib, params: dict, history: list[dict], lang: str) -> tuple[str,
     for s in sources:
         text = (pages.get((s["paper_id"], s["page"])) or "")[s["char_start"]:s["char_end"]]
         blocks.append(f'<source n="{s["n"]}" title="{_attr(s.get("title"))}" year="{_attr(s.get("year"))}" '
-                      f'page="{s["page"]}">\n{text.strip()}\n</source>')
+                      f'page="{s["page"]}">\n{fence(text.strip())}\n</source>')
     convo = "\n\n".join(f"{'사용자' if m['role'] == 'user' else '조수'}: {m['content']}" for m in history[-HISTORY_N:])
     return ASK_SYSTEM.format(lang=lang), ("<sources>\n" + "\n".join(blocks) + "\n</sources>\n\n"
                                           + (f"<conversation>\n{convo}\n</conversation>\n\n" if convo else "")

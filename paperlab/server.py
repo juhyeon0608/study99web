@@ -43,8 +43,8 @@ from . import extsources
 from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
-from .db import (SYNC_OPS_DAYS, TOMBSTONE_DAYS, TRASH_DAYS, Database, DBUnavailable, Library, NotFoundError,
-                 folder_name_problem)
+from .db import (PAPER_TRASHED, SYNC_OPS_DAYS, TOMBSTONE_DAYS, TRASH_DAYS, Database, DBUnavailable, Library,
+                 NotFoundError, folder_name_problem)
 from . import citegraph as cg
 from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, FIELDS_META, WARNINGS as GRAPH_WARNINGS, BadSeed, Flights,
                           GraphBuilder, GraphError, GraphGate, lookup_dois, paper_view, parse_openalex_id, parse_recommend_request,
@@ -75,10 +75,12 @@ STYLE_MAX = 2 * 1024 * 1024
 WARN_LEVEL, FULL_LEVEL = 0.80, 0.95
 # 6단계 K-46 DB 예산: 무료 한도의 90%, 편당 증가 추정 · 첫 PGroonga 할당 (스파이크 S-5 (e) 실측 — 가정값)
 DB_LEVEL, DB_PER_PAPER, DB_FIRST_ALLOC = 0.90, int(0.26 * 1024 ** 2), 55 * 1024 ** 2
+SYSTEM_TTL = 30.0  # 사용자 트랜잭션 안에서 저장 공간 · DB 크기 합계를 다시 쓰는 시간(초 — QA D7)
 HEALTH_DB_TIMEOUT = 4.0  # /api/health?deep=1 의 DB 연결 대기 · 문 실행 제한(초)
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
-CSP = "img-src 'self' data: blob: https://*.googleusercontent.com; form-action 'self'"
+CSP = "img-src 'self' data: blob: https://*.googleusercontent.com; font-src 'self' data:; form-action 'self'"
 KST = timezone(timedelta(hours=9))
+TAG_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}")  # 빈 값('') = 색 없음
 GRAPH_BODY_MAX = 4096  # 인용 그래프 요청 본문 (명세 9.1)
 BAD_SEED = {"detail": "이 논문으로는 그래프를 만들 수 없어요. DOI · arXiv 번호 · 제목 형식을 확인해 주세요.", "code": "bad_seed"}
 BAD_REC = {"detail": "추천 요청이 올바르지 않아요.", "code": "bad_request"}  # 1C 명세 9.4절
@@ -91,6 +93,13 @@ AUTH_REQUIRED = {"detail": "로그인이 필요해요", "code": "auth_required"}
 NOT_ALLOWED = {"detail": "허용되지 않은 계정이에요", "code": "not_allowed"}
 TRASHED_DUP = "휴지통에 같은 논문이 있어요"
 DB_UNAVAILABLE = {"detail": "데이터베이스에 연결할 수 없어요. 잠시 후 다시 시도해 주세요.", "code": "db_unavailable"}
+
+
+class BadPdf(Exception):
+    """PDF를 열 수 없음 (손상 · 암호 등 — 화면 문구는 고정)"""
+
+
+BAD_PDF = "PDF를 열 수 없어요. 손상되었거나 암호가 걸린 파일인지 확인해 주세요"
 
 
 def _md_title(content: str) -> str:
@@ -155,6 +164,8 @@ class RequestCtx:
         self._sources = None
         self._ai = None
         self.after_commit: list[Callable[[], None]] = []
+        # 지금 트랜잭션이 롤백(요청 실패)으로 끝날 때 할 정리 — 그 트랜잭션이 가리키게 하려던 R2 파일 · 임시 파일 지우기 (QA D8)
+        self.on_rollback: list[Callable[[], None]] = []
 
     @property
     def lib(self) -> Library:
@@ -173,22 +184,44 @@ class RequestCtx:
         if self._tx is not None:
             tx, self._tx, self._lib = self._tx, None, None
             tx.__exit__(None, None, None)
+            self.on_rollback.clear()  # 커밋됐으니 이제 DB가 가리키는 파일
 
     def finish(self, exc: BaseException | None) -> None:
-        """트랜잭션을 끝낸다(오류면 ROLLBACK). 커밋이 끝난 뒤에만 after_commit을 실행한다."""
-        if self._tx is not None:
-            tx, self._tx, self._lib = self._tx, None, None
-            if exc is None:
-                tx.__exit__(None, None, None)
-            else:
-                tx.__exit__(type(exc), exc, exc.__traceback__)
-                return
-        if exc is None:
-            for fn in self.after_commit:
-                try:
-                    fn()
-                except Exception as e:  # noqa: BLE001 - 커밋 뒤 정리는 실패해도 응답은 성공(DB가 기준)
-                    log.warning("after_commit failed user=%s: %s", self.uid, type(e).__name__)
+        """트랜잭션을 끝낸다(오류면 ROLLBACK). 커밋이 끝난 뒤에만 after_commit, 롤백(커밋 실패 포함)이면 on_rollback."""
+        committed = False
+        try:
+            if self._tx is not None:
+                tx, self._tx, self._lib = self._tx, None, None
+                if exc is None:
+                    tx.__exit__(None, None, None)
+                else:
+                    tx.__exit__(type(exc), exc, exc.__traceback__)
+            committed = exc is None
+        finally:
+            self._run(self.after_commit if committed else self.on_rollback)
+
+    def _run(self, fns: list[Callable[[], None]]) -> None:
+        for fn in fns:
+            try:
+                fn()
+            except Exception as e:  # noqa: BLE001 - 정리는 실패해도 응답은 그대로(DB가 기준)
+                log.warning("cleanup failed user=%s: %s", self.uid, type(e).__name__)
+
+    def retry_names(self, fn: Callable[[], object]) -> object:
+        """PC 파일 이름 겹침 경합(유일 색인 위반 23505 — 다른 요청이 같은 이름을 먼저 씀): 저장점 안에서 fn을 부르고
+        걸리면 한 번 더, 그래도 걸리면 409 (QA D3). 실패한 시도가 더한 after_commit은 버리고 on_rollback은 바로 실행"""
+        for attempt in (1, 2):
+            n_after, n_back = len(self.after_commit), len(self.on_rollback)
+            try:
+                with self.lib.conn.transaction():
+                    return fn()
+            except psycopg.errors.UniqueViolation:
+                undo = self.on_rollback[n_back:]
+                del self.after_commit[n_after:], self.on_rollback[n_back:]
+                self._run(undo)
+                if attempt == 2:
+                    log.info("file name race user=%s", self.uid)
+                    raise HTTPException(409, "같은 이름의 파일이 방금 생겼어요. 다시 시도해 주세요") from None
 
     # ------------------------------------------------------- 사용자 설정
     @property
@@ -439,32 +472,43 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             ctx.after_commit.append(lambda: ctx.storage.delete_quietly(old_tr))
         return bool(old_tr)
 
+    def extract_pdf(data: bytes) -> pdf.PdfInfo:
+        """PDF 본문 추출만 감싼다 — 손상된 PDF는 BadPdf(문구 고정 · 예외 내용은 응답에 넣지 않음), DB · 저장소 오류는
+        그대로 올라간다 (QA D5)"""
+        try:
+            return pdf.extract(data)
+        except Exception as e:  # noqa: BLE001 - PyMuPDF가 내는 여러 예외
+            raise BadPdf(type(e).__name__) from e
+
     def store_pdf(ctx: RequestCtx, pid: int, data: bytes) -> pdf.PdfInfo:
         """서버가 받은 PDF(URL에서 받기)를 임시 키를 거쳐 최종 키에 올리고 본문을 저장한다.
-        추출 · R2 올리기 동안 DB 트랜잭션을 잡지 않는다(F9 — 6단계 앱 역할 idle_in_transaction 60초). 그 사이 지워졌으면 404"""
+        추출 · R2 올리기 동안 DB 트랜잭션을 잡지 않는다(F9 — 6단계 앱 역할 idle_in_transaction 60초). 그 사이 지워졌으면 404.
+        임시 키에 먼저 올리고(트랜잭션 밖), 논문 행을 잠근 트랜잭션 안에서 최종 키로 복사한다(attach_from_incoming — QA D9b)"""
         ctx.release()
-        info = pdf.extract(data)
-        # 임시 키에 먼저 올리고(트랜잭션 밖), 논문 행을 잠근 트랜잭션 안에서 최종 키로 복사 — 그 사이 휴지통으로 간
-        # 논문의 PDF를 덮어쓰지 않게(QA D9b: 휴지통 보내기도 같은 행을 for update로 잠금 · RLS가 휴지통 행을 숨김)
+        info = extract_pdf(data)
         incoming = ctx.storage.incoming_key(new_upload_id())
         ctx.storage.put(incoming, data)
-        if not ctx.lib._one("select 1 as x from paperlab.papers where id = %s and user_id = %s for update",
-                            (pid, ctx.uid)):
-            ctx.storage.delete_quietly(incoming)
-            raise HTTPException(404, "논문을 찾을 수 없어요")
+        ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(incoming))
         attach_from_incoming(ctx, pid, incoming, data, info)  # 파일 이름은 `{저자} {연도} - {제목}.pdf`(8.2절)
         return info
 
     def attach_from_incoming(ctx: RequestCtx, pid: int, incoming: str, data: bytes, info: pdf.PdfInfo, *,
                              name: str = "", device_id: int | None = None, content_at=None) -> bool:
         """임시 파일을 최종 키로 복사하고 DB에 기록. 임시 파일은 커밋 뒤에 지운다. → 전체 번역을 지웠는지(K-28).
-        name: 올린 파일 이름(PC 파일 이름이 비었을 때만 씀), device_id · content_at: 동기화 올리기(10.1절)"""
+        name: 올린 파일 이름(PC 파일 이름이 비었을 때만 씀), device_id · content_at: 동기화 올리기(10.1절).
+        논문 행을 **먼저** 잠그고(없거나 휴지통이면 404 — RLS가 숨김) R2에 복사한다: 그 사이 휴지통으로 간 논문의 PDF를
+        덮어쓰지 않게(QA D2 — 휴지통 보내기도 같은 행을 for update로 잠금). 휴지통 논문을 되살리는 동기화는 trash_tx 안에서 부름"""
+        row = ctx.lib._one("select pdf_key from paperlab.papers where id = %s and user_id = %s for update", (pid, ctx.uid))
+        if not row:
+            raise HTTPException(404, "논문을 찾을 수 없어요")
         key = ctx.storage.paper_key(pid)
+        ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))  # 복사가 실패하고 커밋돼도 지우게 먼저
         ctx.storage.storage.copy(ctx.storage.check(incoming), ctx.storage.check(key))
+        if not row["pdf_key"]:  # PDF가 없던 논문(새 논문 포함): 롤백되면 DB가 가리키지 않는 파일이 남음 (QA D8)
+            ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))
         cleared = pdf_changed(ctx, pid, ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(),
                                                         len(data), device_id, content_at))
         ctx.lib.ensure_file_name(pid, name)
-        ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
         return cleared
 
     def trash_papers(ctx: RequestCtx, ids: list[int], by: str = "web") -> int:
@@ -547,15 +591,26 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             meta["authors"] = [split_name(a) for a in re.split(r"\s*(?:;|,| and )\s*", info.meta_author) if a]
         return meta, "PDF 정보만 사용"
 
-    def storage_used() -> int:
+    sys_sizes: dict = {}
+
+    def system_sizes(ctx: RequestCtx) -> dict:
+        """사용자 구분 없는 합계(system_tx 하나): PDF 합계(휴지통 포함 — R2에 있음) · DB 크기 · PGroonga 할당 여부.
+        사용자 트랜잭션이 열려 있으면(ctx.lib 사용 중) SYSTEM_TTL초 안의 값을 그대로 쓰고 연결을 하나 더 잡지 않는다
+        (QA D7 — 요청마다 연결 두 개를 잡으면 풀이 바닥날 때 서로 기다림). 트랜잭션이 없을 때는 늘 새로 잰다"""
+        if sys_sizes and ctx._tx is not None and time.monotonic() - sys_sizes["at"] < SYSTEM_TTL:
+            return sys_sizes
         with db.system_tx("storage usage") as conn:
-            # 사용자 구분 없는 합계만 (휴지통 PDF도 R2에 있으므로 포함 — system_tx는 RLS 밖)
-            total = conn.execute("select coalesce(sum(pdf_size), 0)::bigint as n from paperlab.papers "
-                                 "where pdf_key <> ''").fetchone()["n"]
-        return int(total) + st.backup_sizes.get()
+            r = conn.execute("select (select coalesce(sum(pdf_size), 0) from paperlab.papers where pdf_key <> '')::bigint "
+                             "as pdf, pg_database_size(current_database())::bigint as size, "
+                             "exists (select 1 from paperlab.page_texts) as allocated").fetchone()
+        sys_sizes.update(at=time.monotonic(), pdf=int(r["pdf"]), size=int(r["size"]), allocated=bool(r["allocated"]))
+        return sys_sizes
+
+    def storage_used(ctx: RequestCtx) -> int:
+        return system_sizes(ctx)["pdf"] + st.backup_sizes.get()
 
     def usage(ctx: RequestCtx) -> dict:
-        used = storage_used()
+        used = storage_used(ctx)
         limit = int(config.storage_limit_bytes)
         frac = used / limit if limit else 1.0
         level = "full" if frac >= FULL_LEVEL else "warn" if frac >= WARN_LEVEL else "ok"
@@ -564,7 +619,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     def sync_budget(ctx: RequestCtx) -> dict:
         """6단계 K-30 동기화 올리기 예산 = max(0, min(R2 한도 95% − 서버 측 합계, 사용자 상한 − 내 PDF 총량(휴지통 포함)))"""
-        storage_left = int(config.storage_limit_bytes * FULL_LEVEL) - storage_used()
+        storage_left = int(config.storage_limit_bytes * FULL_LEVEL) - storage_used(ctx)
         trash = int(ctx.lib.trash_bytes())
         cap = int(config.sync_user_cap_bytes)
         user_left = cap - int(ctx.lib.mine_pdf_bytes()) - trash
@@ -572,19 +627,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 "upload_budget_limit": "storage" if storage_left <= user_left else "user",
                 "user_cap_bytes": cap, "trash_bytes": trash, "storage_left": storage_left, "user_left": user_left}
 
-    db_size_cache: dict = {}
-
-    def db_budget() -> dict:
-        """6단계 K-46 DB 예산(snapshot 첫 쪽 db · files/add db_full). pg_database_size는 1분 캐시"""
-        now_m = time.monotonic()
-        if not db_size_cache or now_m - db_size_cache["at"] > 60:
-            with db.system_tx("db size") as conn:
-                r = conn.execute("select pg_database_size(current_database())::bigint as size, "
-                                 "exists (select 1 from paperlab.page_texts) as allocated").fetchone()
-            db_size_cache.update(at=now_m, size=int(r["size"]), allocated=bool(r["allocated"]))
+    def db_budget(ctx: RequestCtx) -> dict:
+        """6단계 K-46 DB 예산(snapshot 첫 쪽 db · files/add db_full). 크기는 system_sizes(트랜잭션 안이면 짧은 캐시)"""
+        sizes = system_sizes(ctx)
         limit = int(config.db_limit_bytes)
-        size = db_size_cache["size"]
-        first = 0 if db_size_cache["allocated"] else DB_FIRST_ALLOC
+        size = sizes["size"]
+        first = 0 if sizes["allocated"] else DB_FIRST_ALLOC
         return {"size_bytes": size, "limit_bytes": limit, "per_paper_bytes": DB_PER_PAPER,
                 "first_alloc_bytes": DB_FIRST_ALLOC, "budget_bytes": max(0, int(limit * DB_LEVEL) - size - first)}
 
@@ -790,7 +838,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.post("/api/trash/restore")
     def trash_restore(data: dict = Body(...), ctx: RequestCtx = Ctx):
-        out = ctx.lib.restore_papers(trash_ids(data))
+        ids = trash_ids(data)
+        out = ctx.retry_names(lambda: ctx.lib.restore_papers(ids))  # 이름 겹침 경합은 한 번 더 → 409 (QA D3)
         if out["restored"]:
             ctx.after_commit.append(lambda: ensure_index(ctx.claims))
         return {"restored": out["restored"], "renamed": out["renamed"], "to_root": out["to_root"]}
@@ -869,20 +918,18 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                     raise SourceError("라이선스를 확인하지 못해 PaperLab이 대신 받지 않았어요. 상세 패널의 "
                                       "[무료 PDF 찾기]로 직접 받은 뒤 [PDF 첨부]로 올려 주세요.")
                 raw = sources.download_pdf(plan["fetch"])
-                if ctx.lib.pdf_info(pid) is None:  # 그 사이 지워짐
-                    raise HTTPException(404, "논문을 찾을 수 없어요")
-                store_pdf(ctx, pid, raw)
+                store_pdf(ctx, pid, raw)  # 그 사이 지워졌으면 404
                 if plan.get("via"):  # 대신 받음 — 실제로 받은 주소 · 라이선스 (사용자 결정 2026-10-13)
                     ctx.lib.update_paper(pid, {"pdf_url": plan["fetch"]})
                     extra = {"via": plan["via"], "license": plan["license"]}
             except SourceError as e:
                 warning = f"논문은 추가했지만 PDF는 받지 못했어요: {e}"
-            except HTTPException:
-                raise
-            except DBUnavailable:
-                raise
-            except Exception as e:  # noqa: BLE001 - 손상된 PDF · 저장소 오류
-                warning = f"논문은 추가했지만 PDF는 저장하지 못했어요: {type(e).__name__}"
+            except BadPdf:
+                warning = "논문은 추가했지만 PDF는 저장하지 못했어요: PDF를 열 수 없어요"
+            except StorageError:
+                # 저장소 오류는 DB 문보다 앞(복사 · 올리기 실패)이라 트랜잭션은 멀쩡. DB 오류는 잡지 않고 올린다 —
+                # 깨진 트랜잭션에서 get_paper를 부르지 않게 (QA D5)
+                warning = "논문은 추가했지만 PDF는 저장하지 못했어요: 저장소 오류"
         return {"paper": ctx.lib.get_paper(pid), "warning": warning, **extra}
 
     @app.post("/api/resolve")
@@ -924,6 +971,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if not data.startswith(b"%PDF"):
             ctx.storage.delete_quietly(key)
             return key, None, "PDF 파일이 아니에요"
+        ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))  # 요청이 실패로 끝나면 임시 파일도 (QA D8 · D9b)
         return key, data, ""
 
     @app.post("/api/uploads")
@@ -969,10 +1017,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if error:
             return {"file": name, "error": error}
         try:
-            info = pdf.extract(raw)
-        except Exception as e:  # noqa: BLE001 - 손상된 PDF
+            info = extract_pdf(raw)
+        except BadPdf:
             ctx.storage.delete_quietly(incoming)
-            return {"file": name, "error": f"PDF를 열 수 없어요: {e}"}
+            return {"file": name, "error": BAD_PDF}
         if lookup:
             meta_, matched_by = metadata_from_pdf(ctx, info)
         else:
@@ -984,6 +1032,13 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             collection_id = None
         if folder_id and not lib.has_folder(folder_id):
             folder_id = None
+        # PC 파일 이름 겹침 경합(23505)은 저장점에서 한 번 더, 그래도 겹치면 409 (QA D3)
+        return ctx.retry_names(lambda: save_upload(ctx, name, incoming, raw, info, meta_, matched_by, collection_id,
+                                                   folder_id))
+
+    def save_upload(ctx: RequestCtx, name: str, incoming: str, raw: bytes, info, meta_: dict, matched_by: str,
+                    collection_id: int | None, folder_id: int | None) -> dict:
+        lib = ctx.lib
         dup = lib.find_duplicate(meta_.get("doi", ""), meta_.get("arxiv_id", ""), meta_.get("title", ""), include_trash=True)
         if dup and dup.get("trashed"):  # 6단계 K-40: 휴지통에 같은 논문 — 새로 만들지 않고 [되살리기] 안내 (SW-8)
             ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
@@ -1017,6 +1072,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.patch("/api/papers/{pid}")
     def patch_paper(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        if "status" in data and not (isinstance(data["status"], str) and data["status"] in STATUSES):
+            raise HTTPException(400, "읽기 상태가 올바르지 않아요")
         need_paper(ctx, pid)
         if "folder_id" in data:
             ctx.lib.move_papers_to_folder([pid], own_folder(ctx, data["folder_id"]))
@@ -1050,12 +1107,15 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 raise HTTPException(400, "컬렉션을 찾을 수 없어요")
             lib.set_paper_collections(ids, int(value), action == "add_collection")
         elif action == "move_folder":
-            lib.move_papers_to_folder(ids, own_folder(ctx, value))
+            folder = own_folder(ctx, value)
+            ctx.retry_names(lambda: lib.move_papers_to_folder(ids, folder))  # 이름 겹침 경합 (QA D3)
         elif action == "add_tag":
             if not str(value or "").strip():
                 raise HTTPException(400, "태그 이름이 필요해요")
             lib.add_tag_to_papers(ids, str(value))
         elif action == "status":
+            if not (isinstance(value, str) and value in STATUSES):  # 리스트 · dict는 TypeError(500) 대신 400
+                raise HTTPException(400, "읽기 상태가 올바르지 않아요")
             for pid in ids:
                 lib.update_paper(pid, {"status": value})
         elif action == "star":
@@ -1086,6 +1146,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.post("/api/papers/{pid}/pdf/upload")
     def pdf_upload_slot(pid: int, ctx: RequestCtx = Ctx):
+        system_sizes(ctx)  # 사용자 트랜잭션을 열기 전에 (QA D7)
         need_paper(ctx, pid)
         ensure_space(ctx)
         return upload_slot(ctx)
@@ -1098,11 +1159,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if error:
             raise HTTPException(400, error)
         try:
-            info = pdf.extract(raw)
-        except Exception as e:  # noqa: BLE001 - 손상된 PDF
-            ctx.storage.delete_quietly(incoming)
-            raise HTTPException(400, f"PDF를 열 수 없어요: {e}") from e
-        need_paper(ctx, pid)  # 그 사이 지워졌으면 404 (임시 파일은 수명 주기 규칙이 정리)
+            info = extract_pdf(raw)
+        except BadPdf:
+            raise HTTPException(400, BAD_PDF) from None  # 임시 파일은 on_rollback이 지움
+        # 그 사이 지워졌거나 휴지통으로 갔으면 404 — attach가 행을 먼저 잠그고 확인한다 (QA D2)
         cleared = attach_from_incoming(ctx, pid, incoming, raw, info, name=str(data.get("name") or ""))
         # 6단계 K-34: 이 교체로 전체 번역을 지웠는지 (웹 토스트 "PDF가 바뀌어 번역을 지웠어요")
         return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings, "translation_cleared": cleared}
@@ -1129,15 +1189,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             data = sources.download_pdf(url)
         except SourceError as e:
             raise HTTPException(502, str(e)) from e
-        need_paper(ctx, pid)  # 새 트랜잭션: 그 사이 지워졌으면 404
         try:
-            info = store_pdf(ctx, pid, data)
-        except HTTPException:
-            raise
+            info = store_pdf(ctx, pid, data)  # 그 사이 지워졌으면 404
         except StorageError as e:
             raise HTTPException(502, "PDF를 저장하지 못했어요") from e
-        except Exception as e:  # noqa: BLE001 - 손상된 PDF
-            raise HTTPException(400, f"PDF를 열 수 없어요: {e}") from e
+        except BadPdf:
+            raise HTTPException(400, BAD_PDF) from None
         ctx.lib.update_paper(pid, {"pdf_url": url})
         out = {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings, "license": plan.get("license") or ""}
         if plan.get("via"):
@@ -1624,6 +1681,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.patch("/api/tags/{tid}")
     def patch_tag(tid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        color = data.get("color")
+        if color is not None and (not isinstance(color, str) or color and not TAG_COLOR_RE.fullmatch(color)):
+            raise HTTPException(400, "태그 색은 #RRGGBB 모양이어야 해요")
         try:
             ctx.lib.update_tag(tid, data.get("name"), data.get("color"))
         except psycopg.errors.UniqueViolation as e:
@@ -1936,12 +1996,22 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                     except Exception:  # noqa: BLE001
                         pass
 
+        def gone(e: jobs.JobError) -> list[str]:
+            """작업을 반영할 수 없음 — 논문이 휴지통으로 가 작업이 숨음(RLS → 404) · 취소돼 리스를 잃음. 화면이 끝을
+            알 수 있게 오류 이벤트로 끝낸다 (QA D6)"""
+            log.info(f"job gone job={job_id} code={e.code}")
+            return [_sse({"type": "error", "error": PAPER_TRASHED if paper_id is not None and e.code == "not_found"
+                          else e.detail, "code": e.code})]
+
         def save_done(ev: dict) -> list[str]:
+            try:
+                return _save_done(ev)
+            except jobs.JobError as e:
+                return gone(e)
+
+        def _save_done(ev: dict) -> list[str]:
             with db.user_tx(claims) as lib:
-                try:
-                    j = jobs.lock_leased(lib, job_id, token)
-                except jobs.JobError:
-                    return []
+                j = jobs.lock_leased(lib, job_id, token)
                 parsed = {"text": ev["text"], "citations": ev.get("citations") or []}
                 if kind in jobs.EXPLAIN_KINDS:  # 4단계: 결과 검사 — 틀리면 bad_output(폴백 없음, 6.2절 5번)
                     try:
@@ -1967,8 +2037,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             with db.user_tx(claims) as lib:
                 try:
                     j = jobs.lock_leased(lib, job_id, token)
-                except jobs.JobError:
-                    return []
+                except jobs.JobError as e:
+                    return gone(e)
                 jobs.record_key_error(lib, engine, code)
                 status = jobs.fail_or_fallback(lib, j, code, message, guide=guide())
                 view = jobs.get_job(lib, job_id, ws.free)
@@ -2770,7 +2840,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     sync.register(app, st, SimpleNamespace(
         ctx=lambda claims: RequestCtx(st, claims), maintain=maintain, read_incoming=read_incoming,
         attach_from_incoming=attach_from_incoming, pdf_changed=pdf_changed, metadata_from_pdf=metadata_from_pdf,
-        sync_budget=sync_budget, db_budget=db_budget, ensure_index=ensure_index, allowlist=allowlist, ws=ws,
+        sync_budget=sync_budget, db_budget=db_budget, system_sizes=system_sizes, ensure_index=ensure_index,
+        allowlist=allowlist, ws=ws,
         trash_papers=trash_papers))
 
     # -------------------------------------------------------------- static

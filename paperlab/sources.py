@@ -94,6 +94,15 @@ def _empty(source: str) -> dict:
             "item_type": "article", "keywords": [], "tldr": "", "issued": ""}
 
 
+def _year(v) -> int | None:
+    """연도 → int 또는 None (외부 응답에 문자열 · 실수 · 엉뚱한 값이 올 수 있음 — 웹 점검 L-2)"""
+    if isinstance(v, str) and re.fullmatch(r"\s*\d{1,4}\s*", v):
+        v = int(v)
+    elif isinstance(v, float) and v.is_integer():
+        v = int(v)
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 < v < 3000 else None
+
+
 def _openalex_abstract(inv: dict | None) -> str:
     if not inv:
         return ""
@@ -114,7 +123,7 @@ def norm_openalex(w: dict) -> dict:
     p["title"] = w.get("display_name") or w.get("title") or ""
     p["authors"] = [split_name((a.get("author") or {}).get("display_name", ""))
                     for a in w.get("authorships") or []]
-    p["year"] = w.get("publication_year")
+    p["year"] = _year(w.get("publication_year"))
     p["issued"] = w.get("publication_date") or ""
     p["language"] = w.get("language") or ""
     loc = w.get("primary_location") or {}
@@ -181,7 +190,7 @@ def norm_s2(d: dict) -> dict:
     p = _empty("semanticscholar")
     p["title"] = d.get("title") or ""
     p["authors"] = [split_name(a.get("name", "")) for a in d.get("authors") or []]
-    p["year"] = d.get("year")
+    p["year"] = _year(d.get("year"))
     p["issued"] = d.get("publicationDate") or ""
     journal = d.get("journal") or {}
     p["venue"] = d.get("venue") or journal.get("name") or ""
@@ -215,9 +224,11 @@ def norm_crossref(m: dict) -> dict:
                     for a in m.get("author") or []]
     for key in ("published-print", "published-online", "issued", "created"):
         parts = (m.get(key) or {}).get("date-parts") or [[None]]
-        if parts and parts[0] and parts[0][0]:
-            p["year"] = parts[0][0]
-            p["issued"] = "-".join([f"{parts[0][0]:04d}"] + [f"{x:02d}" for x in parts[0][1:3] if x])
+        year = _year(parts[0][0]) if isinstance(parts[0], list) and parts[0] else None
+        if year:
+            p["year"] = year
+            rest = [_year(x) for x in parts[0][1:3]]
+            p["issued"] = "-".join([f"{year:04d}"] + [f"{x:02d}" for x in rest if x and x <= 31])
             break
     if m.get("language"):
         p["language"] = m["language"]

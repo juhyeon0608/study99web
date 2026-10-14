@@ -4,13 +4,13 @@
 
 (function () {
   var L = window.paperlabLocal;
-  var $ = function (s, r) { return (r || document).querySelector(s); };
-  var esc = function (s) {
-    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; });
-  };
+  var U = window.PaperLabStatusSync; // status-sync.js(먼저 읽힘)의 $ · esc · el · ICON_WARN
+  var $ = U.$;
+  var esc = U.esc;
+  var el = U.el;
+  var ICON_WARN = U.ICON_WARN;
   var KIND = { summary: '요약', chat: '대화', write: '글쓰기' };
   var MIN = { claude: '2.1.259' };
-  var ICON_WARN = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5v5.5M12 16.5v.01"/></svg>';
   var BANNERS = {
     revoked: ['danger', '이 PC 연결이 해지됐어요.', '다시 쓰려면 새 연결 코드를 넣어 주세요.'],
     update_required: ['danger', '이 앱 버전으로는 작업을 받을 수 없어요.', '새 버전을 받는 중이에요. 준비되면 [지금 다시 시작]을 눌러 주세요.'],
@@ -22,11 +22,6 @@
   var drawn = {};
   var flash = null;
 
-  function el(html) {
-    var t = document.createElement('template');
-    t.innerHTML = html.trim();
-    return t.content.firstElementChild;
-  }
   function clock(ts) {
     return ts ? new Date(ts).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' }) : '';
   }
@@ -228,7 +223,7 @@
     S = s;
     drawBanner();
     drawConnect();
-    if (window.PaperLabStatusSync) window.PaperLabStatusSync.draw(s);
+    U.draw(s);
     drawRunning();
     drawEngines();
     drawUpdate();

@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
+const { run } = require('../lib/run');
 const { checkRoot, rootProblem, oneDriveRoots, recycleNuke, linkInChain } = require('../sync/rootcheck');
 const { safeJoin, isInside, SYNC_DIR, MAX_PATH } = require('../sync/paths');
 const { parseToken } = require('../sync/engine');
@@ -16,24 +16,12 @@ const SUGGESTED_NAME = 'PaperLab 논문';
 const REG_KEY = 'HKCU\\Software\\PaperLab';
 const CHOICES = new Set(['continue', 'revert', 'later', 'off']);
 
-function run(cmd, args) {
-  return new Promise((resolve) => execFile(cmd, args, { windowsHide: true, timeout: 15000, encoding: 'utf8' }, (err, out) => resolve(err ? null : String(out))));
-}
-
-/** → {code: 0 | 종료 코드 | null(시작 못 함 · 시간 초과), out} */
-function runCode(cmd, args) {
-  return new Promise((resolve) => execFile(cmd, args, { windowsHide: true, timeout: 15000, encoding: 'utf8' }, (err, out) => {
-    if (!err) return resolve({ code: 0, out: String(out) });
-    resolve({ code: err.killed || typeof err.code !== 'number' ? null : err.code, out: String(out || '') });
-  }));
-}
-
 /**
  * 설치 ID(K-33 · S-5 f): HKCU\Software\PaperLab\InstallId. 없으면 만들어 씀. 제거할 때 설치 프로그램이 이 키를 지움
  * (build/installer.nsh — 업데이트 설치(--updated)에서는 지우지 않음) → 업데이트로는 그대로, 제거 후 새로 설치하면 새 값.
  * 개발 실행은 PAPERLAB_INSTALL_ID 또는 'dev'(레지스트리를 건드리지 않음).
  */
-async function readInstallId({ packaged, env = process.env, reg = runCode }) {
+async function readInstallId({ packaged, env = process.env, reg = run }) {
   if (!packaged) return String(env.PAPERLAB_INSTALL_ID || 'dev').slice(0, 64);
   const q = await reg('reg.exe', ['query', REG_KEY, '/v', 'InstallId']);
   const m = q.code === 0 && q.out.match(/InstallId\s+REG_SZ\s+([0-9a-fA-F-]{36})/);
@@ -62,7 +50,8 @@ async function trashInRoot(abs, root, shell) {
     return { ok: true, reason: p.length > MAX_PATH ? 'long_path' : '' };
   } catch (e) {
     const msg = String((e && e.message) || '');
-    if (/aborted/i.test(msg)) return { ok: false, reason: 'locked' };
+    // Electron 은 사용자 창 없이(FOF_NOERRORUI) 보내므로 잠긴 파일 · 그 밖의 거절이 모두 "Operation was aborted" — 잠김으로 단정하지 않음
+    if (/aborted/i.test(msg)) return { ok: false, reason: 'aborted' };
     if (/parse path/i.test(msg)) return { ok: false, reason: 'parse_failed' };
     return { ok: false, reason: 'other' };
   }
@@ -72,7 +61,7 @@ function createSyncHost(d) {
   const { utilityProcess, dialog, shell, store, log, serverUrl, userData, appVersion, isPackaged, onChange, balloon } = d;
   const env = d.env || process.env;
   const H = {
-    child: null, state: { state: 'off', counts: {} }, installId: '', pickError: null, suggestion: null, quitting: false, startWaiters: [],
+    child: null, state: { state: 'off', counts: {} }, installId: '', pickError: null, suggestion: null, quitting: false, startWaiters: new Map(), startSeq: 0,
     oneDrive: [], focus: '',
   };
   const to = (m) => { try { if (H.child) H.child.postMessage(m); } catch { /* 다시 시작 중 */ } };
@@ -94,6 +83,7 @@ function createSyncHost(d) {
   }
 
   function fork() {
+    if (H.quitting) return;
     const child = utilityProcess.fork(path.join(__dirname, '..', 'sync', 'entry.js'), [], { serviceName: 'PaperLab Sync', stdio: 'ignore' });
     H.child = child;
     child.on('message', onMessage);
@@ -144,8 +134,10 @@ function createSyncHost(d) {
       to({ type: 'settings', settings: settings() });
       onChange();
     } else if (m.type === 'start-result') {
-      const w = H.startWaiters.shift();
+      const w = H.startWaiters.get(m.id);
       if (w) w(m);
+    } else if (m.type === 'token-invalid') {
+      if (d.onTokenInvalid) d.onTokenInvalid(String(m.code || ''));
     } else if (m.type === 'update-required') {
       if (d.onUpdateRequired) d.onUpdateRequired();
     }
@@ -221,9 +213,13 @@ function createSyncHost(d) {
 
   async function startSync(place) {
     if (!['local', 'library'].includes(place)) return { ok: false };
-    const wait = new Promise((resolve) => { H.startWaiters.push(resolve); setTimeout(() => resolve({ ok: false, code: 'timeout' }), 120000); });
-    to({ type: 'start', place });
-    const r = await wait;
+    const id = ++H.startSeq;
+    const r = await new Promise((resolve) => {
+      const done = (m) => { clearTimeout(t); H.startWaiters.delete(id); resolve(m); };
+      const t = setTimeout(() => done({ ok: false, code: 'timeout' }), 120000);
+      H.startWaiters.set(id, done);
+      to({ type: 'start', place, id });
+    });
     if (!r.ok && r.code === 'not_writable') { H.pickError = { code: 'not_writable', path: (H.state.preview && H.state.preview.root) || '' }; onChange(); }
     return { ok: !!r.ok, code: r.code || '' };
   }

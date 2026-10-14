@@ -17,8 +17,9 @@ import re
 from psycopg.types.json import Jsonb
 
 from . import ai
+from .ai import fence
 from .db import iso, now_dt
-from .translate import LANGS, TRANSLATE_RULES, fence, hangul_ratio
+from .translate import LANGS, TRANSLATE_RULES, hangul_ratio
 
 log = logging.getLogger("paperlab.explain")
 

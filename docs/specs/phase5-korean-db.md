@@ -1,7 +1,7 @@
 # 기능 명세 — 5단계 국내 DB · 기관 연동(⑤)
 
 - 작성: 기획팀 · 2026-10-13 (브랜치 `claude/paper-program-hrrhl2`, HEAD `f49b553` 기준)
-- 상태: **구현 완료(승인 대기)** — 2026-10-13 구현 · 품질 후속 수정(D1~D9, 19장) 개발팀 완료, 승인자 검토 중. 사용자 U-1~U-5 · 팀장 K-1~K-22 · 디자인 질문 답 9건(16.4절) · 구현 차이 8건 수용(16.5절) · 팀장 결정 D1(8.3절 경계 ① 엄격화) · 사용자 결정 3건(16.1절 — **대신 받기** 포함, 2026-10-13)을 반영함. 판정 함수는 `sources.py`, 새 소스 검색 분기는 `server.py`의 `ext_search`(18장). **키 발급 뒤 확인할 것**은 16.3절 · AC-5R3, 수동 확인 AC-585 · 586은 아직 안 함. 키 발급이 늦어도 픽스처로 개발 · 자동 테스트는 가능(13장)
+- 상태: **완료(승인 · 커밋 452b1d8 · b315d41)** — 2026-10-13 구현 · 품질 후속 수정(D1~D9, 19장) 개발팀 완료, 승인자 승인. 사용자 U-1~U-5 · 팀장 K-1~K-22 · 디자인 질문 답 9건(16.4절) · 구현 차이 8건 수용(16.5절) · 팀장 결정 D1(8.3절 경계 ① 엄격화) · 사용자 결정 3건(16.1절 — **대신 받기** 포함, 2026-10-13)을 반영함. 판정 함수는 `sources.py`, 새 소스 검색 분기는 `server.py`의 `ext_search`(18장). **키 발급 뒤 확인할 것**은 16.3절 · AC-5R3, 수동 확인 AC-585 · 586은 아직 안 함. 키 발급이 늦어도 픽스처로 개발 · 자동 테스트는 가능(13장)
 - 근거: [PLAN.md](../../PLAN.md) 2장(공용 캐시 · 1A 원칙) · 3장 ⑤ · 6장 5단계 · 10장 P9, [1A 명세](inha-proxy.md) 5 · 6 · 8장(`paperProxyTarget` · 감싸지 않는 호스트), [1B 명세](citation-graph.md) 7 · 8 · 9장(공용 캐시 · 호출 규칙 · 로그 · K-5 · K-6 · K-7), [3단계 명세](phase3-rag-verify-search.md) 13장(AI로 찾기 — 공용 캐시 안 씀 K-11)
 - 참고(고치지 않음): 1st My paper `work/backend/external/`(kci · riss · europepmc · opencitations — `unpaywall.py`는 U-4로 옮기지 않음)
 - 원칙: 기존 모듈 재사용, 꼭 필요하지 않은 것은 "안 하는 것". 수치는 코드 상수 한 곳의 **가정값**
@@ -27,7 +27,7 @@
 | 공용 캐시 | 공개 서지 · 인용 관계는 `paperlab.external_works` · `citation_edges`(1B)를 함께 씀. `user_id` 없음, **누가 조회했는지 남기지 않음**, 시각은 날짜만. 5단계에서 **새로 넣는 것은 OpenCitations 참고문헌뿐**(KCI · RISS · Europe PMC 검색 결과 · 무료 PDF 조회 결과는 넣지 않음). 다만 OpenCitations 보강 때 서지를 찾은 **OpenAlex 작품 행**도 1B와 같은 방식으로 함께 씀(10.2절 — 새 출처 아님) | 확정(PLAN 2장 · U-5) |
 | 키 | KCI · RISS 키는 **공용 키 하나씩**. 관리자가 신청해 서버 PC `cloud.env`(`KCI_API_KEY` · `RISS_API_KEY`)에 둠. 사용자별 키 · 설정 창 칸 없음. 키가 없으면 그 소스만 꺼지고 이유를 보임 | 확정(U-1 · PLAN P9 해결) · 팀장 K-13 |
 | RISS 키 없을 때 | RISS는 **1A 검색 바로가기만**. API 코드 경로는 유지하되 키가 없으면 목록에서 **비활성**, 자동 테스트는 **손 픽스처**로만 | 확정(U-2 · 팀장) |
-| 무료 PDF | 정보는 **OpenAlex 것만**(Unpaywall 안 씀). **라이선스가 확인된 것(CC · 퍼블릭 도메인)만 서버가 받고**, 나머지는 새 탭으로 엶. 기존 [PDF 받기]에도 같은 규칙(K-12). 새 탭 열기에 프록시 · openlink 호스트를 쓰지 않음(K-11) | 확정(U-3 · U-4) |
+| 무료 PDF | 정보는 **OpenAlex 것만**(Unpaywall 안 씀). **라이선스가 확인된 것(CC · 퍼블릭 도메인)만 서버가 받고**, 나머지는 새 탭으로 엶. 기존 서재 [무료 PDF 찾기](옛 이름 [PDF 받기])에도 같은 규칙(K-12). 새 탭 열기에 프록시 · openlink 호스트를 쓰지 않음(K-11) | 확정(U-3 · U-4) |
 | 사용자 이메일 | 외부 호출에 **사용자 이메일을 보내지 않음**(Crossref만 예외 — 1B K-6). 5단계는 이메일이 필요한 새 외부 서비스가 없음 | 원칙(1B 2장 · K-6) |
 | 외부 요청 대상 | **고정 호스트 상수**에만 요청(9.1절). 요청 본문 · 응답 값으로 호스트를 만들지 않음. API 호출은 리디렉션을 따라가지 않음 | 원칙(1B 9.5절 · 1단계 F3) |
 | 외부 호출 중 DB 연결 | 외부 호출 전에 트랜잭션을 끝내고 연결을 돌려줌 | 원칙(1단계 F9) |
@@ -42,7 +42,7 @@
 2. **결과 정규화**: 세 소스 응답을 지금 결과 카드 모양(`sources._empty`)으로 바꿈(6.1~6.3절). 출처 표시(KCI · RISS 이용 조건 — 4장).
 3. **서재 추가**: 지금 `POST /api/papers` 그대로. 중복 판별도 지금 규칙(DOI → arXiv → 정규화 제목 12자 이상).
 4. **"인하대에서 보기"**: KCI · RISS · Europe PMC 결과 카드와 서재 상세에 1A `paperProxyTarget` 규칙 그대로(7장 — K-15).
-5. **OpenAlex 무료 PDF**(U-3 · U-4): DOI → OpenAlex `best_oa_location` · `oa_locations`의 `pdf_url` · `license` 조회(서버, 클릭 때만), 서재 [PDF 받기] · 결과 카드 [무료 PDF 찾기]에서 사용(8장). **라이선스가 확인된 것만 서버가 받고 나머지는 새 탭.** 기존 [PDF 받기]에도 같은 규칙(K-12).
+5. **OpenAlex 무료 PDF**(U-3 · U-4): DOI → OpenAlex `best_oa_location` · `oa_locations`의 `pdf_url` · `license` 조회(서버, 클릭 때만), 서재 · 결과 카드의 [무료 PDF 찾기]에서 사용(8장 — 서재 버튼의 옛 이름은 [PDF 받기], 디자인 AD-3으로 이름 변경). **라이선스가 확인된 것만 서버가 받고 나머지는 새 탭.** 기존 서재 [무료 PDF 찾기](옛 [PDF 받기])에도 같은 규칙(K-12).
 6. **OpenCitations 참고문헌 보강**: ① 서재 상세 "인용 관계" 탭 · 찾기 화면 참고문헌 목록에서 OpenAlex 참고문헌이 0편이고 DOI가 있으면 OpenCitations로 보강 ② 1B 그래프 씨앗 보강에서 S2보다 먼저(9.3절 — K-7).
 7. **공용 캐시 확장**: OpenCitations 참고문헌을 1B 표에 저장(10장 — U-5 · K-8). 무료 PDF 조회는 1B 캐시의 OpenAlex 작품 행을 읽기만 하고, 라이선스 칸 `oa_license` 하나를 더함(K-21). 마이그레이션 1개.
 8. **공용 키 설정**: KCI · RISS 키(U-1) — 서버 PC `cloud.env`의 `KCI_API_KEY` · `RISS_API_KEY` 두 개뿐(K-13). 없으면 그 소스만 꺼지고 화면에 이유를 보임.
@@ -133,7 +133,7 @@ Unpaywall은 쓰지 않는다(사용자 결정 U-4). 앞 초안의 Unpaywall 사
 ### 4.6 저작권 참고 (법률 자문 아님 — 확인 필요)
 - 저작권법 제30조(사적이용을 위한 복제): 공표된 저작물을 영리 목적 없이 개인적으로 이용하는 경우 **"그 이용자는"** 복제할 수 있음. 해설 · 판례 요약에서 요건으로 "이용자에 의한 복제"를 들고, 업체를 통한 대리 복제는 해당하지 않는다고 봄(17장). → **라이선스 없는 OA 파일을 서버가 대신 받아 두는 것**은 회색 지대일 수 있음.
 - CC 라이선스(`cc-by` 등)가 붙은 OA 파일은 라이선스가 복제를 허락함. → U-3 확정: **라이선스가 확인된 것만** 서버가 받음.
-- 지금 PaperLab은 1단계부터 [PDF 받기] · [PDF 포함 추가]에서 **서버가** OpenAlex 무료 PDF 주소의 파일을 받아 그 사용자의 R2에 저장함(`server.py` `fetch_pdf` · `add_paper`). U-3은 이 동작에도 똑같이 적용(K-12 확정).
+- 지금 PaperLab은 1단계부터 [무료 PDF 찾기](옛 이름 [PDF 받기]) · [PDF 포함 추가]에서 **서버가** OpenAlex 무료 PDF 주소의 파일을 받아 그 사용자의 R2에 저장함(`server.py` `fetch_pdf` · `add_paper`). U-3은 이 동작에도 똑같이 적용(K-12 확정).
 
 ## 5. 사용 흐름 · 화면 (문구 · 배치는 디자인 시안 `docs/design/phase5-korean-db-ui.md`)
 
@@ -146,7 +146,7 @@ Unpaywall은 쓰지 않는다(사용자 결정 U-4). 앞 초안의 Unpaywall 사
    [＋ 서재에 추가] [인용] [인하대에서 보기](대상 있을 때) [Google Scholar](**새 소스 카드에만** — 16.4절 6번) [그래프](DOI 있을 때)
    [무료 PDF 찾기](DOI 있고 PDF 주소 없을 때 — OpenAlex 조회) → 찾으면 [PDF 포함 추가](라이선스 확인된 것) 또는 [무료 PDF 열기 ↗](그 밖 — U-3)
    카드 묶음 아래 출처 한 줄: "검색 결과 출처: KCI(한국연구재단)" / "RISS(KERIS)" / "Europe PMC"
-[서재 상세] PDF 없는 논문: [PDF 받기] → (OpenAlex 무료 PDF 정보 — U-3 규칙) → 저장(서재 주소가 규칙에 안 맞으면 같은 논문의 무료 공개본을 대신 받고 토스트로 알림 — 8.3절) 또는 [무료 PDF 열기 ↗] + "받은 파일은 [PDF 첨부]로 올려 주세요"
+[서재 상세] PDF 없는 논문: [무료 PDF 찾기] → (OpenAlex 무료 PDF 정보 — U-3 규칙) → 저장(서재 주소가 규칙에 안 맞으면 같은 논문의 무료 공개본을 대신 받고 토스트로 알림 — 8.3절) 또는 [무료 PDF 열기 ↗] + "받은 파일은 [PDF 첨부]로 올려 주세요"
 [서재 상세 "인용 관계" 탭 · 찾기 참고문헌 목록] OpenAlex 참고문헌 0편 + DOI → OpenCitations 보강 목록 + "OpenCitations 기준" 표시
 ```
 
@@ -247,7 +247,7 @@ Unpaywall은 쓰지 않는다(U-4). 무료 PDF 정보는 OpenAlex 것만 쓴다(
 - **정보 출처 순서**: ① 1B 공용 캐시 `external_works`의 그 DOI 행(`pdf_url` · `is_oa` · **`oa_license`**) — `oa_license`가 **null도 `''`도 아닐 때만** 믿음(D5 — `''`은 "best 위치에 라이선스 없음"일 뿐 `oa_locations`에 허용 위치가 있을 수 있어 캐시로 판정하지 않음) ② 행이 없거나 `oa_license`가 null · `''`이면 OpenAlex `GET /works/doi:<DOI>` **1회**(지금 `lookup_doi`가 부르는 호출 — `select`에 `best_oa_location` · `oa_locations`가 이미 있음. 새 호스트 · 새 환경 변수 · 이메일 없음). 이 조회 결과는 **캐시에 쓰지 않음**(5단계에서 무료 PDF용 새 쓰기 경로 없음 — U-5).
 - DOI 검사: `normalize_doi` 뒤 `^10\.\d{4,9}/\S{1,250}$`(등록자 번호 **4~9자리**), 경로에는 **퍼센트 인코딩**해 넣고 `/`로 나눈 조각에 `.` · `..`이 있으면 요청하지 않음(1B AC-G35와 같은 규칙). **엄격 검사 한 가지로 통일(2026-10-13 후속)**: `check_doi` · `doi_path`를 쓰는 모든 경로 — `Sources.oa_locations` · `crossref_pdf_link` · `/api/oa/lookup` · OpenCitations · **`lookup_doi`** — 가 같은 검사를 씀. 앞서 `lookup_doi`에 두었던 느슨한 검사(`strict=False` — `.` · `..` 조각과 빈 값만 거부)는 **없앰**. **사용자 영향**: 등록자 번호가 4~9자리가 아닌 DOI(예: `10.1/x`)는 `lookup_doi`에서도 "DOI 형식이 올바르지 않아요"로 거부돼 조회되지 않음.
 - `/api/oa/lookup` 본문은 **`small_json`**(4KB 상한 — `Content-Length`가 없거나 chunked여도 4KB 넘게는 읽지 않음, 그래프 · 추천 요청과 같은 함수)으로 읽음. 넘거나 JSON이 아니거나 객체가 아니면 400 `bad_request`(D3).
-- 호출 시점: **사용자가 [무료 PDF 찾기] · [PDF 받기]를 누를 때만**(K-10). 검색 결과를 미리 조회하지 않음.
+- 호출 시점: **사용자가 [무료 PDF 찾기]를 누를 때만**(K-10 — 서재 · 결과 카드 모두 같은 이름). 검색 결과를 미리 조회하지 않음.
 - **고르는 위치**(`sources.pick_oa_location` — 순수 함수, 순환 import를 피하려고 `sources.py`에 둠. `extsources`가 다시 내보냄): `best_oa_location`과 `oa_locations[]`를 이 순서로 보고(http/https 주소만, **openlink 호스트 주소는 버림**, 같은 위치는 한 번), `pdf_url`이 있는 위치 가운데 **① `license`가 8.2절 허용 값인 위치 → ② 없으면 호스트가 `arxiv.org`인 PDF 위치**(arXiv 예외 — 16.5절 2번)를 **서버가 받을 위치**로 고름. 둘 다 없으면 `best_oa_location`의 `pdf_url`(없으면 `pdf_url`이 있는 첫 위치)을 **새 탭용**(`open_kind: "pdf"`)으로, `pdf_url`이 하나도 없으면 `landing_page_url`을 새 탭용(`open_kind: "landing"`)으로, 위치가 아예 없으면 없음(None).
 - 응답 값: `pdf_url` · `landing_url` · `license` · `version`(OpenAlex 필드 이름 · 값은 개발팀 첫 주 녹화로 확인), 새 탭이면 `open_url` · **`open_kind`**(`pdf` | `landing` — 16.4절 3번).
 - **캐시 한계**: 1B 캐시에는 `best_oa_location` 하나의 `pdf_url`만 있고(`oa_locations` 없음), 이 `pdf_url`은 OA 주소가 없을 때 arXiv 주소로 채워질 수 있음(`norm_openalex` 동작). 캐시의 `pdf_url` 호스트가 `arxiv.org`이면 arXiv 규칙(8.3절 ②)으로 처리. 캐시 행은 `oa_license`가 null도 `''`도 아닐 때만 믿고(`extsources.cache_locations` — D5), 서재 `pdf_url`이 이 캐시 위치와 **다르거나 캐시 위치가 허용 라이선스가 아니면 캐시로 판정하지 않고 OpenAlex 위치 전체를 다시 조회**(8.3절 1번 — 16.5절 3번).
@@ -279,7 +279,7 @@ Unpaywall은 쓰지 않는다(U-4). 무료 PDF 정보는 OpenAlex 것만 쓴다(
     - **대신 받기(사용자 결정 2026-10-13 — 앞의 "후속 검토 항목"을 대체)**: 보낸 주소나 서재 주소가 위 규칙에 맞지 않으면 **같은 논문의 무료 공개본을 서버가 대신 받는다**(구현 `extsources.substitute` · `plan_pdf`). 고르는 순서: ① 그 주소가 허용 라이선스 위치와 같으면 그 주소(규칙 (b) 그대로) → ② arXiv PDF — 논문의 `arxiv_id`, 없으면 OpenAlex 위치 중 arXiv 주소(`fetch-pdf`는 서재 논문의 `arxiv_id`, `add_paper`는 요청 본문의 `arxiv_id`) → ③ 허용 라이선스 OpenAlex 위치 → ④ 모두 없으면 원래 주소를 새 탭으로(D1). `arxiv_id`가 있으면 OpenAlex 위치를 보기 전에 바로 arXiv를 고른다(②가 ③보다 먼저). **openlink 호스트 위치는 후보에서 뺀다.**
       - 응답: `via: "substitute"`, `license` = 실제로 받은 위치의 라이선스(arXiv 번호로 받으면 `""`, OpenAlex의 arXiv 위치면 그 위치의 값 또는 `""`). `fetch-pdf`는 `{paper, warnings, license, via}`, `add_paper`는 `{paper, warning: "", via, license}`.
       - **서재 `pdf_url`은 실제로 받은 주소로 바뀐다**(`fetch-pdf`는 늘 받은 주소로 갱신 — 기존 동작, `add_paper`는 대신 받았을 때만 갱신). 원래 주소는 서재에 남지 않는다(15장 위험).
-      - 화면 토스트(`sourcemeta.substituteText(license)`): "같은 논문의 무료 공개본(라이선스 CC BY)을 받았어요", 라이선스 이름이 없으면(빈 값 · `other-oa` 등 이름표가 없는 값) 괄호를 뺀 "같은 논문의 무료 공개본을 받았어요". [PDF 포함 추가](`dialogs.js`)는 "서재에 추가하고 " + 위 문구, 서재 [PDF 받기](`library.js`)는 위 문구만. `via`가 없으면 지금 문구 그대로.
+      - 화면 토스트(`sourcemeta.substituteText(license)`): "같은 논문의 무료 공개본(라이선스 CC BY)을 받았어요", 라이선스 이름이 없으면(빈 값 · `other-oa` 등 이름표가 없는 값) 괄호를 뺀 "같은 논문의 무료 공개본을 받았어요". [PDF 포함 추가](`dialogs.js`)는 "서재에 추가하고 " + 위 문구, 서재 [무료 PDF 찾기](`library.js`)는 위 문구만. `via`가 없으면 지금 문구 그대로.
       - 서재 `pdf_url`이 **비어 있을 때**(보낸 주소 없음)는 이 규칙이 아니라 위 2 · 3번 순서(arXiv 번호 → DOI)이고 `via`가 붙지 않는다.
       - 대신 받을 곳을 찾으려고 OpenAlex를 부르다 실패하면 지금처럼 `fetch-pdf` 502 · `add_paper`는 "PDF는 받지 못했어요" 경고.
   - **② (사용자 결정, 2026-10-13)**: **arXiv는 지금처럼 서버가 받는다. U-3의 예외다.** 근거는 "arXiv는 누구나 받도록 공개한 저장소"라는 점이다. arXiv 논문은 CC 라이선스가 아니라 arXiv 배포 허락만 있는 경우가 많아 U-3의 "라이선스 확인" 원칙과는 다르지만, 이 예외는 사용자가 정했다. 호스트가 `arxiv.org`인 주소(서재 `pdf_url` · 번호로 만든 `arxiv.org/pdf/…` · 1B 캐시 `pdf_url`이 arXiv 주소인 경우)에 적용된다. **이것은 법률 자문이 아니다** — 논문마다 저작권자의 허락 범위가 다를 수 있고, 현행 법 · 약관 확인은 사용자 몫이다(4.6절).
@@ -438,7 +438,7 @@ KCI · RISS · Europe PMC 결과를 서재에 넣으면 지금 열(`title` · `a
 
 ### 실환경 (키 발급 뒤 — 서버 PC)
 - **AC-5R1** KCI · Europe PMC에서 "딥러닝" · "deep learning" 검색이 결과를 보이고 서재에 추가됨(PLAN 5단계 완료 기준 ①). **RISS는 키를 받았을 때만** 같은 검사(키가 없으면 이 항목에서 RISS는 제외 — 비활성 표시와 1A [RISS] 검색 바로가기가 동작하는지만 확인). 각 소스 첫 응답 시간 기록.
-- **AC-5R2** DOI가 있는 OA 논문 3편(CC 2 · 라이선스 없음 1)에서 OpenAlex 무료 PDF 정보로 U-3 규칙대로 — CC는 서버가 받아 서재에 저장, 라이선스 없음은 새 탭으로 엶(완료 기준 ②). 기존 OpenAlex [PDF 받기]도 같은 결과.
+- **AC-5R2** DOI가 있는 OA 논문 3편(CC 2 · 라이선스 없음 1)에서 OpenAlex 무료 PDF 정보로 U-3 규칙대로 — CC는 서버가 받아 서재에 저장, 라이선스 없음은 새 탭으로 엶(완료 기준 ②). 기존 서재 OpenAlex [무료 PDF 찾기]도 같은 결과.
 - **AC-5R3** 실측 보고(4장 "확인 필요"를 이 문서에 반영): KCI 호출 주소 · `keyword`만으로 검색되는지 · `displayCount` · `sortNm=pubiYr` 방향 · `citation-count` 구조 · `url` 모양, RISS https 지원 · 한도 · 키 유효기간(키를 받은 뒤), Europe PMC `pageSize` 최대, OpenCitations `cited` 값 모양, **OpenAlex `best_oa_location` · `oa_locations`의 `license` 실제 값 목록과 필드 이름**(개발팀 첫 주 — 8.2절 허용 목록 확정용). **실행 방법**: 관리자가 키로 `tools/record_extsources.py`를 한 번 실행(서버 PC 안내서 `deploy/server-pc/README.md` 14절). 구체 목록은 16.3절.
 
 ### 수동 확인 (배포 뒤 — 사용자)
@@ -569,7 +569,7 @@ KCI · RISS · Europe PMC 결과를 서재에 넣으면 지금 열(`title` · `a
 7. **자동 되돌림**(고른 정렬 · 필터가 소스에서 지원되지 않을 때 기본값으로 되돌림)은 이유 줄에 덧붙이고 **화면 읽기로도 알림**(디자인 2.3절 · 7.3절).
 8. **`add_paper` 안내는 `warning` 필드**에 둠(기존 필드 — 당시에는 `dialogs.js`를 바꾸지 않았음. 이후 대신 받기 토스트 때문에 `dialogs.js`가 바뀜 — 18장). 새 탭 주소는 `open_url` · `open_kind` · `reason`으로 함께 줌.
 
-### 16.6 품질 후속 수정 D1~D9 (2026-10-13 — 개발팀 완료, 승인자 검토 중)
+### 16.6 품질 후속 수정 D1~D9 (2026-10-13 — 개발팀 완료, 승인자 승인)
 품질 검증에서 나온 지적을 고친 것. 코드(`extsources.py` · `sources.py` · `server.py` · `graph_build.py` · `discover.js` · `graph.js` · `app.css` · `tools/record_extsources.py`)와 대조해 반영함.
 | # | 내용 | 반영 위치 |
 |---|---|---|
@@ -621,7 +621,7 @@ KCI · RISS · Europe PMC 결과를 서재에 넣으면 지금 열(`title` · `a
 | `paperlab/static/js/discover.js` | 소스 목록 · 비활성 · 정렬/필터 매핑 · 카드 배지 · 출처 줄 · [무료 PDF 찾기] 흐름 · EPMC 커서 · 검색 중 503 `source_unconfigured` 때 옵션 비활성 · OpenAlex로 되돌림(D8) |
 | `paperlab/static/js/graph.js` · `graphmath.js` | `oc_failed` 문구를 `refs_via`로 고름(`s2`일 때만 "채웠어요" — D6) |
 | `paperlab/static/css/app.css` | 560px 이하 `.discover-view` 전체 스크롤(D7) |
-| `paperlab/static/js/library.js` | [PDF 받기]의 `open_url` 처리 · 안내, 인용 관계 탭 `via` · `unresolved` 표시, 응답 `via === "substitute"`면 토스트 `substituteText(license)`(대신 받기) |
+| `paperlab/static/js/library.js` | [무료 PDF 찾기]의 `open_url` 처리 · 안내, 인용 관계 탭 `via` · `unresolved` 표시, 응답 `via === "substitute"`면 토스트 `substituteText(license)`(대신 받기) |
 | `paperlab/static/js/sourcemeta.js` | `substituteText(license)` 신설(대신 받기 토스트 — `licenseLabel`로 괄호 붙임 · 뺌) |
 | `paperlab/static/js/dialogs.js` | **[PDF 포함 추가] 토스트만 변경**(대신 받기): 응답 `via === "substitute"`면 "서재에 추가하고 " + `substituteText(license)`, 아니면 `warning` 또는 "서재에 추가했어요" 그대로. (처음 안은 "변경 없음 — U-1 공용 키라 설정 창 키 칸이 없음"이었음. 키 칸이 없다는 점은 그대로, 설정 창은 바뀌지 않음) |
 | `tools/record_extsources.py`(신규) | 13장 녹화 도구(관리자 수동). OpenAlex 무료 PDF 응답 녹화 포함, RISS는 키가 있을 때만. 이메일 모양은 `redacted@example.invalid`로 바꿔 저장, 키 문자열이면 중단(D9) |
@@ -670,3 +670,4 @@ KCI · RISS · Europe PMC 결과를 서재에 넣으면 지금 열(`title` · `a
   - **18장**: `dialogs.js` "변경 없음" → **[PDF 포함 추가] 토스트 변경**(`sourcemeta.js` · `library.js` 행 추가), `extsources.py` · `server.py` · 테스트 행, 품질팀 확인 항목. 디자인 `phase5-korean-db-ui.md` 4.1 · `FEATURES.md` 무료 PDF 규칙도 같은 날 고침.
 - 2026-10-13 승인자 조건부 승인 뒤 팀장 수정: `add_paper`에서 `plan_pdf`가 None이면 "무료 PDF를 찾지 못했어요" 경고(TypeError 문구 대신, 테스트 추가) / `lookup_dois`가 앞 200편(S2_MAX_DOIS)만 돌려줘 그래프 total · 인용 관계 탭 `unresolved`가 조회 범위를 넘지 않음(L1). 후속(낮음): `lookup_doi` 엄격 검사 직접 테스트(L2), graph Node 테스트 `refs_via` s2 · 없음(L3), 운영 `citation_edges_source_check` 이름 확인(L5).
 - 2026-10-13 승인자 조건부 승인(대신 받기) 반영(팀장): C-1 AC-550d · 15장 위험 행 — 상세 패널에 PDF 주소가 보이지 않으므로 "토스트로만 알림"으로 정정, 버튼 이름 [무료 PDF 찾기] / L-1 `plan_pdf`가 arXiv 번호를 `ARXIV_ID_RE`로 검사(형식 밖이면 번호 없음으로 — 엉뚱한 PDF 방지, 테스트 추가). 후속(낮음): L-2 경로별 후보 순서 차이(대신 받기는 arXiv 우선, pdf_url 없을 때는 허용 라이선스 우선) — 명세대로 유지.
+- 2026-10-14 전체 오류 점검 반영(기획팀): 서재 버튼의 현재 이름이 [무료 PDF 찾기](`library.js` · `discover.js`로 확인)이므로, 현재 상태를 설명하는 곳(4.1 표의 "무료 PDF" 줄 · 4.6절 · 대신 받기 토스트 설명 · AC-5R2 · 작업 목록의 `library.js` 행)의 [PDF 받기]를 [무료 PDF 찾기]로 고침. 결정 기록(U-3 · K-12 · 변경 기록)과 옛 이름 설명(5번 항목 "옛 이름은 [PDF 받기]")은 그대로 둠.

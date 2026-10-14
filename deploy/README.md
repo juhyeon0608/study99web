@@ -1,4 +1,4 @@
-# PaperLab 1단계 운영 안내 (초안 — 문구는 기획팀 검토)
+# PaperLab 운영 안내
 
 서버는 **서버 PC(상시 켜 둔 Windows PC) + Tailscale Funnel**에서 Python으로 직접 돕니다(사용자 결정 2026-10-07).
 서버 PC 설치 · 업데이트 · 감시는 **[서버 PC 설치 안내서](server-pc/README.md)** 를 따르세요. 이 문서는 사용자 준비 ·
@@ -63,13 +63,21 @@ python -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"
 | `python -m paperlab.admin backup --tmp-dir <폴더>` | 수동 백업(보통은 서버 PC 작업 `PaperLab Backup`이 매일 04:00). 앱 역할 주소 + `pg_dump`(`PAPERLAB_PG_DUMP` → PATH). 같은 날 다시 돌리면 그날 파일 `backups/db/<YYYYMMDD>.dump`를 덮어씀. 임시 파일은 끝나면 지움 |
 | `python -m paperlab.admin pg-dump-check` | `pg_dump` 주 버전이 DB 서버 주 버전 이상인지(설치 스크립트가 백업 작업 등록 전에 부름) |
 | `python -m paperlab.admin latest-backup` | R2의 가장 최근 백업 날짜(감시 작업이 하루 한 번 — 36시간 넘으면 종료 코드 2) |
+| `python -m paperlab.admin rag-model [--download] [--dir <폴더>]` | 3단계 임베딩 모델 파일 확인(SHA-256까지 — 없거나 틀리면 종료 코드 2, 서버는 낱말 검색만 함). `--download`면 없거나 틀린 파일을 Hugging Face 공식 저장소(고정 커밋)에서 받음. 폴더 기본값은 `PAPERLAB_EMBED_MODEL_DIR` 또는 `D:\PaperLab\models\embeddinggemma-300m`. **3단계 코드를 반영한 뒤에** 실행(옛 코드에는 이 명령이 없음) |
+| `python -m paperlab.admin rag-reindex --all` | 모든 논문을 '색인 대기'로 돌림(모델 · 색인 규칙을 바꾼 뒤). 사용자가 AI 질문 화면을 열 때 차례로 다시 색인하고 옛 벡터 파일은 교체 때 지워짐. 바꾼 논문 수를 출력(`--all` 필수) |
+| `python -m paperlab.admin maintain` | 6단계 DB 정리: `extensions.pgroonga_vacuum()` 실행 + 전 · 후 DB 크기(MB) 출력. 논문을 많이 영구 삭제한 뒤나 DB가 한도에 가까울 때(행을 지워도 Groonga 파일은 줄지 않음). 관리자 주소 사용, 테스트 표지 DB는 거부 |
+| `python -m paperlab.admin cache-stats` | 인용 그래프 공용 캐시 크기 · 행 수 · 가장 오래된 날짜만 출력(내용은 출력하지 않음) |
+| `python -m paperlab.admin cache-prune [--max-mb 150]` | 공용 캐시의 살아 있는 행 크기가 상한(기본 150MB) 아래가 될 때까지 서지를 받은 날이 오래된 작품부터 그 작품의 관계 행과 함께 지움. 지워도 필요하면 다시 받으므로 데이터 손실은 아님 |
 | `python -m paperlab.serve --check` | 서버 설정 점검: 빠진 · 틀린 · 지울 변수 **이름**, 앱 역할 사용자 이름 앞부분, `cloud.env` 권한 |
 
-## 4. 복원 절차 (초안)
+## 4. 복원 절차 (초안 — 운영 환경에서는 검증되지 않음)
+
+> **위험(2026-10-14 점검 D-3)**: 이 절차는 **초안**이며 운영 Supabase에서 한 번도 시험하지 않았습니다. 특히 2번의 `pg_restore --disable-triggers`는 트리거를 끄기 위해 **superuser 권한**이 필요한데, Supabase처럼 superuser가 아닌 관리자 계정에서 되는지는 **확인되지 않았습니다**(안 되면 복원이 실패하거나 트리거가 켜진 채 들어가 데이터가 달라질 수 있음). 테스트 프로젝트 복원 시험(AC-70, `tests/test_backup.py`)은 별도 스키마로 한 번 복원해 보는 수준입니다. 따라서 **새 버전을 반영하기 직전에 수동 백업(`python -m paperlab.admin backup --tmp-dir <폴더>`)을 반드시 하고, `admin latest-backup`이 오늘 날짜인지 확인**합니다. 복원이 필요한 상황이면 직접 시도하지 말고 팀장에게 보고합니다.
 
 1. R2 `backups/db/<YYYYMMDD>.dump`를 받습니다.
 2. 빈 프로젝트에 `python -m paperlab.migrate`로 스키마를 만든 뒤, 데이터만 복원합니다.
    `pg_restore --data-only --schema=paperlab --no-owner --disable-triggers -d "<관리자 주소>" <파일>`
+   (**미검증** — 위 위험 참고)
 3. `auth.users`는 백업에 없습니다. 사용자가 같은 구글 계정으로 다시 로그인하면 `user_id`가 달라질 수 있으므로,
    옛 id → 새 id로 모든 개인 표의 `user_id`를 바꾸는 단계가 필요합니다(기획팀이 절차 문구 작성).
 4. 1단계 검증 때 테스트 프로젝트의 별도 스키마로 한 번 복원해 봅니다(AC-70, `tests/test_backup.py`).

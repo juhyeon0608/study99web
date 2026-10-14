@@ -271,13 +271,13 @@ test('AC-654 서버가 위험한 이름을 주면 루트 밖에 아무것도 안
   assert.ok(e.snapshot().problems.filter((p) => p.code === 'bad_name_server').length >= 4);
 });
 
-test('AC-658 휴지통 실패(그 밖 오류) → 보관함으로 옮김 + 알림, 영구 삭제 0 / AC-658a 잠김 → 그대로 · 재시도 · 문제 목록, 해석 실패 → 문제 목록', async () => {
+test('AC-658 휴지통 실패(그 밖 오류) → 보관함으로 옮김 + 알림, 영구 삭제 0 / AC-658a 중단(aborted) → 그대로 · 재시도 · 문제 목록, 해석 실패 → 문제 목록', async () => {
   const env = setup();
   for (let i = 0; i < 40; i++) env.write(`p${i}.pdf`, `p${i}`);
   const e = await env.connect(env.make());
   await env.spin(e, 1);
   const [a, b, c] = env.api.live();
-  env.trashOverride = async (abs) => (/p0\.pdf$/.test(abs) ? { ok: false, reason: 'other' } : /p1\.pdf$/.test(abs) ? { ok: false, reason: 'locked' } : { ok: false, reason: 'parse_failed' });
+  env.trashOverride = async (abs) => (/p0\.pdf$/.test(abs) ? { ok: false, reason: 'other' } : /p1\.pdf$/.test(abs) ? { ok: false, reason: 'aborted' } : { ok: false, reason: 'parse_failed' });
   for (const p of [a, b, c]) env.api.webTrash(p.id);
   await env.spin(e, 1);
   const names = Object.fromEntries([a, b, c].map((p) => [p.file_name, env.exists(p.file_name)]));
@@ -287,7 +287,7 @@ test('AC-658 휴지통 실패(그 밖 오류) → 보관함으로 옮김 + 알�
   assert.ok(fs.existsSync(path.join(env.root, '.paperlab-sync', '보관함', day[0], archived[0])));
   assert.ok(env.emitted.some((m) => m.type === 'notify' && m.kind === 'archived'));
   const codes = e.snapshot().problems.map((p) => p.code);
-  assert.ok(codes.includes('trash_locked') && codes.includes('trash_parse_failed'));
+  assert.ok(codes.includes('trash_aborted') && codes.includes('trash_parse_failed'));
   env.trashOverride = null; // 풀림 → 다음 시도(1분 뒤)에서 휴지통으로
   env.clock.t += 61e3;
   await e.cycle();
@@ -649,3 +649,102 @@ for (const [label, change] of [
     assert.notEqual(e.snapshot().state, 'waiting_confirm');
   });
 }
+
+// ---------------------------------------------------------------- 전체 오류 점검 후속 (F2 · F5 · F6 · F7 · F10)
+test('F2 휴지통 중단(aborted)은 몇 번이 이어져도 제자리 · 재시도만(보관함 0), 2분 시간 초과(timeout)도 따로 · 재시도만', async () => {
+  const env = setup();
+  for (let i = 0; i < 40; i++) env.write(`p${i}.pdf`, `p${i}`);
+  const e = await env.connect(env.make());
+  await env.spin(e, 1);
+  const [a, b] = env.api.live();
+  const tries = { [a.file_name]: 0, [b.file_name]: 0 };
+  env.trashOverride = async (abs) => { const n = path.basename(abs); tries[n]++; return { ok: false, reason: n === a.file_name ? 'aborted' : 'timeout' }; };
+  env.api.webTrash(a.id);
+  env.api.webTrash(b.id);
+  await env.spin(e, 1);
+  assert.deepEqual(e.snapshot().problems.map((p) => p.code).filter((c) => c.startsWith('trash_')).sort(), ['trash_aborted', 'trash_timeout']);
+  for (let i = 0; i < 8; i++) { env.clock.t += 3700e3; await e.cycle(); } // 재시도 대기(최대 1시간)를 넘김
+  assert.ok(tries[a.file_name] >= 6, `중단 ${tries[a.file_name]}번`);
+  assert.ok(env.exists(a.file_name), '중단은 보관함으로 옮기지 않음');
+  assert.ok(!fs.existsSync(path.join(env.root, '.paperlab-sync', '보관함')), '보관함 이동 0회');
+  assert.ok(!env.emitted.some((m) => m.type === 'notify' && m.kind === 'archived'));
+  assert.ok(e.snapshot().problems.some((p) => p.code === 'trash_aborted' && p.rel === a.file_name));
+  const r = e.retries.get(`trash:${a.file_name.toLowerCase()}`);
+  assert.ok(r && r.ms <= 3600e3, '재시도 간격은 최대 1시간');
+  assert.ok(tries[b.file_name] >= 6);
+  assert.ok(env.exists(b.file_name), '시간 초과는 보관함으로 옮기지 않음');
+  assert.ok(e.snapshot().problems.some((p) => p.code === 'trash_timeout' && p.rel === b.file_name));
+  assert.equal(env.trashed.length, 0);
+});
+
+test('F5 서재에서 지운 논문 여러 편: PC 파일 속성을 한 번에 읽음(PowerShell 1회)', async () => {
+  const env = setup();
+  for (let i = 0; i < 40; i++) env.write(`p${i}.pdf`, `p${i}`);
+  const reads = [];
+  const e = await env.connect(env.make({ readAttrs: async (ps) => { reads.push(ps.length); return new Map(ps.map((p) => [p, 32])); } }));
+  await env.spin(e, 1);
+  reads.length = 0;
+  for (const p of env.api.live().slice(0, 3)) env.api.webTrash(p.id);
+  await env.spin(e, 1);
+  assert.equal(env.trashed.length, 3);
+  assert.deepEqual(reads, [3]);
+});
+
+test('F6 루트 문제(고정 디스크 아님)가 이어지는 동안 깊은 확인은 10분에 한 번, 풀리면 다시 맞춤', async () => {
+  const env = setup();
+  env.write('a.pdf', 'A');
+  let deep = 0;
+  const e = await env.connect(env.make({ driveType: async () => { deep++; return env.drive || 'Fixed'; } }));
+  env.drive = 'Removable';
+  e.lastRootCheck = 0; // 감시가 루트 이벤트를 알린 것처럼
+  deep = 0;
+  await e.cycle();
+  assert.equal(e.snapshot().state, 'root_missing');
+  assert.equal(deep, 1);
+  for (let i = 0; i < 18; i++) { env.clock.t += 31e3; await e.cycle(); } // 9분 남짓
+  assert.equal(deep, 1, '10분 안에는 가벼운 확인만');
+  assert.equal(e.snapshot().state, 'root_missing');
+  env.clock.t += 60e3;
+  await e.cycle();
+  assert.equal(deep, 2);
+  env.drive = 'Fixed';
+  env.clock.t += 31e3;
+  await e.cycle();
+  assert.equal(deep, 2);
+  assert.equal(e.snapshot().state, 'root_missing', '깊은 확인으로 안 문제는 깊은 확인으로만 풀림');
+  env.clock.t += 600e3;
+  await e.cycle();
+  assert.equal(deep, 3);
+  assert.equal(e.snapshot().state, 'idle');
+});
+
+test('F7 PC 이름 바꾸기: 대소문자만 다르면 바꾸고, NFC · NFD 만 다른 다른 파일이 자리에 있으면 덮어쓰지 않음', async () => {
+  const env = setup();
+  const e = await env.connect(env.make());
+  const problems = [];
+  env.write('case.pdf', 'C');
+  assert.equal(await e.localMove({ pid: 1, from: 'case.pdf', to: 'Case.pdf' }, problems), true);
+  assert.ok(fs.readdirSync(env.root).includes('Case.pdf'));
+  const nfc = 'café.pdf';
+  const nfd = 'café.pdf';
+  env.write(nfc, 'one');
+  env.write(nfd, 'two');
+  if (fs.readdirSync(env.root).filter((n) => n.normalize('NFC') === nfc).length === 2) { // NTFS 는 두 이름을 따로 둠
+    assert.equal(await e.localMove({ pid: 2, from: nfc, to: nfd }, problems), false);
+    assert.equal(env.read(nfc).toString(), pdf('one').toString());
+    assert.equal(env.read(nfd).toString(), pdf('two').toString());
+  }
+});
+
+test('F10 동기화가 401 을 받으면 꺼짐 + main 에 token-invalid(워커와 같은 길)', async () => {
+  const env = setup();
+  env.write('a.pdf', 'A');
+  const e = await env.connect(env.make());
+  env.api.fail['/api/worker/sync/changes'] = { status: 401, code: 'device_revoked' };
+  e.feedDue = 0;
+  env.clock.t += 61e3;
+  await e.cycle();
+  assert.equal(e.snapshot().state, 'off');
+  assert.ok(env.emitted.some((m) => m.type === 'turned-off'));
+  assert.deepEqual(env.emitted.filter((m) => m.type === 'token-invalid'), [{ type: 'token-invalid', code: 'device_revoked' }]);
+});

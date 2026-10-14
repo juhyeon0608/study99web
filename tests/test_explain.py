@@ -364,7 +364,9 @@ def test_no_signed_url_or_system_tx_in_phase4_code():
 
 
 def test_csp_unchanged():
-    assert server.CSP == "img-src 'self' data: blob: https://*.googleusercontent.com; form-action 'self'"
+    # QA: font-src 'self' data: 추가(웹 점검 — 위반 0건). 그 밖(img-src · form-action)은 그대로
+    assert server.CSP == ("img-src 'self' data: blob: https://*.googleusercontent.com; font-src 'self' data:; "
+                          "form-action 'self'")
 
 
 def test_worker_code_is_kind_agnostic():

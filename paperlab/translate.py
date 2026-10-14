@@ -18,6 +18,7 @@ import re
 from psycopg.types.json import Jsonb
 
 from . import ai
+from .ai import fence
 from .config import TRANSLATE_LANGS
 from .storage import TR_TYPE, NotFound, UserStorage, tr_key
 
@@ -64,14 +65,6 @@ class TranslationFileError(Exception):
 
 
 # ====================================================================== 순수 함수
-_FENCE_RE = re.compile(r"<(/?)(paper|page|context|selection|abstract)\b", re.I)
-
-
-def fence(text: str) -> str:
-    """자료 안의 우리 태그 모양을 무디게 (자료가 <selection>을 닫고 지시를 끼워 넣지 못하게 — 프롬프트 주입 방어)"""
-    return _FENCE_RE.sub(lambda m: f"‹{m.group(1)}{m.group(2)}", str(text or ""))
-
-
 def hangul_ratio(text: str) -> float:
     """글자(문자 · 한자 · 가나 — 숫자 · 기호 · 공백 제외) 중 한글 비율"""
     letters = [c for c in str(text or "") if c.isalpha()]

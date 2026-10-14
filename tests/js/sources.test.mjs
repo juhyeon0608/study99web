@@ -39,7 +39,8 @@ describe("소스 표 (6.4절 · AC-581)", () => {
   test("쓸 수 없는 이유 (2.2절)", () => {
     assert.equal(S.offReason("kci", "unconfigured"), "KCI는 관리자가 키를 등록하면 쓸 수 있어요.");
     assert.match(S.offReason("riss", "unconfigured"), /^RISS는 키를 받으면 쓸 수 있어요\. 지금은 아래 ‘학교 DB에서 찾기’의 \[RISS\]/);
-    assert.equal(S.offReason("kci", "other"), "KCI은 지금 쓸 수 없어요.");
+    assert.equal(S.offReason("kci", "other"), "KCI는 지금 쓸 수 없어요."); // 조사는 ui.josa로
+    assert.equal(S.offReason("europepmc", "other"), "Europe PMC는 지금 쓸 수 없어요.");
   });
 });
 
@@ -115,5 +116,33 @@ describe("코드 검사 (AC-582 · K-11)", () => {
     const src = read("sourcemeta.js");
     const m = src.match(/export const SOURCE_LIMITS = (\{.*?\});/s);
     assert.deepEqual(JSON.parse(m[1]), S.SOURCE_LIMITS);
+  });
+});
+
+// 조사 고르기 (ui.josa — 화면 문구 공용)
+describe("조사 josa", () => {
+  test("한글 받침 · ㄹ 받침 · 받침 없음", async () => {
+    const { josa } = await import("../../paperlab/static/js/ui.js");
+    assert.equal(josa("논문", "을/를"), "논문을");
+    assert.equal(josa("요약", "은/는"), "요약은");
+    assert.equal(josa("원고 제목", "이/가"), "원고 제목이");
+    assert.equal(josa("스타일", "을/를"), "스타일을");
+    assert.equal(josa("서재", "을/를"), "서재를");
+    assert.equal(josa("파일", "으로/로"), "파일로");
+    assert.equal(josa("폴더", "으로/로"), "폴더로");
+    assert.equal(josa("책", "으로/로"), "책으로");
+    assert.equal(josa("‘대학생의 학업’", "을/를"), "‘대학생의 학업’을");
+  });
+  test("숫자 · 영문 · 모르는 글자", async () => {
+    const { josa } = await import("../../paperlab/static/js/ui.js");
+    assert.equal(josa("p.12", "을/를"), "p.12를");
+    assert.equal(josa("p.10", "을/를"), "p.10을");
+    assert.equal(josa("@kim2020", "과/와"), "@kim2020과");
+    assert.equal(josa("KCI", "은/는"), "KCI는");
+    assert.equal(josa("HTML", "을/를"), "HTML을");
+    assert.equal(josa("Attention", "을/를"), "Attention을");
+    assert.equal(josa("Transformer", "은/는"), "Transformer는");
+    assert.equal(josa("日本", "을/를"), "日本을(를)");
+    assert.equal(josa("", "을/를"), "을(를)");
   });
 });

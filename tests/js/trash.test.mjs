@@ -1,6 +1,7 @@
 // 6단계 휴지통 · 동기화 웹 문구 (docs/design/phase6-folder-sync-ui.md 8 · 10장, AC-693) — 순수 함수만
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 globalThis.document = { addEventListener() {}, hidden: false, querySelector() { return null; }, querySelectorAll() { return []; } };
 globalThis.window = { addEventListener() {} };
@@ -48,5 +49,19 @@ describe("충돌 사본 (10.4절)", () => {
     assert.equal(L.conflictOriginal("plain.pdf"), "");
     assert.equal(L.tagKind({ name: "충돌 사본", color: "" }), ' data-tag-kind="conflict"');
     assert.equal(L.tagKind({ name: "충돌 사본", color: "#e03131" }), "");
+  });
+});
+
+// 앱 창 로그인 대기를 웹에서 취소 · 시간 초과하면 앱(0.3.1+)의 대기도 풀게 알림 — 옛 앱은 함수가 없으니 옵셔널 호출, 결과는 기다리지 않음
+describe("앱 로그인 취소 알림", () => {
+  const app = readFileSync(new URL("../../paperlab/static/js/app.js", import.meta.url), "utf8");
+  test("cancelGoogleLogin은 ?.()로만, await 없이", () => {
+    assert.match(app, /window\.paperlabDesktop\?\.cancelGoogleLogin\?\.\(\)/);
+    assert.ok(!/await[^;\n]*cancelGoogleLogin/.test(app));
+  });
+  test("[취소] 단추와 대기 시간 초과 둘 다 부름", () => {
+    assert.match(app, /\[data-desktop-cancel\]", gate\)\.onclick = \(\) => \{[^}]*cancelDesktopLogin\(\)/);
+    const wait = app.slice(app.indexOf("desktopWait = { selectAccount"), app.indexOf("DESKTOP_WAIT_MS) }"));
+    assert.match(wait, /cancelDesktopLogin\(\)/);
   });
 });

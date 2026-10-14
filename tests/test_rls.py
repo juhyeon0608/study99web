@@ -594,6 +594,56 @@ def test_migrations_idempotent_and_guarded(project):
         refuse_test_project(project.admin_db)
 
 
+def test_migration_lock_timeout_fails_fast(project, tmp_path, monkeypatch):
+    """QA D-4: 마이그레이션 트랜잭션마다 lock_timeout — 서버 요청이 표 잠금을 잡고 있으면 오래 줄 세우지 않고 실패(롤백, 기록 없음)
+    → update.ps1 이 기존 규칙대로 코드를 되돌린다(test_update_rolls_back_when_step_after_merge_fails)"""
+    import time
+
+    from paperlab import migrate
+    monkeypatch.setattr(migrate, "LOCK_TIMEOUT", "1s")  # 운영 값은 10s
+    table = f"public.paperlab_lock_probe_{uuid.uuid4().hex[:8]}"
+    version = "20991231000001_lock_probe"
+    (tmp_path / f"{version}.sql").write_text(f"alter table {table} add column y int;\n", encoding="utf-8")
+    with admin(project) as conn:
+        conn.execute(f"create table {table} (x int)")
+    try:
+        with admin(project) as holder:
+            holder.execute("begin")
+            holder.execute(f"lock table {table} in access share mode")  # 읽는 요청처럼
+            started = time.monotonic()
+            with pytest.raises(MigrationError, match="잠금"):
+                apply_migrations(project.admin_db, target="test", directory=tmp_path)
+            assert time.monotonic() - started < 15
+            holder.execute("rollback")
+        with admin(project) as conn:
+            assert conn.execute("select count(*) from paperlab.schema_migrations where version = %s",
+                                (version,)).fetchone()[0] == 0
+            assert conn.execute("select count(*) from information_schema.columns where table_schema = 'public' "
+                                "and table_name = %s and column_name = 'y'", (table.split(".")[1],)).fetchone()[0] == 0
+    finally:
+        with admin(project) as conn:
+            conn.execute(f"drop table if exists {table}")
+
+
+def test_orphans_skip_recent_objects(cloud):
+    """QA D4: 최근 1시간 안에 바뀐 객체는 고아로 보지 않음(올리는 중 — R2에 먼저 쓰고 DB는 나중에 커밋)"""
+    from datetime import datetime, timedelta, timezone
+    u = cloud.user()
+    fresh, old = f"users/{u.id}/papers/999999991.pdf", f"users/{u.id}/papers/999999992.pdf"
+    cloud.storage.objects[fresh] = cloud.storage.objects[old] = b"%PDF orphan"
+    now = datetime.now(timezone.utc)
+    cloud.storage.mtimes[fresh] = now - timedelta(minutes=10)
+    cloud.storage.mtimes[old] = now - timedelta(hours=2)
+    n = len(cloud.storage.log)
+    res = find_orphans(cloud.project.admin_db, cloud.storage)
+    assert old in res["orphans"] and fresh not in res["orphans"]
+    find_orphans(cloud.project.admin_db, cloud.storage, delete=True)
+    assert old not in cloud.storage.objects and fresh in cloud.storage.objects
+    res = find_orphans(cloud.project.admin_db, cloud.storage, now=now + timedelta(hours=1))
+    assert fresh in res["orphans"]
+    del cloud.storage.objects[fresh], cloud.storage.log[n:]  # 관리 명령 기록은 사용자 요청 기록(AC-39) 밖
+
+
 def test_search_performance(cloud):
     """AC-35: 논문 500편 · 쪽 1만 개(쪽당 2,000자)에서 검색 1초 안 (결과는 출력 — 보고서에 기록)"""
     import time

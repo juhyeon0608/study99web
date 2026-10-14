@@ -1,7 +1,7 @@
 # PaperLab — 클라우드 논문 연구 도구
 
 논문을 **찾고 → 모으고 → 읽고 → 정리하고 → 쓰고 → 인용하는** 과정을 한곳에서 끝내는 웹 서비스입니다.
-브라우저로 접속해 **관리자가 등록한 구글 계정**으로 로그인하면, 서재·PDF·원고가 계정별로 클라우드에 저장되어 어느 기기에서나 같은 서재를 이어서 씁니다. PC에 설치할 것은 없습니다.
+브라우저로 접속해 **관리자가 등록한 구글 계정**으로 로그인하면, 서재·PDF·원고가 계정별로 클라우드에 저장되어 어느 기기에서나 같은 서재를 이어서 씁니다. 웹만 쓸 때는 PC에 설치할 것이 없고, **Windows 설치형 앱(PC 앱)** 은 선택입니다(내 PC의 AI CLI 연결 · 폴더 동기화가 필요할 때).
 Python 백엔드(FastAPI)와 HTML/JS 화면으로 만들었습니다. 서버는 **상시 켜 둔 서버 PC**에서 Python으로 직접 돌고 **Tailscale Funnel**의 고정 HTTPS 주소로 공개됩니다. 데이터는 Supabase(서울 리전), PDF와 백업은 Cloudflare R2에 둡니다.
 **서버 PC가 꺼져 있으면(전원 · 재부팅 · 인터넷 끊김) 아무도 PaperLab을 쓸 수 없습니다** — 내 PC는 꺼도 됩니다. 데이터는 클라우드에 있어 서버 PC가 고장 나도 남습니다.
 
@@ -14,7 +14,8 @@ Python 백엔드(FastAPI)와 HTML/JS 화면으로 만들었습니다. 서버는 
 | 웹 주소 | 브라우저에서 PaperLab 주소(`https://…ts.net` 형식의 고정 주소)를 엽니다. 주소는 관리자가 알려 줍니다. |
 | 바탕화면 바로가기 (관리자 PC) | 관리자가 `deploy/make-shortcut.ps1`로 만든 **PaperLab** 아이콘을 더블클릭하면 주소창 없는 앱 창으로 열립니다(Microsoft Edge, 없으면 Chrome. 둘 다 없으면 일반 인터넷 바로가기). |
 
-- 다른 사용자는 지금은 웹 주소로 접속합니다(브라우저 즐겨찾기 권장). 다른 사용자 PC용 **Windows 설치형 앱**(앱 창 + 내 PC의 CLI 워커, 나중에 폴더 동기화)은 **2단계**에서 만들 예정입니다. GitHub Releases로 배포하고 자동 업데이트되며, 코드 서명이 없어 처음 설치할 때 Windows SmartScreen 경고가 뜰 수 있습니다.
+- 웹 주소로 접속하는 것이 기본입니다(브라우저 즐겨찾기 권장). 선택으로 **Windows 설치형 앱(PC 앱)** 을 설치할 수 있습니다 — 앱 창 + **내 PC의 CLI 워커**(claude · codex · gemini) + **폴더 동기화**(6단계). **설정 → PC 앱 받기**에서 받고(서버 PC가 `/downloads/`로 직접 배포 — GitHub Releases 아님), 자동 업데이트되며, 코드 서명이 없어 처음 설치할 때 Windows SmartScreen 경고가 뜰 수 있습니다. 서버 PC에 PC 앱 · 워커는 설치하지 않습니다.
+- 2026-10-14 기준 서버 PC에는 1C단계까지 반영돼 있고, 2a~6단계 기능(작업 큐 · PC 앱 · AI 질문 · 번역 · 국내 DB 검색 · 휴지통 · 폴더 동기화)은 **서버 PC에 반영된 뒤부터** 쓸 수 있습니다([PLAN.md](PLAN.md) 6장).
 
 - 로그인은 **Google로 계속하기** 하나입니다. **관리자가 사용 등록한 구글 계정만** 들어올 수 있습니다(Google 로그인 설정의 "테스트 사용자" 목록 — 최대 100명). 등록되지 않은 계정은 Google 화면에서 로그인이 막히니, 계정이 필요하면 관리자에게 알려 주세요.
 - 이메일로 로그인하는 방법은 아직 없습니다(나중에 추가 예정).
@@ -23,12 +24,13 @@ Python 백엔드(FastAPI)와 HTML/JS 화면으로 만들었습니다. 서버는 
 
 ### AI 기능 설정 (선택)
 
-**설정 → AI**에서 **본인의 Anthropic [API 키](https://console.anthropic.com/settings/keys)** 를 넣습니다.
+**설정 → AI 엔진**에서 **본인의 API 키**(Anthropic [API 키](https://console.anthropic.com/settings/keys) · OpenAI · Google)를 넣거나, **PC 앱을 설치한 PC를 연결**합니다.
 
 - 키는 **계정별로 암호화해 클라우드에 저장**되고, PC를 꺼도 AI 기능을 쓸 수 있습니다. 사용량만큼 요금이 키 주인에게 나갑니다.
-- 서버는 공용 키를 쓰지 않습니다. 키를 넣지 않으면 AI 기능은 동작하지 않습니다.
-- PDF를 그림·수식까지 통째로 읽고, 답변의 근거를 **쪽 번호와 원문 인용**으로 보여줍니다. 기본 모델은 Claude Opus 5.5이고, 설정에서 Sonnet 5.5 · Haiku 4.5로 바꿀 수 있습니다.
-- **Claude CLI 엔진은 지금 쓸 수 없습니다.** 2단계에서 내 PC를 연결하는 워커가 생긴 뒤에 쓸 수 있습니다.
+- 서버는 공용 키를 쓰지 않습니다. API 키도 연결된 PC도 없으면 AI 기능은 동작하지 않습니다.
+- **API 키가 있으면 API로 먼저, 안 되면 연결된 PC의 CLI로** 실행합니다. 작업별(요약 · 대화 · 글쓰기 · AI로 찾기 · 인용 검증 · 쉬운 설명 · 번역)로 엔진 순서를 정할 수 있습니다.
+- Anthropic API는 PDF를 그림·수식까지 통째로 읽고, 답변의 근거를 **쪽 번호와 원문 인용**으로 보여줍니다. 기본 모델은 Claude Opus 5.5이고, 설정에서 Sonnet 5.5 · Haiku 4.5로 바꿀 수 있습니다. OpenAI · Google API는 본문 글만 보냅니다.
+- **Claude CLI 엔진(claude · codex · gemini)은 PC 앱의 워커로 씁니다**(2단계 — 앱을 설치하고 설정 → 연결된 PC에서 연결). PC가 꺼져 있으면 작업은 대기합니다. 서버 PC에서는 CLI를 실행하지 않습니다.
 
 AI 없이도 검색·서재·읽기·하이라이트·노트·인용·원고는 모두 동작합니다.
 
@@ -49,7 +51,8 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용·원고는 
 - **태그**(색 지정), 읽기 상태(읽을 예정·읽는 중·다 읽음), 즐겨찾기, 중요도 별점
 - **전문 검색**: 제목·저자·초록·**PDF 본문**·노트·하이라이트 메모까지 한 번에 검색, 본문에서 찾은 부분을 미리보기로 표시 (한국어 2글자 검색 지원)
 - 중복 감지(DOI·arXiv·제목), 온라인 정보로 빈 항목·피인용 수 채우기, 무료 PDF 자동 받기
-- 여러 편 선택 후 일괄 작업: 컬렉션 넣기·폴더로 이동·태그·상태·삭제·참고문헌 목록
+- 여러 편 선택 후 일괄 작업: 컬렉션 넣기·폴더로 이동·태그·상태·휴지통으로·참고문헌 목록
+- **휴지통**(6단계): [삭제]는 모두 휴지통으로 갑니다. **30일 안에 되살릴 수 있고**, [영구 삭제] · 30일 경과 시 지워집니다(휴지통의 PDF도 저장 공간을 씀)
 - 상세 패널의 **인용 관계** 탭: 이 논문을 인용한 논문 / 참고문헌 / 관련 논문
 
 ### 3. 읽기 화면
@@ -125,6 +128,14 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용·원고는 
 
 > 워드 파일에도 규정 글꼴 이름(휴먼명조 · HY신명조 · 한양신명조)을 그대로 넣습니다. 한컴오피스가 없는 PC의 워드에서는 비슷한 다른 글꼴로 보이니, 제출 파일은 한컴오피스가 설치된 PC에서 확인하세요.
 
+### 9. 2~6단계에서 더해진 기능 (자세한 사용법은 [FEATURES.md](FEATURES.md))
+- **AI 작업 큐 · 연결된 PC**(2단계): API 키 우선 → 연결된 PC의 CLI로 넘어가는 실행, 작업 목록, PC 앱(Windows 설치형)
+- **AI 질문**(3단계): 서재 여러 편에 질문하고 출처(논문 · 쪽)를 눌러 이동, **AI로 찾기**(서재 밖 논문을 자연어로 찾아 출처 달린 한국어 요약), 원고 **인용 검증**
+- **쉬운 설명 · 번역**(4단계): 드래그한 문장 설명(필요하면 SVG 도식), 선택 번역, **논문 전체 번역**
+- **국내 DB · 무료 PDF 찾기**(5단계): KCI · RISS(키를 받은 뒤) · Europe PMC 검색, OpenCitations 인용 관계, 라이선스가 확인된 무료 PDF만 서버가 받음
+- **휴지통 · 폴더 동기화**(6단계): 삭제는 휴지통 30일, PC 폴더 ↔ 서재 폴더 양방향 동기화(PC 앱, 기본은 꺼짐)
+- 이미 있던 **인용 그래프**(1B)와 **논문 쓰기 참고 패널**(1C)도 FEATURES.md에 있습니다.
+
 ## 비교
 
 | 기능 | Google Scholar | EndNote | Zotero | **PaperLab** |
@@ -145,12 +156,12 @@ AI 없이도 검색·서재·읽기·하이라이트·노트·인용·원고는 
 | 무엇 | 어디에 |
 |---|---|
 | 서재·폴더·컬렉션·태그·하이라이트·노트·PDF 본문 텍스트·원고·내 양식·내 인용 스타일·AI 요약·대화·설정 | **Supabase** Postgres (서울 리전) |
-| API 키(Anthropic · OpenAlex · Semantic Scholar) | 같은 DB에 **계정별로 암호화**(AES-256-GCM)해 저장. 암호화 키는 DB와 따로 **서버 PC의 비밀값 파일**(`cloud.env`, 서버를 돌리는 Windows 계정만 접근)에 보관 |
+| API 키(Anthropic · OpenAI · Google · OpenAlex · Semantic Scholar) | 같은 DB에 **계정별로 암호화**(AES-256-GCM)해 저장. 암호화 키는 DB와 따로 **서버 PC의 비밀값 파일**(`cloud.env`, 서버를 돌리는 Windows 계정만 접근)에 보관 |
 | PDF 파일 | **Cloudflare R2** (`users/{계정 id}/papers/{논문 id}.pdf`) |
 | DB 백업 | Cloudflare R2 (`backups/db/`) |
 
 - **계정별 분리**: 모든 개인 데이터에 계정 id가 붙고, DB의 행 수준 보안(**RLS**)이 본인 행만 보이게 합니다. 서재를 다른 사람과 공유하는 기능은 없습니다.
-- **백업**: **매일 04:00(한국 시간)** DB 전체를 R2로 자동 백업하고, **최근 14개**를 보관합니다. PDF는 따로 백업하지 않습니다. 지운 논문·PDF는 되돌릴 수 없습니다(휴지통 없음). 백업은 서버 PC의 예약 작업이 하므로, 04:00에 서버 PC가 꺼져 있었으면 켜진 뒤 실행됩니다. 복원은 관리자가 합니다([deploy/README.md](deploy/README.md) 4장).
+- **백업**: **매일 04:00(한국 시간)** DB 전체를 R2로 자동 백업하고, **최근 14개**를 보관합니다. PDF는 따로 백업하지 않습니다. 지운 논문은 **휴지통에 30일** 남아 되살릴 수 있고(6단계), 휴지통에서 영구 삭제하거나 30일이 지나면 PDF까지 되돌릴 수 없습니다. 백업은 서버 PC의 예약 작업이 하므로, 04:00에 서버 PC가 꺼져 있었으면 켜진 뒤 실행됩니다. 복원은 관리자가 합니다([deploy/README.md](deploy/README.md) 4장 — 복원 절차는 초안이며 운영 환경에서는 아직 검증되지 않았습니다).
 - **저장 공간 10GB**: R2 무료 10GB를 **모든 사용자의 PDF와 DB 백업이 함께** 씁니다. 사이드바 아래와 설정 → 계정에서 사용량을 볼 수 있고, **80%** 를 넘으면 경고, **95%** 를 넘으면 PDF를 더 올릴 수 없습니다(관리자에게 알려 주세요). 필요 없는 논문을 지우면 그 PDF만큼 공간이 생깁니다.
 - 내 데이터를 파일로 받아 두려면: 서지 정보는 BibTeX·RIS·CSL-JSON 내보내기, 하이라이트·노트는 `.md` 내보내기, 원고는 워드·한글·마크다운 내보내기를 쓰세요(브라우저의 다운로드 폴더에 저장됩니다).
 - 예전 설치형 PaperLab의 데이터 폴더를 옮겨 오는 기능은 없습니다(새로 시작).
@@ -173,12 +184,24 @@ study99web/
 │  ├─ crypto.py      API 키 암호화(AES-256-GCM)
 │  ├─ config.py      서버 환경 변수, 사용자별 설정
 │  ├─ migrate.py     SQL 마이그레이션 적용 도구
-│  ├─ admin.py       관리 명령(허용 목록 동기화 · 앱 역할 주소 쓰기 · 키 회전 · 고아 PDF 정리 · 백업 · pg_dump 버전 확인 · 최근 백업 확인 · 테스트 프로젝트 표지)
+│  ├─ admin.py       관리 명령(허용 목록 동기화 · 앱 역할 주소 쓰기 · 키 회전 · 고아 PDF 정리 · 백업 · pg_dump 버전 확인 · 최근 백업 확인 · 테스트 프로젝트 표지 · 임베딩 모델 확인/받기(rag-model) · 색인 다시(rag-reindex) · DB 정리(maintain) · 공용 캐시 크기/정리(cache-stats · cache-prune))
+│  ├─ jobs.py        2단계 작업 큐 · 연결된 PC · 엔진 라우팅(API 우선 → PC의 CLI 폴백)
+│  ├─ api_runner.py  2단계 서버 프로세스 안 API 실행기(Anthropic · OpenAI · Google)
+│  ├─ worker_api.py  2단계 워커 API /api/worker/* (기기 토큰 인증 · 잡기 · 하트비트 · 결과)
+│  ├─ downloads.py   2단계 PC 앱 설치 파일 /downloads/ 내려주기 · 처음 설치 정보
+│  ├─ rag.py         3단계 여러 논문 질문: 청크 · 로컬 임베딩(EmbeddingGemma) · 색인 · 하이브리드 검색
+│  ├─ find.py        3단계 AI로 찾기
+│  ├─ verify.py      3단계 원고 인용 검증
+│  ├─ explain.py     4단계 쉬운 설명 · 선택 번역
+│  ├─ translate.py   4단계 논문 전체 번역
+│  ├─ extsources.py  5단계 국내 DB · 생명과학 검색(KCI · RISS · Europe PMC)
+│  ├─ sync.py        6단계 폴더 동기화 워커 API /api/worker/sync/* · 휴지통 정리
+│  ├─ graph_build.py · citegraph.py · citecache.py  1B 인용 그래프(만들기 · 알고리즘 · 공용 캐시)
 │  ├─ pdf.py         PyMuPDF: 쪽별 텍스트 추출, DOI/arXiv/제목 인식
 │  ├─ sources.py     OpenAlex · arXiv · Semantic Scholar · Crossref
 │  ├─ citations.py   CSL-JSON 변환, 인용 정보 점검, BibTeX · RIS · CSL-JSON
 │  ├─ csl_style.py   CSL 스타일 파일 정보
-│  ├─ ai.py          요약(구조화 출력) · Q&A(인용) · 글쓰기 도우미 — Anthropic API (CLI 엔진은 2단계)
+│  ├─ ai.py          요약(구조화 출력) · Q&A(인용) · 글쓰기 도우미 — Anthropic · OpenAI · Google API 호출, CLI용 프롬프트 만들기 · 결과 해석. 서버는 CLI를 실행하지 않음 — 실행 경로는 jobs.py가 정함
 │  ├─ manuscripts.py 원고 템플릿
 │  ├─ writer.py      원고 → 워드(.docx, 각주 포함) · 한글(.hwpx) · 마크다운, 논문 양식·표지 적용
 │  ├─ doc_formats.py 논문 양식: 기본 양식 4개 · 검증 · 단위 환산 · 표지 문구와 배치
@@ -186,7 +209,10 @@ study99web/
 │  ├─ compose.py     워드·한글 문서의 [@인용키] → 서식 있는 인용 + 참고문헌
 │  └─ static/        화면 (HTML · CSS · ES 모듈 JS, PDF.js · citeproc-js · CSL 스타일 · KaTeX · marked · DOMPurify · supabase-js 포함)
 │     ├─ js/auth.js  구글 로그인 · 로그아웃 · 세션
-│     └─ js/formats.js 양식 관리 · 표지 정보 창, 미리보기 양식 반영
+│     ├─ js/formats.js 양식 관리 · 표지 정보 창, 미리보기 양식 반영
+│     └─ js/ask.js · jobs.js · explain.js · trash.js · sourcemeta.js · graph.js · refpane.js  AI 질문 · 작업 목록 · 설명/번역 패널 · 휴지통 · 국내 DB 소스 표 · 인용 그래프 · 참고 패널 화면
+├─ desktop/          2 · 6단계 Electron PC 앱(Windows): main/(앱 창 · 트레이 · 자동 업데이트) · worker/(CLI 워커) · sync/(폴더 동기화) · ui/ · preload/ · lib/ · test/
+├─ tools/            record_extsources.py(5단계 녹화 도구 — 관리자가 키로 한 번 실행)
 └─ tests/            pytest (DB 테스트는 테스트용 Supabase 프로젝트)
 ```
 

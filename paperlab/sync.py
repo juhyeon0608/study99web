@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import logging
 import re
@@ -28,11 +27,10 @@ from psycopg.types.json import Jsonb
 from starlette.concurrency import run_in_threadpool
 
 from . import jobs, pdf
-from .auth import NotAllowed, bearer_token
-from .db import (DBUnavailable, actor_claims, copy_name, deleted_by_label, file_name_problem, folder_name_problem, iso,
+from .db import (DBUnavailable, actor_claims, deleted_by_label, file_name_problem, folder_name_problem, iso,
                  kst_day, now_dt)
 from .storage import MAX_PDF_BYTES, is_upload_id
-from .worker_api import DEVICE_AUTH, DEVICE_REVOKED
+from .worker_api import _Deny, check_device, device_token
 
 log = logging.getLogger("paperlab.sync")
 
@@ -282,24 +280,14 @@ def snapshot_page(lib, after: tuple[str, int] | None, limit: int) -> dict:
 
 
 # ====================================================================== 충돌 · 사본 (10장)
-def _copy_slot(lib, folder_id, base_name: str, device: str, day: str) -> str:
-    """사본 이름(늘 사본 형식) — 같은 이름이 있으면 괄호 안 끝에 ` 2`, ` 3` … (10.3절)"""
-    taken = lib.names_in(folder_id)
-    n = 1
-    while True:
-        cand = copy_name(base_name, device, day, n)
-        if cand.lower() not in taken:
-            return cand
-        n += 1
-
-
 def _new_copy_paper(lib, orig: dict, device: str, day: str) -> int:
     """충돌 사본 논문(K-6): 서지 복사(인용 키는 새로) · 같은 폴더 · 태그 `충돌 사본`. 하이라이트 · 노트 · 컬렉션 등은 복사 안 함"""
     meta = lib._one("select title, authors, year, venue, volume, issue, pages, publisher, doi, arxiv_id, openalex_id, "
                     "s2_id, url, pdf_url, abstract, item_type, keywords, issued, language from paperlab.papers "
                     "where id = %s and user_id = %s", (orig["id"], lib.uid))
     cid = lib.add_paper(dict(meta))
-    name = _copy_slot(lib, orig["folder_id"], orig["file_name"] or f"paper-{orig['id']}.pdf", device, day)
+    name = lib.free_name(orig["folder_id"], orig["file_name"] or f"paper-{orig['id']}.pdf", copy_of=(device, day),
+                         always_copy=True)
     lib._x("update paperlab.papers set folder_id = %s, file_name = %s where id = %s and user_id = %s",
            (orig["folder_id"], name, cid, lib.uid))
     lib.add_tag_to_papers([cid], CONFLICT_TAG)
@@ -321,29 +309,22 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
     db = st.db
 
     def device_ctx(request: Request):
-        parsed = jobs.parse_token(bearer_token(request.headers.get("authorization")) or "")
-        if not parsed:
-            raise SyncError(401, **DEVICE_AUTH)
-        uid, dev_id, secret = parsed
+        try:
+            uid, dev_id, secret = device_token(request)
+        except _Deny as e:
+            raise SyncError(e.status, **e.body) from None
         ctx = H.ctx(actor_claims(uid, f"device:{dev_id}"))
         try:
-            d = ctx.lib._one("select d.*, p.email from paperlab.devices d left join paperlab.profiles p "
-                             "on p.user_id = d.user_id where d.id = %s and d.user_id = %s", (dev_id, uid))
-            if not d or not hmac.compare_digest(d["token_hash"], jobs.sha256_hex(secret)):
-                raise SyncError(401, **DEVICE_AUTH)
-            if d["revoked_at"] is not None:
-                raise SyncError(401, **DEVICE_REVOKED)
             try:
-                H.allowlist.check({"email": d["email"] or ""})
-            except NotAllowed:
-                raise SyncError(403, "not_allowed", "허용되지 않은 계정이에요") from None
+                d = check_device(ctx.lib, request, dev_id, secret, H.allowlist)  # 워커 API와 같은 확인
+            except _Deny as e:
+                raise SyncError(e.status, **e.body) from None
             if jobs.version_tuple(d["app_version"]) < jobs.version_tuple(MIN_SYNC_VERSION):
                 raise SyncError(426, "update_required", "폴더 동기화는 PaperLab 앱 0.3.0 이상에서 쓸 수 있어요. "
                                 "앱을 업데이트해 주세요", min_app_version=MIN_SYNC_VERSION)
         except BaseException as e:
             ctx.finish(e)
             raise
-        request.state.device_id = dev_id
         jobs.touch_device(ctx.lib, dev_id)
         return ctx, d
 
@@ -393,7 +374,7 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
                 raise SyncError(400, "sync_quota", "올리기 한도를 넘어요", reason="sync_quota",
                                 user_cap_bytes=b["user_cap_bytes"])
         if papers:
-            budget = H.db_budget()
+            budget = H.db_budget(ctx)
             if papers * budget["per_paper_bytes"] > budget["budget_bytes"]:
                 raise SyncError(400, "db_full", "서재 데이터베이스 공간이 모자라요. 관리자에게 알려 주세요", reason="db")
 
@@ -514,7 +495,7 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
                 log.info("sync named files n=%d", named)
             bud = H.sync_budget(ctx)
             out.update({k: bud[k] for k in ("upload_budget_bytes", "upload_budget_limit", "user_cap_bytes",
-                                             "trash_bytes")}, db=H.db_budget())
+                                             "trash_bytes")}, db=H.db_budget(ctx))
             # K-13 기본값: 이 사용자의 다른 기기 중 동기화를 켠 수 (앱 요청)
             out["other_sync_devices"] = ctx.lib._one(
                 "select count(*)::int as n from paperlab.sync_devices s join paperlab.devices v on v.id = s.device_id "
@@ -583,19 +564,18 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
         return {"items": out}
 
     def read_upload(ctx, upload_id, sha: str):
-        """임시 파일 읽기 · 해시 확인 · 추출 → (임시 키, 내용, PdfInfo). 실패하면 임시 파일을 지우고 SyncError"""
+        """임시 파일 읽기 · 해시 확인 · 추출 → (임시 키, 내용, PdfInfo). 실패하면 SyncError — 임시 파일은 요청이
+        실패로 끝날 때 지운다(read_incoming이 ctx.on_rollback에 등록 — QA D8)"""
         if not is_upload_id(str(upload_id or "")):
             raise SyncError(400, "bad_request", "upload_id가 필요해요")
         incoming, raw, error = H.read_incoming(ctx, upload_id)
         if error:
             raise SyncError(400, "bad_pdf", error)
         if hashlib.sha256(raw).hexdigest() != sha:
-            ctx.storage.delete_quietly(incoming)
             raise SyncError(400, "sha_mismatch", "올린 파일의 해시가 달라요")
         try:
             info = pdf.extract(raw)
         except Exception:  # noqa: BLE001 - 손상된 PDF
-            ctx.storage.delete_quietly(incoming)
             raise SyncError(400, "bad_pdf", "PDF를 열 수 없어요") from None
         return incoming, raw, info
 
@@ -617,18 +597,26 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
         finally:
             S.done_add(ctx.uid)
 
+    def discard_on_fail(ctx, upload_id) -> None:
+        """이 요청이 실패(롤백)로 끝나면 올려 둔 임시 파일을 지운다 — 저장 공간 검사 등 읽기 전 실패도 (QA D8).
+        PC는 다시 보낼 때 새 업로드 자리를 받는다"""
+        if is_upload_id(str(upload_id or "")):
+            key = ctx.storage.incoming_key(str(upload_id))
+            ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))
+
     def add_file(ctx, d, b, op, sha, name, folder, at, copy_of):
+        discard_on_fail(ctx, b.get("upload_id"))
         hit = _by_sha(ctx.lib, sha)
         if hit:  # 같은 해시 — 전송 0, 새 논문 0
             return link_or_restore(ctx, d, op, hit, folder, name, copy_of, b.get("upload_id"))
         check_room(ctx, _int(b.get("size"), 0) or 0, papers=1)
         ctx.sources  # noqa: B018 - 사용자 설정(연락처 · API 키)을 먼저 읽어 둔다
         ctx.release()  # R2 받기 · 추출 · 메타데이터 조회 동안 DB 연결을 잡지 않는다 (F9)
+        H.system_sizes(ctx)  # 트랜잭션이 없는 지금 저장 공간 합계를 새로 (QA D7 — 아래 check_room은 이 값을 씀)
         incoming, raw, info = read_upload(ctx, b.get("upload_id"), sha)
         if len(raw) != (_int(b.get("size"), 0) or 0):  # 보낸 크기로 검사를 통과하고 더 큰 파일을 올리지 못하게 (QA D4)
-            ctx.storage.delete_quietly(incoming)
             raise SyncError(400, "sha_mismatch", "올린 파일의 크기가 보낸 값과 달라요")
-        meta_, _ = H.metadata_from_pdf(ctx, info)
+        meta_, _ = H.metadata_from_pdf(ctx, info)  # 예외로 끝나도 임시 파일은 on_rollback이 지움 (QA D9b)
         if not meta_.get("title"):
             meta_["title"] = name[:-4]
         lib = ctx.lib  # 새 트랜잭션: 그 사이 같은 해시가 생겼거나 폴더가 지워졌을 수 있음
@@ -640,11 +628,7 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
         if hit:
             ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
             return link_or_restore(ctx, d, op, hit, folder, name, copy_of, None)
-        try:
-            check_room(ctx, len(raw), papers=1)  # 실제 크기로 다시 (그 사이 다른 올리기로 줄었을 수도)
-        except SyncError:
-            ctx.storage.delete_quietly(incoming)
-            raise
+        check_room(ctx, len(raw), papers=1)  # 실제 크기로 다시 (그 사이 다른 올리기로 줄었을 수도)
         if folder is not None and not lib.has_folder(folder):
             folder = None
         out: dict = {"result": "created"}
@@ -693,6 +677,7 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
             return prev
         sha, base = _sha(b.get("sha256")), _sha(b.get("base_sha256"))
         at = _ms_time(b.get("mtime_ms"), b.get("clock_offset_ms"))
+        discard_on_fail(ctx, b.get("upload_id"))
         with ctx.lib.trash_tx():
             p = _paper(ctx.lib, pid) if _int(pid, 1) else None
         if not p or not p["pdf_key"]:
@@ -703,6 +688,7 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
                 ctx.after_commit.append(lambda: ctx.storage.delete_quietly(key))
             return remember(ctx.lib, d, op, {"result": "replaced", "paper": paper_out(p), "translation_cleared": False})
         ctx.release()  # R2 받기 · 추출 동안 DB 연결을 잡지 않는다 (F9)
+        H.system_sizes(ctx)  # 트랜잭션이 없는 지금 저장 공간 합계를 새로 (QA D7)
         incoming, raw, info = read_upload(ctx, b.get("upload_id"), sha)
         lib = ctx.lib
         prev = stored(lib, d, op)
@@ -712,8 +698,7 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
         with lib.trash_tx():  # K-39: 휴지통 논문의 되살리기 · PDF 교체는 trash_tx 안에서
             p = _paper(lib, pid, lock=True)
             if not p or not p["pdf_key"]:
-                ctx.storage.delete_quietly(incoming)
-                raise SyncError(404, "gone", "논문을 찾을 수 없어요")
+                raise SyncError(404, "gone", "논문을 찾을 수 없어요")  # 임시 파일은 on_rollback이 지움
             if p["deleted_at"] is not None:
                 check_room(ctx, len(raw) - (p["pdf_size"] or 0))
                 lib.restore_papers([pid])
@@ -739,6 +724,7 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
             # 진 쪽 = 서버의 지금 내용: 덮어쓰기 **전에** 사본 키로 복사(12.1절 6번 · AC-632)
             key = ctx.storage.paper_key(cid)
             ctx.storage.storage.copy(ctx.storage.check(p["pdf_key"]), ctx.storage.check(key))
+            ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))  # 사본 논문이 롤백되면 고아 (QA D8)
             texts = lib.page_texts(p["id"])
             H.pdf_changed(ctx, cid, lib.set_pdf(cid, key, texts, p["pdf_sha256"], p["pdf_size"], p["content_device_id"],
                                                 p["content_at"]))
@@ -823,10 +809,7 @@ def register(app: FastAPI, st, H: SimpleNamespace) -> None:
                 return {"ok": False, "result": "gone"}
             if lib._is_descendant("folders", parent, fid):
                 return {"ok": False, "result": "rejected"}
-        final, n = name, 1
-        while lib._folder_name_taken(final, parent, exclude=fid):  # 겹치면 바꾸는 쪽을 ` (2)` (K-8)
-            n += 1
-            final = name[:100 - len(f" ({n})")] + f" ({n})"
+        final = lib.free_folder_name(name, parent, exclude=fid)  # 겹치면 바꾸는 쪽을 ` (2)` (K-8)
         lib._x("update paperlab.folders set name = %s, parent_id = %s, updated_at = now() where id = %s and user_id = %s",
                (final, parent, fid, lib.uid))
         return {"result": "applied", "folder": folder_out(lib, fid)}

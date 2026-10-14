@@ -51,17 +51,8 @@ function fontFamily(fonts) {
   return [...names, ...FALLBACK_FONTS.filter((f) => !names.includes(f))].join(", ");
 }
 
-// ------------------------------------------------------------------ 목록 API
-let listCache = null;
-
-export async function listFormats(force = false) {
-  if (!listCache || force) listCache = await api.get("/api/doc-formats");
-  return listCache;
-}
-
-export function forgetFormats() {
-  listCache = null;
-}
+// ------------------------------------------------------------------ 목록 API (늘 새로 받음 — 쓰는 원고 수가 바뀌므로 캐시하지 않음)
+export const listFormats = () => api.get("/api/doc-formats");
 
 export function getFormat(id) {
   return api.get(`/api/doc-formats/${encodeURIComponent(id)}`);
@@ -401,7 +392,7 @@ export function formatManagerDialog({ selected = "default" } = {}) {
 
     // ---------------------------------------------------------- 목록
     async function reloadList() {
-      S.list = await listFormats(true);
+      S.list = await listFormats();
     }
 
     function drawList() {
@@ -823,8 +814,8 @@ export function formatManagerDialog({ selected = "default" } = {}) {
       await reloadList().catch(() => {}); // 쓰는 원고 수(used_by)는 최신 값으로
       const entry = S.list.find((f) => f.id === id) || S.cur.entry;
       const n = Number(entry.used_by) || 0;
-      const msg = n ? `'${entry.name}' 양식을 지울까요? 이 양식을 쓰는 원고 ${n}개는 기본 (A4)로 바뀌어요.`
-        : `'${entry.name}' 양식을 지울까요? 되돌릴 수 없어요.`;
+      const msg = n ? `‘${entry.name}’ 양식을 지울까요? 이 양식을 쓰는 원고 ${n}개는 기본 (A4)로 바뀌어요.`
+        : `‘${entry.name}’ 양식을 지울까요? 되돌릴 수 없어요.`;
       if (!(await confirmDialog(msg, { ok: "삭제", danger: true }))) return;
       try {
         const r = await api.del(`/api/doc-formats/${encodeURIComponent(id)}`);

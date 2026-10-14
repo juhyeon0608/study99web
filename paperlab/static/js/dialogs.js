@@ -7,13 +7,13 @@ import { LANGS } from "./explain.js";
 import { formatManagerDialog, formatOptions, listFormats } from "./formats.js";
 import { COMPANY, fmtAgo, fmtClock } from "./jobs.js";
 import {
-  $, $$, authorsShort, avatarEl, confirmDialog, copyText, el, errorToast, esc, fmtBytes, modal, pickFiles, promptDialog, toast,
+  $, $$, ICON_INFO, ICON_WARN, authorsShort, avatarEl, cleanCiteHtml, confirmDialog, copyText, el, errorToast, esc, fmtBytes, josa,
+  modal, pickFiles, promptDialog, safeUrl, store, toast,
 } from "./ui.js";
 import { substituteText } from "./sourcemeta.js";
 import { actions, refreshAll, refreshUsage, state } from "./state.js";
 import { restoreFromTrash } from "./trash.js";
 
-export const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
 const ICON_ALERT = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5v5.5M12 16.5v.01"/></svg>`;
 const FOLDER_PATH = "M3.5 6.5A1.5 1.5 0 0 1 5 5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18z";
 // 폴더 아이콘 (none = "폴더 없음" 모양)
@@ -25,7 +25,6 @@ export const folderIcon = (none = false) =>
 export const ICON_EXT = `<svg class="ico ext-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>`;
 export const extMark = (note = "새 탭에서 열림") => `${ICON_EXT}<span class="sr-only">(${esc(note)})</span>`;
 export const EXT_MARK = extMark();
-export const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
 const ICON_LOCK = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></svg>`;
 const GUIDE_KEY = "paperlab.inhaGuideSeen";
 export const G5_NOTICE = `<div class="notice inha-after" data-tone="info">${ICON_INFO}<div>학교 사이트에서 PDF를 받았다면 <b>[PDF 첨부]</b>로 올려 주세요.</div></div>`;
@@ -35,12 +34,8 @@ export const SCHOLAR_LIBRARY_NOTE = "Google Scholar: 설정 → 도서관 링크
 export const ICON_GRAPH = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="7" r="2.5"/><circle cx="18" cy="6" r="2"/><circle cx="15" cy="17" r="3"/><path d="M7.7 8.9 13 14.8M8.5 6.8l7.5-.6M17.5 7.9l-1.7 6.2"/></svg>`;
 
 // 이 브라우저에서 안내 창을 "다시 보지 않기" 했는지 (저장소를 못 쓰면 매번 안내)
-function guideSeen() {
-  try { return localStorage.getItem(GUIDE_KEY) === "1"; } catch { return false; }
-}
-function setGuideSeen(on) {
-  try { if (on) localStorage.setItem(GUIDE_KEY, "1"); else localStorage.removeItem(GUIDE_KEY); } catch { /* 저장 못 함 — 다음에 다시 뜸 */ }
-}
+const guideSeen = () => store.get(GUIDE_KEY) === "1";
+const setGuideSeen = (on) => store.set(GUIDE_KEY, on ? "1" : null); // 저장 못 하면 다음에 다시 뜸
 
 const openTab = (url) => window.open(url, "_blank", "noopener,noreferrer");
 
@@ -217,8 +212,7 @@ export async function citeDialog(paperOrId) {
   const m = modal({ title: "인용하기", body, wide: true });
   const fix = inLibrary ? async () => {
     m.close();
-    const p = await api.get(`/api/papers/${paperOrId}`);
-    editPaperDialog(p);
+    try { editPaperDialog(await api.get(`/api/papers/${paperOrId}`)); } catch (e) { errorToast(e); }
   } : null;
   const ib = issuesBox(data.issues, fix);
   if (ib) $(".issues", body).appendChild(ib);
@@ -232,12 +226,12 @@ export async function citeDialog(paperOrId) {
       const entry = r.entries[0] || { html: "", text: "" };
       out.innerHTML = "";
       const inText = el(`<div class="cite-block"><div class="name"><span>${r.note ? "각주" : "본문 인용"}</span><button class="btn sm">복사</button></div>
-        <div class="body">${window.DOMPurify.sanitize(r.citation.html)}</div></div>`);
+        <div class="body">${cleanCiteHtml(r.citation.html)}</div></div>`);
       $("button", inText).onclick = () => copyText(r.citation.text, r.citation.html);
       out.appendChild(inText);
       if (entry.text) {
         const ref = el(`<div class="cite-block"><div class="name"><span>참고문헌</span><button class="btn sm">복사</button></div>
-          <div class="body">${entry.html}</div></div>`);
+          <div class="body">${cleanCiteHtml(entry.html)}</div></div>`);
         $("button", ref).onclick = () => copyText(entry.text, entry.html);
         out.appendChild(ref);
       }
@@ -269,7 +263,7 @@ export async function settingsDialog({ focus = "" } = {}) {
   const usageP = refreshUsage(); // 설정 창 열 때 사용량을 다시 받는다 (사이드바 막대도 함께)
   const models = state.meta.models;
   const styles = await listStyles(true).catch(() => []);
-  const formats = await listFormats(true).catch(() => null);
+  const formats = await listFormats().catch(() => null);
   const fmtDefault = s.doc_format_default || "default";
   const user = state.user || {};
   const body = el(`<form autocomplete="off">
@@ -325,7 +319,7 @@ export async function settingsDialog({ focus = "" } = {}) {
     <label class="check" style="margin-bottom:10px"><input type="checkbox" name="korean_first" ${s.korean_first ? "checked" : ""}> 참고문헌 목록에서 국문 문헌을 영문 문헌보다 앞에 두기 (저자-연도 스타일)</label>
     <div class="field"><label>학술지 스타일 추가</label>
       <div class="row"><button type="button" class="btn sm" data-add-style>.csl 파일 추가</button>
-        <a class="small" href="https://www.zotero.org/styles" target="_blank" rel="noopener">Zotero 스타일 저장소에서 찾기 (10,000+개)</a></div>
+        <a class="small" href="https://www.zotero.org/styles" target="_blank" rel="noopener noreferrer">Zotero 스타일 저장소에서 찾기 (10,000+개)</a></div>
       <div class="hint">투고할 학술지 이름으로 검색해 .csl 파일을 받아 추가하면, 그 학술지 형식 그대로 인용돼요.</div>
       <div class="chips" data-custom-styles style="margin-top:6px"></div>
     </div>
@@ -382,7 +376,7 @@ export async function settingsDialog({ focus = "" } = {}) {
     for (const st of list.filter((x) => !x.builtin)) {
       const chip = el(`<span class="chip">${esc(st.title)}<button type="button" title="삭제">✕</button></span>`);
       $("button", chip).onclick = async () => {
-        if (!(await confirmDialog(`'${st.title}' 스타일을 지울까요?`, { ok: "삭제" }))) return;
+        if (!(await confirmDialog(`‘${st.title}’ 스타일을 지울까요?`, { ok: "삭제" }))) return;
         try { await api.del(`/api/styles/${st.id}`); forgetStyle(st.id); drawCustom(await listStyles(true)); } catch (e) { errorToast(e); }
       };
       box.appendChild(chip);
@@ -397,7 +391,7 @@ export async function settingsDialog({ focus = "" } = {}) {
       try {
         const st = await api.post("/api/styles", fd);
         forgetStyle(st.id);
-        toast(`'${st.title}' 스타일을 추가했어요`, "success");
+        toast(`‘${st.title}’ 스타일을 추가했어요`, "success");
       } catch (e) { errorToast(e); }
     }
     const list = await listStyles(true);
@@ -411,7 +405,7 @@ export async function settingsDialog({ focus = "" } = {}) {
     const sel = $("#set-doc-format", body);
     await formatManagerDialog({ selected: sel.disabled ? fmtDefault : sel.value });
     try {
-      const list = await listFormats(true);
+      const list = await listFormats();
       const cur = list.some((f) => f.id === sel.value) ? sel.value : "default";
       sel.innerHTML = formatOptions(list, cur);
       sel.value = cur;
@@ -519,7 +513,7 @@ function aiSection(body, s, getDevices) {
       let text;
       if (!parts.length) {
         const e = list[0];
-        text = `이대로는 ${label}을(를) 쓸 수 없어요 — ${COMPANY[e]} API 키를 넣거나, ${e}가 있는 PC를 연결해 주세요.`;
+        text = `이대로는 ${josa(label, "을/를")} 쓸 수 없어요 — ${COMPANY[e]} API 키를 넣거나, ${e}가 있는 PC를 연결해 주세요.`;
       } else if (!cliEngines.length) text = `${parts.join(" → ")}만 써요`;
       else if (parts.every((p) => p.startsWith("PC의")) && parts.length === 1) text = `${parts[0]}만 써요 (${on ? `켜진 PC ${on}대` : "켜진 PC 없음 — 켜질 때까지 기다려요"})`;
       else text = `${parts[0]} → ${parts.length > 1 ? `${parts.length === 2 ? "안 되면 " : ""}${parts.slice(1).join(" → ")}` : ""} (${on ? `켜진 PC ${on}대` : "켜진 PC 없음"})`;
@@ -545,7 +539,7 @@ function aiSection(body, s, getDevices) {
         : st === "unreadable" ? `<span class="chip warn">! 저장된 키를 읽지 못했어요</span>` : `<span class="chip">없음</span>`;
     const row = $("[data-key-state]", field);
     row.dataset.keyState = st === "typed" ? saved : st;
-    row.innerHTML = `${chip}<span class="grow"></span><a class="ext-link" href="${k.url}" target="_blank" rel="noopener noreferrer">키 발급받기${EXT_MARK}</a>`;
+    row.innerHTML = `${chip}<span class="grow"></span><a class="ext-link" href="${esc(safeUrl(k.url))}" target="_blank" rel="noopener noreferrer">키 발급받기${EXT_MARK}</a>`;
     $("[data-key-clear]", field).classList.toggle("hidden", saved === "none");
     const fail = s[`${k.name}_last_error`];
     $("[data-key-fail-slot]", field).innerHTML = fail && st !== "typed" ? `<div class="notice" data-tone="warn" data-key-fail style="margin-top:6px">${ICON_WARN}<div>${fail.code === "api_permission"
@@ -801,7 +795,7 @@ export async function pcAppDialog() {
       ${dk ? `<div class="notice" data-tone="info">${ICON_INFO}<div>지금 PaperLab 앱 ${esc(appVer)}을 쓰고 있어요. 업데이트는 자동으로 받아요. 다른 PC에 설치하려면 그 PC에서 이 화면을 열어 주세요.</div></div>`
         : !/Windows/.test(navigator.userAgent) ? `<div class="notice" data-tone="info">${ICON_INFO}<div>PC 앱은 Windows용이에요. Windows PC에서 이 화면을 열어 받아 주세요.</div></div>` : ""}
       <p class="small muted" data-release-meta style="margin-top:0">Windows 10 · 11용 · 버전 ${esc(r.version)} · ${esc(fmtBytes(r.size))}${r.built_at ? ` · ${esc(fmtAgo(r.built_at))} 만듦` : ""}</p>
-      <a class="btn primary" style="width:100%;justify-content:center" href="${esc(r.url)}" download data-release-download>${ICON_DOWNLOAD} 설치 파일 받기</a>
+      <a class="btn primary" style="width:100%;justify-content:center" href="${esc(safeUrl(r.url))}" download data-release-download>${ICON_DOWNLOAD} 설치 파일 받기</a>
       <p class="small muted" style="margin:6px 0 12px">받기가 안 되면 1분 뒤 다시 눌러 주세요.</p>
       <div class="section-title" style="margin-top:0">설치 순서</div>
       <ol class="inha-guide-list" data-install-steps>
@@ -906,30 +900,30 @@ export function editPaperDialog(paper = null) {
   const authorsText = (p.authors || []).map((a) => a.literal ? `{${a.literal}}` : [a.family, a.given].filter(Boolean).join(", ")).join("\n");
   const types = state.meta.item_types;
   const body = el(`<form>
-    <div class="field"><label>제목</label>
-      <div class="row"><input class="input grow" name="title" value="${esc(p.title)}" required>
+    <div class="field"><label for="ep-title">제목</label>
+      <div class="row"><input class="input grow" id="ep-title" name="title" value="${esc(p.title)}" required>
       <button type="button" class="btn sm" data-sentence title="APA 등은 제목을 문장형(첫 글자만 대문자)으로 써요. 바뀐 결과를 확인하고 저장하세요.">문장형으로</button></div></div>
-    <div class="field"><label>저자 (한 줄에 한 명, "성, 이름" 형식)</label><textarea class="input" name="authors" rows="4">${esc(authorsText)}</textarea></div>
+    <div class="field"><label for="ep-authors">저자 (한 줄에 한 명, "성, 이름" 형식)</label><textarea class="input" id="ep-authors" name="authors" rows="4">${esc(authorsText)}</textarea></div>
     <div class="grid-3">
-      <div class="field"><label>발행일 (연도 또는 YYYY-MM-DD)</label><input class="input" name="issued" value="${esc(p.issued || p.year || "")}" placeholder="2017-06-12"></div>
-      <div class="field"><label>유형</label><select class="input" name="item_type">${Object.entries(types).map(([k, v]) => `<option value="${k}" ${k === p.item_type ? "selected" : ""}>${v}</option>`).join("")}</select></div>
-      <div class="field"><label>인용 키</label><input class="input" name="citekey" value="${esc(p.citekey || "")}"></div>
+      <div class="field"><label for="ep-issued">발행일 (연도 또는 YYYY-MM-DD)</label><input class="input" id="ep-issued" name="issued" value="${esc(p.issued || p.year || "")}" placeholder="2017-06-12"></div>
+      <div class="field"><label for="ep-item_type">유형</label><select class="input" id="ep-item_type" name="item_type">${Object.entries(types).map(([k, v]) => `<option value="${k}" ${k === p.item_type ? "selected" : ""}>${v}</option>`).join("")}</select></div>
+      <div class="field"><label for="ep-citekey">인용 키</label><input class="input" id="ep-citekey" name="citekey" value="${esc(p.citekey || "")}"></div>
     </div>
-    <div class="field"><label>학술지 / 학회</label><input class="input" name="venue" value="${esc(p.venue || "")}"></div>
+    <div class="field"><label for="ep-venue">학술지 / 학회</label><input class="input" id="ep-venue" name="venue" value="${esc(p.venue || "")}"></div>
     <div class="grid-3">
-      <div class="field"><label>권</label><input class="input" name="volume" value="${esc(p.volume || "")}"></div>
-      <div class="field"><label>호</label><input class="input" name="issue" value="${esc(p.issue || "")}"></div>
-      <div class="field"><label>쪽</label><input class="input" name="pages" value="${esc(p.pages || "")}"></div>
+      <div class="field"><label for="ep-volume">권</label><input class="input" id="ep-volume" name="volume" value="${esc(p.volume || "")}"></div>
+      <div class="field"><label for="ep-issue">호</label><input class="input" id="ep-issue" name="issue" value="${esc(p.issue || "")}"></div>
+      <div class="field"><label for="ep-pages">쪽</label><input class="input" id="ep-pages" name="pages" value="${esc(p.pages || "")}"></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>DOI</label><input class="input" name="doi" value="${esc(p.doi || "")}"></div>
-      <div class="field"><label>arXiv ID</label><input class="input" name="arxiv_id" value="${esc(p.arxiv_id || "")}"></div>
+      <div class="field"><label for="ep-doi">DOI</label><input class="input" id="ep-doi" name="doi" value="${esc(p.doi || "")}"></div>
+      <div class="field"><label for="ep-arxiv_id">arXiv ID</label><input class="input" id="ep-arxiv_id" name="arxiv_id" value="${esc(p.arxiv_id || "")}"></div>
     </div>
     <div class="grid-2">
-      <div class="field"><label>출판사</label><input class="input" name="publisher" value="${esc(p.publisher || "")}"></div>
-      <div class="field"><label>URL</label><input class="input" name="url" value="${esc(p.url || "")}"></div>
+      <div class="field"><label for="ep-publisher">출판사</label><input class="input" id="ep-publisher" name="publisher" value="${esc(p.publisher || "")}"></div>
+      <div class="field"><label for="ep-url">URL</label><input class="input" id="ep-url" name="url" value="${esc(p.url || "")}"></div>
     </div>
-    <div class="field"><label>초록</label><textarea class="input" name="abstract" rows="5">${esc(p.abstract || "")}</textarea></div>
+    <div class="field"><label for="ep-abstract">초록</label><textarea class="input" id="ep-abstract" name="abstract" rows="5">${esc(p.abstract || "")}</textarea></div>
   </form>`);
   const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn primary" data-save>${paper ? "저장" : "추가"}</button></div>`);
   const m = modal({ title: paper ? "논문 정보 수정" : "직접 입력해서 추가", body, foot, wide: true });
@@ -1245,8 +1239,10 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
       summary.className = `status-line ${added ? "ok" : "bad"}`;
       summary.textContent = added ? `✓ ${replace ? "PDF를 바꿨어요" : "PDF를 붙였어요"}` : `✕ ${replace ? "PDF를 바꾸지 못했어요" : "PDF를 붙이지 못했어요"}`;
     } else {
-      summary.className = `status-line ${added ? "ok" : ""}`;
-      summary.textContent = `✓ ${added}개 추가 · ${skipped}개 건너뜀${failed ? ` · ${failed}개 실패` : ""}`;
+      summary.className = `status-line ${added ? "ok" : failed ? "bad" : ""}`;
+      summary.textContent = added ? `✓ ${added}개 추가 · ${skipped}개 건너뜀${failed ? ` · ${failed}개 실패` : ""}`
+        : failed && !skipped ? `✕ ${failed}개 모두 추가하지 못했어요`
+          : `추가한 논문이 없어요 · ${skipped}개 건너뜀${failed ? ` · ${failed}개 실패` : ""}`;
     }
     if (!foot.querySelector("[data-close-upload]")) {
       foot.innerHTML = `<button class="btn primary" data-close-upload>닫기</button>`;
@@ -1418,7 +1414,7 @@ export async function importDialog() {
 export async function exportPapers(format, scope) {
   try {
     const res = await api.raw("POST", "/api/export", { format, ...scope });
-    if (!res.ok) throw new Error("내보내기 실패");
+    if (!res.ok) throw new Error("내보내지 못했어요");
     const ext = { bibtex: "bib", ris: "ris", csljson: "json", txt: "txt" }[format];
     downloadBlob(await res.blob(), `paperlab-${new Date().toISOString().slice(0, 10)}.${ext}`);
   } catch (e) { errorToast(e); }

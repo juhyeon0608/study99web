@@ -1,10 +1,81 @@
 // 화면 공통 도우미: DOM 생성, 모달, 토스트, 마크다운·수식 렌더링
 
+import { refreshAll } from "./state.js";
+
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
 export function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+// 알림 · 상태 아이콘 (여러 화면이 함께 씀 — 한 곳에만 둔다)
+export const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
+export const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
+export const ICON_CLOCK = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"/></svg>`;
+
+// localStorage (사생활 모드 · 꺼진 저장소에서도 멈추지 않게 — 읽기 실패는 null/fallback, 쓰기 실패는 무시).
+// set: 글자는 그대로, 그 밖의 값은 JSON, null이면 지움
+export const store = {
+  get(key) { try { return localStorage.getItem(key); } catch { return null; } },
+  json(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } },
+  set(key, value) {
+    try {
+      if (value == null) localStorage.removeItem(key);
+      else localStorage.setItem(key, typeof value === "string" ? value : JSON.stringify(value));
+    } catch { /* 저장 못 함 */ }
+  },
+};
+
+// 조사: josa("논문", "을/를") → "논문을". 앞 = 받침 있을 때, 뒤 = 없을 때. "으로/로"는 ㄹ 받침도 "로".
+// 끝의 따옴표 · 괄호는 건너뛰고 본다. 한글 · 숫자 · 영문 끝 글자로 판단, 모르면 "을(를)"처럼 둘 다
+const DIGIT_JONG = [1, 8, 0, 1, 0, 0, 1, 8, 1, 0]; // 영 일 이 삼 사 오 육 칠 팔 구 → 0 없음, 1 있음, 8 ㄹ
+export function josa(word, pair) {
+  const w = String(word ?? "");
+  const [withJ, noJ] = pair.split("/");
+  const ch = w.replace(/[\s'"’”)\]}>」』…·.,!?]+$/u, "").slice(-1);
+  let jong = null; // 0 없음 · 1 있음 · 8 ㄹ
+  if (/[가-힣]/.test(ch)) { const j = (ch.charCodeAt(0) - 0xac00) % 28; jong = j === 0 ? 0 : j === 8 ? 8 : 1; }
+  else if (/[0-9]/.test(ch)) jong = DIGIT_JONG[Number(ch)];
+  else if (/[a-z]/i.test(ch)) {
+    const tail = w.match(/[A-Za-z]+(?=[^A-Za-z]*$)/)[0];
+    jong = /^[A-Z]+$/.test(tail) ? (/[LMNR]$/.test(tail) ? (/[LR]$/.test(tail) ? 8 : 1) : 0) // 약어는 글자 이름(엘 · 엠 · 엔 · 알)
+      : /(ng|[mnkptbdg])$/i.test(tail) ? 1 : /l$/i.test(tail) ? 8 : 0;
+  }
+  if (jong == null) return `${w}${withJ}(${noJ})`;
+  const useNo = withJ === "으로" ? jong !== 1 : jong === 0;
+  return w + (useNo ? noJ : withJ);
+}
+
+// 화면 읽기 프로그램 알림 줄(role=status)에 글을 넣는다 — 같은 글을 다시 넣어도 읽게 한 번 비운 뒤
+export function liveSay(box, msg) {
+  if (!box) return;
+  box.textContent = "";
+  setTimeout(() => { if (box.isConnected) box.textContent = msg; }, 50);
+}
+
+// 탭 줄 접근성: role=tablist/tab, ←→ · Home · End로 옆 탭(누른 것처럼). selectTab이 aria-selected · 초점 순서를 맞춘다
+export function markTabs(bar, label = "") {
+  const tabs = $$("[data-tab]", bar);
+  bar.setAttribute("role", "tablist");
+  if (label) bar.setAttribute("aria-label", label);
+  for (const b of tabs) b.setAttribute("role", "tab");
+  bar.addEventListener("keydown", (e) => {
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const n = e.key === "Home" ? 0 : e.key === "End" ? tabs.length - 1 : (i + (e.key === "ArrowRight" ? 1 : tabs.length - 1)) % tabs.length;
+    tabs[n].focus();
+    tabs[n].click();
+  });
+}
+export function selectTab(bar, value) {
+  for (const b of $$("[data-tab]", bar)) {
+    const on = b.dataset.tab === value;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", String(on));
+    b.tabIndex = on ? 0 : -1;
+  }
 }
 
 export function el(html) {
@@ -49,35 +120,80 @@ export function errorToast(e) {
   toast(e && e.message ? e.message : String(e), "error");
 }
 
+// 저장 · 바꾸기 요청이 실패했을 때: 토스트 + 이미 없어진 항목(404)이면 서재 목록을 다시 받아 화면을 맞춘다
+export function saveError(e) {
+  errorToast(e);
+  if (e && e.status === 404) refreshAll();
+}
+
+const FOCUSABLE = "a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), "
+  + "textarea:not([disabled]), summary, [tabindex]:not([tabindex='-1'])";
+const focusables = (root) => (root ? $$(FOCUSABLE, root).filter((n) => n.getClientRects().length) : []);
+
+// 창이 열려 있으면 맨 위 창 말고는(#app · 계정 버튼 · 아래 창) inert — 화면 읽기 · Tab이 창 밖으로 나가지 않게.
+// 토스트 · 연결 알림 띠는 그대로 둔다
+function syncInert() {
+  const top = $$("body > .modal-backdrop").pop();
+  for (const n of document.body.children) {
+    if (n.id !== "toasts" && n.id !== "app-banner") n.inert = !!top && n !== top;
+  }
+}
+
 let openModals = 0;
+let modalSeq = 0;
 export function modal({ title, body = "", foot = null, wide = false, onClose = null }) {
+  const tid = `modal-title-${++modalSeq}`;
   const back = el(`<div class="modal-backdrop">
-    <div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true">
-      <div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" data-close title="닫기">✕</button></div>
+    <div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-labelledby="${tid}">
+      <div class="modal-head"><h3 id="${tid}">${esc(title)}</h3><button class="icon-btn" data-close title="닫기" aria-label="닫기">✕</button></div>
       <div class="modal-body"></div>
     </div></div>`);
   const box = $(".modal", back);
   const bodyEl = $(".modal-body", back);
   if (typeof body === "string") bodyEl.innerHTML = body; else bodyEl.appendChild(body);
+  let footEl = null;
   if (foot) {
-    const f = el(`<div class="modal-foot"></div>`);
-    if (typeof foot === "string") f.innerHTML = foot; else f.appendChild(foot);
-    box.appendChild(f);
+    footEl = el(`<div class="modal-foot"></div>`);
+    if (typeof foot === "string") footEl.innerHTML = foot; else footEl.appendChild(foot);
+    box.appendChild(footEl);
   }
+  const opener = document.activeElement; // 닫으면 초점을 여기로 되돌린다
   const close = () => {
     if (!back.isConnected) return;
     back.remove();
     openModals--;
     document.removeEventListener("keydown", onKey);
+    syncInert();
+    if (opener && opener !== document.body && opener.isConnected) opener.focus();
     onClose && onClose();
   };
-  const onKey = (e) => { if (e.key === "Escape" && back === [...document.querySelectorAll(".modal-backdrop")].pop()) close(); };
+  const onKey = (e) => {
+    if (back !== $$("body > .modal-backdrop").pop()) return;
+    if (e.key === "Escape") return close();
+    if (e.key !== "Tab") return;
+    // 초점 가두기: 마지막 → 처음, 처음 → 마지막 (창 밖은 inert라 브라우저 주소창으로 빠지지 않게)
+    const f = focusables(box);
+    if (!f.length) return;
+    const i = f.indexOf(document.activeElement);
+    if (i < 0) return; // 창 밖에 뜬 상자(인용 고르기 등)에 초점이 있으면 그대로
+    if (e.shiftKey ? i === 0 : i === f.length - 1) {
+      e.preventDefault();
+      f[e.shiftKey ? f.length - 1 : 0].focus();
+    }
+  };
   back.addEventListener("mousedown", (e) => { if (e.target === back) close(); });
   $("[data-close]", back).onclick = close;
   document.addEventListener("keydown", onKey);
   document.body.appendChild(back);
   openModals++;
-  setTimeout(() => { const f = $("input:not([type=checkbox]):not([type=radio]), textarea", bodyEl); f && f.focus(); }, 30);
+  syncInert();
+  // 처음 초점: 글 입력 칸 → 본문의 첫 초점 요소 → 아래 단추 → 닫기. 부른 쪽이 이미 옮겼으면(confirmDialog 등) 그대로
+  setTimeout(() => {
+    if (!back.isConnected || box.contains(document.activeElement)) return;
+    const f = $("input:not([type=checkbox]):not([type=radio]), textarea", bodyEl) || focusables(bodyEl)[0] || focusables(footEl)[0]
+      || $("[data-close]", back);
+    f.focus();
+  }, 30);
   return { el: back, body: bodyEl, close };
 }
 
@@ -130,9 +246,21 @@ export function popupMenu(anchor, items, { left = false, head = null, className 
   if (r.bottom > window.innerHeight - 8) { menu.style.top = "auto"; menu.style.bottom = "calc(100% + 4px)"; }
   if (r.right > window.innerWidth - 8) { menu.style.right = "0"; menu.style.left = "auto"; }
   if (r.left < 8) { menu.style.left = "0"; menu.style.right = "auto"; }
-  // Esc = 메뉴만 닫고 연 버튼으로 포커스 (창 · 읽기 화면의 Esc보다 먼저 받는다)
+  // Esc = 메뉴만 닫고 연 버튼으로 포커스 (창 · 읽기 화면의 Esc보다 먼저 받는다).
+  // ↑↓ · Home · End = 항목 사이 이동 (연 버튼에 초점이 있어도 첫 · 끝 항목으로 들어감)
   const onKey = (e) => {
-    if (e.key !== "Escape" || !menu.isConnected) return;
+    if (!menu.isConnected) return;
+    const btns = $$("button", menu);
+    const i = btns.indexOf(document.activeElement);
+    if (["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key) && btns.length && (i >= 0 || document.activeElement === anchor)) {
+      e.preventDefault();
+      e.stopPropagation();
+      const n = e.key === "Home" ? 0 : e.key === "End" ? btns.length - 1
+        : i < 0 ? (e.key === "ArrowDown" ? 0 : btns.length - 1) : (i + (e.key === "ArrowDown" ? 1 : btns.length - 1)) % btns.length;
+      btns[n].focus();
+      return;
+    }
+    if (e.key !== "Escape") return;
     e.preventDefault();
     e.stopPropagation();
     closeMenus();
@@ -193,6 +321,29 @@ export const MD_PURIFY = {
   FORBID_ATTR: ["style", "srcset", "background", "class", "id", "popover", "popovertarget", "popovertargetaction"],
 };
 
+// MD_PURIFY로 정화할 때만 링크를 새 탭(noopener noreferrer)으로 — DOMPurify 훅은 전역이라 표시(mdLinks)를 켠 동안만 손댄다
+let mdLinks = false;
+let mdHook = false;
+export function purifyMd(html) {
+  const P = window.DOMPurify;
+  if (!P) return null;
+  if (!mdHook) {
+    mdHook = true;
+    P.addHook("afterSanitizeAttributes", (node) => {
+      if (mdLinks && node.tagName === "A" && node.hasAttribute("href")) {
+        node.setAttribute("target", "_blank");
+        node.setAttribute("rel", "noopener noreferrer");
+      }
+    });
+  }
+  mdLinks = true;
+  try { return P.sanitize(html, MD_PURIFY); } finally { mdLinks = false; }
+}
+
+// 인용 문구 · 참고문헌 HTML(citeproc 출력): 서식 태그만. DOMPurify가 없으면 태그를 글자로(fail-closed)
+export const CITE_PURIFY = { ALLOWED_TAGS: ["i", "b", "em", "strong", "sup", "sub", "span", "a"], ALLOWED_ATTR: ["href", "style"] };
+export const cleanCiteHtml = (html) => (window.DOMPurify ? window.DOMPurify.sanitize(String(html ?? ""), CITE_PURIFY) : esc(html));
+
 export function renderMarkdown(text, { citations = false } = {}) {
   if (!text) return "";
   const store = [];
@@ -210,7 +361,7 @@ export function renderMarkdown(text, { citations = false } = {}) {
     .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => keep(tex(m.trim(), false)))
     .replace(/(^|[^\\$])\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d)/g, (_, pre, m) => pre + keep(tex(m, false)));
   let html = window.marked ? window.marked.parse(src, { breaks: true, gfm: true }) : `<p>${esc(src)}</p>`;
-  html = window.DOMPurify ? window.DOMPurify.sanitize(html, MD_PURIFY) : esc(src);
+  html = purifyMd(html) ?? esc(src);
   // 수식·인용 번호는 정화한 뒤 텍스트 노드에서만 바꾼다 (속성 안의 같은 글자는 건드리지 않는다)
   const t = document.createElement("template");
   t.innerHTML = html;

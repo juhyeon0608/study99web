@@ -3,17 +3,14 @@
 
 import { api, qs } from "./api.js";
 import { state } from "./state.js";
-import { $, $$, copyText, el, errorToast, esc, toast } from "./ui.js";
+import { $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, copyText, el, errorToast, esc, toast } from "./ui.js";
 
 export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" };
 const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증",
   explain: "쉬운 설명", translate: "선택 번역", translate_paper: "전체 번역" }; // 4단계 (시안 7.3절)
 const XT_VIEW = { explain: "history", translate: "history", translate_paper: "paper" };
-const ACTIVE = new Set(["queued", "running"]);
-export const ICON_CLOCK = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"/></svg>`;
-export const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
-export const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
-export const ICON_JOBS = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6h10M10 12h10M10 18h10M4 6l1.2 1.2L7.5 5M4 12l1.2 1.2L7.5 11"/><circle cx="5.5" cy="18" r="1.5"/></svg>`;
+// 아직 끝나지 않은 작업인지 (요약 · 대화 · 설명 · 찾기 화면이 함께 씀)
+export const isActive = (j) => !!j && (j.status === "queued" || j.status === "running");
 
 // 5.4절 오류 이름 (history.error_code → 짧은 글)
 const ERROR_LABELS = {
@@ -74,7 +71,7 @@ const elapsedText = (job) => (job.started_at ? fmtElapsed((Date.now() - new Date
 // ------------------------------------------------------------------ 상태 (5.1절)
 export function jobState(job) {
   if (job.status === "running" && job.cancel_requested) return "cancelling";
-  if (ACTIVE.has(job.status)) return `${job.runner}-${job.status === "queued" ? (job.runner === "api" ? "queued" : "waiting") : "running"}`;
+  if (isActive(job)) return `${job.runner}-${job.status === "queued" ? (job.runner === "api" ? "queued" : "waiting") : "running"}`;
   return job.status;
 }
 const WAITING = {
@@ -113,9 +110,9 @@ export function stepsHtml(job) {
     let msg = "";
     if (i < job.route_index) { state = "failed"; msg = fails.length ? errorLabel(fails[fails.length - 1].error_code, slot.engine) : ""; }
     else if (i === job.route_index) {
-      state = job.status === "succeeded" ? "done" : job.status === "failed" ? "failed" : ACTIVE.has(job.status) ? "now" : "";
-      msg = job.status === "failed" ? errorLabel(job.error_code, slot.engine) : ACTIVE.has(job.status) ? jobLine(job) : "";
-      if (fails.length && ACTIVE.has(job.status)) msg = `${errorLabel(fails[fails.length - 1].error_code, slot.engine)} → ${msg}`;
+      state = job.status === "succeeded" ? "done" : job.status === "failed" ? "failed" : isActive(job) ? "now" : "";
+      msg = job.status === "failed" ? errorLabel(job.error_code, slot.engine) : isActive(job) ? jobLine(job) : "";
+      if (fails.length && isActive(job)) msg = `${errorLabel(fails[fails.length - 1].error_code, slot.engine)} → ${msg}`;
     }
     return `<li${state ? ` data-state="${state}"` : ""}>${esc(slotName(slot))} <span class="graph-step-msg">${esc(msg)}</span></li>`;
   });
@@ -134,14 +131,14 @@ export function watchJob(id, onUpdate, { first = null } = {}) {
       const job = await api.get(`/api/jobs/${id}`);
       if (stopped) return;
       onUpdate(job);
-      if (!ACTIVE.has(job.status)) { stopped = true; return; }
+      if (!isActive(job)) { stopped = true; return; }
     } catch (e) {
       if (stopped) return;
       if (e.status === 404) { stopped = true; onUpdate(null); return; }
     }
     timer = setTimeout(tick, document.hidden ? 10000 : 1500);
   };
-  if (first) { onUpdate(first); if (!ACTIVE.has(first.status)) return () => {}; timer = setTimeout(tick, 1500); }
+  if (first) { onUpdate(first); if (!isActive(first)) return () => {}; timer = setTimeout(tick, 1500); }
   else tick();
   return () => { stopped = true; clearTimeout(timer); };
 }
@@ -158,9 +155,10 @@ export function nudgeDesktop(job) {
 const openSettings = () => import("./dialogs.js").then((m) => m.settingsDialog({ focus: "pc" }));
 
 // 대화 · 글쓰기의 한 줄 상태 (`.status-line[data-job-line]`) — 같은 글이면 다시 넣지 않는다(화면 읽기 중복 방지)
+// 경과 시간은 1.5초마다 바뀌므로 role=status 글에 넣지 않고 옆 칸(aria-hidden)에 — 화면 읽기가 계속 읽지 않게
 export function setStatusLine(line, job, verb) {
   const st = jobState(job);
-  const text = jobLine(job, verb);
+  const text = jobLine(job, verb, { elapsed: false });
   line.dataset.jobState = st;
   const icon = st.endsWith("waiting") ? ICON_CLOCK : st === "failed" ? ICON_WARN : `<span class="spinner" aria-hidden="true"></span>`;
   if (line.dataset.text !== text) {
@@ -168,9 +166,10 @@ export function setStatusLine(line, job, verb) {
     $("[data-icon]", line).innerHTML = icon;
     $(".grow", line).textContent = text + (st.endsWith("waiting") && job.deadline_at ? ` · ${deadlineText(job)}` : "");
   }
+  $("[data-tick]", line).textContent = st === "cli-running" && job.started_at ? ` · ${elapsedText(job)}` : "";
 }
 export function statusLineEl(onCancel) {
-  const line = el(`<div class="status-line" role="status" data-job-line><span data-icon></span><span class="grow"></span>
+  const line = el(`<div class="status-line" data-job-line><span data-icon></span><span class="grow" role="status"></span><span data-tick aria-hidden="true"></span>
     ${onCancel ? `<button type="button" class="btn sm ghost" data-job-cancel>취소</button>` : ""}</div>`);
   if (onCancel) $("[data-job-cancel]", line).onclick = onCancel;
   return line;
@@ -288,7 +287,7 @@ export async function renderJobs(main) {
     let data;
     try { data = await api.get(`/api/jobs${qs({ status: me.tab, limit: 100 })}`); } catch (e) { errorToast(e); return; }
     if (jobsView !== me) return;
-    const active = data.jobs.filter((j) => ACTIVE.has(j.status));
+    const active = data.jobs.filter((j) => isActive(j));
     if (me.tab === "active") { $("[data-n]", view).textContent = data.total || ""; setJobBadge(data.total); }
     drawList(list, data.jobs, me.tab, load);
     if (active.length) me.timer = setTimeout(load, document.hidden ? 10000 : 1500);
@@ -345,7 +344,7 @@ function drawList(list, jobs, tab, reload) {
 
 function jobItem(j, reload) {
   const st = jobState(j);
-  const active = ACTIVE.has(j.status);
+  const active = isActive(j);
   const title = jobTitle(j);
   const expired = j.kind === "find" && !j.question; // 24시간 정리로 질문 · 결과가 지워짐 (3단계 품질팀 L4)
   const href = jobHref(j);
@@ -360,7 +359,7 @@ function jobItem(j, reload) {
   const tone = j.status === "failed" ? " bad" : j.status === "succeeded" ? " ok" : "";
   const li = el(`<li class="item-card" data-job-id="${j.id}" data-job-state="${st}">
     <div class="item-head"><span class="chip">${esc(kindLabel(j))}</span>
-      ${href ? `<a class="item-title" href="${href}">${esc(title)}</a>` : `<span class="item-title">${esc(title)}</span>`}
+      ${href ? `<a class="item-title" href="${esc(href)}">${esc(title)}</a>` : `<span class="item-title">${esc(title)}</span>`}
       <span class="item-actions"></span></div>
     <div class="status-line${tone}"><span class="grow" data-elapsed>${esc(expired && !active ? "만료됨 — 24시간이 지나 지워졌어요" : jobLine(j))}</span></div>
     <p class="item-meta">${esc(meta)}</p>
@@ -380,7 +379,7 @@ function jobItem(j, reload) {
   } else if (j.status === "failed" || j.status === "cancelled") {
     btn("다시 시도", "primary", async () => { try { await retryJob(j.id); toast("작업을 다시 시작했어요", "success"); } catch (e) { errorToast(e); } reload(); });
   } else if (j.kind === "write" && j.result && j.result.text) {
-    btn("결과 복사", "", () => { copyText(j.result.text); toast("결과를 복사했어요", "success"); }).title = "결과 글은 24시간 동안 복사할 수 있어요";
+    btn("결과 복사", "", () => copyText(j.result.text)).title = "결과 글은 24시간 동안 복사할 수 있어요";
   } else if (href) {
     btn("열기", "", () => { remember(); location.hash = href; });
   }

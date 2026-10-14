@@ -6,6 +6,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { normalizeSettings } = require('../worker/worker');
+const { writeAtomic } = require('../lib/write-atomic');
 
 // 폴더 동기화 설정(명세 15.1 · 7.3 K-33): 루트는 미리보기 [시작]에서만 저장, 그때의 설치 ID 를 함께. 비밀 아님
 const SYNC_DEFAULTS = { enabled: false, root: '', installId: '', previousRoot: '', paused: false, notify: true };
@@ -43,10 +44,7 @@ class Store {
     Object.assign(this.data, patch);
     if (patch.worker) this.data.worker = normalizeSettings(patch.worker);
     if (patch.sync) this.data.sync = normalizeSync(patch.sync);
-    fs.mkdirSync(this.dir, { recursive: true });
-    const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(this.data, null, 2), 'utf8');
-    fs.renameSync(tmp, this.file);
+    writeAtomic(this.file, JSON.stringify(this.data, null, 2));
   }
 
   canEncrypt() {

@@ -196,7 +196,7 @@ test('AC-693 상태 값마다 문구 · 트레이 줄이 있고, 문제 이유 �
     }
   }
   assert.match(Look.syncLook({ state: 'storage_full', reason: 'sync_quota', userCap: 2 * 1024 ** 3 }).line, /2GB/);
-  for (const c of ['too_long_down', 'busy', 'cloud_only', 'trash_locked', 'trash_parse_failed', 'folder_kept', 'duplicate_copy']) assert.ok(Look.PROBLEM_TEXT[c], c);
+  for (const c of ['too_long_down', 'busy', 'cloud_only', 'trash_aborted', 'trash_timeout', 'trash_parse_failed', 'folder_kept', 'duplicate_copy']) assert.ok(Look.PROBLEM_TEXT[c], c);
   assert.match(Look.problemText('없는코드'), /로그 폴더/);
   for (const code of ['onedrive', 'drive_root', 'not_writable', 'other_device', 'recycle_off', 'check_failed']) assert.ok(Look.pickError(code, { suggested: 'C:\\Users\\a\\PaperLab 논문' }).title, code);
   for (const kind of ['disk', 'storage', 'user', 'db']) assert.ok(!/undefined|NaN/.test(Look.previewBlock({ kind, need: 1e9, left: 1e8, free: 5e8, cap: 2e9, n: 3 }).body), kind);
@@ -262,7 +262,7 @@ test('main 휴지통 보내기: 루트 밖 · \\\\?\\ · 링크 안쪽 · 없는
   try { fs.symlinkSync(home, path.join(root, 'j'), 'junction'); } catch { junction = false; }
   if (junction) assert.equal((await trashInRoot(path.join(root, 'j', 'out.pdf'), root, shell())).ok, false);
   assert.equal(calls.length, 0);
-  assert.deepEqual(await trashInRoot(f, root, shell('Operation was aborted')), { ok: false, reason: 'locked' });
+  assert.deepEqual(await trashInRoot(f, root, shell('Operation was aborted')), { ok: false, reason: 'aborted' });
   assert.deepEqual(await trashInRoot(f, root, shell('Failed to parse path')), { ok: false, reason: 'parse_failed' });
   assert.deepEqual(await trashInRoot(f, root, shell('boom')), { ok: false, reason: 'other' });
   assert.deepEqual(await trashInRoot(f, root, shell()), { ok: true, reason: '' });

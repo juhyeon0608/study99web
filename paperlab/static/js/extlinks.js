@@ -38,6 +38,9 @@ export const INHA = deepFreeze({
   ],
 });
 
+// [인하대에서 보기] 툴팁 (서재 · 찾기 · 그래프 · 참고 패널 공용)
+export const INHA_OPEN_TITLE = `${INHA.proxyName}(정석학술정보관)로 원문 페이지를 열어요`;
+
 export const SCHOLAR_BASE = "https://scholar.google.com/scholar";
 
 const MAX_QUERY = 256; // 코드포인트(9.2절 · IK-4)

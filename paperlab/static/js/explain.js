@@ -5,9 +5,10 @@
 // addAnnotation(page, rects, text, color, comment) } — 탭 그리기 함수는 export만(1C 참고 패널은 AI를 하지 않음 — 명세 3장).
 
 import { api, streamEvents } from "./api.js";
-import { COMPANY, ICON_INFO, ICON_WARN, cancelJob, errorLabel, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
+import { COMPANY, cancelJob, errorLabel, isActive, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
 import {
-  $, $$, confirmDialog, copyText, el, errorToast, esc, fmtDate, modal, popupMenu, renderMarkdown, renderSvg, toast,
+  $, $$, ICON_INFO, ICON_WARN, confirmDialog, copyText, el, errorToast, esc, fmtDate, josa, liveSay, modal, popupMenu,
+  renderMarkdown, renderSvg, toast,
 } from "./ui.js";
 
 export const LANGS = { ko: "한국어", en: "English", ja: "日本語", zh: "简体中文" };
@@ -20,9 +21,8 @@ const KIND = {
   translate: { chip: "번역", verb: "번역", doing: "번역하고 있어요", done: "번역을 다 썼어요", fail: "번역하지 못했어요.",
     cached: "저장된 번역을 보여 드려요" },
 };
-const FIG_NOTE = { failed: "그림을 그리지 못했어요 — 설명 글은 위에 그대로 있어요.", unsafe: "그림이 안전 검사를 통과하지 못해 빼었어요.",
-  too_large: "그림이 너무 커서 빼었어요." };
-const ACTIVE = (j) => !!j && (j.status === "queued" || j.status === "running");
+const FIG_NOTE = { failed: "그림을 그리지 못했어요 — 설명 글은 위에 그대로 있어요.", unsafe: "그림이 안전 검사를 통과하지 못해 뺐어요.",
+  too_large: "그림이 너무 커서 뺐어요." };
 
 // ====================================================================== 순수 함수 (tests/js/explain.test.mjs)
 export const normText = (s) => String(s || "").replace(/\s+/g, " ").trim();
@@ -137,10 +137,7 @@ function stateFor(host) {
 export const explainBusy = () => !!(S && S.run && !S.run.failed);
 
 function live(msg) {
-  const box = S && S.body && $("[data-xt-live]", S.body);
-  if (!box) return;
-  box.textContent = "";
-  setTimeout(() => { box.textContent = msg; }, 30);
+  liveSay(S && S.body && $("[data-xt-live]", S.body), msg);
 }
 
 // ====================================================================== 탭 그리기
@@ -466,7 +463,7 @@ async function loadTr() {
   if (S !== s) return null;
   s.tr = r;
   s.trLoaded = true;
-  if (ACTIVE(r.job)) watchTr(r.job); else { s.trStop && s.trStop(); s.trStop = null; }
+  if (isActive(r.job)) watchTr(r.job); else { s.trStop && s.trStop(); s.trStop = null; }
   return r;
 }
 
@@ -479,10 +476,10 @@ function watchTr(job) {
   s.trStop = watchJob(job.id, async (j) => {
     if (S !== s || !j) return;
     const counts = JSON.stringify((j.progress || {}).counts || {});
-    const changed = counts !== last || !ACTIVE(j);
+    const changed = counts !== last || !isActive(j);
     last = counts;
     s.tr.job = j;
-    if (!ACTIVE(j)) {
+    if (!isActive(j)) {
       s.trStop = null;
       s.trJobId = null;
       await loadTr().catch(() => {});
@@ -523,7 +520,7 @@ async function drawPaper() {
       <button type="button" class="btn primary" data-xt-start ${off ? 'aria-disabled="true" aria-describedby="xt-off-why"' : ""}>전체 번역 시작…</button>
       ${off ? `<p class="small" id="xt-off-why" style="margin-top:8px">PDF 글자를 읽을 수 없는 논문이에요(스캔본).</p>` : ""}</div>`);
     $("[data-xt-start]", cta).onclick = () => (off ? null : startDialog());
-    if (ACTIVE(job)) cta.prepend(trStatus(job));
+    if (isActive(job)) cta.prepend(trStatus(job));
     // 6단계 SW-7(K-28): PDF가 바뀌어 전체 번역을 지웠으면 안내 — 새로 번역을 시작하면 서버가 표시를 비워 사라짐
     if (s.tr.translation_cleared_at) {
       cta.prepend(el(`<div class="notice" data-tone="info" data-tr-cleared><div><b>PDF가 바뀌어 번역을 지웠어요.</b>
@@ -534,7 +531,7 @@ async function drawPaper() {
   }
   const st = tr.page_state;
   const c = trCounts(st);
-  const active = ACTIVE(job);
+  const active = isActive(job);
   const lang = LANGS[tr.lang] || tr.lang;
   const chip = (cls, ch, label, n) => (n ? `<span class="chip ${cls}" data-page-state="${ch}">${label} ${n}</span>` : "");
   b.appendChild(el(`<div><div class="row small muted" style="margin-bottom:6px">${esc(lang)} 번역 · ${c.total}쪽 중 ${c.done}쪽 완료</div>
@@ -570,7 +567,7 @@ async function drawPaper() {
 }
 
 function trStatus(job) {
-  const line = statusLineEl(ACTIVE(job) ? async () => { try { await cancelJob(job.id); } catch (e) { errorToast(e); } } : null);
+  const line = statusLineEl(isActive(job) ? async () => { try { await cancelJob(job.id); } catch (e) { errorToast(e); } } : null);
   line.dataset.xtTrLine = "";
   setStatusLine(line, job, "번역");
   return line;
@@ -626,7 +623,7 @@ function showPage(n, announce = false) {
   s.trPage = n;
   const wrap = s.body && $("[data-xt-page-wrap]", s.body);
   if (!wrap) return;
-  const fresh = pageSection(s.tr.translation, ACTIVE(s.tr.job));
+  const fresh = pageSection(s.tr.translation, isActive(s.tr.job));
   wrap.replaceWith(fresh);
   const head = $(".xt-head", fresh);
   if (head && s.body) s.body.scrollTop = Math.max(0, head.offsetTop - 4); // 쪽 머리 위치로 (진행 줄은 위에 그대로)
@@ -679,7 +676,7 @@ async function makeManuscript(btn) {
     const r = await api.post(`/api/papers/${S.pid}/translation/manuscript`);
     const a = el(`<a class="btn sm" href="#/write/${Number(r.id)}">원고 열기 →</a>`);
     btn.replaceWith(a);
-    toast(`원고 ‘${r.title}’을 만들었어요`, "success");
+    toast(`원고 ${josa(`‘${r.title}’`, "을/를")} 만들었어요`, "success");
   } catch (e) {
     errorToast(e);
     btn.removeAttribute("aria-busy");

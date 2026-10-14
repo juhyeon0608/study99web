@@ -1,7 +1,7 @@
 // 논문 찾기 소스 표 · 문구 (docs/design/phase5-korean-db-ui.md 2 · 3 · 4 · 5 · 6장)
 // 순수 모듈 — DOM · 네트워크를 쓰지 않는다. tests/js/sources.test.mjs가 시험한다.
 
-import { esc } from "./ui.js";
+import { esc, josa } from "./ui.js";
 
 // 소스별 지원 정렬 · '무료만' 필터 (명세 6.4절). 서버 paperlab/extsources.py SOURCE_LIMITS와 같아야 함(테스트로 비교 — JSON 그대로 둠)
 export const SOURCE_LIMITS = {"kci": {"sort": ["relevance", "date"], "oa": false}, "riss": {"sort": ["relevance", "date"], "oa": true}, "europepmc": {"sort": ["relevance", "date", "cited"], "oa": true}};
@@ -46,7 +46,7 @@ export const isNewSource = (s) => Object.prototype.hasOwnProperty.call(SOURCE_LI
 export function offReason(source, reason) {
   const m = SOURCE_META[source];
   if (m && m.off && reason === "unconfigured") return m.off;
-  return `${nameOf(source)}은 지금 쓸 수 없어요.`;
+  return `${josa(nameOf(source), "은/는")} 지금 쓸 수 없어요.`;
 }
 
 // 소스의 정렬 · 필터 제한 (2.3절): {sortOff: [값], oaOff: bool, oaLabel, note}
@@ -135,3 +135,4 @@ export function substituteText(license) {
 
 // 무료 PDF 새 탭 버튼 글자 (4.2절)
 export const oaOpenLabel = (kind) => (kind === "landing" ? "무료 원문 페이지 열기" : "무료 PDF 열기");
+export const OA_OPEN_TITLE = "라이선스를 확인하지 못한 PDF예요. 새 탭에서 직접 받아 [PDF 첨부]로 올려 주세요.";

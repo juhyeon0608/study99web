@@ -6,18 +6,15 @@
 
 const fs = require('node:fs');
 const path = require('node:path').win32;
-const { execFile } = require('node:child_process');
+const { run: exec } = require('../lib/run');
 const { fold, SYNC_DIR } = require('./paths');
 
 const norm = (p) => fold(path.resolve(String(p))).replace(/\\+$/, '');
 /** a 가 b 와 같거나 b 안인가('\' 경계 — OneDriveBackup 같은 접두어 함정을 거름) */
 const within = (a, b) => { const x = norm(a); const y = norm(b); return !!y && (x === y || x.startsWith(y + '\\')); };
 
-function run(cmd, args, timeout = 20000) {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { windowsHide: true, timeout, encoding: 'utf8' }, (err, stdout) => resolve(err ? null : String(stdout)));
-  });
-}
+/** → 출력 문자열 | null(실패 · 시간 초과) */
+const run = async (cmd, args, timeout = 20000) => { const r = await exec(cmd, args, { timeout }); return r.code === 0 ? r.out : null; };
 
 /** reg query 한 값 → 문자열 · null */
 async function regValue(key, name) {

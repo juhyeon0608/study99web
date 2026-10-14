@@ -4,7 +4,7 @@
 // 저널은 캐시처럼 다룬다 — 쓰기를 잃어도 다음 비교가 연결 · 같은 위치 옮기기로 끝나도록 엔진이 순서를 정함(engine.js 머리 주석).
 
 const fs = require('node:fs');
-const path = require('node:path');
+const { writeAtomic } = require('../lib/write-atomic');
 
 const VERSION = 1;
 
@@ -29,11 +29,6 @@ function load(file) {
   return j;
 }
 
-function save(file, j) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp`;
-  fs.writeFileSync(tmp, JSON.stringify(j), 'utf8');
-  fs.renameSync(tmp, file);
-}
+function save(file, j) { writeAtomic(file, JSON.stringify(j)); }
 
 module.exports = { VERSION, fresh, load, save };

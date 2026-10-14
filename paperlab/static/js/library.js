@@ -2,18 +2,20 @@
 
 import { api, downloadBlob, qs, safeFilename } from "./api.js";
 import {
-  EXT_MARK, G5_NOTICE, ICON_GRAPH, ICON_INFO, ICON_WARN, SCHOLAR_LIBRARY_NOTE, addByIdentifierDialog, addPaper, bibliographyDialog, bindExtLink,
+  EXT_MARK, G5_NOTICE, ICON_GRAPH, SCHOLAR_LIBRARY_NOTE, addByIdentifierDialog, addPaper, bibliographyDialog, bindExtLink,
   citeDialog, copySearchQuery, editPaperDialog, exportPapers, folderIcon, folderPath, importDialog, issuesBox,
   extMark, moveToFolderDialog, openExternal, uploadPdfs,
 } from "./dialogs.js";
-import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
+import {
+  INHA, INHA_OPEN_TITLE, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl,
+} from "./extlinks.js";
 import { openGraph } from "./graph.js";
-import { OC_FAILED_TEXT, licenseLabel, oaOpenLabel, substituteText, viaHtml } from "./sourcemeta.js";
+import { OA_OPEN_TITLE, OC_FAILED_TEXT, licenseLabel, oaOpenLabel, substituteText, viaHtml } from "./sourcemeta.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
 import { restoreFromTrash } from "./trash.js";
 import {
-  $, $$, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum, modalOpen, pickFiles,
-  copyText, popupMenu, promptDialog, renderMarkdown, safeUrl, toast,
+  $, $$, ICON_INFO, ICON_WARN, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum,
+  markTabs, modalOpen, pickFiles, copyText, popupMenu, promptDialog, renderMarkdown, safeUrl, saveError, selectTab, store, toast,
 } from "./ui.js";
 
 let root = null;
@@ -22,10 +24,8 @@ let relatedKind = "cited_by";
 let noteSaver = null;
 let detailToken = 0;
 
-const INHA_OPEN_TITLE = `${INHA.proxyName}(정석학술정보관)로 원문 페이지를 열어요`;
 // 무료 PDF 찾기 (docs/design/phase5-korean-db-ui.md 4장 · AD-3 · AD-9)
 const OA_FIND_TITLE = "무료 PDF를 찾아요. 라이선스가 확인되면 바로 저장하고, 아니면 직접 받을 링크를 드려요.";
-const OA_OPEN_TITLE = "라이선스를 확인하지 못한 PDF예요. 새 탭에서 직접 받아 [PDF 첨부]로 올려 주세요.";
 const oaNotice = (html) => `<div class="notice oa-after" data-tone="info">${ICON_INFO}<div>${html}</div></div>`;
 const OA_AFTER_OPEN = oaNotice("무료 PDF가 있지만 라이선스를 확인하지 못해 PaperLab이 대신 받지 않았어요. <b>[무료 PDF 열기]</b>로 직접 받은 뒤 <b>[PDF 첨부]</b>로 올려 주세요.");
 const oaAfterNone = (inha) => oaNotice(inha
@@ -87,7 +87,7 @@ export function renderLibrary(main) {
   search.onkeydown = (e) => { if (e.key === "Escape") { search.value = ""; doSearch.flush(); } };
   $("[data-sort]", root).onchange = (e) => {
     state.sort = e.target.value;
-    try { localStorage.setItem("paperlab.sort", state.sort); } catch { /* 무시 */ }
+    store.set("paperlab.sort", state.sort);
     loadPapers();
   };
   $("[data-add]", root).onclick = (e) => {
@@ -180,9 +180,9 @@ function paperRow(p) {
     <button class="star ${p.starred ? "on" : ""}" title="즐겨찾기">${p.starred ? "★" : "☆"}</button>
     <div style="min-width:0">
       <div class="paper-title">${esc(p.title || "(제목 없음)")}</div>
-      <div class="paper-sub">${esc(authorsShort(p.authors))}${p.venue ? ` · <span class="venue">${esc(p.venue)}</span>` : ""}${p.year ? ` · ${p.year}` : ""}</div>
+      <div class="paper-sub">${esc(authorsShort(p.authors))}${p.venue ? ` · <span class="venue">${esc(p.venue)}</span>` : ""}${Number.isInteger(p.year) ? ` · ${p.year}` : ""}</div>
       <div class="paper-meta">
-        <span class="badge-status ${p.status}">${esc(state.meta.statuses[p.status] || p.status)}</span>
+        <span class="badge-status ${esc(p.status)}">${esc(state.meta.statuses[p.status] || p.status)}</span>
         ${p.tags.map((t) => `<span class="chip"${tagKind(t)} ${t.color ? `style="color:${esc(t.color)}"` : ""}>#${esc(t.name)}</span>`).join("")}
         ${p.has_summary ? `<span class="chip accent">AI 요약</span>` : ""}
         ${p.annotation_count ? `<span class="chip">하이라이트 ${p.annotation_count}</span>` : ""}
@@ -200,7 +200,7 @@ function paperRow(p) {
   };
   $(".star", row).onclick = async (e) => {
     e.stopPropagation();
-    await api.patch(`/api/papers/${p.id}`, { starred: !p.starred });
+    try { await api.patch(`/api/papers/${p.id}`, { starred: !p.starred }); } catch (err) { return saveError(err); }
     refreshAll();
   };
   row.onclick = (e) => {
@@ -258,8 +258,10 @@ async function deletePapers(ids) {
   }
   const title = n === 1 ? "이 논문을 휴지통으로 옮길까요?" : `${n}편을 휴지통으로 옮길까요?`;
   if (!(await confirmDialog(msg, { ok: "휴지통으로 옮기기", title }))) return;
-  if (n === 1) await api.del(`/api/papers/${ids[0]}`);
-  else await api.post("/api/papers/bulk", { ids, action: "delete" });
+  try {
+    if (n === 1) await api.del(`/api/papers/${ids[0]}`);
+    else await api.post("/api/papers/bulk", { ids, action: "delete" });
+  } catch (e) { return saveError(e); }
   state.selected.clear();
   toast(n === 1 ? "휴지통으로 옮겼어요" : `${n}편을 휴지통으로 옮겼어요`, "",
     { action: { label: "되돌리기", attr: "data-toast-undo", onClick: () => restoreFromTrash(ids, "되돌렸어요") } });
@@ -287,15 +289,19 @@ function bulkBar() {
     <button class="btn sm" data-bib>참고문헌 목록</button>
     <button class="btn sm danger" data-del>휴지통으로</button>
     <span class="spacer"></span><button class="btn sm ghost" data-clear>선택 해제</button></div>`);
-  const bulk = async (action, value) => { await api.post("/api/papers/bulk", { ids, action, value }); refreshAll(); };
+  // 성공하면 true (실패는 토스트 — 이미 지워진 논문이 섞였으면 404 → 목록을 다시 받음)
+  const bulk = async (action, value) => {
+    try { await api.post("/api/papers/bulk", { ids, action, value }); } catch (e) { saveError(e); return false; }
+    refreshAll();
+    return true;
+  };
   $("[data-col]", bar).onclick = (e) => {
     e.stopPropagation();
-    const items = state.collections.map((c) => ({ label: c.name, action: () => bulk("add_collection", c.id).then(() => toast(`'${c.name}'에 넣었어요`)) }));
+    const items = state.collections.map((c) => ({ label: c.name, action: () => bulk("add_collection", c.id).then((ok) => ok && toast(`‘${c.name}’에 넣었어요`)) }));
     items.push("-", { label: "새 컬렉션 만들어 넣기", action: async () => {
       const name = await promptDialog("새 컬렉션 이름");
       if (!name) return;
-      const { id } = await api.post("/api/collections", { name });
-      bulk("add_collection", id);
+      try { bulk("add_collection", (await api.post("/api/collections", { name })).id); } catch (err) { saveError(err); }
     } });
     popupMenu(e.currentTarget, items, { left: true });
   };
@@ -332,15 +338,15 @@ async function renderDetail() {
   // 그사이 다른 논문을 골랐거나 다시 그리기가 시작됐으면 이 결과는 버린다
   if (token !== detailToken || p.id !== state.activeId) return;
   body.classList.remove("no-detail");
-  const ids = (p.doi ? `<dt>DOI</dt><dd><a href="https://doi.org/${esc(p.doi)}" target="_blank" rel="noopener">${esc(p.doi)}</a></dd>` : "")
-    + (p.arxiv_id ? `<dt>arXiv</dt><dd><a href="https://arxiv.org/abs/${esc(p.arxiv_id)}" target="_blank" rel="noopener">${esc(p.arxiv_id)}</a></dd>` : "")
-    + (safeUrl(p.url) && !p.doi ? `<dt>링크</dt><dd><a href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener">${esc(p.url.replace(/^https?:\/\//, "").slice(0, 50))}</a></dd>` : "")
+  const ids = (p.doi ? `<dt>DOI</dt><dd><a href="https://doi.org/${esc(p.doi)}" target="_blank" rel="noopener noreferrer">${esc(p.doi)}</a></dd>` : "")
+    + (p.arxiv_id ? `<dt>arXiv</dt><dd><a href="https://arxiv.org/abs/${esc(p.arxiv_id)}" target="_blank" rel="noopener noreferrer">${esc(p.arxiv_id)}</a></dd>` : "")
+    + (safeUrl(p.url) && !p.doi ? `<dt>링크</dt><dd><a href="${esc(safeUrl(p.url))}" target="_blank" rel="noopener noreferrer">${esc(p.url.replace(/^https?:\/\//, "").slice(0, 50))}</a></dd>` : "")
     + scholarRow(p);
   // 학교 프록시로 열 주소(없으면 숨김), 대상이 없을 때 제목으로 학교 DB 검색 (시안 5장)
   const inha = paperProxyTarget(p);
   const titleQ = normalizeQuery(p.title);
   const inhaBtn = p.has_pdf ? "" : inha
-    ? `<a class="btn" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${INHA_OPEN_TITLE}">${esc(INHA.buttons.view)}${EXT_MARK}</a>`
+    ? `<a class="btn" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${esc(INHA_OPEN_TITLE)}">${esc(INHA.buttons.view)}${EXT_MARK}</a>`
     : titleQ ? `<span class="menu-wrap"><button class="btn" data-inha-title-search aria-haspopup="menu" aria-expanded="false">학교 DB에서 제목 검색 ▾</button></span>` : "";
   const venueBits = [p.venue, p.volume && `${p.volume}권`, p.issue && `${p.issue}호`, p.pages && `${p.pages}쪽`].filter(Boolean).join(", ");
   panel.innerHTML = "";
@@ -382,6 +388,9 @@ async function renderDetail() {
     <div class="tab-body"></div></div>`);
   panel.appendChild(inner);
   const reload = () => { refreshAll(); };
+  // 상세 패널의 저장 요청: 실패하면 토스트(404면 목록을 다시 받음), 성공하면 다시 그림
+  const save = (req) => req.then(reload, saveError);
+  markTabs($(".tabs", inner), "상세 정보");
   drawFolderLine($("[data-folder-line]", inner), p);
 
   const ib = issuesBox(p.cite_issues, () => editPaperDialog(p));
@@ -465,45 +474,40 @@ async function renderDetail() {
       { label: "휴지통으로 옮기기", danger: true, action: () => deletePapers([p.id]) },
     ]);
   };
-  $$("[data-status] button", inner).forEach((b) => (b.onclick = async () => { await api.patch(`/api/papers/${p.id}`, { status: b.dataset.v }); reload(); }));
-  $$(".rating button", inner).forEach((b) => (b.onclick = async () => {
+  $$("[data-status] button", inner).forEach((b) => (b.onclick = () => save(api.patch(`/api/papers/${p.id}`, { status: b.dataset.v }))));
+  $$(".rating button", inner).forEach((b) => (b.onclick = () => {
     const r = Number(b.dataset.r);
-    await api.patch(`/api/papers/${p.id}`, { rating: p.rating === r ? 0 : r });
-    reload();
+    save(api.patch(`/api/papers/${p.id}`, { rating: p.rating === r ? 0 : r }));
   }));
   const tagInput = $(".tag-input input", inner);
-  tagInput.onkeydown = async (e) => {
+  tagInput.onkeydown = (e) => {
     if (e.key === "Enter" && tagInput.value.trim()) {
       e.preventDefault();
-      await api.patch(`/api/papers/${p.id}`, { tags: [...p.tags.map((t) => t.name), tagInput.value.trim()] });
-      reload();
+      save(api.patch(`/api/papers/${p.id}`, { tags: [...p.tags.map((t) => t.name), tagInput.value.trim()] }));
     }
   };
-  $$("[data-untag]", inner).forEach((b) => (b.onclick = async () => {
-    await api.patch(`/api/papers/${p.id}`, { tags: p.tags.map((t) => t.name).filter((n) => n !== b.dataset.untag) });
-    reload();
+  $$("[data-untag]", inner).forEach((b) => (b.onclick = () => {
+    save(api.patch(`/api/papers/${p.id}`, { tags: p.tags.map((t) => t.name).filter((n) => n !== b.dataset.untag) }));
   }));
-  $$("[data-uncol]", inner).forEach((b) => (b.onclick = async () => {
-    await api.post("/api/papers/bulk", { ids: [p.id], action: "remove_collection", value: Number(b.dataset.uncol) });
-    reload();
+  $$("[data-uncol]", inner).forEach((b) => (b.onclick = () => {
+    save(api.post("/api/papers/bulk", { ids: [p.id], action: "remove_collection", value: Number(b.dataset.uncol) }));
   }));
   $("[data-addcol]", inner).onclick = (e) => {
     e.stopPropagation();
     const items = state.collections.filter((c) => !p.collections.includes(c.id))
-      .map((c) => ({ label: c.name, action: async () => { await api.post("/api/papers/bulk", { ids: [p.id], action: "add_collection", value: c.id }); reload(); } }));
+      .map((c) => ({ label: c.name, action: () => save(api.post("/api/papers/bulk", { ids: [p.id], action: "add_collection", value: c.id })) }));
     items.push("-", { label: "새 컬렉션…", action: async () => {
       const name = await promptDialog("새 컬렉션 이름");
       if (!name) return;
-      const { id } = await api.post("/api/collections", { name });
-      await api.post("/api/papers/bulk", { ids: [p.id], action: "add_collection", value: id });
-      reload();
+      save(api.post("/api/collections", { name })
+        .then(({ id }) => api.post("/api/papers/bulk", { ids: [p.id], action: "add_collection", value: id })));
     } });
     popupMenu(e.currentTarget, items, { left: true });
   };
   const showTab = (tab) => {
     if (noteSaver) { noteSaver.flush(); noteSaver = null; }
     detailTab = tab;
-    $$(".tabs button", inner).forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+    selectTab($(".tabs", inner), tab);
     const tb = $(".tab-body", inner);
     tb.innerHTML = "";
     if (tab === "note") tb.appendChild(noteEditor(p));
@@ -616,8 +620,8 @@ function relatedView(p) {
 
 export function miniResult(it) {
   const m = el(`<div class="mini">
-    <div class="t">${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener">${esc(it.title)}</a>` : esc(it.title)}</div>
-    <div class="s">${esc(authorsShort(it.authors, 2))}${it.venue ? ` · ${esc(it.venue)}` : ""}${it.year ? ` · ${it.year}` : ""}${it.cited_by_count != null ? ` · 인용 ${fmtNum(it.cited_by_count)}` : ""}</div>
+    <div class="t">${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener noreferrer">${esc(it.title)}</a>` : esc(it.title)}</div>
+    <div class="s">${esc(authorsShort(it.authors, 2))}${it.venue ? ` · ${esc(it.venue)}` : ""}${Number.isInteger(it.year) ? ` · ${it.year}` : ""}${it.cited_by_count != null ? ` · 인용 ${fmtNum(it.cited_by_count)}` : ""}</div>
     <div class="a">${it.in_library ? `<span class="chip success">서재에 있음</span>` : `<button class="btn sm" data-add>＋ 서재에 추가</button>`}
       ${it.pdf_url && !it.in_library ? `<button class="btn sm ghost" data-addpdf>PDF 포함 추가</button>` : ""}</div></div>`);
   const add = async (withPdf, btn) => {
@@ -675,7 +679,7 @@ export async function openPdfFile(pid) {
   try {
     const { url } = await api.get(`/api/papers/${pid}/pdf-url`);
     if (w && !w.closed) w.location.replace(url);
-    else window.open(url, "_blank", "noopener");
+    else window.open(url, "_blank", "noopener,noreferrer");
   } catch (e) {
     if (w && !w.closed) w.close();
     errorToast(e);

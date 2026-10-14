@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { isAuthorizeUrl, parseCallback, findDeepLink } = require('../main/auth-bridge');
+const { isAuthorizeUrl, parseCallback, findDeepLink, launchSwitches, registerProtocol } = require('../main/auth-bridge');
 const { isCloudSender, isLocalSender } = require('../main/ipc');
 const { Store } = require('../main/store');
 const { serverOrigin, cleanOrigin } = require('../main/config');
@@ -33,6 +33,32 @@ test('딥 링크: paperlab://auth-callback?code= 만, 코드 모양 검사, 오�
   assert.equal(parseCallback('https://auth-callback/?code=abcdefgh'), null);
   assert.equal(findDeepLink(['C:\\PaperLab.exe', '--hidden']), null);
   assert.equal(findDeepLink(['C:\\PaperLab.exe', 'PAPERLAB://auth-callback?code=abcdefgh']), 'PAPERLAB://auth-callback?code=abcdefgh');
+});
+
+test('F1 paperlab:// 등록: 배포본만 "exe" -- "%1" 로(가짜 app — 이 PC 레지스트리는 건드리지 않음), 개발 실행은 건너뜀, 제거 때 지움', () => {
+  const calls = [];
+  const fake = (isPackaged) => ({ isPackaged, setAsDefaultProtocolClient: (...a) => { calls.push(a); return true; } });
+  const exe = 'C:\\Users\\홍 길동\\AppData\\Local\\Programs\\PaperLab\\PaperLab.exe';
+  assert.equal(registerProtocol(fake(true), exe), true);
+  assert.deepEqual(calls, [['paperlab', exe, ['--']]]);
+  assert.equal(registerProtocol(fake(false), 'C:\\x\\electron.exe'), false);
+  assert.equal(calls.length, 1, '개발 실행은 등록하지 않음');
+  assert.equal(registerProtocol({ isPackaged: true, setAsDefaultProtocolClient: () => false }, exe), false);
+  const nsh = fs.readFileSync(path.join(ROOT, 'build', 'installer.nsh'), 'utf8');
+  const un = nsh.slice(nsh.indexOf('${ifNot} ${isUpdated}'), nsh.indexOf('${endIf}'));
+  assert.ok(un.includes('DeleteRegKey HKCU "Software\\Classes\\paperlab"'), '제거(업데이트 아님) 때 등록을 지움');
+});
+
+test('F1 실행 인자: paperlab:// 인자는 꼭 하나만, 그 뒤 · "--" 뒤의 스위치는 무시', () => {
+  const exe = 'C:\\PaperLab.exe';
+  const link = 'paperlab://auth-callback?code=abcdefgh';
+  assert.equal(findDeepLink([exe, '--', link]), link);
+  assert.equal(findDeepLink([exe, link, 'paperlab://auth-callback?code=zzzzzzzz']), null, '둘 이상이면 받지 않음');
+  assert.equal(findDeepLink([exe, `paperlab://auth-callback?code=${'a'.repeat(5000)}`]), null);
+  assert.deepEqual(launchSwitches([exe, '--hidden']), ['--hidden']);
+  assert.deepEqual(launchSwitches([exe, link, '--hidden', '--inspect=9229']), [], '딥 링크 뒤 스위치는 무시');
+  assert.deepEqual(launchSwitches([exe, '--', link, '--hidden']), [], '"--" 뒤는 무시');
+  assert.deepEqual(launchSwitches([exe, '--hidden', '--', link]), ['--hidden']);
 });
 
 test('IPC 보낸 곳: 클라우드 채널은 서버 출처 최상위 프레임만, 로컬 채널은 app://ui 최상위만', () => {
@@ -101,11 +127,11 @@ test('AC-88 (h) electron-builder: publish generic · url = server.json public_ur
   assert.deepEqual(Object.keys(pkg.dependencies), ['electron-updater']);
 });
 
-test('AC-74 preload: 클라우드 화면에는 13.3 표의 함수 6개만, 토큰 · Electron API 를 내주지 않음', () => {
+test('AC-74 preload: 클라우드 화면에는 13.3 표의 함수 6개 + 로그인 대기 취소만, 토큰 · Electron API 를 내주지 않음', () => {
   const src = fs.readFileSync(path.join(ROOT, 'preload', 'preload.js'), 'utf8');
   const block = src.slice(src.indexOf("exposeInMainWorld('paperlabDesktop'"));
   const names = [...block.matchAll(/^\s{4}([A-Za-z]+):/gm)].map((m) => m[1]);
-  assert.deepEqual(names, ['info', 'pair', 'nudge', 'startGoogleLogin', 'onAuthCallback', 'openStatusWindow']);
+  assert.deepEqual(names, ['info', 'pair', 'nudge', 'startGoogleLogin', 'cancelGoogleLogin', 'onAuthCallback', 'openStatusWindow']);
   assert.ok(!/:\s*ipcRenderer\b|\(ipcRenderer\)|exposeInMainWorld\('ipcRenderer'|require\('(fs|child_process|node:)/.test(src));
 });
 

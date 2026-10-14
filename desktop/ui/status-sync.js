@@ -331,6 +331,6 @@
     if (sy.state !== 'off' && flashText && /취소했어요/.test(flashText) && sy.state !== 'scanning') flashText = '';
   }
 
+  window.PaperLabStatusSync = { draw: draw, $: $, esc: esc, el: el, ICON_WARN: ICON_WARN }; // status.js 도 같은 도우미를 씀
   init();
-  window.PaperLabStatusSync = { draw: draw };
 })();

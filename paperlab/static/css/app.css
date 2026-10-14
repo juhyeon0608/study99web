@@ -492,6 +492,11 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
   .reader { grid-template-columns: 1fr; }
   .reader .panel { display: none; }
 }
+/* 좁은 화면: 읽기 막대를 두 줄로 — 첫 줄 = 서재 · 제목 · 패널 단추, 다음 줄 = 쪽 · 확대 · 색 (패널 단추가 화면 밖으로 나가지 않게) */
+@media (max-width: 560px) {
+  .reader .reader-bar { flex-wrap: wrap; row-gap: 6px; }
+  .reader .reader-bar .title { flex-basis: calc(100% - 130px); }
+}
 
 /* ---------------- 논문 쓰기 ---------------- */
 .write-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; max-width: 980px; }
@@ -975,6 +980,7 @@ img.avatar { background: var(--surface-3); }
   .account-mini-wrap { display: block; position: fixed; right: 16px; bottom: 16px; z-index: 50; }
   #app.reading ~ .account-mini-wrap,
   body[data-auth="pending"] > .account-mini-wrap, body[data-auth="out"] > .account-mini-wrap { display: none; }
+  .ask .chat-input { padding-right: 72px; }
 }
 .account-mini {
   width: 44px; height: 44px; padding: 0; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 50%;
@@ -1459,6 +1465,9 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 
 /* 한 줄 상태(대화 · 글쓰기 · 작업 목록): 글자 칸이 늘고 버튼은 오른쪽 */
 .status-line .grow { flex: 1; min-width: 0; }
+/* 작업 줄의 경과 시간(aria-hidden): 상태 글 바로 뒤에 붙임 — 상태 글(role=status)만 화면 읽기가 읽는다 */
+.status-line > .grow:has(+ [data-tick]:not(:empty)) { flex: 0 1 auto; }
+.status-line > [data-tick]:not(:empty) { flex: 1; margin-left: -8px; white-space: nowrap; }
 .status-line > svg.ico { flex: none; }
 .msg.assistant > .status-line, .msg.assistant > .notice { margin-top: 6px; }
 

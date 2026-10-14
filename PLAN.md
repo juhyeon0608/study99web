@@ -10,16 +10,20 @@
 - **개정 2026-10-08 (1C단계 추가 — 사용자 요청 · 결정 2026-10-07)**: 논문 쓰기 화면에 **참고 패널**(PDF 원문 · 하이라이트·노트 · AI 요약 · 서지 정보 + 원고 인용 기반 추천)을 넣는 **1C단계**를 1B 바로 다음 · 2단계 이전에 진행(사용자 결정 "2단계보다 먼저"). [명세](docs/specs/writing-reference-pane.md) · 팀장 K-1~K-13 결정(추천안) · 디자인 RD-1~RD-6(디자인팀 안 채택) · 사용자 U-1(직접 인용 = APA 방식 + “ ”). 진행 순서는 **0 → 1 → 1A → 1B → 1C → 2 → 3 → 4 → 5 → 6**. 바뀐 곳: 6장
 - **개정 2026-10-08 (2단계를 2a · 2b로 나눔 — 사용자 결정)**: **2a = 서버 · 웹**(작업 큐 · 기기 연결 · 워커 API · API 우선/CLI 폴백 라우팅 · API 키 3종 · 설정 화면 · PC 앱 받기 화면과 `/downloads` · 작업 목록), **2b = Electron 앱 · PC 워커 · 서버 PC 빌드(`update.ps1`) · 실제 PC 실측**. 이유: 세션 사용량 절감, 2a를 먼저 반영해 브라우저에서 OpenAI · Google 키를 바로 쓰기. 2a만 반영된 동안 CLI 작업은 워커가 없으면 대기. 진행 순서는 **… → 1C → 2a → 2b → 3 → …**. 바뀐 곳: 6장 2단계(2a · 2b 하위 단계와 각각의 완료 기준), [2단계 명세](docs/specs/phase2-worker-electron.md) 17 · 21장
 - **개정 2026-10-13 (6단계 결정 반영 — 사용자 · 팀장 결정)**: 사용자 U-4(**OneDrive 안 폴더는 루트로 막음** · 기본 위치 `C:\Users\<이름>\PaperLab 논문`), K-28(**PC에서 PDF를 고치면 서재에 반영, 전체 번역이 있던 논문은 "PDF가 바뀌어 번역을 지웠어요"를 앱 알림 · 웹 화면에 알리고 다시 번역은 사용자가 한 번 더 누름**). 팀장 K-1~K-29 확정, **K-11 해석**("서버를 통해서만" = 앱이 DB에 직접 붙지 않고 권한 판단을 서버가 함, PDF 바이트는 R2 서명 주소로 직접 — 2 · 6장), **K-30 용량 대비**(첫 연결 미리보기 용량 막음 + 사용자당 올리기 상한 기본 2GB). 개발팀 첫 작업으로 스파이크 S-1~S-5(명세 21.4절). 바뀐 곳: 2장 보안 원칙 · 폴더 미러 · `sync_state` 줄, 6장 6단계, 목록 6단계 명세 줄. 6단계 명세 상태 "결정 반영 — 구현 대기"
+- **개정 2026-10-14 (전체 오류 점검 — 문서 정리)**: 단계 표에 "상태 / 서버 반영" 칸 추가(2026-10-14 현재 서버 PC는 1C `f9e748e`까지 반영, 2a~6단계는 미반영), 4 · 5단계 명세 링크 추가, 낡은 "(초안)" · "나중에 작성" · "승인 대기" 표기 정리, 남은 일을 12장에 통합. 바뀐 곳: 머리말 · 6장 · 12장
+- **개정 2026-10-14 전체 오류 점검 반영**: 코드 수정분을 각 명세 · 안내서에 맞춤(2단계 preload 7개 · `paperlab://` 등록 · 딥 링크 검사 · 로그오프 정지 / 6단계 `trash_aborted` · `trash_timeout` 등 / 5단계 버튼 이름 / 3단계 `ai.fence` / `FEATURES.md` / 서버 PC 안내서 `lock_timeout` · `Remove-PLTree`). 12장 남은 일에 13~17번 추가(PDF 교체 시 R2 키 덮어쓰기 · D-9 안쪽 정션 · 트레이만 켠 상태의 로그오프 신호 · ASAR fuse · AC-72 실기기). 바뀐 곳: 12장
 - 표기: **확정** = 사용자가 정한 것, **팀장 결정** = 팀장이 정한 것(사용자 이견 시 변경), **미정** = 사용자 확인이 필요한 것
 - 0단계 기능 명세: [`docs/specs/doc-formats.md`](docs/specs/doc-formats.md) (논문 양식 · 서식 프리셋)
 - 1단계 기능 명세: [`docs/specs/phase1-cloud.md`](docs/specs/phase1-cloud.md) (클라우드 기반)
-- 2단계 기능 명세(초안 — 사용자 결정 반영, 서버 PC 기준 개정 중): [`docs/specs/phase2-worker-electron.md`](docs/specs/phase2-worker-electron.md) (작업 큐 · CLI 워커 · 엔진 라우팅 · Electron 앱)
+- 2단계 기능 명세(2a · 2b 구현 완료): [`docs/specs/phase2-worker-electron.md`](docs/specs/phase2-worker-electron.md) (작업 큐 · CLI 워커 · 엔진 라우팅 · Electron 앱)
 - 서버 PC 설치 안내서: [`deploy/server-pc/README.md`](deploy/server-pc/README.md)
-- 1A단계 기능 명세(초안): [`docs/specs/inha-proxy.md`](docs/specs/inha-proxy.md) (인하대 openlink 프록시 링크 · Google Scholar 바로가기)
+- 1A단계 기능 명세: [`docs/specs/inha-proxy.md`](docs/specs/inha-proxy.md) (인하대 openlink 프록시 링크 · Google Scholar 바로가기)
 - 1B단계 기능 명세: [`docs/specs/citation-graph.md`](docs/specs/citation-graph.md) (인용 그래프 — Connected Papers 방식 · 공용 캐시. 2026-10-07 사용자 결정 U-1 · 팀장 결정 K-1~K-16 반영)
 - 3단계 기능 명세: [`docs/specs/phase3-rag-verify-search.md`](docs/specs/phase3-rag-verify-search.md) (여러 논문 RAG 질문 · 인용 검증 · AI로 찾기. 2026-10-08 사용자 U-1(D안) · U-2(벡터 R2 + 서버 메모리) · 팀장 K-1~K-15 반영)
 - 1C단계 기능 명세: [`docs/specs/writing-reference-pane.md`](docs/specs/writing-reference-pane.md) (논문 쓰기 화면의 참고 패널 · 원고 인용 기반 추천. 2026-10-08 팀장 결정 K-1~K-13 · 디자인 RD-1~RD-6 · 사용자 U-1 반영)
-- 6단계 기능 명세(구현 완료(검증 중) — 2026-10-14): [`docs/specs/phase6-folder-sync.md`](docs/specs/phase6-folder-sync.md) (폴더 양방향 동기화 ⑧ · 서재 휴지통. 2026-10-13 사용자 U-1~U-4 · K-28 번역 알림, 팀장 K-1~K-30 확정)
+- 4단계 기능 명세(완료 — 커밋 `f49b553`): [`docs/specs/phase4-explain-translate.md`](docs/specs/phase4-explain-translate.md) (쉬운 설명 · 번역. 2026-10-13 사용자 U-1 · 팀장 K-1~K-14)
+- 5단계 기능 명세(완료 — 커밋 `452b1d8` · `b315d41`): [`docs/specs/phase5-korean-db.md`](docs/specs/phase5-korean-db.md) (국내 DB · 기관 연동 — KCI · RISS · Europe PMC · OpenCitations · OpenAlex 무료 PDF. 2026-10-13 사용자 U-1~U-5 · 팀장 K-1~K-22)
+- 6단계 기능 명세(완료 — 커밋 `853c81e`, 실기기 확인 남음, 2026-10-14): [`docs/specs/phase6-folder-sync.md`](docs/specs/phase6-folder-sync.md) (폴더 양방향 동기화 ⑧ · 서재 휴지통. 2026-10-13 사용자 U-1~U-4 · K-28 번역 알림, 팀장 K-1~K-30 확정)
 
 ---
 
@@ -143,18 +147,21 @@
 
 **진행 순서(개정 2026-10-08, 사용자 결정)**: 0 → 1 → **1A(인하대 프록시 링크 · Scholar 바로가기)** → **1B(인용 그래프 ⑥)** → **1C(논문 쓰기 참고 패널)** → 2 → 3 → 4 → 5 → 6. 1A · 1B · 1C는 다른 명세의 단계 번호를 바꾸지 않으려고 붙인 이름입니다.
 
-| 단계 | 내용 | 기능 | 명세 |
-|---|---|---|---|
-| 0 | 계획서 + 논문 양식 | 양식 | [doc-formats](docs/specs/doc-formats.md) |
-| 1 | 클라우드 기반 | — | [phase1-cloud](docs/specs/phase1-cloud.md) |
-| **1A** | 인하대 openlink 프록시 링크 · Google Scholar 바로가기 | ⑤ 일부 | [inha-proxy](docs/specs/inha-proxy.md)(초안) |
-| **1B** | 인용 그래프(Connected Papers 방식) | ⑥ | [citation-graph](docs/specs/citation-graph.md) |
-| **1C** | 논문 쓰기 화면의 참고 패널(PDF · 하이라이트·노트 · 요약 · 정보 · 원고 인용 기반 추천) | ⑥ 활용 | [writing-reference-pane](docs/specs/writing-reference-pane.md) |
-| 2 | 작업 큐 · CLI 워커 · 엔진 라우팅 · Electron 앱 | ④ | [phase2-worker-electron](docs/specs/phase2-worker-electron.md) |
-| 3 | 여러 논문 RAG 질문 · 인용 검증 · **AI로 찾기** | ① ⑦ **⑨** | [phase3-rag-verify-search](docs/specs/phase3-rag-verify-search.md) |
-| 4 | 쉬운 설명 · 번역 (영역 캡처 · codex 이미지 생성은 4단계 이후 후속 — U-1) | ② ③ | [phase4-explain-translate](docs/specs/phase4-explain-translate.md) |
-| 5 | 국내 DB · 기관 연동(프록시 링크 제외) | ⑤ | 나중에 작성 |
-| 6 | 폴더 양방향 동기화 | ⑧ | [phase6-folder-sync](docs/specs/phase6-folder-sync.md)(초안) |
+| 단계 | 내용 | 기능 | 명세 | 상태 / 서버 반영 (2026-10-14) |
+|---|---|---|---|---|
+| 0 | 계획서 + 논문 양식 | 양식 | [doc-formats](docs/specs/doc-formats.md) | 완료 / 반영 |
+| 1 | 클라우드 기반 | — | [phase1-cloud](docs/specs/phase1-cloud.md) | 완료 / 반영 |
+| **1A** | 인하대 openlink 프록시 링크 · Google Scholar 바로가기 | ⑤ 일부 | [inha-proxy](docs/specs/inha-proxy.md) | 완료 / 반영 |
+| **1B** | 인용 그래프(Connected Papers 방식) | ⑥ | [citation-graph](docs/specs/citation-graph.md) | 완료 / 반영 |
+| **1C** | 논문 쓰기 화면의 참고 패널(PDF · 하이라이트·노트 · 요약 · 정보 · 원고 인용 기반 추천) | ⑥ 활용 | [writing-reference-pane](docs/specs/writing-reference-pane.md) | 완료 / 반영(`f9e748e`) |
+| **2a** | 작업 큐 · 기기 연결 · 워커 API · 엔진 라우팅 · API 키 · 설정 화면 · PC 앱 받기 | ④ | [phase2-worker-electron](docs/specs/phase2-worker-electron.md) | 완료(커밋) / 미반영 |
+| **2b** | Electron 앱 · PC 워커 · 서버 PC 빌드 | ④ | [phase2-worker-electron](docs/specs/phase2-worker-electron.md) | 완료(커밋) / 미반영 |
+| 3 | 여러 논문 RAG 질문 · 인용 검증 · **AI로 찾기** | ① ⑦ **⑨** | [phase3-rag-verify-search](docs/specs/phase3-rag-verify-search.md) | 완료(커밋 `362b7f0`) / 미반영 |
+| 4 | 쉬운 설명 · 번역 (영역 캡처 · codex 이미지 생성은 4단계 이후 후속 — U-1) | ② ③ | [phase4-explain-translate](docs/specs/phase4-explain-translate.md) | 완료(커밋 `f49b553`) / 미반영 |
+| 5 | 국내 DB · 기관 연동(프록시 링크 제외) | ⑤ | [phase5-korean-db](docs/specs/phase5-korean-db.md) | 완료(커밋 `452b1d8` · `b315d41`) / 미반영 |
+| 6 | 폴더 양방향 동기화 · 서재 휴지통 | ⑧ | [phase6-folder-sync](docs/specs/phase6-folder-sync.md) | 완료(커밋 `853c81e`, 실기기 확인 남음) / 미반영 |
+
+**서버 PC 반영 현황**: 2026-10-14 현재 서버 PC는 `f9e748e`(1C)까지 반영했고 2a~6단계는 **미반영**입니다. 한 번에 올리는 순서는 [서버 PC 안내서](deploy/server-pc/README.md) 16절. 남은 확인 · 후속은 12장.
 
 ### 0단계 — 계획서 + 논문 양식(서식 프리셋)
 
@@ -264,6 +271,7 @@
 - **목표**: 서재 여러 편을 근거로 질문하고, 원고의 인용이 원문과 맞는지 확인합니다. (개정 2026-10-07, 사용자 결정) **서재 밖 논문도 자연어 질문으로 찾아, 출처가 달린 한국어 요약으로 답을 받습니다(AI로 찾기 — Liner Scholar 방식).**
 - **범위**: 쪽·좌표가 붙은 청크 만들기(PyMuPDF, `chunks`), 로컬 임베딩 계산(클라우드), pgvector + PGroonga 전문 검색 하이브리드 검색, 범위(현재 논문 / 컬렉션·폴더 / 전체) 선택, 출처 클릭 → 읽기 화면의 해당 쪽·좌표로 이동, 원고 인용 검증(인용 문장 ↔ 근거 청크 비교, 근거 없는 인용 표시)
   - **AI로 찾기(⑨)**: ① 사용자의 자연어 질문(한국어 · 영어)을 AI가 **검색어 여러 개**(영어 검색어 포함)로 바꿈 → ② **OpenAlex · Semantic Scholar**를 검색(지금 `paperlab/sources.py` 사용) → ③ 결과를 합치고 중복(DOI · 제목)을 없앤 뒤 **관련도로 골라** 상위 몇 편만 남김 → ④ 고른 논문의 서지 · 초록을 근거로 **출처 번호가 달린 요약**을 만듦(본문 문장마다 [1] [2] … → 아래 논문 목록과 연결) → ⑤ 출처 논문마다 서재 추가 · 인용 · (1A) 인하대에서 보기 · Google Scholar 버튼. **답변은 항상 한국어**(사용자 결정). 엔진은 **API 키 우선 → CLI 워커 폴백**(5장 · 2단계 작업 큐 그대로 — 작업 종류 하나 추가). 근거는 검색된 논문의 서지 · 초록뿐이며, 근거에 없는 내용을 지어내지 않고 출처 없는 문장을 만들지 않음(프롬프트 규칙 + 출처 번호 검사)
+- **상태**: 구현 완료(커밋 `362b7f0`) — 서버 미반영
 - **명세**: [`docs/specs/phase3-rag-verify-search.md`](docs/specs/phase3-rag-verify-search.md) (2026-10-08)
 - **결정됨(2026-10-08)**: 사용자 **U-1 = D안**(서버 PC 무료 로컬 모델 EmbeddingGemma-300M 512차원 + PGroonga 낱말 검색 — `page_texts` 색인 그대로), **U-2 = 벡터는 Supabase(pgvector)에 넣지 않고 R2 파일(`users/{uid}/rag/…`, 논문당 하나) + 서버 메모리(사용자별 지연 로드 · 상한 512MB · LRU)** — Supabase 무료 유지, DB 증가는 약 10MB 안팎(범위 대화 · 인용 검증 캐시 · `papers` 두 열). 벡터 파일에는 RLS가 없어 **서버 코드가 사용자 경계를 지킴**(파일 키는 RLS 질의로 얻은 `papers.rag_key`만). 팀장 K-1~K-15 확정(화면 `#/ask`, 색인 = 작업 큐 `index`, 인용 검증 = 직접 인용 문자열 대조 + 간접 인용 AI 일괄 판정, AI로 찾기 = 검색어 3 · 소스별 20편 · 요약 8편 · 결과 24시간 뒤 비움 · 공용 캐시 안 씀). 아래 범위 줄의 "pgvector"는 이 결정으로 바뀜. R2 방식에서 생긴 팀장 결정 K-16~K-21(명세 20.3절)도 추천안대로 확정. **남은 것**: 실측(명세 20.4절)
 - **산출물**: 3단계 명세, 색인·검색·검증 코드, **AI로 찾기 코드(검색어 생성 · 다중 검색 · 관련도 선별 · 출처 달린 요약)**, 화면, 테스트(가짜 API · 가짜 CLI · 가짜 검색 응답)
@@ -273,7 +281,7 @@
 ### 4단계 — 쉬운 설명(②) · 번역(③)
 
 - **목표**: 읽기 화면에서 드래그한 부분을 쉽게 설명·도식화하고, 선택 번역과 논문 전체 번역을 합니다.
-- **상태**: 구현 완료(승인 대기)
+- **상태**: 완료(승인 · 커밋 `f49b553`) — 서버 미반영
 - **명세**: [`docs/specs/phase4-explain-translate.md`](docs/specs/phase4-explain-translate.md) — **확정(2026-10-13)**: 사용자 U-1, 팀장 K-1~K-14(기획팀 추천안)
 - **범위(개정 2026-10-13)**: 선택 상자 · 하이라이트 상자의 [쉽게 설명] · [번역] → 읽기 화면 패널 탭 "설명·번역"(K-1), 드래그 설명(한 줄 · 쉬운 설명 · 자세한 설명 · 필요할 때 SVG 도식 — DOMPurify SVG 프로필 + blob 이미지 격리 K-2 · K-3, DB `explanations`에 기록 겸 캐시 · 사용자당 300개 K-4), 선택 번역(interactive SSE), 논문 전체 번역(작업 큐 `translate_paper`, **잡기 한 번 = 묶음 하나(최대 3쪽) · 병렬 없음** K-6, 진행률 · 취소 · 이어서 · 실패 쪽 다시 · 쪽 범위 · 참고문헌 이후 기본 제외 K-8, 본문은 **R2 파일** + DB 메타 K-5, PDF 옆 쪽 따라가기 보기), 번역 대상 언어 설정(기본 한국어 K-9), 작업별 엔진 `explain` · `translate`(기본 claude K-10), [원고로 만들기](K-12)
 - **안 하는 것 → 4단계 이후 후속(사용자 결정 U-1, 2026-10-13)**: **영역 캡처(그림 · 수식 이미지를 잘라 설명)**, **codex 이미지 생성**. 그 밖 범위 밖은 명세 3장
@@ -287,21 +295,22 @@
 (개정 2026-10-13, **사용자 결정** — [명세](docs/specs/phase5-korean-db.md) 16장: **Unpaywall을 쓰지 않음**(무료 PDF 정보는 OpenAlex 것만), KCI · RISS 키는 공용 키 하나, RISS 키를 못 받으면 RISS는 1A 검색 바로가기만, 무료 PDF는 라이선스가 확인된 것만 서버가 받음)
 
 - **목표**: 국내 논문 검색과 오픈 액세스 찾기.
-- **범위**: KCI · RISS(키를 받으면) · Europe PMC 검색, OpenCitations 인용 관계, **OpenAlex 무료 PDF 정보**(`best_oa_location` / `oa_locations`의 `pdf_url` · `license`)로 **라이선스가 확인된 것(CC · 퍼블릭 도메인)만 서버가 받고 나머지는 새 탭으로 엶**(기존 [PDF 받기]에도 같은 규칙 — 프록시 · openlink 호스트는 쓰지 않음). ~~Unpaywall 무료 PDF~~ — **삭제(사용자 결정 2026-10-13)**. 공용 캐시(`external_works` · `citation_edges`, 사용자 결정 — 1B단계에서 만든 것을 함께 씀)에는 **DOI로 다시 찾는 것만** 새로 저장(OpenCitations 참고문헌 · 인용 관계) — OpenAlex 무료 PDF 정보는 1B 캐시에 이미 있는 작품 행을 읽어 씀. KCI · RISS · Europe PMC 검색 결과 목록은 캐시하지 않음. 누가 조회했는지는 남기지 않고, 서재에 넣은 논문·PDF·메모는 각자의 개인 데이터로 따로 저장. KCI · RISS로 찾은 논문에도 1A의 "인하대에서 보기"를 붙임
+- **상태**: 완료(승인 · 커밋 `452b1d8` · `b315d41`) — 서버 미반영. 명세: [`docs/specs/phase5-korean-db.md`](docs/specs/phase5-korean-db.md)
+- **범위**: KCI · RISS(키를 받으면) · Europe PMC 검색, OpenCitations 인용 관계, **OpenAlex 무료 PDF 정보**(`best_oa_location` / `oa_locations`의 `pdf_url` · `license`)로 **라이선스가 확인된 것(CC · 퍼블릭 도메인)만 서버가 받고 나머지는 새 탭으로 엶**(기존 [무료 PDF 찾기]에도 같은 규칙 — 프록시 · openlink 호스트는 쓰지 않음). ~~Unpaywall 무료 PDF~~ — **삭제(사용자 결정 2026-10-13)**. 공용 캐시(`external_works` · `citation_edges`, 사용자 결정 — 1B단계에서 만든 것을 함께 씀)에는 **DOI로 다시 찾는 것만** 새로 저장(OpenCitations 참고문헌 · 인용 관계) — OpenAlex 무료 PDF 정보는 1B 캐시에 이미 있는 작품 행을 읽어 씀. KCI · RISS · Europe PMC 검색 결과 목록은 캐시하지 않음. 누가 조회했는지는 남기지 않고, 서재에 넣은 논문·PDF·메모는 각자의 개인 데이터로 따로 저장. KCI · RISS로 찾은 논문에도 1A의 "인하대에서 보기"를 붙임
 - **완료 기준**: 검색 화면에서 KCI를 고를 수 있고 서재 추가가 됨 · **RISS 검색은 키를 받으면** 같은 방식으로 됨(키가 없으면 RISS는 1A 검색 바로가기만, 목록에서는 비활성) · DOI가 있는 논문에서 **OpenAlex 무료 PDF 정보로, 라이선스 규칙에 따라 받거나(CC · 퍼블릭 도메인) 새 탭으로 엶**
 - **미정**: (없음 — KCI·RISS API 키 발급 주체는 공용 키 하나로 해결, P9). 남은 것은 관리자의 키 신청 결과와 개발팀 첫 주 실측(OpenAlex `license` 실제 값 목록). (학교 프록시 주소 형식은 1A 명세 5장에서 확인 — 이 단계 미정에서 뺌)
 
 ### 6단계 — 폴더 양방향 동기화(⑧)
 
 - **목표**: 각 PC의 논문 폴더와 클라우드 서재의 **폴더**를 양쪽으로 맞춥니다(컬렉션은 가상 분류라 동기화 대상 아님).
-- **상태**: 구현 완료(검증 중)
+- **상태**: 완료(커밋 `853c81e`) — 실기기 확인 남음, 서버 미반영
 - **범위**: 2단계 **Electron 설치형 앱(같은 앱)** 에 폴더 동기화 추가(사용자 결정 — 별도 프로그램을 만들지 않음, 자동 업데이트로 배포), 폴더 감시, PC 폴더 ↔ 서재 `folders` 대응, 파일 추가·이름 변경·이동·삭제 반영, 해시로 같은 파일 판별, PC별 상태 기록(`sync_state`: 경로·해시·버전), 여러 PC 동시 변경 처리. 워커는 여기서도 PaperLab 서버(공개 주소)를 통해서만 주고받습니다 — **여기서 "서버를 통해서만"은 앱이 Supabase · DB에 직접 붙지 않고 모든 권한 판단을 PaperLab 서버가 한다는 뜻**이며, PDF 바이트는 서버가 발급한 R2 서명 주소로 직접 주고받고 서명 주소 요청은 R2 호스트로만 · 키 접두어 검사를 거쳐 보냅니다(팀장 결정 K-11, 2장 보안 원칙과 같은 해석). 서재 휴지통(30일) · 첫 연결 미리보기 · 용량 상한도 이 단계에 포함합니다.
 - **완료 기준**: PC A 폴더에 넣은 PDF가 서재와 PC B 폴더에 나타남 · 화면에서 논문을 다른 폴더로 옮기면 각 PC 폴더에서도 옮겨짐 · 컬렉션을 바꿔도 PC 파일은 움직이지 않음 · 정한 충돌 규칙대로 처리됨 · 어떤 경우에도 파일이 소리 없이 사라지지 않음
-- **명세**: [`docs/specs/phase6-folder-sync.md`](docs/specs/phase6-folder-sync.md) (**구현 완료(검증 중)**, 2026-10-14 — 코드와 달라진 곳은 명세 16.5절 "구현 차이" 표. 결정 반영은 2026-10-13)
+- **명세**: [`docs/specs/phase6-folder-sync.md`](docs/specs/phase6-folder-sync.md) (**완료(853c81e) — 실기기 확인 남음**, 2026-10-14 — 코드와 달라진 곳은 명세 16.5절 "구현 차이" 표. 결정 반영은 2026-10-13)
 - **결정됨(2026-10-13, 사용자)**: U-1(P5) 충돌 = **나중 것 우선 + 충돌 사본**(같은 폴더에 "파일명 (충돌 사본 PC이름 날짜).pdf", 자동, 어느 쪽도 잃지 않음), U-2(P6) 삭제 = **다른 PC · 서재에도 반영** — 서재는 **휴지통 30일**(되살리기), PC는 **Windows 휴지통**(웹의 [삭제]도 휴지통으로 바뀜), U-3 대상 = **PDF만**(노트 · 하이라이트는 클라우드에만). ~~미정: 충돌 처리 방식, 삭제를 다른 PC에도 퍼뜨릴지(휴지통 보관 기간), 동기화할 파일 종류~~
 - **추가 결정됨(2026-10-13, 사용자)**: U-4 **OneDrive 안 폴더는 루트로 막음**(기본 위치 `C:\Users\<이름>\PaperLab 논문` 제안). K-28 **PC에서 PDF를 고치면 서재에 반영** — 전체 번역이 있던 논문이면 "PDF가 바뀌어 번역을 지웠어요"를 앱 알림 · 웹 화면 모두에 알리고, 다시 번역하려면 한 번 더 눌러야 함(자동 재번역 없음). ~~미정: OneDrive 안 폴더 허용 여부~~
 - **팀장 결정(2026-10-13)**: K-1~K-29는 기획팀 추천안대로 확정(명세 21.3절). **K-11**은 위 "서버를 통해서만" 해석으로 확정. **K-30 용량 대비**(17장 위험 보강): 첫 연결 미리보기에서 R2 남은 용량(서버 측 사용량 합계 기준)을 넘으면 올리기를 막고 안내, 사용자당 올리기 상한을 설정값으로 둠(기본 2GB ≈ 10GB ÷ 5명, 관리자 설정으로 변경).
-- **남은 것(2026-10-14)**: 개발팀 첫 작업(스파이크 S-1~S-5)은 끝났고(2026-10-13, 명세 21.4절 — xid8 · restrictive RLS · `shell.trashItem`(main 전용) · NTFS 파일 ID 모두 통과) 서버 · 앱 구현도 끝나 **품질팀 검증 중**입니다. ① 설치 ID(`HKCU\Software\PaperLab\InstallId`) 업데이트 · 제거 실측(S-5 (f)) ② 실환경 시험(시험용 계정 · 시험용 루트, 명세 AC-6R1~6R3) ③ 관리자 작업: 운영 DB 크기 확인 · `admin maintain` · 앱 역할 `idle_in_transaction_session_timeout` 적용 확인([서버 PC 안내서](deploy/server-pc/README.md) 15절) ④ 후속: 동기화 중 휴지통 논문과 같은 DOI 알림 · 앱 "최근 알림". 사용자에게 더 묻는 것은 없음
+- **남은 것(2026-10-14)**: 개발팀 첫 작업(스파이크 S-1~S-5)은 끝났고(2026-10-13, 명세 21.4절 — xid8 · restrictive RLS · `shell.trashItem`(main 전용) · NTFS 파일 ID 모두 통과) 서버 · 앱 구현도 끝나 품질팀 검증과 승인을 거쳐 커밋했습니다(`853c81e`). 남은 것: ① 설치 ID(`HKCU\Software\PaperLab\InstallId`) 업데이트 · 제거 실측(S-5 (f)) ② 실환경 시험(시험용 계정 · 시험용 루트, 명세 AC-6R1~6R3) ③ 관리자 작업: 운영 DB 크기 확인 · `admin maintain` · 앱 역할 `idle_in_transaction_session_timeout` 적용 확인([서버 PC 안내서](deploy/server-pc/README.md) 15절) ④ 후속: 동기화 중 휴지통 논문과 같은 DOI 알림 · 앱 "최근 알림". 사용자에게 더 묻는 것은 없음
 
 ## 7. 비용 참고 (무료 한도)
 
@@ -376,3 +385,30 @@
 - **학교 프록시 이용 규정 (1A, 개정 2026-10-07)**: 구독 계약상 자동 수집 · 대량 다운로드는 금지이고, 걸리면 **학교 전체 접속이 막힐 수 있습니다.** 대응: 서버 · 화면 코드 모두 openlink로 요청을 보내지 않고 사용자가 누른 링크만 새 탭으로 엶, 학교 계정은 다루지 않음, 처음 쓸 때 "한 편씩 직접 받기" 안내(1A 명세 10 · 11장). Google Scholar도 새 탭으로 열기만 하고 결과를 가져오지 않음(약관).
 - **AI로 찾기의 근거 범위 (3단계, 개정 2026-10-07)**: 요약은 검색된 논문의 서지 · 초록만 근거로 하므로 본문 내용과 다를 수 있고, AI가 출처에 없는 내용을 지어낼 수 있습니다. 대응: 출처 번호 검사(목록에 없는 번호 · 출처 없는 문장 거부), 화면에 "초록 기반 요약" 표시, 원문 확인 링크. Semantic Scholar는 키 없이 쓰면 요청 한도가 낮음(429 — 지금 오류 문구 있음).
 - **한컴 글꼴**: 학교 양식의 휴먼명조·HY신명조·한양신명조 등은 한컴오피스가 없는 PC의 워드에서 대체 글꼴로 보입니다(명세에 안내 문구 포함).
+
+## 12. 남은 일(통합) — 2026-10-14
+
+품질팀이 정리한 보류 · 후속 항목을 한 곳에 모은 표입니다(2026-10-14 전체 점검 기준). 각 항목의 세부는 해당 단계 명세에 있습니다. **서버 미반영 단계(2a~6)의 실측 · 실기기 항목은 서버 PC에 반영한 뒤**([서버 PC 안내서](deploy/server-pc/README.md) 16절)에야 할 수 있습니다. 이번 전체 점검에서 나와 문서 정리로 고친 결함은 이 표에 넣지 않았습니다.
+
+| # | 단계 | 항목 | 내용 | 누가 · 언제 |
+|---|---|---|---|---|
+| 1 | 서버 PC(P13) | 사용자 질문 Q-S2~Q-S7 | 10장 P13 — 설치를 막지 않는 미정 질문들([1단계 명세](docs/specs/phase1-cloud.md) 19.4절) | **사용자 확인 필요** |
+| 2 | 1 | Funnel 헤더 진단 · AC-75 **보류** | 공개 주소로 온 요청의 `Host` · `X-Forwarded-For` 확인(저장소에 진단 기능이 아직 없음 — 서버 PC 안내서 9절 11번) | 개발팀이 진단 준비 → 관리자 · 품질팀 |
+| 3 | 1A | 배포 뒤 수동 확인 | IU-2 · IU-3 · IU-4 · IU-6, M-1 · M-2 · M-3 · M-15 · M-16([1A 명세](docs/specs/inha-proxy.md) 15장 · 10장 P15) | **사용자**(학교 계정으로 직접) |
+| 4 | 1B | 실측 | cites OR 쿼리, 하루 예산(IP 단위), Funnel 유휴 연결, AC-G40([1B 명세](docs/specs/citation-graph.md) 14.3절) | 개발팀 · 품질팀 |
+| 5 | 1C | 실측 | AC-R05, M-R11([1C 명세](docs/specs/writing-reference-pane.md)) | 품질팀 · 사용자 |
+| 6 | 2 | CLI 모델 이름 `unrecognized_model` **미해결** | CLI가 `claude-opus-5-5`를 거부함 — 모델 이름 매핑 또는 CLI 기본 모델 사용을 정해야 함(9장, 2단계 명세 11.6절) | 개발팀(2b 실측 때) |
+| 7 | 2b | 실기기 확인 | AC-70 · AC-76 · AC-77 · AC-78([2단계 명세](docs/specs/phase2-worker-electron.md)) | 관리자 · 품질팀(서버 반영 뒤) |
+| 8 | 3 | 실측 | AC-D05 · AC-S07 · AC-I08 · AC-Q09([3단계 명세](docs/specs/phase3-rag-verify-search.md) 20.4절) | 개발팀 · 품질팀(서버 반영 뒤) |
+| 9 | 4 | 후속 · 실측 | ① U-1 후속: 영역 캡처 · codex 이미지 생성 ② OpenAI · Gemini 번역의 토큰 비율 실측([4단계 명세](docs/specs/phase4-explain-translate.md) 16.3절) | ①은 별도 단계(사용자 결정 필요) ② 개발팀 |
+| 10 | 5 | 키 · 확인 | KCI · RISS 키 신청(서버 PC 안내서 14.2절), RISS가 https를 지원하는지, 녹화 도구 실행(14.3절), OpenAlex `license` 실제 값 목록 | **관리자**(키 신청 · 녹화), 개발팀(픽스처) |
+| 11 | 6 | 실기기 · 운영 확인 | 설치 ID(`HKCU\Software\PaperLab\InstallId`) 실측, AC-6R1~AC-6R3, 운영 DB 크기(Pro 전환 판단은 **사용자 확인**), 앱 역할 `idle_in_transaction_session_timeout` 60s 확인, 휴지통 중복 알림(동기화 중 휴지통 논문과 같은 DOI), AD-6([6단계 명세](docs/specs/phase6-folder-sync.md) · 서버 PC 안내서 15.3절) | 관리자 · 품질팀(서버 반영 뒤) |
+| 12 | 운영 | 복원 절차 **미검증**(D-3) | `pg_restore --disable-triggers`가 Supabase처럼 superuser가 아닌 환경에서 되는지 확인되지 않음. 새 버전 반영 직전 수동 백업은 필수([deploy/README.md](deploy/README.md) 4장) | 개발팀이 검증 방법 제시 → 팀장 승인 |
+
+| 13 | 1 · 6 | PDF 교체 때 R2 최종 키를 커밋 전에 덮어씀(설계 후속) | PDF가 **이미 있는 논문**의 PDF를 바꿀 때(`attach_from_incoming` — 웹 [PDF 바꾸기] · 동기화 `content`) 새 파일을 DB 커밋 **전에** 같은 최종 키(`paper_key`)로 복사해 덮어씀. 처음 붙이는 논문은 롤백 때 새 파일을 지우지만, 이미 PDF가 있던 논문은 롤백돼도 **옛 파일이 이미 새 파일로 바뀐 채**라 DB(해시 · 쪽 본문)와 R2 파일이 어긋날 수 있음. 고치려면 **버전이 붙은 키**(새 키에 쓰고 → DB 포인터 교체 → 옛 키 삭제 — 3단계 벡터 파일 `rag_key`와 같은 방식)가 필요한 **설계 후속**(키 규칙이 바뀌므로 기존 PDF · 고아 정리와의 관계를 함께 설계해야 함 — 미정) | 개발팀이 설계안 제시 → 팀장 승인(코드 변경은 그 뒤) |
+| 14 | 서버 PC 스크립트 | D-9 폴더 **안쪽** 정션은 검사하지 않음 | `Remove-PLTree`는 지울 **경로 자체**가 정션 · 심볼릭 링크면 멈추지만([서버 PC 안내서](deploy/server-pc/README.md) 13절), 지울 폴더 **안쪽**에 있는 정션 · 링크는 검사하지 않음(지우는 대상은 `dist` · `.staging` · 설치 `.venv`). 안쪽 링크까지 막을지, 지금대로 수용할지는 **미정 — 팀장 확인 필요** | 팀장(수용 여부 결정) |
+| 15 | 2b · 6 | 트레이만 켠 상태에서 로그오프 신호 | 자동 시작(`--hidden`)으로 창 없이 트레이만 떠 있으면 Windows `session-end`(창 이벤트)를 받을 창이 없어, 로그오프 때 워커 · 동기화를 정상 정지하지 못할 수 있음(Electron `powerMonitor`의 `shutdown`은 Linux · macOS 전용). 이때는 Windows가 프로세스를 그냥 끝내고 작업은 리스 만료 뒤 다른 PC가 이어받음([2단계 명세](docs/specs/phase2-worker-electron.md) 13.5절) | 개발팀 설계(숨은 창 · 다른 신호) → 실기기 확인 |
+| 16 | 2b | ASAR 무결성 fuse(`EnableEmbeddedAsarIntegrityValidation`) **미설정** | 서명 없는 설치본이 시작 · 업데이트되는지 확인하기 전이라 일부러 꺼 둠(2단계 명세 13.2절 Fuses · 20.3절) | 개발팀 · 관리자(AC-70 · 71 실환경에서 먼저 시험) |
+| 17 | 2b | 실기기 확인 — `paperlab://` 등록과 로그인 복귀(AC-72) | 설치본 `boot()`가 `setAsDefaultProtocolClient`로 등록한 `"…\PaperLab.exe" -- "%1"` 명령이 실제 Windows에서 동작하는지: [Google로 계속] → 브라우저 로그인 → "PaperLab 열기" 허용 → 앱 창에 로그인됨 · 앱 창 [취소] 뒤에는 콜백을 받지 않음 · **업데이트 뒤에도 등록이 남아 있고 제거하면 `HKCU\Software\Classes\paperlab`이 지워지는지**(`desktop/README.md`) | 관리자 · 품질팀(서버 반영 뒤) |
+
+표의 "누가 · 언제" 칸은 기획팀 정리이며, 담당 지정이 필요한 항목은 팀장이 정합니다.

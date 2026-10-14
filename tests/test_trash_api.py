@@ -186,3 +186,121 @@ def test_duplicates_and_citekeys_include_trash(cloud, project):
     assert new["citekey"] == key + "a"
     a.post("/api/trash/restore", json={"ids": [pid]})
     assert a.get(f"/api/papers/{pid}").json()["citekey"] == key
+
+
+# ====================================================================== 전체 오류 점검 (QA1) 회귀 시험
+def test_tag_of_trashed_paper_survives_other_tag_edit(cloud, project):
+    """QA D1: 휴지통 논문에만 붙은 (색 없는) 태그가, 다른 논문의 태그를 고칠 때(_drop_unused_tags) 지워지지 않는다.
+    태그 이름을 바꾸면 휴지통 논문의 검색 메타도 새 이름으로"""
+    u = cloud.user()
+    a = cloud.client(u)
+    pa = cloud.upload(a, make_pdf(title="Tag Keeper Paper Alpha Title", doi=""), "a.pdf")["id"]
+    pb = cloud.upload(a, make_pdf(title="Tag Editor Paper Beta Title", doi=""), "b.pdf")["id"]
+    a.patch(f"/api/papers/{pa}", json={"tags": ["solo-tag"]})
+    assert a.delete(f"/api/papers/{pa}").json() == {"ok": True}
+    a.patch(f"/api/papers/{pb}", json={"tags": ["other-tag"]})       # set_paper_tags → _drop_unused_tags
+    tid = next(t["id"] for t in a.get("/api/tags").json() if t["name"] == "solo-tag")
+    word = "renamedtag" + uuid.uuid4().hex[:6]
+    assert a.patch(f"/api/tags/{tid}", json={"name": word}).status_code == 200
+    a.post("/api/trash/restore", json={"ids": [pa]})
+    assert [t["name"] for t in a.get(f"/api/papers/{pa}").json()["tags"]] == [word]
+    assert [p["id"] for p in a.get("/api/papers", params={"q": word}).json()["items"]] == [pa]
+
+
+def _replace_slot(cloud, a, pid, data):
+    slot = a.post(f"/api/papers/{pid}/pdf/upload").json()
+    assert cloud.storage.browser_put(slot["upload"]["url"], data) == 200
+    return slot
+
+
+def _db_sha(project, pid):
+    return sql(project, "select pdf_sha256 from paperlab.papers where id = %s", (pid,))[0][0]
+
+
+def test_pdf_replace_after_trash_is_404_and_keeps_pdf(cloud, project):
+    """QA D2: PDF 교체 중(R2 받기 · 추출 사이) 다른 요청이 휴지통으로 보냄 → 행을 먼저 잠그는 attach가 404,
+    R2 PDF는 그대로(DB sha와 같음) · 임시 파일은 지움(D8)"""
+    import hashlib
+    u = cloud.user()
+    a = cloud.client(u)
+    pid = cloud.upload(a, make_pdf(title="Race Paper Original Title", doi=""), "r.pdf")["id"]
+    key = f"users/{u.id}/papers/{pid}.pdf"
+    slot = _replace_slot(cloud, a, pid, make_pdf(title="Race Paper Replacement Title", body="new body", doi=""))
+    incoming = f"incoming/{u.id}/{slot['upload_id']}.pdf"
+    real_get = cloud.storage.get
+
+    def get(k):
+        if k == incoming:  # 웹이 R2에서 받는 동안 다른 요청이 휴지통으로 (커밋)
+            with cloud.app.state.db.user_tx(actor_claims(u.id, "qa")) as lib:
+                assert lib.trash_papers([pid], "web")
+        return real_get(k)
+
+    cloud.storage.get = get
+    try:
+        r = a.post(f"/api/papers/{pid}/pdf/complete", json={"upload_id": slot["upload_id"], "name": "r.pdf"})
+    finally:
+        cloud.storage.get = real_get
+    assert r.status_code == 404, r.text
+    assert hashlib.sha256(cloud.storage.objects[key]).hexdigest() == _db_sha(project, pid)
+    assert incoming not in cloud.storage.objects
+
+
+def test_trash_waits_for_pdf_replace_lock(cloud, project):
+    """QA D2: R2 복사 중에 온 휴지통 보내기는 행 잠금을 기다렸다가 교체가 커밋된 뒤에 진행 → R2 = DB = 새 PDF, 휴지통에 있음"""
+    import hashlib
+    import threading
+    u = cloud.user()
+    a = cloud.client(u)
+    pid = cloud.upload(a, make_pdf(title="Lock Paper Original Title", doi=""), "r.pdf")["id"]
+    key = f"users/{u.id}/papers/{pid}.pdf"
+    new_pdf = make_pdf(title="Lock Paper Replacement Title", body="replacement body text", doi="")
+    slot = _replace_slot(cloud, a, pid, new_pdf)
+    real_copy = cloud.storage.copy
+    seen = {}
+
+    def trash():
+        with cloud.app.state.db.user_tx(actor_claims(u.id, "qa")) as lib:
+            seen["moved"] = lib.trash_papers([pid], "web")
+
+    def copy(src, dst):
+        if dst == key and "thread" not in seen:
+            seen["thread"] = t = threading.Thread(target=trash, daemon=True)
+            t.start()
+            t.join(1.5)
+            seen["blocked"] = t.is_alive()  # attach가 잡은 행 잠금을 기다리는 중
+        return real_copy(src, dst)
+
+    cloud.storage.copy = copy
+    try:
+        r = a.post(f"/api/papers/{pid}/pdf/complete", json={"upload_id": slot["upload_id"], "name": "r.pdf"})
+    finally:
+        cloud.storage.copy = real_copy
+    seen["thread"].join(30)
+    assert r.status_code == 200, r.text
+    assert seen["blocked"] is True and [m["id"] for m in seen["moved"]] == [pid]
+    assert hashlib.sha256(cloud.storage.objects[key]).hexdigest() == _db_sha(project, pid) == \
+        hashlib.sha256(new_pdf).hexdigest()
+    assert sql(project, "select deleted_at is not null from paperlab.papers where id = %s", (pid,)) == [(True,)]
+
+
+def test_chat_result_after_trash_ends_with_error_event(cloud, project):
+    """QA D6: 대화 답이 끝나기 전에 논문이 휴지통으로 가면(작업이 RLS로 숨음 → JobError) 빈 스트림이 아니라
+    {"type": "error"} 이벤트로 끝난다"""
+    u = cloud.user()
+    a = cloud.client(u)
+    assert a.put("/api/settings", json={"anthropic_api_key": "sk-ant-test-key-0001"}).status_code == 200
+    pid = cloud.upload(a, make_pdf(title="Chat Trash Paper Title", doi=""))["id"]
+
+    def chat(ctx, history, question, engine="claude"):
+        yield {"type": "delta", "text": "답"}
+        with cloud.app.state.db.user_tx(actor_claims(u.id, "qa")) as lib:
+            lib.trash_papers([pid], "web")
+        yield {"type": "done", "text": "끝[1]", "citations": []}
+
+    cloud.fake_ai.chat = chat
+    with a.stream("POST", f"/api/papers/{pid}/chat", json={"question": "몇 쪽?"}) as r:
+        events = [json.loads(line[6:]) for line in r.iter_lines() if line.startswith("data: ")]
+    assert events[0] == {"type": "delta", "text": "답"}
+    assert events[-1]["type"] == "error" and events[-1]["error"] == "논문을 휴지통으로 옮겨 작업을 멈췄어요", events
+    assert sql(project, "select count(*) from paperlab.chat_messages m join paperlab.chat_sessions s on s.id = m.session_id "
+                        "where s.paper_id = %s", (pid,))[0][0] == 0

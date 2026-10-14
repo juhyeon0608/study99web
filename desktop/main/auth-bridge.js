@@ -28,9 +28,33 @@ function parseCallback(url) {
   return { code: '', error: error.slice(0, 80) };
 }
 
-/** 프로세스 인자에서 딥 링크 찾기 (두 번째 실행 · 처음 실행 둘 다) */
+const isLinkArg = (a) => typeof a === 'string' && a.toLowerCase().startsWith(`${PROTOCOL}://`);
+
+/** 프로세스 인자에서 딥 링크 찾기 (두 번째 실행 · 처음 실행 둘 다). paperlab:// 인자가 꼭 하나일 때만(둘 이상 · 너무 김 → null) */
 function findDeepLink(argv) {
-  return (argv || []).find((a) => typeof a === 'string' && a.toLowerCase().startsWith(`${PROTOCOL}://`)) || null;
+  const links = (argv || []).filter(isLinkArg);
+  return links.length === 1 && links[0].length <= 4096 ? links[0] : null;
 }
 
-module.exports = { isAuthorizeUrl, parseCallback, findDeepLink, LOGIN_WAIT_MS };
+/** 실행 스위치(--hidden 등): 딥 링크 · "--" 앞의 것만 읽고 그 뒤는 무시(주소에 스위치를 끼워 넣는 것 막기) */
+function launchSwitches(argv) {
+  const out = [];
+  for (const a of (argv || []).slice(1)) {
+    if (a === '--' || isLinkArg(a)) break;
+    if (typeof a === 'string' && a.startsWith('--')) out.push(a);
+  }
+  return out;
+}
+
+/**
+ * paperlab:// 를 이 실행 파일에 등록(HKCU\Software\Classes\paperlab — 사용자별, 관리자 권한 없음). electron-builder NSIS 는 protocols 를
+ * 등록하지 않아 앱이 시작할 때마다 직접 한다(같은 값이면 그대로). 명령은 "PaperLab.exe" -- "%1": "--" 뒤라 주소에 따옴표 · 스위치를 끼워
+ * 넣어도 Chromium 스위치로 읽히지 않음(Electron 의 CVE-2018-1000006 권고 — Electron 도 주소 뒤 인자가 있으면 시작하지 않음).
+ * 개발 실행은 건너뜀(이 PC 레지스트리를 바꾸지 않음 — 개발 실행의 앱 창 로그인은 README 참고). 제거할 때 지우기는 build/installer.nsh.
+ */
+function registerProtocol(app, execPath = process.execPath) {
+  if (!app.isPackaged) return false;
+  return app.setAsDefaultProtocolClient(PROTOCOL, execPath, ['--']) === true;
+}
+
+module.exports = { isAuthorizeUrl, parseCallback, findDeepLink, launchSwitches, registerProtocol, LOGIN_WAIT_MS, PROTOCOL };

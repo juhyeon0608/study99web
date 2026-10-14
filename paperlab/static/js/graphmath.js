@@ -155,15 +155,6 @@ export function seedFromResult(it) {
   return s;
 }
 
-export function seedKey(seed) {
-  if (!seed) return "";
-  if (seed.paper_id) return `p:${seed.paper_id}`;
-  if (seed.openalex_id) return seed.openalex_id;
-  if (seed.doi) return `doi:${String(seed.doi).toLowerCase()}`;
-  if (seed.arxiv_id) return `arxiv:${seed.arxiv_id}`;
-  return `title:${String(seed.title || "").toLowerCase()}`;
-}
-
 // ------------------------------------------------------------------ 이웃 · 정렬
 export function neighbors(edges) {
   const m = new Map();

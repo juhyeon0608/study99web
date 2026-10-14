@@ -1,7 +1,8 @@
 ﻿<#
   PaperLab 서버 PC 스크립트 공통 함수 (install · update · funnel · watchdog · uninstall 이 dot-source 로 읽음).
   - 설정은 같은 폴더의 server.json(공개 주소 · 포트 · 기본 경로 · 작업 이름 — 비밀 없음, 팀장 결정 S10).
-  - cloud.env 의 값은 읽지 않는다. 확인은 `python -m paperlab.serve --check`(변수 이름만)로.
+  - cloud.env 는 PAPERLAB_RELEASES_DIR 한 줄만 읽는다(Get-PLReleasesDir — 설치 파일 폴더). 다른 값은 읽거나 출력하지 않고,
+    확인은 `python -m paperlab.serve --check`(변수 이름만)로.
   - Windows PowerShell 5.1 기준 (?? · ?: 연산자 쓰지 않음).
 #>
 
@@ -169,6 +170,17 @@ function Get-PLReparsePoints {
     if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { $hits += $p }
   }
   return $hits
+}
+
+function Remove-PLTree {
+  <# 폴더를 통째로 지움(-Recurse). 그 경로가 재분석 지점(정션 · 심볼릭 링크)이면 지우지 않고 멈춤(throw) —
+     Windows PowerShell 5.1 의 Remove-Item -Recurse 는 링크를 따라 들어가 대상 폴더 내용을 지울 수 있음 (QA D-9).
+     없는 경로는 그냥 지나감. 대상이 없는 정션도 항목은 있으므로 걸린다 #>
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (@(Get-PLReparsePoints -Paths @($Path)).Count -gt 0) {
+    throw "정션 · 심볼릭 링크라 지우지 않았어요: $Path — 링크를 직접 확인해 주세요"
+  }
+  if (Test-Path -LiteralPath $Path) { Remove-Item -LiteralPath $Path -Recurse -Force }
 }
 
 function Find-PLTailscale {
@@ -410,7 +422,7 @@ function Invoke-PLDesktopBuild {
   Write-PLLog -LogFile $LogFile -Message "데스크톱 앱 빌드 시작: 버전 $version ($($node.Text)) — 빌드 로그 $buildLog"
   try {
     foreach ($d in @($LogDir, $ReleasesDir, $CacheDir)) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
-    if (Test-Path -LiteralPath $dist) { Remove-Item -LiteralPath $dist -Recurse -Force }
+    Remove-PLTree -Path $dist  # 정션 · 심볼릭 링크면 멈춤 (QA D-9)
     # 캐시는 D: 로 (C: 여유가 적음 — 이 빌드 프로세스에만 주는 도구용 변수, 앱 · 서버 환경 변수 아님)
     $envs = @{
       npm_config_cache = (Join-Path $CacheDir 'npm')
@@ -431,7 +443,7 @@ function Invoke-PLDesktopBuild {
     $files = @($exeName, "$exeName.blockmap", 'latest.yml')
     foreach ($f in $files) { if (-not (Test-Path -LiteralPath (Join-Path $dist $f))) { throw "빌드 결과에 $f 가 없어요" } }
     $step = '.staging 확인'
-    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
+    Remove-PLTree -Path $staging
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
     foreach ($f in $files) { Copy-Item -LiteralPath (Join-Path $dist $f) -Destination (Join-Path $staging $f) -Force }
     $bad = Test-PLLatestYml -YmlPath (Join-Path $staging 'latest.yml') -ExePath (Join-Path $staging $exeName) -Version $version
@@ -457,7 +469,7 @@ function Invoke-PLDesktopBuild {
       else { Remove-Item -LiteralPath $prevInfo -Force -ErrorAction SilentlyContinue }
       throw
     }
-    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    try { Remove-PLTree -Path $staging } catch { Write-PLLog -LogFile $LogFile -Level WARN -Message $_.Exception.Message }
     $step = '보관 정리'
     Remove-PLOldReleases -ReleasesDir $ReleasesDir -Keep 3 -LogFile $LogFile
     $secs = [int]((Get-Date) - $started).TotalSeconds
@@ -466,7 +478,7 @@ function Invoke-PLDesktopBuild {
     if ($urlLine.Count) { Write-PLLog -LogFile $LogFile -Message "빌드 로그 확인: $($urlLine[0].Trim())" }
     return $true
   } catch {
-    if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue }
+    try { Remove-PLTree -Path $staging } catch { Write-PLLog -LogFile $LogFile -Level WARN -Message $_.Exception.Message }
     Write-PLLog -LogFile $LogFile -Level WARN -Message ("데스크톱 앱 빌드 실패($step — $($_.Exception.Message)) — 이전 설치 파일을 그대로 둬요. " +
       "빌드 로그: $buildLog (서버 업데이트 결과에는 영향 없음)")
     return $false

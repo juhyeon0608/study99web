@@ -5,13 +5,13 @@
 
 const path = require('node:path');
 const os = require('node:os');
-const { app, Tray, Menu, nativeImage, session, shell, dialog, utilityProcess, powerSaveBlocker, safeStorage } = require('electron');
+const { app, Tray, Menu, nativeImage, session, shell, dialog, utilityProcess, powerSaveBlocker, powerMonitor, safeStorage } = require('electron');
 const { Logger } = require('../lib/log');
 const { Store } = require('./store');
 const { serverOrigin } = require('./config');
 const { registerAppScheme, prepareSession, createAppWindow, createStatusWindow, PARTITION } = require('./window');
 const { createOpenLimiter, originOf } = require('./links');
-const { isAuthorizeUrl, parseCallback, findDeepLink, LOGIN_WAIT_MS } = require('./auth-bridge');
+const { isAuthorizeUrl, parseCallback, findDeepLink, launchSwitches, registerProtocol, LOGIN_WAIT_MS } = require('./auth-bridge');
 const { createUpdater } = require('./updater');
 const ipc = require('./ipc');
 const { createApi } = require('../worker/api-client');
@@ -85,20 +85,35 @@ async function boot() {
   prepareSession(session.defaultSession);
   S.noSafeStorage = !store.canEncrypt();
   ipc.register(controller, { serverOrigin: S.server, log });
+  try { if (registerProtocol(app) === false && app.isPackaged) log.warn('paperlab:// 등록 실패'); } catch (e) { log.warn('paperlab:// 등록 실패', { code: e.name }); }
+  powerMonitor.on('shutdown', onSessionEnd);
   createTray();
   startWorker();
   sync = createSyncHost({
     utilityProcess, dialog, shell, store, log, serverUrl: S.server, userData, appVersion: app.getVersion(), isPackaged: app.isPackaged,
     readToken: () => store.readToken(), onChange: () => refreshUi(), balloon, onUpdateRequired: () => updater && updater.check(),
+    onTokenInvalid: (code) => tokenInvalid(code),
   });
-  sync.start();
+  sync.start().catch((e) => log.error('동기화 시작 실패', { code: e.code || e.name }));
   updater = createUpdater({ isPackaged: app.isPackaged, log, onChange: onUpdate });
   S.update = updater.state();
   updater.start();
   applyAutoStart();
   const link = findDeepLink(process.argv);
-  if (!process.argv.includes('--hidden') || link) showAppWindow();
+  if (!launchSwitches(process.argv).includes('--hidden') || link) showAppWindow();
   if (link) handleDeepLink(link);
+}
+
+/** Windows 로그오프 · 끄기(F9): 종료 중으로 두고 워커 · 동기화를 정상 정지(다시 띄우지 않음). 앱 자체는 Windows 가 끝냄 —
+ *  여기서 app.quit() 하면 받아 둔 업데이트 설치가 세션 끝과 겹쳐 돌 수 있어 부르지 않음 */
+let sessionEnding = null;
+function onSessionEnd() {
+  if (!sessionEnding) {
+    S.quitting = true;
+    log.info('Windows 세션 끝 — 정지');
+    sessionEnding = Promise.all([stopWorker(), sync ? sync.stop() : null]);
+  }
+  return sessionEnding;
 }
 
 function applyAutoStart() {
@@ -126,7 +141,8 @@ function stopWorker() {
   return new Promise((resolve) => {
     const child = S.child;
     if (!child) return resolve();
-    const t = setTimeout(() => { try { child.kill(); } catch { /* 끝남 */ } resolve(); }, 12000);
+    // 워커는 실행 중 작업 정리 8초 + bye 5초까지 씀 → 그보다 길게 기다린 뒤 강제 종료
+    const t = setTimeout(() => { try { child.kill(); } catch { /* 끝남 */ } resolve(); }, 15000);
     child.once('exit', () => { clearTimeout(t); resolve(); });
     toWorker({ type: 'stop' });
   });
@@ -145,16 +161,23 @@ function onWorkerMessage(m) {
     store.set({ deviceId: m.deviceId || store.get('deviceId'), deviceName: m.name || '', accountHint: m.accountHint || '' });
     refreshUi();
   } else if (m.type === 'token-invalid') {
-    store.clearToken();
-    if (sync) sync.token(null);
-    store.set({ deviceId: null, accountHint: '' });
-    if (m.code === 'device_revoked') balloon('PaperLab', '이 PC 연결이 해지됐어요. 다시 쓰려면 이 PC 상태에서 연결해 주세요.', { always: true });
-    refreshUi();
+    tokenInvalid(m.code);
   } else if (m.type === 'update-required') {
     if (updater) updater.check();
   } else if (m.type === 'job-finished') {
     jobBalloon(m);
   }
+}
+
+/** 기기 토큰이 더는 쓸모없음(401) — 워커 · 동기화 어느 쪽이 먼저 알아도 같은 길. 둘 다 알려 오면 한 번만 */
+function tokenInvalid(code) {
+  if (!paired()) return;
+  store.clearToken();
+  toWorker({ type: 'invalidate', code: String(code || '') }); // 워커가 실행 중 작업을 끄고 '해지됨' 상태로(이미 알면 그대로)
+  if (sync) sync.token(null);
+  store.set({ deviceId: null, accountHint: '' });
+  if (code === 'device_revoked') balloon('PaperLab', '이 PC 연결이 해지됐어요. 다시 쓰려면 이 PC 상태에서 연결해 주세요.', { always: true });
+  refreshUi();
 }
 
 function jobBalloon(m) {
@@ -214,6 +237,7 @@ function showAppWindow() {
     }
   });
   S.win.webContents.on('did-finish-load', deliverCallback);
+  S.win.on('session-end', onSessionEnd);
   openStart();
 }
 
@@ -236,6 +260,7 @@ function showStatusWindow({ focusPair = false, focusSync = '' } = {}) {
   if (!S.statusWin || S.statusWin.isDestroyed()) {
     S.statusWin = createStatusWindow({ icon: icon('icon.ico'), session: session.defaultSession });
     S.statusWin.on('close', (e) => { if (!S.quitting) { e.preventDefault(); S.statusWin.hide(); } });
+    S.statusWin.on('session-end', onSessionEnd);
     S.statusWin.once('ready-to-show', () => S.statusWin.show());
     S.statusWin.loadURL('app://ui/status.html');
   } else {
@@ -260,6 +285,13 @@ async function startGoogleLogin(url) {
   } catch {
     return { ok: false };
   }
+}
+
+/** 화면이 로그인 대기를 취소함 — 그 뒤에 오는 콜백은 무시 */
+function cancelGoogleLogin() {
+  if (!S.loginUntil) return;
+  S.loginUntil = 0;
+  log.info('앱 로그인 대기 취소');
 }
 
 function handleDeepLink(link) {
@@ -394,7 +426,7 @@ function updateTray() {
   const pairedNow = paired();
   const ready = S.update.state === 'ready';
   const ss = sync ? sync.settings() : { enabled: false };
-  const key = JSON.stringify([look, ws, pairedNow, ready, S.update.version, ss.enabled, ss.paused]);
+  const key = JSON.stringify([look, ws, pairedNow, ready, S.update.version, ss.enabled, ss.paused, !!store.get('worker').paused]);
   if (key === trayKey) return;
   trayKey = key;
   S.tray.setImage(icon(`tray-${look.icon}.ico`));
@@ -571,7 +603,7 @@ async function localAction(name, arg, sender) {
 }
 
 const controller = {
-  info, pair, startGoogleLogin, localState, localAction,
+  info, pair, startGoogleLogin, cancelGoogleLogin, localState, localAction,
   nudge: () => { toWorker({ type: 'nudge' }); if (sync) sync.nudge(); },
   showStatusWindow: () => showStatusWindow(),
 };

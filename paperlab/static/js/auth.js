@@ -26,8 +26,6 @@ export function initAuth({ supabase_url: url, supabase_anon_key: key }) {
   return client;
 }
 
-export const authReady = () => !!client;
-
 // 구글에서 돌아온 주소(?code=)인지
 export function hasAuthCode() {
   return new URL(location.href).searchParams.has("code");

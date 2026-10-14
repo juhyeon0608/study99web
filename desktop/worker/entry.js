@@ -1,6 +1,6 @@
 'use strict';
 // utilityProcess 진입점 (명세 11.1 · K4 ①): main 과 메시지로만 주고받는다. 토큰은 main 이 safeStorage 에서 읽어 넘김.
-// main → {type: init | token | settings | nudge | recheck | cancel | stop}, 워커 → {type: state | hello | token-invalid | update-required | job-finished | stopped}
+// main → {type: init | token | settings | nudge | recheck | cancel | invalidate | stop}, 워커 → {type: state | hello | token-invalid | update-required | job-finished | stopped}
 
 const { Worker } = require('./worker');
 const { createApi } = require('./api-client');
@@ -31,6 +31,7 @@ port.on('message', async ({ data: m }) => {
   else if (m.type === 'nudge') worker.nudge();
   else if (m.type === 'recheck') worker.recheck();
   else if (m.type === 'cancel') worker.cancel(m.id);
+  else if (m.type === 'invalidate') worker.invalidate(String(m.code || 'device_auth_required')); // 동기화가 먼저 401 을 받음
   else if (m.type === 'stop') {
     await worker.stop({ bye: m.bye !== false });
     send({ type: 'stopped' });

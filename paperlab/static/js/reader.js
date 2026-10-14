@@ -7,16 +7,15 @@ import { listStyles, render, styleOptions } from "./cite.js";
 import { EXT_MARK, bindExtLink, citeDialog, editPaperDialog, issuesBox, settingsDialog, uploadPdfs } from "./dialogs.js";
 import { INHA, paperProxyTarget } from "./extlinks.js";
 import {
-  ICON_WARN, cancelJob, errorLabel, retryJob, setStatusLine, statusLineEl, summaryCard,
-  updateSummaryCard, watchJob,
+  cancelJob, errorLabel, isActive, retryJob, setStatusLine, statusLineEl, summaryCard, updateSummaryCard, watchJob,
 } from "./jobs.js";
 import { BUSY_TIP, explainBusy, explainTab, followPage, resetExplain, startExplain } from "./explain.js";
 import { exportAnnotations } from "./library.js";
 import { quoteRuleText } from "./refquote.js";
 import { onRefresh, state } from "./state.js";
 import {
-  $, $$, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modalOpen, pickFiles, renderMarkdown,
-  renderTex, toast,
+  $, $$, ICON_WARN, authorsShort, cleanCiteHtml, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, markTabs,
+  modalOpen, pickFiles, renderMarkdown, renderTex, saveError, selectTab, store, toast,
 } from "./ui.js";
 
 const COLORS = ["yellow", "green", "blue", "pink", "purple"];
@@ -29,7 +28,6 @@ let openSeq = 0; // 열기 도중 다른 화면으로 가면 늦게 끝난 열�
 
 // 요약은 서버 작업(2단계 15장 — 탭을 닫아도 계속, U8). 화면은 진행 중인 요약 작업만 따라간다: 논문 id → stop()
 const watches = new Map();
-const ACTIVE = (j) => j && (j.status === "queued" || j.status === "running");
 
 // 로그아웃할 때: 화면의 따라가기만 멈춘다 (서버 작업은 계속)
 export function stopSummaries() {
@@ -50,11 +48,9 @@ async function loadPdfjs() {
   return pdfjs;
 }
 
-function prefs() {
-  try { return JSON.parse(localStorage.getItem("paperlab.reader") || "{}"); } catch { return {}; }
-}
+const prefs = () => store.json("paperlab.reader", {});
 export function savePrefs(patch) {
-  try { localStorage.setItem("paperlab.reader", JSON.stringify({ ...prefs(), ...patch })); } catch { /* 무시 */ }
+  store.set("paperlab.reader", { ...prefs(), ...patch });
 }
 
 function teardown() {
@@ -109,12 +105,12 @@ export async function openReader(main, pid, startPage = null) {
       <div class="reader-bar">
         <a class="btn ghost sm" href="#/library" title="서재로 (Esc)">← 서재</a>
         <div class="title" title="${esc(paper.title)}">${esc(paper.title)}</div>
-        <div class="pageno"><input class="input" data-page value="1"> / <span data-total>…</span></div>
-        <button class="icon-btn" data-zoom="-1" title="축소">−</button>
+        <button class="icon-btn" data-panel title="오른쪽 패널 열고 닫기" aria-label="패널 열고 닫기">◧</button>
+        <div class="pageno"><input class="input" data-page value="1" aria-label="쪽 번호"> / <span data-total>…</span></div>
+        <button class="icon-btn" data-zoom="-1" title="축소" aria-label="축소">−</button>
         <button class="btn sm ghost" data-fit title="폭 맞춤">맞춤</button>
-        <button class="icon-btn" data-zoom="1" title="확대">＋</button>
+        <button class="icon-btn" data-zoom="1" title="확대" aria-label="확대">＋</button>
         ${colorsHtml()}
-        <button class="icon-btn" data-panel title="오른쪽 패널 열고 닫기">◧</button>
       </div>
       <div class="pdf-scroll"><div class="pdf-pages"></div></div>
     </div>
@@ -131,6 +127,7 @@ export async function openReader(main, pid, startPage = null) {
   R.pagesEl = $(".pdf-pages", view);
 
   $$("[data-tab]", view).forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+  markTabs($(".panel .tabs", view), "패널");
   wireBar(view);
   $("[data-panel]", view).onclick = () => {
     if (narrow()) { view.classList.toggle("panel-sheet"); return; } // 900px 이하: 아래 시트로 열고 닫음 (AD-1)
@@ -139,18 +136,20 @@ export async function openReader(main, pid, startPage = null) {
     if (R.fit) setTimeout(() => setScale(fitScale(), true), 50);
   };
   R.onKey = (e) => {
-    if (document.querySelector(".modal-backdrop")) return;
-    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)) return;
-    if (e.key === "Escape") {
-      if (document.querySelector(".sel-pop")) return hidePopups();
-      if (view.classList.contains("panel-sheet")) return view.classList.remove("panel-sheet"); // Esc는 먼저 시트를 닫음
-      location.hash = "#/library";
-    }
+    if (e.key !== "Escape" || document.querySelector(".modal-backdrop")) return;
+    if (document.querySelector(".sel-pop")) return hidePopups(); // 메모 칸에 쓰던 중이어도 상자를 닫음
+    if (view.classList.contains("panel-sheet")) return view.classList.remove("panel-sheet"); // Esc는 먼저 시트를 닫음
+    // 입력 칸(쪽 번호 · 질문 · 노트)에서는 서재로 나가지 않고 칸에서만 나옴 — 한 번 더 Esc면 서재로
+    const a = document.activeElement;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable) return a.blur();
+    location.hash = "#/library";
   };
   document.addEventListener("keydown", R.onKey);
 
   showTab(R.tab);
-  const [annotations] = await Promise.all([api.get(`/api/papers/${pid}/annotations`), loadPdf(startPage)]);
+  const [annotations] = await Promise.all([
+    api.get(`/api/papers/${pid}/annotations`).catch((e) => { if (R === me) errorToast(e); return []; }), loadPdf(startPage),
+  ]);
   if (R !== me) return;
   R.annotations = annotations;
   drawAllHighlights();
@@ -754,7 +753,7 @@ function showTab(tab) {
   if (R.noteSave) { R.noteSave.flush(); R.noteSave = null; }
   R.tab = tab;
   savePrefs({ tab });
-  $$("[data-tab]", R.view).forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
+  selectTab($(".panel .tabs", R.view), tab);
   const body = $(".panel-body", R.view);
   body.className = "panel-body" + (tab === "chat" ? " chat-body" : "");
   body.innerHTML = "";
@@ -763,6 +762,7 @@ function showTab(tab) {
 }
 
 function pageLink(n) {
+  n = Number(n);
   return n ? `<button class="page-link" data-goto="${n}">p.${n}</button>` : "";
 }
 
@@ -781,13 +781,13 @@ async function summaryTab(body) {
       R.summary = r.summary;
       R.summaryJob = r.job;
       R.summaryLoaded = true;
-      if (ACTIVE(r.job)) followSummary(R.pid, r.job); // 다시 열면 진행 중 작업을 이어서 (AC-92)
+      if (isActive(r.job)) followSummary(R.pid, r.job); // 다시 열면 진행 중 작업을 이어서 (AC-92)
     } catch (e) { body.innerHTML = `<div class="msg error">${esc(e.message)}</div>`; return; }
     if (R.tab !== "summary") return;
   }
   body.innerHTML = "";
   const job = R.summaryJob;
-  if (ACTIVE(job) || (job && job.status === "failed" && !R.summary && !R.failSeen)) return drawJobCard(body, job);
+  if (isActive(job) || (job && job.status === "failed" && !R.summary && !R.failSeen)) return drawJobCard(body, job);
   if (!R.summary) return drawSummaryCta(body);
   drawSummary(body, R.summary);
 }
@@ -829,7 +829,7 @@ async function onSummaryJob(pid, j) {
   const here = R && R.pid === pid;
   if (!j) { watches.delete(pid); return; }
   if (here) R.summaryJob = j;
-  if (ACTIVE(j)) {
+  if (isActive(j)) {
     if (here && R.tab === "summary") {
       const card = $("[data-summary-progress]", R.view);
       if (card && card.dataset.jobId === String(j.id)) updateSummaryCard(card, j);
@@ -1129,7 +1129,7 @@ async function chatTab(body) {
   ta.oninput = () => { ta.style.height = "auto"; ta.style.height = Math.min(160, ta.scrollHeight) + "px"; };
   $("[data-clear]", foot).onclick = async () => {
     if (!R.chat.length || !(await confirmDialog("이 논문과 나눈 대화를 모두 지울까요?", { ok: "지우기" }))) return;
-    await api.del(`/api/papers/${R.pid}/chat`);
+    try { await api.del(`/api/papers/${R.pid}/chat`); } catch (e) { return saveError(e); }
     R.chat = [];
     draw();
   };
@@ -1156,7 +1156,7 @@ function updateMessage(node, m) {
   list.innerHTML = "";
   const cites = m.citations || [];
   for (const c of cites) {
-    const item = el(`<div class="cite-item"><span class="cite-ref">${c.n}</span>${c.page ? `<span class="page-link">p.${c.page}${c.end_page && c.end_page !== c.page ? `–${c.end_page}` : ""}</span>` : ""}${c.text ? `<q>${esc(c.text)}</q>` : ""}</div>`);
+    const item = el(`<div class="cite-item"><span class="cite-ref">${Number(c.n)}</span>${c.page ? `<span class="page-link">p.${Number(c.page)}${c.end_page && c.end_page !== c.page ? `–${Number(c.end_page)}` : ""}</span>` : ""}${c.text ? `<q>${esc(c.text)}</q>` : ""}</div>`);
     item.onclick = () => c.page && goToPage(c.page, c.text);
     list.appendChild(item);
   }
@@ -1173,7 +1173,7 @@ function updateMessage(node, m) {
 export function highlightsTab(body, { onInsert = null } = {}) {
   const anns = [...R.annotations].sort((a, b) => a.page - b.page || (a.rects[0]?.[1] || 0) - (b.rects[0]?.[1] || 0));
   const v = el(`<div><div class="row" style="margin-bottom:12px"><span class="small muted">${anns.length}개</span><span class="spacer"></span>
-    <div class="seg" data-filter><button class="active" data-c="">전체</button>${COLORS.map((c) => `<button data-c="${c}"><span class="hl-color" data-c="${c}" style="display:inline-block;width:10px;height:10px;border:0"></span></button>`).join("")}</div>
+    <div class="seg" data-filter><button class="active" data-c="">전체</button>${COLORS.map((c) => `<button data-c="${c}" aria-label="${COLOR_NAMES[c]} 하이라이트만" title="${COLOR_NAMES[c]}"><span class="hl-color" aria-hidden="true" data-c="${c}" style="display:inline-block;width:10px;height:10px;border:0"></span></button>`).join("")}</div>
     <button class="btn sm" data-export>.md</button></div><div data-list></div></div>`);
   const list = $("[data-list]", v);
   const draw = (color) => {
@@ -1223,7 +1223,11 @@ export function highlightsTab(body, { onInsert = null } = {}) {
 // ---------------------------------------------------------------- note
 async function noteTab(body) {
   const me = R;
-  const p = await api.get(`/api/papers/${R.pid}`);
+  let p;
+  try { p = await api.get(`/api/papers/${R.pid}`); } catch (e) {
+    if (R === me && R.tab === "note") body.innerHTML = `<div class="msg error">${esc(e.message)}</div>`;
+    return;
+  }
   if (R !== me || R.tab !== "note") return;
   R.paper = p;
   const v = el(`<div>
@@ -1261,8 +1265,14 @@ async function noteTab(body) {
 // ------------------------------------------------------------ info/cite
 async function citeTab(body) {
   const me = R;
-  const [p, cite, styles] = await Promise.all([api.get(`/api/papers/${R.pid}`), api.get(`/api/papers/${R.pid}/cite`),
-    listStyles().catch(() => [])]);
+  let p, cite, styles;
+  try {
+    [p, cite, styles] = await Promise.all([api.get(`/api/papers/${R.pid}`), api.get(`/api/papers/${R.pid}/cite`),
+      listStyles().catch(() => [])]);
+  } catch (e) {
+    if (R === me && R.tab === "cite") body.innerHTML = `<div class="msg error">${esc(e.message)}</div>`;
+    return;
+  }
   if (R !== me || R.tab !== "cite") return;
   const v = el(`<div>
     <h3 style="margin:0 0 4px;font-size:15px;line-height:1.4">${esc(p.title)}</h3>
@@ -1275,7 +1285,9 @@ async function citeTab(body) {
     <div data-out><div class="status-line"><span class="spinner"></span> 만드는 중…</div></div>
     <div class="row" style="margin-top:8px"><span class="spacer"></span><button class="btn sm" data-bib>BibTeX 복사</button><button class="btn sm" data-all>자세히</button></div>
   </div>`);
-  const ib = issuesBox(cite.issues, async () => editPaperDialog(await api.get(`/api/papers/${R.pid}`)));
+  const ib = issuesBox(cite.issues, async () => {
+    try { editPaperDialog(await api.get(`/api/papers/${R.pid}`)); } catch (e) { errorToast(e); }
+  });
   if (ib) $("[data-issues]", v).appendChild(ib);
   const draw = async () => {
     const out = $("[data-out]", v);
@@ -1283,8 +1295,8 @@ async function citeTab(body) {
       const r = await render([cite.csl], { style: $("[data-style]", v).value });
       const e = r.entries[0] || { html: "", text: "" };
       out.innerHTML = "";
-      const block = el(`<div class="cite-block"><div class="body">${e.html || window.DOMPurify.sanitize(r.citation.html)}</div>
-        <div class="row" style="margin-top:8px"><span class="small muted">${r.note ? "각주" : "본문"}: ${window.DOMPurify.sanitize(r.citation.html)}</span><span class="spacer"></span>
+      const block = el(`<div class="cite-block"><div class="body">${cleanCiteHtml(e.html || r.citation.html)}</div>
+        <div class="row" style="margin-top:8px"><span class="small muted">${r.note ? "각주" : "본문"}: ${cleanCiteHtml(r.citation.html)}</span><span class="spacer"></span>
         <button class="btn sm" data-c1>참고문헌 복사</button><button class="btn sm" data-c2>본문 인용 복사</button></div></div>`);
       $("[data-c1]", block).onclick = () => copyText(e.text || r.citation.text, e.html || r.citation.html);
       $("[data-c2]", block).onclick = () => copyText(r.citation.text, r.citation.html);

@@ -289,10 +289,12 @@ def build_request(lib, job: dict, lang: str) -> tuple[str, str, list[int], int]:
                               for e in r["evidence"] or [] if e.get("page")])
     parts = []
     for i, r in enumerate(batch, 1):
+        # 근거 글 · 문장은 ai.fence로 우리 태그 모양을 무디게 (자료가 </evidence>로 칸을 닫고 지시를 넣지 못하게)
         ev = "".join(f'\n<evidence n="{j}" page="{e["page"]}">\n'
-                     f'{(pages.get((r["paper_id"], e["page"])) or "")[e["char_start"]:e["char_end"]].strip()}\n</evidence>'
-                     for j, e in enumerate(r["evidence"] or [], 1))
-        parts.append(f'<claim id="{i}" key="{r["citekey"]}">\n{current[r["claim_hash"]]["sentence"]}{ev}\n</claim>')
+                     f'{ai.fence((pages.get((r["paper_id"], e["page"])) or "")[e["char_start"]:e["char_end"]].strip())}'
+                     '\n</evidence>' for j, e in enumerate(r["evidence"] or [], 1))
+        parts.append(f'<claim id="{i}" key="{ai.fence_attr(r["citekey"])}">\n'
+                     f'{ai.fence(current[r["claim_hash"]]["sentence"])}{ev}\n</claim>')
     return VERIFY_SYSTEM, "\n\n".join(parts) + "\n\n" + VERIFY_PROMPT.format(lang=lang), [r["id"] for r in batch], remaining
 
 

@@ -258,3 +258,165 @@ def test_folder_db_check_violation_is_400(cloud, monkeypatch):
     r = c.patch(f"/api/folders/{fid}", json={"name": name})
     assert r.status_code == 400, r.text
     assert [f["name"] for f in c.get("/api/folders").json()] == ["정상 폴더"]
+
+
+# ====================================================================== 전체 오류 점검 (QA1) 회귀 시험
+def test_file_name_race_retries_then_409(cloud, monkeypatch):
+    """QA D3: 이름 겹침 경합(유일 색인 23505)은 저장점에서 한 번 더 → 성공, 두 번 다 겹치면 500이 아니라 409"""
+    from paperlab.db import Library
+    c = cloud.client(cloud.user())
+    fid = c.post("/api/folders", json={"name": "Race"}).json()["id"]
+    a = cloud.upload(c, make_pdf(title="Race Name Paper One Title", doi=""), "same.pdf", folder_id=fid)["id"]
+    b = cloud.upload(c, make_pdf(title="Race Name Paper Two Title", doi=""), "same.pdf")["id"]
+    real = Library.free_name
+    calls = {"n": 0, "stale": 1}
+
+    def stale_free_name(self, folder_id, name, *args, **kw):
+        calls["n"] += 1
+        if calls["n"] <= calls["stale"]:
+            return "same.pdf"  # 다른 요청이 같은 이름을 먼저 쓴 것처럼 (검사 뒤 · 쓰기 전)
+        return real(self, folder_id, name, *args, **kw)
+
+    monkeypatch.setattr(Library, "free_name", stale_free_name)
+    r = c.post("/api/papers/bulk", json={"ids": [b], "action": "move_folder", "value": fid})
+    assert r.status_code == 200, r.text
+    names = {p["id"]: p["file_name"] for p in c.get("/api/papers", params={"folder": fid}).json()["items"]}
+    assert names == {a: "same.pdf", b: "same (2).pdf"}
+    c.post("/api/papers/bulk", json={"ids": [b], "action": "move_folder", "value": None})
+    calls.update(n=0, stale=99)
+    r = c.post("/api/papers/bulk", json={"ids": [b], "action": "move_folder", "value": fid})
+    assert r.status_code == 409 and "같은 이름" in r.json()["detail"]
+    assert c.get(f"/api/papers/{b}").json()["folder_id"] is None  # 롤백
+
+
+def test_failed_upload_leaves_no_r2_objects(cloud, monkeypatch):
+    """QA D8 · D9b: 새 논문에 붙인 뒤 요청이 실패(롤백)하면 최종 PDF · 임시 파일을 지운다. 메타데이터 조회 예외도 같음"""
+    from paperlab.db import Library
+    u = cloud.user()
+    c = cloud.client(u)
+    cid = c.post("/api/collections", json={"name": "C"}).json()["id"]
+
+    def boom(*a, **kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(Library, "set_paper_collections", boom)  # attach 뒤에 실패
+    data = make_pdf(title="Rollback Upload Paper Title", doi="")
+    slot = c.post("/api/uploads", json={"files": [{"name": "x.pdf", "size": len(data)}]}).json()["files"][0]
+    assert cloud.storage.browser_put(slot["upload"]["url"], data) == 200
+    from fastapi.testclient import TestClient
+    quiet = TestClient(cloud.app, headers=dict(c.headers), raise_server_exceptions=False)
+    r = quiet.post(f"/api/uploads/{slot['upload_id']}/complete", json={"name": "x.pdf", "collection_id": cid})
+    assert r.status_code == 500
+    assert [k for k in cloud.storage.objects if k.startswith((f"users/{u.id}/", f"incoming/{u.id}/"))] == []
+    assert c.get("/api/papers").json()["total"] == 0
+    monkeypatch.undo()
+    # 메타데이터 조회가 예외로 끝나도 임시 파일을 남기지 않음 (QA D9b)
+    cloud.app.state.sources_factory = lambda get: type("S", (), {"lookup_doi": boom, "lookup_arxiv": boom,
+                                                                   "match_title": boom})()
+    slot = c.post("/api/uploads", json={"files": [{"name": "y.pdf", "size": len(data)}]}).json()["files"][0]
+    assert cloud.storage.browser_put(slot["upload"]["url"], data) == 200
+    r = quiet.post(f"/api/uploads/{slot['upload_id']}/complete", json={"name": "y.pdf"})
+    assert r.status_code == 500
+    assert [k for k in cloud.storage.objects if k.startswith(f"incoming/{u.id}/")] == []
+
+
+def test_bad_pdf_message_has_no_exception_text(cloud, client):
+    """QA D5: 손상된 PDF는 고정 문구(예외 내용 없음) · 임시 파일 지움"""
+    pid = cloud.upload(client, make_pdf(title="Bad Replace Paper Title", doi=""), "r.pdf")["id"]
+    bad = b"%PDF-1.4 garbage that is not a pdf"
+    slot = client.post(f"/api/papers/{pid}/pdf/upload").json()
+    assert cloud.storage.browser_put(slot["upload"]["url"], bad) == 200
+    r = client.post(f"/api/papers/{pid}/pdf/complete", json={"upload_id": slot["upload_id"]})
+    assert r.status_code == 400 and r.json()["detail"] == "PDF를 열 수 없어요. 손상되었거나 암호가 걸린 파일인지 확인해 주세요"
+    assert not any(k.endswith(slot["upload_id"] + ".pdf") for k in cloud.storage.objects)
+    slot = client.post("/api/uploads", json={"files": [{"name": "b.pdf", "size": len(bad)}]}).json()["files"][0]
+    assert cloud.storage.browser_put(slot["upload"]["url"], bad) == 200
+    out = client.post(f"/api/uploads/{slot['upload_id']}/complete", json={"name": "b.pdf"}).json()
+    assert out["error"] == "PDF를 열 수 없어요. 손상되었거나 암호가 걸린 파일인지 확인해 주세요"
+
+
+def test_add_paper_db_error_is_not_swallowed(cloud, monkeypatch):
+    """QA D5: PDF 받아 붙이기 중 DB 오류를 경고로 삼키고 깨진 트랜잭션에서 get_paper를 부르지 않는다(→ 500).
+    저장소 오류는 지금처럼 경고"""
+    from fastapi.testclient import TestClient
+
+    from paperlab.db import Library
+    from paperlab.storage import StorageError
+    c = cloud.client(cloud.user())
+    body = dict(SAMPLE, title="Db Error Download Paper", doi="", download_pdf=True, pdf_url="https://arxiv.org/pdf/1706.03762")
+    real_copy = cloud.storage.copy
+
+    def broken_copy(src, dst):
+        raise StorageError("x")
+
+    cloud.storage.copy = broken_copy
+    try:
+        r = c.post("/api/papers", json=body)
+    finally:
+        cloud.storage.copy = real_copy
+    assert r.status_code == 200 and r.json()["warning"].endswith("저장소 오류") and not r.json()["paper"]["has_pdf"]
+    assert not any(k.startswith("incoming/") for k in cloud.storage.objects)  # 임시 파일도 지움
+
+    def db_error(self, *a, **kw):
+        self._x("select 1/0")
+
+    monkeypatch.setattr(Library, "set_pdf", db_error)
+    quiet = TestClient(cloud.app, headers=dict(c.headers), raise_server_exceptions=False)
+    r = quiet.post("/api/papers", json=dict(body, title="Db Error Download Paper Two"))
+    assert r.status_code == 500 and "division" not in r.text
+
+
+def test_status_and_tag_color_validation(client):
+    """웹 점검 L-1 · L-3: 읽기 상태는 STATUSES만, 태그 색은 #RRGGBB 또는 빈 값"""
+    pid = client.post("/api/papers", json=dict(SAMPLE, title="Validation Paper Title")).json()["paper"]["id"]
+    assert client.patch(f"/api/papers/{pid}", json={"status": "bogus"}).status_code == 400
+    assert client.patch(f"/api/papers/{pid}", json={"status": "done"}).json()["status"] == "done"
+    assert client.post("/api/papers/bulk", json={"ids": [pid], "action": "status", "value": "x"}).status_code == 400
+    for bad in (["done"], {"a": 1}):  # 해시 불가 값도 500이 아니라 400 (승인자 남은 위험 1)
+        assert client.patch(f"/api/papers/{pid}", json={"status": bad}).status_code == 400
+        assert client.post("/api/papers/bulk", json={"ids": [pid], "action": "status", "value": bad}).status_code == 400
+    client.patch(f"/api/papers/{pid}", json={"tags": ["colored"]})
+    tid = client.get("/api/tags").json()[0]["id"]
+    for bad in ("red", "#12345", "#1234567", "#GGGGGG", 5, "#123456\n"):
+        assert client.patch(f"/api/tags/{tid}", json={"color": bad}).status_code == 400, bad
+    assert client.patch(f"/api/tags/{tid}", json={"color": "#A0b1C2"}).status_code == 200
+    assert client.get("/api/tags").json()[0]["color"] == "#A0b1C2"
+    assert client.patch(f"/api/tags/{tid}", json={"color": ""}).status_code == 200
+
+
+def test_system_sizes_never_opened_inside_user_tx(cloud, monkeypatch):
+    """QA D7: 저장 공간 합계(system_tx)를 사용자 트랜잭션을 연 채로 열지 않는다(연결 두 개 — 풀 고갈 교착).
+    순서대로 보내는 요청이므로, 동시에 열린 트랜잭션이 둘 이상이면 같은 요청이 두 개를 잡은 것"""
+    from contextlib import contextmanager
+
+    db = cloud.app.state.db
+    real_tx = type(db)._tx
+    state = {"open": 0, "max": 0}
+
+    @contextmanager
+    def counting_tx(self, *a, **kw):
+        state["open"] += 1
+        state["max"] = max(state["max"], state["open"])
+        try:
+            with real_tx(self, *a, **kw) as conn:
+                yield conn
+        finally:
+            state["open"] -= 1
+
+    c = cloud.client(cloud.user())
+    pid = cloud.upload(c, make_pdf(title="Two Connections Paper Title", doi=""), "t.pdf")["id"]
+    monkeypatch.setattr(type(db), "_tx", counting_tx)
+    assert c.get("/api/storage/usage").status_code == 200
+    assert c.post("/api/uploads", json={"files": [{"name": "x.pdf", "size": 10}]}).status_code == 200
+    assert c.post(f"/api/papers/{pid}/pdf/upload").status_code == 200
+    assert state["max"] == 1
+
+
+def test_delete_folder_with_same_name_child(client):
+    """ponytail 4 (폴더 " (n)" 도우미): 지울 폴더와 이름이 같은 하위 폴더를 부모로 올려도 유일 색인 위반(500)이 아니라 ` (2)`"""
+    top = client.post("/api/folders", json={"name": "Dup"}).json()["id"]
+    client.post("/api/folders", json={"name": "Dup", "parent_id": top})
+    client.post("/api/folders", json={"name": "Other", "parent_id": top})
+    r = client.delete(f"/api/folders/{top}")
+    assert r.status_code == 200, r.text
+    assert sorted(f["name"] for f in client.get("/api/folders").json()) == ["Dup (2)", "Other"]

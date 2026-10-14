@@ -2,8 +2,10 @@
 // electron-builder 설정 (명세 13.1 · 13.7 · 13.7.1, U3 · U5 · U6 · U10).
 // - 서버 주소는 저장소의 한 곳(deploy/server-pc/server.json public_url)에서 빌드할 때 읽어 앱 package.json(paperlabServer)에 넣는다.
 // - 자동 업데이트: generic provider, url = public_url + "/downloads/" (https만 — AC-88). GitHub · 토큰 안 씀.
-// - 설치: NSIS 사용자별 · 한 번에 설치, paperlab:// 프로토콜 등록, 파일 이름 PaperLab-Setup-<버전>.exe(서버 /downloads/ 허용 이름).
-// - Electron fuses(보안 체크리스트 19번): runAsNode · NODE_OPTIONS · --inspect 끔.
+// - 설치: NSIS 사용자별 · 한 번에 설치, 파일 이름 PaperLab-Setup-<버전>.exe(서버 /downloads/ 허용 이름).
+//   paperlab:// 는 NSIS 가 등록하지 않음(protocols 는 macOS 용) → 앱이 시작할 때 등록(main/auth-bridge.js), 제거 때 installer.nsh 가 지움.
+// - Electron fuses(보안 체크리스트 19번): runAsNode · NODE_OPTIONS · --inspect 끔. ASAR 무결성(embeddedAsarIntegrityValidation)은 일부러 켜지 않음 —
+//   서명 없는 설치본에서 실측 전(README 후속).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -53,7 +55,7 @@ module.exports = {
     createStartMenuShortcut: true,
     shortcutName: 'PaperLab',
     artifactName: 'PaperLab-Setup-${version}.${ext}',
-    include: 'build/installer.nsh', // 제거할 때 동기화 설치 ID 지움(업데이트 때는 남김 — 6단계 K-33)
+    include: 'build/installer.nsh', // 제거할 때 동기화 설치 ID · paperlab:// 등록 지움(업데이트 때는 남김 — 6단계 K-33)
   },
   publish: [{ provider: 'generic', url: `${server}/downloads/` }],
 };

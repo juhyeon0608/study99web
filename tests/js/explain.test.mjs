@@ -53,8 +53,11 @@ describe("마크다운 정화 (품질팀 H-1 · L-2)", () => {
   test("수식 · 인용 단추는 정화가 끝난 뒤 끼워 넣음 (class를 잃지 않음)", () => {
     const ui = read("ui.js");
     const fn = ui.slice(ui.indexOf("export function renderMarkdown"), ui.indexOf("export function safeUrl"));
-    const san = fn.indexOf("DOMPurify.sanitize(html, MD_PURIFY)");
+    const san = fn.indexOf("purifyMd(html)");
     assert.ok(san > 0 && fn.indexOf('b.className = "cite-ref"') > san && fn.indexOf("span.innerHTML = store[") > san);
+    const pm = ui.slice(ui.indexOf("export function purifyMd"), ui.indexOf("export function renderMarkdown"));
+    assert.match(pm, /P\.sanitize\(html, MD_PURIFY\)/);
+    assert.match(pm, /mdLinks && node\.tagName === "A"/); // 새 탭 링크는 MD 정화 때만 (L-5)
   });
 });
 

@@ -23,6 +23,9 @@ MIGRATIONS_DIR = Path(__file__).resolve().parent.parent / "supabase" / "migratio
 FILE_RE = re.compile(r"^(\d{14})_[a-z0-9_]+\.sql$")
 # 동시 실행 방지용 advisory lock 번호 (트랜잭션 범위)
 LOCK_KEY = 7_301_001
+# 표 잠금 대기 상한 (QA D-4): 서버 요청이 잡은 잠금을 ALTER가 오래 기다리면 그 뒤 모든 질의가 줄을 서서 서버가 멈춘다.
+# 넘으면 그 파일은 실패(롤백) → update.ps1 이 기존 규칙대로 코드를 되돌린다. advisory lock을 잡은 뒤에 걸어 동시 실행은 기다림
+LOCK_TIMEOUT = "10s"
 
 BOOTSTRAP = """
 create schema if not exists paperlab;
@@ -76,12 +79,14 @@ def apply_migrations(conninfo: str, *, target: str = "production", directory: Pa
             raise MigrationError("테스트 프로젝트 표지(public.paperlab_test_project)가 없는 DB예요. 거부합니다.")
         with conn.transaction():
             conn.execute("select pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+            conn.execute(f"set local lock_timeout = '{LOCK_TIMEOUT}'")
             conn.execute(BOOTSTRAP)
         for path in files:
             version = path.name[:-4]
             with conn.transaction():
                 # 여러 곳에서 동시에 돌려도 한 번만 적용되게 같은 잠금 안에서 기록을 다시 본다
                 conn.execute("select pg_advisory_xact_lock(%s)", (LOCK_KEY,))
+                conn.execute(f"set local lock_timeout = '{LOCK_TIMEOUT}'")
                 done = conn.execute("select 1 from paperlab.schema_migrations where version = %s",
                                     (version,)).fetchone()
                 if done:
@@ -89,6 +94,9 @@ def apply_migrations(conninfo: str, *, target: str = "production", directory: Pa
                 log.info("migrate apply %s", path.name)
                 try:
                     conn.execute(path.read_text(encoding="utf-8"))
+                except psycopg.errors.LockNotAvailable as e:
+                    raise MigrationError(f"{path.name} 적용 실패: 표 잠금을 {LOCK_TIMEOUT} 안에 얻지 못했어요(서버 요청이 "
+                                         f"잡고 있음 — 잠시 뒤 다시) — {redact(str(e))}") from None
                 except psycopg.Error as e:
                     raise MigrationError(f"{path.name} 적용 실패: {redact(str(e))}") from None
                 conn.execute("insert into paperlab.schema_migrations (version) values (%s)", (version,))

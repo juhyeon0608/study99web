@@ -2,6 +2,7 @@
 
 import { api } from "./api.js";
 import { state } from "./state.js";
+import { cleanCiteHtml } from "./ui.js";
 
 let stylesCache = null;
 let enginePromise = null;
@@ -63,6 +64,12 @@ export function forgetStyle(id) {
   stylesCache = null;
 }
 
+// 로그아웃: 이전 계정이 추가한 스타일 목록 · XML을 비운다
+export function resetCiteCache() {
+  styleXmlCache.clear();
+  stylesCache = null;
+}
+
 const isKorean = (it) => it.language === "ko" || /[가-힣]/.test(it.title || "");
 
 /**
@@ -120,7 +127,7 @@ function cleanEntry(h) {
   // citeproc 출력의 div 구조(번호 칸 등)를 한 줄로 정리하고 안전하게 거른다
   let s = h.replace(/<div class="csl-left-margin">(.*?)<\/div>\s*<div class="csl-right-inline">(.*?)<\/div>/s, "$1 $2");
   s = s.replace(/^\s*<div class="csl-entry">/, "").replace(/<\/div>\s*$/, "").trim();
-  return window.DOMPurify ? window.DOMPurify.sanitize(s, { ALLOWED_TAGS: ["i", "b", "em", "strong", "sup", "sub", "span", "a"], ALLOWED_ATTR: ["href", "style"] }) : s;
+  return cleanCiteHtml(s);
 }
 
 // APA 등은 논문 제목을 문장형 대소문자로 쓴다. 약어(BERT)·대소문자 혼합(ImageNet)·첫 단어는 그대로 둔다

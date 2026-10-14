@@ -911,3 +911,50 @@ def test_build_malformed_package_json_is_warn_only(tmp_path, build_env):
     log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
     assert "업데이트 성공" in log and "[WARN] 데스크톱 앱 빌드 건너뜀: desktop\\package.json 을 읽지 못했어요" in log
     assert not [c for c in _npm_calls(build_env) if c["args"] != ["-v"]]
+
+
+def test_remove_tree_stops_on_reparse_points(tmp_path, junctions):
+    """QA D-9: 통째로 지우기(-Recurse)는 Remove-PLTree 한 곳 — 그 경로가 정션(대상이 없는 정션 포함)이면 멈추고 대상 폴더
+    내용은 그대로. 실제 폴더는 지우고, 없는 경로는 그냥 지나감"""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x", encoding="utf-8")
+    link = junctions(tmp_path / "work" / ".staging", outside)
+    dangling = junctions(tmp_path / "work" / "dist", tmp_path / "nowhere", create_target=False)
+    real = tmp_path / "work" / "venv"
+    (real / "sub").mkdir(parents=True)
+    (real / "sub" / "f.txt").write_text("x", encoding="utf-8")
+    snippet = ("foreach ($p in ($env:PL_PATHS | ConvertFrom-Json)) { "
+               "try { Remove-PLTree -Path $p; Write-Output ('removed ' + $p) } catch { Write-Output ('stopped ' + $p) } }")
+    p = ps_common(snippet, PL_PATHS=json.dumps([str(link), str(dangling), str(real), str(tmp_path / "missing")]))
+    out = p.stdout + p.stderr
+    assert f"stopped {link}" in out and f"stopped {dangling}" in out, out
+    assert f"removed {real}" in out and f"removed {tmp_path / 'missing'}" in out, out
+    assert (outside / "keep.txt").exists() and os.path.lexists(link) and not real.exists()
+    # 스크립트에서 -Recurse 지우기는 Remove-PLTree 안에만 (빌드 dist · .staging · 설치 .venv)
+    hits = {name: re.findall(r"Remove-Item -LiteralPath (\S+) -Recurse", (SERVER_PC / name).read_text(encoding="utf-8-sig"))
+            for name in ("common.ps1", "install.ps1", "update.ps1", "uninstall.ps1")}
+    assert hits == {"common.ps1": ["$Path"], "install.ps1": [], "update.ps1": [], "uninstall.ps1": []}, hits
+    install = (SERVER_PC / "install.ps1").read_text(encoding="utf-8-sig")
+    assert "-Action { Remove-PLTree -Path $venv }" in install
+
+
+def test_build_stops_when_staging_is_junction(tmp_path, build_env, junctions):
+    """QA D-9: releases 의 .staging 이 정션이면 빌드는 WARN 으로 멈추고(서버 업데이트 결과는 성공) 정션 대상 내용은 그대로"""
+    app = _desktop_repo(tmp_path, "bump")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("x", encoding="utf-8")
+    build_env["releases"].mkdir(parents=True, exist_ok=True)
+    junctions(build_env["releases"] / ".staging", outside)
+    p = _run_update(build_env, app)
+    assert p.returncode == 0, p.stdout + p.stderr
+    log = (build_env["logs"] / "update.log").read_text(encoding="utf-8-sig")
+    assert "[WARN] 데스크톱 앱 빌드 실패(.staging 확인 — 정션 · 심볼릭 링크라 지우지 않았어요" in log, log
+    assert (outside / "keep.txt").exists() and not (build_env["releases"] / "PaperLab-Setup-0.2.1.exe").exists()
+
+
+def test_common_header_says_releases_dir_line_only():
+    """QA D-8: 머리말 — cloud.env 는 PAPERLAB_RELEASES_DIR 한 줄만 읽음(Get-PLReleasesDir)"""
+    head = (SERVER_PC / "common.ps1").read_text(encoding="utf-8-sig").split("#>", 1)[0]
+    assert "cloud.env 는 PAPERLAB_RELEASES_DIR 한 줄만 읽는다" in head and "cloud.env 의 값은 읽지 않는다" not in head

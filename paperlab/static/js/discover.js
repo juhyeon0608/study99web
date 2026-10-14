@@ -1,15 +1,19 @@
 // 논문 찾기: OpenAlex · arXiv · Semantic Scholar · Crossref · KCI · RISS · Europe PMC 검색 (Google Scholar 방식)
 
 import { api, qs } from "./api.js";
-import { EXT_MARK, ICON_INFO, ICON_WARN, SCHOLAR_LIBRARY_NOTE, addPaper, bindExtLink, citeDialog, copySearchQuery, extMark, openExternal } from "./dialogs.js";
-import { INHA, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl } from "./extlinks.js";
+import { EXT_MARK, SCHOLAR_LIBRARY_NOTE, addPaper, bindExtLink, citeDialog, copySearchQuery, extMark, openExternal } from "./dialogs.js";
+import {
+  INHA, INHA_OPEN_TITLE, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl,
+} from "./extlinks.js";
 import { openGraph, seedFromResult } from "./graph.js";
 import {
-  EMPTY_TEXT, GROUPS, OC_FAILED_TEXT, SORT_LABEL, SOURCE_META, adjustOptions, isNewSource, licenseLabel,
+  EMPTY_TEXT, GROUPS, OA_OPEN_TITLE, OC_FAILED_TEXT, SORT_LABEL, SOURCE_META, adjustOptions, isNewSource, licenseLabel,
   oaOpenLabel, offReason, searchErrorView, sourceLimits, viaHtml,
 } from "./sourcemeta.js";
 import { state } from "./state.js";
-import { $, $$, authorsShort, el, errorToast, esc, fmtNum, safeUrl } from "./ui.js";
+import {
+  $, $$, ICON_INFO, ICON_WARN, authorsShort, el, errorToast, esc, fmtNum, josa, liveSay, safeUrl, store,
+} from "./ui.js";
 
 const SOURCE_KEYS = Object.keys(SOURCE_META);
 // "학교 DB에서 찾기" 줄 (docs/design/inha-proxy-ui.md 3장). 툴팁은 켜졌을 때 것, 꺼지면 "검색어를 입력하세요"
@@ -21,29 +25,34 @@ const SCHOOL_DBS = [
 const KISS_COPY_TITLE = "KISS 첫 페이지를 열고 검색어를 복사해요";
 const SCHOLAR_TITLE = "검색어로 Google Scholar를 열어요. Scholar 설정 → 도서관 링크에서 ‘인하대학교’를 켜면 학교 구독 원문 링크가 함께 나와요.";
 const EMPTY_QUERY = "검색어를 입력하세요";
-const INHA_OPEN_TITLE = `${INHA.proxyName}(정석학술정보관)로 원문 페이지를 열어요`;
 const KDB_INTRO_KEY = "paperlab.kdbIntro";
 const OA_FIND_TITLE = "OpenAlex에서 무료 PDF를 찾아요. 라이선스가 확인되면 서재에 PDF까지 넣을 수 있어요.";
-const OA_OPEN_TITLE = "라이선스를 확인하지 못한 PDF예요. 새 탭에서 직접 받아 [PDF 첨부]로 올려 주세요.";
 const OA_OPEN_MARK = extMark("새 탭에서 열림 · 직접 받아 올려야 해요");
 const OA_AFTER_CARD = `<div class="notice oa-after" data-tone="info">${ICON_INFO}<div>라이선스를 확인하지 못해 PaperLab이 대신 받지 않아요. 직접 받은 뒤 서재에 추가하고 <b>[PDF 첨부]</b>로 올려 주세요.</div></div>`;
 
-const ds = {
+const freshDs = () => ({
   q: "", source: "openalex", yearFrom: "", yearTo: "", sort: "relevance", oa: false, page: 1,
   res: null, loading: false, error: "", errorCode: "", graph: null, // graph: {paper, kind, page, res}
   cursors: [], // Europe PMC: 지나온 쪽의 커서(K-6 — 메모리만). 마지막 값이 지금 쪽
   limitSaid: "", // 소스를 바꿔 정렬 · 필터를 되돌렸을 때의 알림(2.3절)
   seq: 0, // 늦게 도착한 이전 요청의 결과를 버리기 위한 번호
-};
+});
+const ds = freshDs();
 let srcStatus = null; // GET /api/sources 결과(화면을 처음 열 때 한 번). 실패하면 {} — 모두 켬(서버 503이 대신 알림)
 let viewRef = null;
+
+// 로그아웃: 이전 계정의 검색어 · 결과를 비운다 (진행 중인 요청 결과는 seq로 버림)
+export function resetDiscover() {
+  Object.assign(ds, freshDs(), { seq: ds.seq + 1 });
+  srcStatus = null;
+  viewRef = null;
+}
 
 const srcOn = (s) => !srcStatus || !srcStatus[s] || srcStatus[s].enabled !== false;
 const meta = (s) => SOURCE_META[s] || {};
 
 function announce(text) {
-  const live = viewRef && $("[data-discover-live]", viewRef);
-  if (live) { live.textContent = ""; setTimeout(() => { live.textContent = text; }, 30); }
+  liveSay(viewRef && $("[data-discover-live]", viewRef), text);
 }
 
 function sourceOptions() {
@@ -261,14 +270,14 @@ async function loadGraph(paper, kind, page = 1) {
 }
 
 function readIntroDismissed() {
-  try { return localStorage.getItem(KDB_INTRO_KEY) === "1"; } catch { return false; }
+  return store.get(KDB_INTRO_KEY) === "1";
 }
 
 function introNotice(box) {
   const n = el(`<div class="notice" data-tone="info" data-kdb-intro>${ICON_INFO}<div>KCI · RISS 검색은 PaperLab 공용 키로 요청해요. 원문은 각 사이트(또는 <b>인하대에서 보기</b>)에서 직접 받아 <b>[PDF 첨부]</b>로 올려 주세요.</div>
     <button type="button" class="icon-btn small" data-kdb-intro-close aria-label="안내 닫기">✕</button></div>`);
   $("[data-kdb-intro-close]", n).onclick = () => {
-    try { localStorage.setItem(KDB_INTRO_KEY, "1"); } catch { /* 못 쓰면 다음에 또 보임 */ }
+    store.set(KDB_INTRO_KEY, "1"); // 못 쓰면 다음에 또 보임
     n.remove();
     $(".result-info", box)?.focus();
   };
@@ -341,9 +350,11 @@ function draw() {
 
 function drawGraph(box) {
   const g = ds.graph;
-  const label = { cited_by: "을(를) 인용한 논문", references: "의 참고문헌", related: "와(과) 관련된 논문" }[g.kind];
+  const t = g.paper.title.length > 70 ? g.paper.title.slice(0, 70) + "…" : g.paper.title;
+  const particle = (pair) => josa(t, pair).slice(t.length); // 제목 뒤 조사만 (제목은 굵게)
+  const label = { cited_by: `${particle("을/를")} 인용한 논문`, references: "의 참고문헌", related: `${particle("과/와")} 관련된 논문` }[g.kind];
   const crumb = el(`<div class="crumb" style="max-width:900px"><button class="btn sm" data-back>← 검색 결과로</button>
-    <span><b>${esc(g.paper.title.length > 70 ? g.paper.title.slice(0, 70) + "…" : g.paper.title)}</b>${label}</span></div>`);
+    <span><b>${esc(t)}</b>${esc(label)}</span></div>`);
   $("[data-back]", crumb).onclick = () => { ds.seq++; ds.graph = null; draw(); };
   box.appendChild(crumb);
   const loadingText = g.kind === "references" ? "참고문헌을 불러오는 중… OpenAlex에 없으면 OpenCitations에서 찾아요" : "불러오는 중…";
@@ -422,7 +433,7 @@ export function resultCard(it, { n = null, lite = false } = {}) {
   const host = it.pdf_url ? (() => { try { return new URL(it.pdf_url).hostname.replace(/^www\./, ""); } catch { return "PDF"; } })() : "";
   const links = !nsrc || !!it.doi; // 새 소스: 참고문헌 · 관련 논문 · 그래프는 DOI 있을 때만(AD-6)
   const card = el(`<div class="result"${it.source ? ` data-source="${esc(it.source)}"` : ""}>
-    <div class="r-title">${n ? `<span class="cite-ref" aria-hidden="true">${n}</span>` : ""}${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener"${titleLabel}>${esc(it.title)}</a>` : `<span tabindex="-1"${titleLabel}>${esc(it.title)}</span>`}</div>
+    <div class="r-title">${n ? `<span class="cite-ref" aria-hidden="true">${n}</span>` : ""}${safeUrl(it.url) ? `<a href="${esc(safeUrl(it.url))}" target="_blank" rel="noopener noreferrer"${titleLabel}>${esc(it.title)}</a>` : `<span tabindex="-1"${titleLabel}>${esc(it.title)}</span>`}</div>
     <div class="r-meta">${esc(authorsShort(it.authors, 4))}${venue ? ` - ${esc(venue)}` : ""}${it.doi ? ` - doi:${esc(it.doi)}` : it.arxiv_id ? ` - arXiv:${esc(it.arxiv_id)}` : ""}</div>
     ${nsrc ? badgeRow(it) : ""}
     ${it.tldr ? `<div class="r-tldr"><b>TL;DR</b> ${esc(it.tldr)}</div>` : ""}
@@ -434,8 +445,8 @@ export function resultCard(it, { n = null, lite = false } = {}) {
       ${links ? `<button class="link" data-g="references">참고문헌</button>
       <button class="link" data-g="related">관련 논문</button>` : ""}`}
       ${links ? `<button class="link" data-graph-open title="이 논문과 주제가 가까운 논문들을 그래프로 봐요">그래프</button>` : ""}
-      ${safeUrl(it.pdf_url) ? `<a href="${esc(safeUrl(it.pdf_url))}" target="_blank" rel="noopener">[PDF] ${esc(host)}</a>` : ""}
-      ${inha ? `<a class="ext-link" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${INHA_OPEN_TITLE}">${esc(INHA.buttons.view)}${EXT_MARK}</a>` : ""}
+      ${safeUrl(it.pdf_url) ? `<a href="${esc(safeUrl(it.pdf_url))}" target="_blank" rel="noopener noreferrer">[PDF] ${esc(host)}</a>` : ""}
+      ${inha ? `<a class="ext-link" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${esc(INHA_OPEN_TITLE)}">${esc(INHA.buttons.view)}${EXT_MARK}</a>` : ""}
       ${scholar ? `<a class="ext-link" href="${esc(scholar)}" target="_blank" rel="noopener noreferrer" data-scholar-open title="${esc(SCHOLAR_LIBRARY_NOTE)}">${esc(INHA.buttons.scholar)}${EXT_MARK}</a>` : ""}
     </div></div>`);
   const inhaLink = $("[data-inha-open]", card);

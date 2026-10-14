@@ -4,9 +4,9 @@
 // - 제목 · 저자 · 초록은 esc() · textContent로만 넣는다(SVG <text> 포함 — AC-G51).
 // - 만든 그래프는 서버에 기록하지 않는다(U-1). 같은 탭에서 뒤로 가기 때 다시 그리려고 브라우저 메모리에만 둔다.
 
-import { streamEvents } from "./api.js";
+import { api, streamEvents } from "./api.js";
 import { EXT_MARK, ICON_GRAPH, SCHOLAR_LIBRARY_NOTE, addPaper, bindExtLink, citeDialog, settingsDialog } from "./dialogs.js";
-import { INHA, paperProxyTarget, scholarUrl } from "./extlinks.js";
+import { INHA, INHA_OPEN_TITLE, paperProxyTarget, scholarUrl } from "./extlinks.js";
 import {
   DEFAULT_SIZE, GRAPH_SIZES, REL_TEXT, STEPS, STEP_LABELS, closest, countFromMessage, edgeBetween, edgeOpacity,
   edgeWidth, fitTransform, fmt, groupNotices, layoutGraph, nearestInDirection, nodeAriaLabel, relationText,
@@ -14,7 +14,9 @@ import {
   yearRamp, zoomAt,
 } from "./graphmath.js";
 import { state } from "./state.js";
-import { $, $$, authorsShort, el, esc, modalOpen, safeUrl } from "./ui.js";
+import {
+  $, $$, ICON_INFO, ICON_WARN, authorsShort, el, errorToast, esc, josa, liveSay, modalOpen, safeUrl, store,
+} from "./ui.js";
 
 // d3-force + 의존 3개 (UMD — window.d3). 해시는 vendor/THIRD_PARTY.md와 같아야 함(AC-G52)
 export const D3_FILES = [
@@ -28,10 +30,7 @@ const LEGEND_KEY = "paperlab.graphLegend";
 const MEMORY_MAX = 8;
 const NARROW = "(max-width: 900px)";
 const SVG_NS = "http://www.w3.org/2000/svg";
-const ICON_WARN = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5l9.5 16.5h-19zM12 10v4.5M12 17.5v.01"/></svg>`;
-const ICON_INFO = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5.5M12 7.5v.01"/></svg>`;
 const ICON_FIT = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>`;
-const INHA_OPEN_TITLE = `${INHA.proxyName}(정석학술정보관)로 원문 페이지를 열어요`;
 const KEYS_TEXT = "끌어서 이동 · 휠로 확대 · 키보드: 화살표로 이동, Enter로 고르기";
 const ERR = {
   seed_not_found: ["이 논문을 OpenAlex에서 찾지 못했어요", "DOI가 있으면 더 정확하게 찾아요. 서재 논문이라면 ⋯ → ‘정보 수정’에서 DOI를 넣고 다시 시도해 보세요.", ["scholar", "back"]],
@@ -41,7 +40,7 @@ const ERR = {
   graph_busy: ["이미 그래프를 만드는 중이에요", "끝난 뒤 다시 눌러 주세요. 다른 탭에서 만들고 있을 수도 있어요.", ["retry", "back"]],
   graph_queue_full: ["지금 그래프 요청이 많아요", "잠시 후 다시 시도해 주세요.", ["retry", "back"]],
   bad_seed: ["이 논문으로는 그래프를 만들 수 없어요", "DOI · arXiv 번호 · 제목 형식을 알아보지 못했어요.", ["back"]],
-  not_found: ["서재에서 이 논문을 찾지 못했어요", "삭제됐을 수 있어요.", ["library"]],
+  not_found: ["서재에 이 논문이 없어요", "휴지통에 있을 수 있어요.", ["library", "trash"]],
   disconnected: ["연결이 끊겼어요", "그동안 받은 정보는 저장돼 있어서 다시 만들면 더 빨라요.", ["retry", "back"]],
   cancelled: ["그래프 만들기를 취소했어요", "그동안 받은 정보는 저장돼 있어서 다시 만들면 더 빨라요.", ["retry", "back"]],
   empty: ["연결된 논문을 충분히 찾지 못했어요", "OpenAlex에 인용 정보가 적은 논문일 수 있어요. Google Scholar에서 ‘인용’ · ‘관련 학술자료’를 살펴보세요.", ["scholar", "back"]],
@@ -203,21 +202,16 @@ function setState(s) {
 }
 
 function announce(msg) {
-  const live = $("[data-graph-live]", g.view);
-  live.textContent = "";
-  setTimeout(() => { if (live.isConnected) live.textContent = msg; }, 60);
+  liveSay($("[data-graph-live]", g.view), msg);
 }
 
 function legendDefault() {
-  try {
-    const v = localStorage.getItem(LEGEND_KEY);
-    if (v === "1" || v === "0") return v === "1";
-  } catch { /* 기본값 */ }
-  return !matchMedia(NARROW).matches;
+  const v = store.get(LEGEND_KEY);
+  return v === "1" || v === "0" ? v === "1" : !matchMedia(NARROW).matches;
 }
 
 function saveLegend(open) {
-  try { localStorage.setItem(LEGEND_KEY, open ? "1" : "0"); } catch { /* 저장 못 함 */ }
+  store.set(LEGEND_KEY, open ? "1" : "0");
 }
 
 function wireBar() {
@@ -332,7 +326,7 @@ function onProgress(ev) {
   }
   const count = countFromMessage(ev.message);
   if (count && ev.step !== "wait") {
-    const li = $(`li[data-step="${ev.step}"] .graph-step-msg`, steps);
+    const li = $(`li[data-step="${CSS.escape(String(ev.step))}"] .graph-step-msg`, steps);
     if (li) li.textContent = count;
   }
   if (ev.step !== g.lastStep) { // 단계가 바뀔 때만 읽힘
@@ -389,6 +383,7 @@ function showState(code) {
     if (b === "retry") btns.push(`<button type="button" class="btn" data-graph-retry>${code === "cancelled" ? "다시 만들기" : "다시 시도"}</button>`);
     if (b === "settings") btns.push(`<button type="button" class="btn" data-graph-settings>설정 열기</button>`);
     if (b === "library") btns.push(`<a class="btn" href="#/library">서재로</a>`);
+    if (b === "trash") btns.push(`<a class="btn" href="#/trash">휴지통 보기</a>`);
     if (b === "discover") btns.push(`<a class="btn" href="#/discover">논문 찾기로</a>`);
   }
   const box = el(`<div class="empty graph-state"><h3 tabindex="-1">${esc(title)}</h3><p>${esc(text)}</p>
@@ -890,7 +885,7 @@ function showInfo(id, { announceIt = true } = {}) {
   openTab("info");
   if (announceIt) {
     const n = g.model.byId.get(id);
-    announce(((n && n.paper.title) || "논문") + "을 골랐어요.");
+    announce(josa((n && n.paper.title) || "논문", "을/를") + " 골랐어요."); // 화면 읽기 글(textContent)
   }
 }
 
@@ -945,7 +940,7 @@ function renderInfo() {
     <dl class="kv">
       <dt>피인용</dt><dd>${esc(fmt(p.cited_by_count || 0))}회</dd>
       ${n && !isSeed ? `<dt>씨앗과</dt><dd>${esc(seedRelationText(seedEdge))}</dd>` : ""}
-      ${p.doi ? `<dt>DOI</dt><dd><a href="${esc("https://doi.org/" + p.doi)}" target="_blank" rel="noopener">${esc(p.doi)}</a></dd>` : ""}
+      ${p.doi ? `<dt>DOI</dt><dd><a href="${esc("https://doi.org/" + p.doi)}" target="_blank" rel="noopener noreferrer">${esc(p.doi)}</a></dd>` : ""}
     </dl>
     <div class="section-title">초록</div>
     ${p.abstract ? `<div class="abstract clamp" id="graph-abs">${esc(p.abstract)}</div>
@@ -991,7 +986,17 @@ function drawActions(box, ent, { proxy, scholar, isSeed }) {
   box.innerHTML = "";
   if (ent.inLibrary) {
     const b = el(`<button type="button" class="btn sm in-lib" data-graph-openlib>✓ 서재에 있음 · 열기</button>`);
-    b.onclick = () => {
+    b.onclick = async () => {
+      try {
+        await api.get(`/api/papers/${Number(ent.inLibrary)}`);
+      } catch (e) {
+        if (e.status !== 404) return errorToast(e);
+        if (!$("[data-graph-trash-note]", box)) {
+          box.appendChild(el(`<div class="notice" data-tone="info" data-graph-trash-note role="status">${ICON_INFO}<div>이 논문은 서재에 없어요(휴지통에 있을 수 있어요).
+            <a class="btn sm" href="#/trash">휴지통 보기</a></div></div>`));
+        }
+        return;
+      }
       state.activeId = ent.inLibrary;
       state.filter = { kind: "all", id: null };
       state.q = "";

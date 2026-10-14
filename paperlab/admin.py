@@ -227,20 +227,31 @@ def rotate_keys(conninfo: str, new_key: bytes, old_keys: list[bytes]) -> int:
     return n
 
 
-def find_orphans(conninfo: str, storage: Storage, delete: bool = False) -> dict:
+ORPHAN_MIN_AGE = timedelta(hours=1)  # 이보다 최근에 바뀐 객체는 고아로 보지 않음 (올리는 중 · 아직 커밋 전 — QA D4)
+
+
+def find_orphans(conninfo: str, storage: Storage, delete: bool = False, now: datetime | None = None) -> dict:
     """DB 행이 없는 users/*/papers/*.pdf와, DB rag_key에 없는 users/*/rag/*.bin (3단계 K-20),
     DB translations.tr_key에 없는 users/*/translations/*.json (4단계 8.2절).
-    incoming/은 수명 주기 규칙이 처리, backups/는 건드리지 않음."""
+    incoming/은 수명 주기 규칙이 처리, backups/는 건드리지 않음.
+    R2 목록을 **먼저** 읽고 DB를 나중에 읽는다 — 목록 뒤에 커밋된 행도 DB 쪽에 보이게. 그리고 최근 1시간 안에 바뀐
+    객체는 빼서, 올리는 중(R2에 먼저 쓰고 DB는 나중에 커밋)인 파일을 지우지 않는다 (QA D4)"""
     log.info("admin reason=orphan scan delete=%s", delete)
+    objects = storage.list_prefix("users/")
     with _connect(conninfo) as conn:
         known = {r[0] for r in conn.execute("select pdf_key from paperlab.papers where pdf_key <> ''")}
         known_rag = {r[0] for r in conn.execute("select rag_key from paperlab.papers where rag_key <> ''")}
         known_tr = {r[0] for r in conn.execute("select tr_key from paperlab.translations")}
         db_total = conn.execute("select coalesce(sum(pdf_size), 0) from paperlab.papers where pdf_key <> ''").fetchone()[0]
-    objects = storage.list_prefix("users/")
-    orphans = [(k, s) for k, s in objects if _PAPER_KEY_RE.fullmatch(k) and k not in known]
-    rag_orphans = [(k, s) for k, s in objects if _RAG_KEY_RE.fullmatch(k) and k not in known_rag]
-    tr_orphans = [(k, s) for k, s in objects if _TR_KEY_RE.fullmatch(k) and k not in known_tr]
+    cutoff = (now or datetime.now(timezone.utc)) - ORPHAN_MIN_AGE
+
+    def old(k: str) -> bool:
+        at = storage.modified(k)  # 고아 후보만 조회(대개 몇 개). 그 사이 지워졌으면 None → 지워도 그만
+        return at is None or at < cutoff
+
+    orphans = [(k, s) for k, s in objects if _PAPER_KEY_RE.fullmatch(k) and k not in known and old(k)]
+    rag_orphans = [(k, s) for k, s in objects if _RAG_KEY_RE.fullmatch(k) and k not in known_rag and old(k)]
+    tr_orphans = [(k, s) for k, s in objects if _TR_KEY_RE.fullmatch(k) and k not in known_tr and old(k)]
     if delete:
         for k, _ in orphans + rag_orphans + tr_orphans:
             storage.delete(k)
@@ -510,8 +521,14 @@ def cache_prune(conninfo: str, max_mb: float) -> dict:
                 break
             picked.append(no)
             excess -= int(size)
-        n_edges = conn.execute("delete from paperlab.citation_edges where work_no = any(%s)", (picked,)).rowcount
+        # 잠금 순서를 쓰기(citecache.write_rows)와 같게: 작품(openalex_no 순) → 관계((work_no, relation) 순) — 캐시를 쓰는
+        # 요청과 서로를 기다리는 교착 방지 (QA). 행을 먼저 그 순서로 잠근 뒤 지운다
+        conn.execute("select 1 from paperlab.external_works where openalex_no = any(%s) order by openalex_no for update",
+                     (picked,))
+        conn.execute("select 1 from paperlab.citation_edges where work_no = any(%s) order by work_no, relation for update",
+                     (picked,))
         n_works = conn.execute("delete from paperlab.external_works where openalex_no = any(%s)", (picked,)).rowcount
+        n_edges = conn.execute("delete from paperlab.citation_edges where work_no = any(%s)", (picked,)).rowcount
         after = int(conn.execute(_CACHE_LIVE).fetchone()[0])
     return {"deleted_works": n_works, "deleted_edges": n_edges, "live_before": live, "live_after": after}
 

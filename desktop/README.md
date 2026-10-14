@@ -99,7 +99,7 @@ PC가 작업을 실행하려면 **claude · codex · gemini 중 쓰려는 도구
 - 폴더에 PDF를 넣으면 서재에 새 논문으로 올라가고, 다른 PC의 같은 폴더에도 생겨요. 서재 화면에서 다른 폴더로 옮기면 각 PC의 파일도 옮겨져요. 컬렉션 · 태그는 PC 파일과 관계없어요.
 - **지우기**: 지운 논문은 서재 **휴지통에 30일** 남고, 다른 PC에서는 **Windows 휴지통**으로 가요. 한꺼번에 많이 지우면(30초 안에 10개 이상 등) 동기화가 잠깐 멈추고 물어봐요.
 - **충돌 사본**: 같은 PDF를 두 곳에서 고치면 나중에 고친 내용이 원래 이름을 갖고, 다른 쪽은 같은 폴더에 `원래 이름 (충돌 사본 PC이름 날짜).pdf`로 남아요. 서재에서는 `충돌 사본` 태그로 찾을 수 있어요.
-- **보관함**: Windows 휴지통으로 보내지 못한 파일은 동기화 폴더 안 `.paperlab-sync\보관함`으로 옮겨 둬요. 이 PC 상태의 [보관함 열기]에서 보고 직접 정리해 주세요(앱은 지우지 않아요).
+- **보관함**: Windows 휴지통으로 보내지 못한 파일은 동기화 폴더 안 `.paperlab-sync\보관함`으로 옮겨 둬요(Windows가 보내기를 중단한 파일은 옮기지 않고 그 자리에 둔 채 다시 시도해요 — 연 프로그램을 닫아 주세요). 이 PC 상태의 [보관함 열기]에서 보고 직접 정리해 주세요(앱은 지우지 않아요).
 - **PDF를 고치면 전체 번역이 지워져요.** PC에서 PDF를 고쳐 저장하면(Acrobat 주석 포함) 서재의 그 논문도 바뀌고, 전체 번역이 있었으면 "PDF가 바뀌어 번역을 지웠어요" 알림이 와요. 다시 번역하려면 서재에서 [전체 번역 시작…]을 한 번 더 눌러야 해요(자동으로 다시 번역하지 않아요).
 - **올리기 한도**: 한 사람이 동기화로 올릴 수 있는 PDF 양에 한도(기본 2GB)가 있어요. 넘으면 올리기만 멈추고 받기 · 옮기기는 계속해요. 서재 휴지통을 비우면 한도가 늘어요.
 - 동기화하지 않는 파일(이름 규칙에 맞지 않음 · 경로가 250자 넘음 · 열려 있음 · 클라우드 전용 등)은 이 PC 상태의 **맞추지 못한 파일**에 이유와 함께 보여요.
@@ -163,4 +163,16 @@ npm run dist    # NSIS 설치 파일 → desktop\dist\PaperLab-Setup-<버전>.ex
 - 보안 설정(Fuses · 탐색 제한 · IPC 출처 검사 · 외부 링크 규칙)은 명세 13.2 · 13.2.1절. 앱 · 트레이 아이콘은 임시 그림이고 디자인팀 확인을 기다리는 중이에요(`build/`, `scripts/make_icons.py`).
 - 비밀값(기기 토큰 · API 키 · DB 주소)은 앱 · 로그 · 저장소 어디에도 두지 않아요.
 - **폴더 동기화(6단계)**: 엔진은 `sync/`(워커와 다른 utilityProcess — `sync/entry.js`), main 쪽은 `main/sync-host.js`, 화면은 `ui/status-sync.js` · `ui/sync-look.js`. 저널은 `%APPDATA%\PaperLab(-dev)\sync\state.json`, 로그는 `logs\sync.log`(파일 이름 · 경로 · 해시를 쓰지 않음). Windows 휴지통 보내기는 main의 `shell.trashItem`만(utilityProcess에서는 동작하지 않음). 시험(`test/sync-*.test.js`)은 임시 폴더 · 가짜 API · 가짜 휴지통만 쓰고, 여러 PC 시험용 엔진은 `test/fixtures/sync-sim.js`(로컬 개발 서버 전용).
+- **`paperlab://` 등록**(앱 창 구글 로그인 콜백 — AC-72): electron-builder NSIS는 `protocols`를 등록하지 않아서, 배포본이 **시작할 때마다** `app.setAsDefaultProtocolClient`로 `HKCU\Software\Classes\paperlab`에 `"…\PaperLab.exe" -- "%1"`을 써요(`main/auth-bridge.js` `registerProtocol`). `--` 뒤라 주소에 스위치를 끼워 넣어도 Chromium 스위치로 읽히지 않고, 앱도 `paperlab://` 인자가 꼭 하나일 때만 받고 그 뒤의 스위치(`--hidden` 등)는 무시해요. 제거할 때(업데이트 아님) `build/installer.nsh`가 이 키를 지워요. **개발 실행(`npm start`)은 등록하지 않아요**(이 PC 레지스트리를 바꾸지 않음) — 그래서 개발 실행의 앱 창에서는 구글 로그인이 앱으로 돌아오지 않아요. 로그인 흐름은 설치본으로 확인하세요.
 - **설치 ID**(재설치 때 동기화 자동 켜짐 막기): 배포본은 `HKCU\Software\PaperLab\InstallId`(앱이 처음 실행 때 만듦), 제거할 때 `build/installer.nsh`가 지워요(자동 업데이트 설치에서는 남김). 개발 실행은 레지스트리를 쓰지 않고 `PAPERLAB_INSTALL_ID`(없으면 `dev`).
+
+### 실기기에서 확인할 것 (설치본)
+
+- 설치 후 앱을 한 번 켠 뒤 `reg query HKCU\Software\Classes\paperlab /s` → `URL Protocol` 값과 `shell\open\command` = `"%LOCALAPPDATA%\Programs\PaperLab\PaperLab.exe" -- "%1"`(설치 경로 그대로)이 보이는지.
+- 앱 창 [Google로 계속하기] → 브라우저 로그인 → "PaperLab 열기" 허용 → 앱 창으로 돌아와 로그인되는지(AC-72). 앱 창에서 [취소]한 뒤 브라우저에서 로그인을 마치면 앱이 받지 않는지(화면이 `cancelGoogleLogin`을 부를 때).
+- 자동 업데이트 뒤에도 위 키가 남아 있는지, **제거한 뒤** `reg query HKCU\Software\Classes\paperlab`가 "찾을 수 없음"인지.
+- 앱을 켠 채 Windows 로그오프 · 다시 시작 → 다음 로그인 때 `main.log`에 `Windows 세션 끝 — 정지`가 남는지(앱 창이 한 번도 열리지 않은 트레이 상태에서는 남지 않을 수 있음).
+
+### 후속
+
+- **ASAR 무결성 fuse**(`embeddedAsarIntegrityValidation`)는 일부러 꺼 둔 채예요. 서명하지 않은 설치본에서 켜도 실행 · 자동 업데이트가 되는지 실측한 뒤 켤지 정해요.

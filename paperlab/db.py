@@ -550,14 +550,6 @@ class Library:
         self._x("update paperlab.papers set last_opened_at = %s where id = %s and user_id = %s",
                 (now_dt(), paper_id, self.uid))
 
-    def delete_paper(self, paper_id: int) -> dict | None:
-        """지운 논문의 저장소 키 {"pdf_key", "rag_key", "tr_key"}('' = 없음). 내 논문이 아니면 None.
-        번역 행은 외래 키로 함께 지워지므로 키는 지우기 전 스냅숏에서 (4단계 8.2절)"""
-        return self._one("with t as (select tr_key from paperlab.translations where paper_id = %(id)s and user_id = %(uid)s) "
-                         "delete from paperlab.papers where id = %(id)s and user_id = %(uid)s "
-                         "returning pdf_key, rag_key, coalesce((select tr_key from t), '') as tr_key",
-                         {"id": paper_id, "uid": self.uid})
-
     def _reindex(self, paper_id: int) -> None:
         """검색 메타(paper_search.meta)만 다시 쓴다. 본문은 page_texts에 쓰는 순간 색인된다."""
         row = self._one("select title, authors, abstract, keywords from paperlab.papers "
@@ -579,9 +571,6 @@ class Library:
         self._x("insert into paperlab.paper_search (paper_id, user_id, meta) values (%s, %s, %s) "
                 "on conflict (paper_id) do update set meta = excluded.meta",
                 (paper_id, self.uid, _clean_text(meta)))
-
-    def reindex(self, paper_id: int) -> None:
-        self._reindex(paper_id)
 
     def list_papers(self, q: str = "", collection_id: int | None = None, tag_id: int | None = None,
                     status: str = "", starred: bool = False, sort: str = "added",
@@ -782,6 +771,14 @@ class Library:
             "select 1 as x from paperlab.folders where user_id = %s and coalesce(parent_id, 0) = coalesce(%s, 0) "
             "and lower(name) = lower(%s) and id is distinct from %s", (self.uid, parent_id, name, exclude)))
 
+    def free_folder_name(self, name: str, parent_id: int | None, exclude: int | None = None) -> str:
+        """그 부모 안에서 겹치지 않는 폴더 이름 — 겹치면 ` (2)`, ` (3)` … (100자 안, K-8)"""
+        final, n = name, 1
+        while self._folder_name_taken(final, parent_id, exclude):
+            n += 1
+            final = name[:100 - len(f" ({n})")] + f" ({n})"
+        return final
+
     def add_folder(self, name: str, parent_id: int | None = None) -> int:
         if parent_id is not None and not self.has_folder(parent_id):
             raise ValueError("상위 폴더를 찾을 수 없어요")
@@ -822,17 +819,10 @@ class Library:
         moved_papers = len(moving)
         children = self._all("select id, name from paperlab.folders where parent_id = %s and user_id = %s order by id",
                              (fid, self.uid))
-        taken = {r["name"].lower() for r in self._all(
-            "select name from paperlab.folders where user_id = %s and coalesce(parent_id, 0) = coalesce(%s, 0) "
-            "and id <> %s", (self.uid, parent, fid))}
         for child in children:
-            # 부모에 같은 이름이 있으면 " (2)", " (3)" … 을 붙여 옮긴다 (가정)
-            name, n = child["name"], 1
-            while name.lower() in taken:
-                n += 1
-                suffix = f" ({n})"
-                name = child["name"][:100 - len(suffix)] + suffix
-            taken.add(name.lower())
+            # 부모에 같은 이름이 있으면 " (2)", " (3)" … 을 붙여 옮긴다 (가정). 지울 폴더 자신도 아직 부모 안에 있으므로
+            # 그 이름과 같은 하위 폴더도 바꾼다(유일 색인 folders_name_uniq 위반 방지)
+            name = self.free_folder_name(child["name"], parent, exclude=child["id"])
             self._x("update paperlab.folders set parent_id = %s, name = %s, updated_at = %s where id = %s and user_id = %s",
                     (parent, name, now_dt(), child["id"], self.uid))
         self._x("delete from paperlab.folders where id = %s and user_id = %s", (fid, self.uid))
@@ -858,10 +848,11 @@ class Library:
             (self.uid, folder_id, exclude))}
 
     def free_name(self, folder_id: int | None, name: str, exclude: int | None = None,
-                  copy_of: tuple[str, str] | None = None) -> str:
-        """겹치지 않는 이름. copy_of=(PC 이름, 날짜)면 사본 형식(K-8 — 들어오는 쪽), 아니면 ` (2)`(서버 안 작업)"""
+                  copy_of: tuple[str, str] | None = None, always_copy: bool = False) -> str:
+        """겹치지 않는 이름. copy_of=(PC 이름, 날짜)면 사본 형식(K-8 — 들어오는 쪽), 아니면 ` (2)`(서버 안 작업).
+        always_copy: 겹치지 않아도 사본 이름(충돌 사본 — 같은 이름이 있으면 괄호 안 끝에 ` 2`, ` 3` …, 10.3절)"""
         taken = self.names_in(folder_id, exclude)
-        if name.lower() not in taken:
+        if not always_copy and name.lower() not in taken:
             return name
         n = 1 if copy_of else 2
         while True:
@@ -1011,8 +1002,10 @@ class Library:
                          (self.uid, name))["id"]
 
     def _drop_unused_tags(self) -> None:
-        self._x("delete from paperlab.tags t where t.user_id = %s and t.color = '' and not exists "
-                "(select 1 from paperlab.paper_tags pt where pt.tag_id = t.id)", (self.uid,))
+        # 휴지통 논문의 paper_tags도 보고 판단한다 — RLS가 숨기면 휴지통 논문에만 붙은 태그가 지워진다 (QA D1)
+        with self.trash_tx():
+            self._x("delete from paperlab.tags t where t.user_id = %s and t.color = '' and not exists "
+                    "(select 1 from paperlab.paper_tags pt where pt.tag_id = t.id)", (self.uid,))
 
     def set_paper_tags(self, paper_id: int, names: list[str]) -> None:
         names = list(dict.fromkeys(n.strip() for n in names if isinstance(n, str) and n.strip()))
@@ -1040,16 +1033,18 @@ class Library:
             raise NotFoundError("태그를 찾을 수 없어요")
         if name and name.strip():
             self._x("update paperlab.tags set name = %s where id = %s and user_id = %s", (name.strip(), tag_id, self.uid))
-            for pid in self._tag_paper_ids(tag_id):
-                self._reindex(pid)
+            with self.trash_tx():  # 휴지통 논문의 검색 메타도 (되살렸을 때 옛 태그 이름으로 찾히지 않게)
+                for pid in self._tag_paper_ids(tag_id):
+                    self._reindex(pid)
         if color is not None:
             self._x("update paperlab.tags set color = %s where id = %s and user_id = %s", (color, tag_id, self.uid))
 
     def delete_tag(self, tag_id: int) -> bool:
-        pids = self._tag_paper_ids(tag_id)
-        n = self._x("delete from paperlab.tags where id = %s and user_id = %s", (tag_id, self.uid)).rowcount
-        for pid in pids:
-            self._reindex(pid)
+        with self.trash_tx():  # 휴지통 논문의 검색 메타도 (되살렸을 때 지운 태그 이름으로 찾히지 않게)
+            pids = self._tag_paper_ids(tag_id)
+            n = self._x("delete from paperlab.tags where id = %s and user_id = %s", (tag_id, self.uid)).rowcount
+            for pid in pids:
+                self._reindex(pid)
         return n > 0
 
     # ------------------------------------------------------- annotations/notes

@@ -108,3 +108,59 @@ test('D3 시작 때 .paperlab-sync\\tmp 바로 아래 *.part 만 지우고 다�
   assert.ok(fs.existsSync(path.join(tmp, 'sub.part')));
   assert.equal(env.api.count('/api/worker/sync/upload-slots') + env.api.count('/api/worker/sync/files/add'), 0);
 });
+
+// ---------------------------------------------------------------- 전체 오류 점검 후속 (F3 · F4 · F10)
+function fakeChild() {
+  const c = { handlers: {}, posted: [], kill() {} };
+  c.on = (ev, fn) => { c.handlers[ev] = fn; };
+  c.once = (ev, fn) => { c.handlers[`once:${ev}`] = fn; };
+  c.postMessage = (m) => { c.posted.push(m); if (m.type === 'stop' && c.handlers['once:exit']) c.handlers['once:exit'](0); };
+  return c;
+}
+
+function bareHost(env, extra = {}) {
+  const data = { sync: { enabled: false, root: '', installId: '', previousRoot: '', paused: false, notify: true } };
+  const forks = [];
+  const invalid = [];
+  const h = createSyncHost({
+    utilityProcess: { fork: () => { const c = fakeChild(); forks.push(c); return c; } }, shell: {}, dialog: {},
+    store: { get: (k) => data[k], set: (p) => Object.assign(data, p) }, log: { info() {}, warn() {}, error() {} },
+    serverUrl: 'http://127.0.0.1:9', userData: () => env.home, appVersion: '0.3.0', isPackaged: false, onChange() {}, balloon() {},
+    readToken: () => TOKEN, env: { USERPROFILE: '' }, readInstallId: extra.readInstallId || (async () => 'I1'), onTokenInvalid: (c) => invalid.push(c),
+  });
+  return { h, forks, invalid };
+}
+
+test('F3 [시작] 대기: 시간 초과된 대기자는 빠지고, 다음 [시작]은 제 id 의 답으로만 풀림 / F10 동기화의 token-invalid 를 main 에 넘김', async (t) => {
+  const env = setup();
+  const { h, forks, invalid } = bareHost(env);
+  await h.start();
+  const child = forks[0];
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const first = h.action('sync-start', { place: 'local' });
+  t.mock.timers.tick(120000);
+  assert.deepEqual(await first, { ok: false, code: 'timeout' });
+  const second = h.action('sync-start', { place: 'local' });
+  const [s1, s2] = child.posted.filter((m) => m.type === 'start');
+  assert.notEqual(s1.id, s2.id);
+  let settled = false;
+  second.then(() => { settled = true; });
+  await child.handlers.message({ type: 'start-result', id: s1.id, ok: true }); // 늦게 온 첫 답
+  await new Promise((r) => setImmediate(r));
+  assert.equal(settled, false, '첫 답으로 둘째 [시작]이 풀리지 않음');
+  await child.handlers.message({ type: 'start-result', id: s2.id, ok: false, code: 'blocked' });
+  assert.deepEqual(await second, { ok: false, code: 'blocked' });
+  await child.handlers.message({ type: 'token-invalid', code: 'device_revoked' });
+  assert.deepEqual(invalid, ['device_revoked']);
+});
+
+test('F4 시작이 끝나기 전에 멈추면 동기화 프로세스를 띄우지 않음', async () => {
+  const env = setup();
+  let release;
+  const { h, forks } = bareHost(env, { readInstallId: () => new Promise((r) => { release = () => r('I1'); }) });
+  const started = h.start();
+  await h.stop();
+  release();
+  await started;
+  assert.equal(forks.length, 0);
+});

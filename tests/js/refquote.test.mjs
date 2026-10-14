@@ -149,9 +149,11 @@ test("refpane.js: 제목 · 저자 · 초록 · 하이라이트 · 노트 글은
 test("추천 결과는 메모리에만 — localStorage · sessionStorage에 쓰지 않음, 로그아웃 때 비움 (AC-R35 · 9.8절)", () => {
   const s = src("refpane.js");
   assert.ok(!/sessionStorage|indexedDB/.test(s));
-  const sets = [...s.matchAll(/localStorage\.setItem\(([^,]+),\s*(JSON\.stringify\(.*?\))\);/g)].map((m) => [m[1].trim(), m[2].trim()]);
-  assert.equal(sets.length, (s.match(/setItem\(/g) || []).length);
-  assert.deepEqual(sets, [["PREF_KEY", "JSON.stringify({ ...prefs(), ...patch })"], ["`${PREF_KEY}.recent.${P.mid}`", "JSON.stringify(P.recent)"]]);
+  // 저장은 ui.js store.set으로만 (localStorage를 직접 쓰지 않음) — 패널 설정 · 원고별 최근 논문 두 가지뿐
+  assert.ok(!/localStorage|setItem\(/.test(s.replace(/\/\/.*$/gm, "")));
+  const sets = [...s.matchAll(/store\.set\(([^,]+),\s*(.*?)\);/g)].map((m) => [m[1].trim(), m[2].trim()]);
+  assert.equal(sets.length, (s.match(/store\.set\(/g) || []).length);
+  assert.deepEqual(sets, [["PREF_KEY", "{ ...prefs(), ...patch }"], ["`${PREF_KEY}.recent.${P.mid}`", "P.recent"]]);
   const prefCalls = [...s.matchAll(/\bsavePrefs\(\{([^}]*)\}\)/g)].map((m) => m[1].split(":")[0].trim());
   assert.ok(prefCalls.length >= 3 && prefCalls.every((k) => k === "open" || k === "tab"), prefCalls.join());
   assert.match(s, /const recMemory = new Map\(\);/);

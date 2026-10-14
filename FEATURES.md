@@ -82,6 +82,12 @@ PaperLab은 PC에 설치하지 않고 **웹 주소로 접속**해서 씁니다. 
 밝은 테마와 어두운 테마를 지원하며, 처음에는 운영체제 설정을 따릅니다.
 화면 폭이 좁으면(900px 이하) 사이드바가 숨고, 오른쪽 아래 둥근 **계정 버튼**으로 AI 질문 · 작업 · 설정 · 로그아웃에 닿습니다.
 
+**키보드 · 화면 읽기 프로그램**(2026-10-14 전체 오류 점검 반영)
+- **대화상자(창)**: 열리면 처음 초점이 창 안으로 들어가고, `Tab`은 창 안에서만 돕니다(창 밖 화면 · 아래에 겹친 창은 `inert`라 초점도 화면 읽기도 닿지 않음). 닫으면 초점이 창을 연 버튼으로 돌아옵니다. 토스트와 연결 알림 띠는 창이 열려 있어도 그대로 보입니다.
+- **탭 줄**: `←` `→` · `Home` · `End`로 옆 탭으로 이동합니다(13장).
+- **메뉴(⋯ 등)**: `↑` `↓` · `Home` · `End`로 항목을 고르고, `Esc`로 닫으면 초점이 메뉴를 연 버튼으로 돌아옵니다.
+- **저장 · 바꾸기가 실패하면** 토스트로 이유를 알립니다. 그 사이 다른 곳에서 이미 지운 논문이면(404) 서재 목록을 **다시 받아** 화면을 실제 상태에 맞춥니다.
+
 ---
 
 ## 3. 논문 찾기
@@ -238,7 +244,7 @@ PaperLab 사용자는 모두 인하대 구성원이라, 논문을 **인하대 �
 
 | 버튼 | 하는 일 |
 |---|---|
-| **＋ 서재에 추가** | 서재에 담기(검색 결과의 서재 추가와 같음). 이미 있으면 **✓ 서재에 있음 · 열기** |
+| **＋ 서재에 추가** | 서재에 담기(검색 결과의 서재 추가와 같음). 이미 있으면 **✓ 서재에 있음 · 열기** — 누른 사이 그 논문이 휴지통으로 갔거나 지워졌으면(서재에서 찾을 수 없음) "이 논문은 서재에 없어요(휴지통에 있을 수 있어요)." 안내와 **[휴지통 보기]**가 그 자리에 나옵니다 |
 | **PDF 포함 추가** | 무료 PDF가 있을 때만 — PDF까지 받아 담기 |
 | **인용** | 인용 창(서재에 넣지 않아도 복사 가능) |
 | **인하대에서 보기** | 학교를 거쳐 원문 페이지를 새 탭으로(위 *인하대에서 보기*와 같은 규칙 · 처음 안내 창) — 열 주소가 있을 때만 |
@@ -346,7 +352,7 @@ DOI, arXiv ID, 제목(띄어쓰기·기호 무시)이 같으면 같은 논문으
 - **읽기 · AI 요약** (PDF가 있을 때) / **무료 PDF 찾기**(OpenAlex 무료 PDF 정보로 탐색 — 라이선스가 확인되면 바로 저장, 아니면 [무료 PDF 열기 ↗] 링크와 "받은 파일은 [PDF 첨부]로" 안내, 없으면 "무료 PDF 없음". 3장 *무료 PDF 찾기 · 라이선스 규칙*) · **인하대에서 보기**(학교를 거쳐 원문 페이지 열기 — 3장) · **PDF 첨부** (PDF가 없을 때). 학교를 거쳐 열 주소가 없으면 **인하대에서 보기** 대신 **학교 DB에서 제목 검색 ▾**
 - **인용** — 인용 창 열기
 - **⋯ 메뉴**: 정보 수정 · 폴더로 이동… · 온라인 정보로 채우기 · PDF 바꾸기 · PDF 파일 열기(새 탭) · 인하대에서 보기(PDF가 있을 때) · 하이라이트·노트 내보내기(.md) · **휴지통으로 옮기기**(6단계 — 예전 *삭제*)
-- **읽기 상태**(읽을 예정·읽는 중·다 읽음), **중요도 별점**(1~5)
+- **읽기 상태**(읽을 예정·읽는 중·다 읽음 — 서버는 이 세 값(`unread` · `reading` · `done`)만 받고 그 밖은 400 "읽기 상태가 올바르지 않아요". 일괄 작업의 읽기 상태 바꾸기도 같음), **중요도 별점**(1~5)
 - **태그**: 입력 후 Enter, ✕로 빼기
 - **폴더**: 지금 들어 있는 폴더 경로(없으면 *폴더 없음*)와 **옮기기**
 - **컬렉션**: ＋ 넣기, ✕로 빼기
@@ -378,7 +384,7 @@ DOI, arXiv ID, 제목(띄어쓰기·기호 무시)이 같으면 같은 논문으
 - ▸/▾로 하위 컬렉션을 접고 펼칩니다.
 
 **태그**
-- 태그 **⋯**로 이름 바꾸기·색 지정(빨강·주황·초록·파랑·보라)·삭제
+- 태그 **⋯**로 이름 바꾸기·색 지정(빨강·주황·초록·파랑·보라)·삭제. 서버는 태그 색을 **`#RRGGBB`(또는 빈 값 = 색 없음)만** 받고 그 밖의 값은 400 "태그 색은 #RRGGBB 모양이어야 해요"로 거절합니다(화면의 색 목록은 이 모양만 보냄)
 
 ### 휴지통 (6단계)
 웹의 **[삭제]는 모두 휴지통으로 가도록 바뀌었습니다**(폴더 동기화를 쓰지 않는 사용자도 같음). 폴더를 지우는 동작(위 *폴더와 컬렉션*)은 그대로입니다 — 안의 논문은 상위 폴더로 옮겨지고 휴지통으로 가지 않습니다.
@@ -439,6 +445,7 @@ PDF가 없는 논문의 읽기 화면에는 "PDF가 없어요"와 함께 **[인�
 - 쪽 이동(쪽 번호 입력 후 Enter), 확대 · 축소 · **맞춤**(창 폭에 맞춤)
 - 오른쪽 패널 열고 닫기(◧). 창 폭이 900px 이하(휴대폰 등)면 패널이 **화면 아래 시트**(높이 75%)로 열리고, ◧ 또는 Esc로 닫습니다.
 - **Esc** 또는 **← 서재**로 돌아갑니다(아래 시트가 열려 있으면 Esc는 먼저 시트를 닫음). 처음 열면 상태가 *읽는 중*으로 바뀝니다.
+- **위 막대**: 폭이 **560px 이하**면 두 줄로 접힙니다(제목이 첫 줄의 넓은 자리를 쓰고 나머지 버튼은 아래 줄로 — 좁은 화면에서 버튼이 잘리지 않게).
 
 ### 하이라이트와 메모
 문장을 드래그하면 작은 도구 상자가 뜹니다.
@@ -503,6 +510,7 @@ AI 기능은 **설정 → AI 엔진**에 **본인의 API 키**(Anthropic · Open
 - 추천 질문으로 바로 시작할 수 있고, PDF에서 선택한 문장을 인용해 물을 수 있습니다.
 - 수식은 LaTeX로 렌더링됩니다. 대화는 저장되며 *대화 지우기*로 지웁니다.
 - Enter 전송, Shift+Enter 줄바꿈
+- AI 답 속 **링크는 새 탭**(`noopener noreferrer`)으로 열립니다(앱 창 · 대화 화면이 바뀌지 않음). 답 · 마크다운을 화면에 넣기 전에 걸러내는 규칙은 12장.
 - PC에서 답을 만들 때는 답 자리에 상태 줄("PC에서 실행 대기 중 — 켜진 PC가 없어요" · "‘집 PC’에서 답을 만드는 중 (claude)")과 [취소]가 보이고, 중간 글이 오면 점점 보입니다. 탭을 닫아도 답은 저장되어 다시 열면 보입니다. API가 실패해 PC로 넘기면 "API가 실패해서 PC로 넘겼어요 (키가 올바르지 않음)."이 표시됩니다.
 
 ### AI 질문 — 여러 논문에 묻기 (사이드바 → AI 질문 → 내 서재에 묻기)
@@ -921,7 +929,7 @@ PC 앱 설치 파일은 서버의 `/downloads/`에서 로그인 없이 받습니
 | 무엇 | 어디에 |
 |---|---|
 | 서재, 폴더, 컬렉션, 태그, 하이라이트, 노트, PDF 본문 텍스트(검색용), **원고**(고른 양식·표지 정보 포함), **내 양식**, 내 인용 스타일, AI 요약, 대화 기록, **쉬운 설명 · 선택 번역 기록**(최근 300개), 전체 번역 진행 정보(쪽별 상태), 설정 | **Supabase** Postgres 데이터베이스 (서울 리전) |
-| Anthropic · OpenAlex · Semantic Scholar API 키 | 같은 데이터베이스에 **계정별로 암호화**(AES-256-GCM)해 저장. 암호화 키는 데이터베이스와 따로 **서버 PC의 비밀값 파일**(`cloud.env`, 서버를 돌리는 Windows 계정만 접근)에 보관 |
+| Anthropic · OpenAI · Google · OpenAlex · Semantic Scholar API 키 | 같은 데이터베이스에 **계정별로 암호화**(AES-256-GCM)해 저장. 암호화 키는 데이터베이스와 따로 **서버 PC의 비밀값 파일**(`cloud.env`, 서버를 돌리는 Windows 계정만 접근)에 보관 |
 | PDF 파일 | **Cloudflare R2** 저장소 (`users/{계정 id}/papers/{논문 id}.pdf`). 휴지통의 PDF도 영구 삭제(또는 30일 정리) 전까지 그대로 남음 |
 | 전체 번역 본문 | Cloudflare R2 (`users/{계정 id}/translations/{논문 id}.{세대}.json`) — 서버만 읽고 브라우저 주소(서명 주소)는 만들지 않음. 논문 **영구 삭제**(휴지통에 있는 동안은 그대로) · PDF 교체 · [번역 지우기] 때 함께 지움. 백업 대상 아님(다시 번역 가능) |
 | 데이터베이스 백업 | Cloudflare R2 (`backups/db/`) |
@@ -934,7 +942,7 @@ PC 앱 설치 파일은 서버의 `/downloads/`에서 로그인 없이 받습니
 ### 백업
 - **매일 04:00(한국 시간)** 데이터베이스 전체를 R2로 자동 백업하고, **최근 14개**(2주)를 보관합니다.
 - **PDF 파일은 따로 백업하지 않습니다**(R2에만 있음). 지운 논문은 **휴지통에 30일** 남아 되살릴 수 있고(4장 *휴지통*), 휴지통에서 영구 삭제하거나 30일이 지나면 되돌릴 수 없습니다.
-- 백업 복원은 관리자가 합니다([deploy/README.md](deploy/README.md) 5장).
+- 백업 복원은 관리자가 합니다([deploy/README.md](deploy/README.md) 4장 — 복원 절차는 초안이며 운영 환경에서는 아직 검증되지 않았습니다).
 - 내 데이터를 파일로 받아 두려면: 서지 정보는 **BibTeX · RIS · CSL-JSON 내보내기**(7장), 하이라이트·노트는 **.md 내보내기**(5장), 원고는 **워드 · 한글 · 마크다운 내보내기**(8장)를 쓰세요. 내보낸 파일은 브라우저의 **다운로드** 폴더에 저장됩니다.
 - 예전 설치형 PaperLab의 데이터 폴더(`library.db` · `pdfs/`)를 옮겨 오는 기능은 없습니다(새로 시작).
 
@@ -972,7 +980,7 @@ PC 앱 설치 파일은 서버의 `/downloads/`에서 로그인 없이 받습니
   - 쓰기 요청에는 PaperLab 화면이 붙이는 전용 헤더가 있어야 합니다.
 - PDF는 브라우저가 **10분 동안만 유효한 서명 주소**로 R2에서 직접 받고 올립니다. 서명 주소는 서버 로그에 남기지 않습니다.
 - 서버가 주소에서 PDF를 받을 때(*PDF 받기* · *PDF 포함 추가*)는 `http(s)` 주소이고 그 이름이 **공인 IP로만** 해석될 때만 받습니다. 리디렉션도 단계마다 같은 검사를 합니다(내부망 · 클라우드 메타데이터 주소 접근 차단). 학교 프록시(`openlink.inha.ac.kr`) 주소는 받지 않습니다. 무료 PDF는 **arXiv 주소와, 그 논문 DOI의 OpenAlex 위치 중 라이선스가 확인된(CC · 퍼블릭 도메인) 위치와 글자까지 같은 주소만** 그대로 서버가 받고 나머지(직접 넣은 주소 포함)는 같은 논문의 arXiv · 허용 라이선스 공개본을 대신 받거나(없으면) 새 탭 링크로 안내하며, 이 판정은 화면이 보낸 주소가 아니라 서버가 OpenAlex 정보로 다시 합니다(3장 *무료 PDF 찾기 · 라이선스 규칙*).
-- AI 답변과 외부 데이터는 화면에 표시하기 전에 걸러(DOMPurify) 악성 코드를 막고, 외부 링크는 `http(s)`만 허용합니다. AI 답 · 마크다운(노트 미리보기 포함)에서는 그림 · 영상 · 폼(입력칸 · 버튼) 태그와 style도 빼서, 답에 섞인 바깥 그림 주소로 읽음 여부가 새거나 가짜 입력 폼이 보이지 않게 합니다. 모든 응답(서버 오류 500 포함)에 `Content-Security-Policy: img-src 'self' data: blob: https://*.googleusercontent.com; form-action 'self'`(구글 프로필 사진만 바깥 그림 허용)을 붙입니다.
+- AI 답변과 외부 데이터는 화면에 표시하기 전에 걸러(DOMPurify) 악성 코드를 막고, 외부 링크는 `http(s)`만 허용합니다. AI 답 · 마크다운(노트 미리보기 포함)의 링크는 **새 탭**(`noopener noreferrer`)으로만 열립니다. AI 답 · 마크다운에서는 그림 · 영상 · 폼(입력칸 · 버튼) 태그와 style도 빼서, 답에 섞인 바깥 그림 주소로 읽음 여부가 새거나 가짜 입력 폼이 보이지 않게 합니다. 모든 응답(서버 오류 500 포함)에 `Content-Security-Policy: img-src 'self' data: blob: https://*.googleusercontent.com; form-action 'self'`(구글 프로필 사진만 바깥 그림 허용)을 붙입니다.
 
 ### 비밀값과 로그
 - API 키는 계정별로 암호화해 저장하고, 화면에는 "저장됨" 여부만 보여 줍니다. 암호화 키는 데이터베이스와 따로 보관하므로 데이터베이스만으로는 키를 읽을 수 없습니다.
@@ -1013,6 +1021,9 @@ PC 앱 설치 파일은 서버의 `/downloads/`에서 로그인 없이 받습니
 | 원고 · `[@` 자동완성 | `Ctrl+Enter` | 고른 논문을 참고 패널에서 보기(넣지 않음) |
 | 원고 화면 | `Alt+R` | 참고 패널 열기 · 열린 패널로 이동 · (패널 안에서) 닫고 원고로 |
 | 참고 패널 | `←` `→` · `Home` · `End` · `Esc` | 탭 이동 · 원고로 돌아가기 |
+| 탭 줄(어디서나) | `←` `→` · `Home` · `End` | 옆 탭으로(누른 것처럼 열림) |
+| 메뉴(⋯ 등) | `↑` `↓` · `Home` · `End` · `Esc` | 항목 고르기 · 닫기(초점은 연 버튼으로) |
+| 대화상자 | `Tab` · `Shift+Tab` · `Esc` | 창 안에서만 돌기 · 닫기 |
 | 인용 검색 창 | `↑` `↓` · `Enter` · `Ctrl+Space` | 고르기 · 넣기 · 여러 편 체크 |
 | 인용 그래프(노드) | `←` `→` `↑` `↓` · `Home` · `Enter`/`Space` · `Esc` | 그 방향 노드로 · 씨앗으로 · 고르기 · 강조 풀기 |
 | 인용 그래프 | `+` · `-` · `0` | 확대 · 축소 · 화면에 맞추기 |
@@ -1144,6 +1155,16 @@ study99web/
 │  ├─ auth.py         Supabase JWT 검증(JWKS ES256·RS256 또는 레거시 HS256), 허용 목록(선택 기능)
 │  ├─ db.py           Supabase Postgres(psycopg 3 + 연결 풀): user_tx(RLS) · system_tx(이유 기록), 서재·폴더·컬렉션·태그·하이라이트·노트·원고·내 양식·내 스타일·AI 결과, PGroonga 전문 검색
 │  ├─ storage.py      저장소 계층(STORAGE_BACKEND: r2 기본 · fake 테스트): 계정별 키 규칙 · 접두어 재검사, 서명 주소, 사용량
+│  ├─ jobs.py         (2단계) 작업 큐 · 연결된 PC · 엔진 라우팅(API 우선 → CLI 폴백) · 리스 · 재할당 — 모두 사용자 권한(RLS) 트랜잭션
+│  ├─ worker_api.py   (2단계) 워커 API `/api/worker/*`: 기기 토큰(`pld1.…`) 인증 · 연결 · hello · 잡기 · 하트비트 · 결과 · bye. JWT는 받지 않음
+│  ├─ api_runner.py   (2~4단계) 서버 프로세스 안 API 실행기: 실행 스레드 + 대기열 + 리스 연장 + 복구 스캔. 요약 · 대화 · 색인 · AI로 찾기 · 인용 검증 · 쉬운 설명 · 번역(전체 번역은 묶음 단위로 다시 대기열에)
+│  ├─ downloads.py    (2단계) PC 앱 설치 파일 `/downloads/` 내려주기(허용 이름 · 경로 순회 차단 · ETag · 시간당 횟수 한도) · `GET /api/desktop/release`
+│  ├─ rag.py          (3단계) 여러 논문 질문: 조각 나누기 · 서버 PC 로컬 임베딩(EmbeddingGemma ONNX, 없으면 낱말 검색만) · R2 벡터 파일 + 서버 메모리 캐시 · 출처 번호 `[n]` 검사
+│  ├─ find.py         (3단계) AI로 찾기: 검색어(AI) → OpenAlex · Semantic Scholar → 유사도 8편 → 출처 번호 한국어 요약
+│  ├─ verify.py       (3단계) 인용 검증: 원고 `[@키]` 문장별 직접 인용 글자 대조 · 간접 인용 근거 후보 3조각 + AI 판정(결과는 `manuscript_citations`)
+│  ├─ explain.py      (4단계) 쉬운 설명 · 선택 번역(결과는 `explanations` — 기록 겸 캐시) · AI가 만든 SVG 사전 검사
+│  ├─ translate.py    (4단계) 전체 번역: 잡기 한 번 = 묶음 하나(최대 3쪽 · 9,000자), `translations` 쪽 상태 + R2 JSON 본문
+│  ├─ sync.py         (6단계) 폴더 동기화 워커 API `/api/worker/sync/*`: 변경 피드(xid8 커서) · 스냅숏 · 업로드/다운로드 서명 주소 · 묘비 · 휴지통은 `trash_tx` 안에서만
 │  ├─ crypto.py       user_secrets 암호화(AES-256-GCM, key_id)
 │  ├─ config.py       서버 환경 변수 검사(값은 로그에 남기지 않음), 사용자별 설정(profiles.settings + user_secrets)
 │  ├─ migrate.py      SQL 마이그레이션 적용 (python -m paperlab.migrate)
@@ -1157,14 +1178,14 @@ study99web/
 │  ├─ citecache.py    공용 캐시 읽기(사용자 트랜잭션) · 쓰기(system_tx "citation cache write") · 유효 기간 · 정리
 │  ├─ citations.py    CSL-JSON 변환, 인용 정보 점검, BibTeX · RIS · CSL-JSON, 인용키
 │  ├─ csl_style.py    CSL 스타일 파일 정보
-│  ├─ ai.py           요약(구조화 출력) · Q&A(쪽 인용) · 글쓰기 도우미 — Anthropic API (CLI 엔진은 2단계 PC 워커에서만)
+│  ├─ ai.py           요약(구조화 출력) · Q&A(쪽 인용) · 글쓰기 도우미 — Anthropic · OpenAI · Google API (CLI 엔진은 2단계 PC 워커에서만). 프롬프트 자료 가두기 `fence` 공용(아래 서버 동작 변경)
 │  ├─ manuscripts.py  원고 템플릿
 │  ├─ writer.py       원고 → 워드(.docx, 각주) · 한글(.hwpx) · 마크다운, 논문 양식·표지·쪽 번호 적용
 │  ├─ doc_formats.py  논문 양식: 데이터 구조·검증, 기본 양식 4개, 단위 환산, 표지 정보 검증·문구·배치 계산
 │  ├─ format_import.py 양식 파일(.docx · .dotx · .hwpx)에서 서식 읽기
 │  ├─ compose.py      워드·한글 문서의 [@인용키] → 서식 있는 인용 + 참고문헌
 │  └─ static/         화면 (HTML · CSS · ES 모듈 JS)
-│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state · extlinks · sourcemeta(5단계: 소스별 정렬 · 필터 표 · 라이선스 이름 · 오류 문구 — 순수 모듈) · graph · graphmath · refpane · refquote
+│     ├─ js/          app · auth · library · discover · reader · writing · formats · cite · dialogs · ui · api · state · jobs(2단계 작업 목록) · ask(3단계 AI 질문) · explain(4단계 쉬운 설명 · 번역) · trash(6단계 휴지통) · extlinks · sourcemeta(5단계: 소스별 정렬 · 필터 표 · 라이선스 이름 · 오류 문구 — 순수 모듈) · graph · graphmath · refpane · refquote
 │     │               (app: 로그인 게이트 · 계정 메뉴 · 폴더 트리 · 저장 공간 / auth: supabase-js 구글 로그인 · 세션 /
 │     │                api: Bearer 토큰 · 401 갱신 · 503 · 연결 지연 띠 / formats: 양식 관리 창 · 표지 정보 창 /
 │     │                extlinks: 인하대 openlink 프록시 · DOI · 학교 DB 검색 · Google Scholar 주소 만들기 — DOM · 다른 모듈에 기대지 않는 순수 모듈 /
@@ -1172,11 +1193,27 @@ study99web/
 │     │                refpane: 논문 쓰기 화면의 참고 패널(reader.js 임베드 모드 mountPdf · 추천 SSE · 넣기) / refquote: 넣는 인용 글 · 쪽 번호 · 이스케이프 ·
 │     │                인용 표시 해석(parseCitation — writing.js가 가져다 씀) · 직접 인용 모양 상수 QUOTE_STYLE 순수 함수)
 │     └─ vendor/      PDF.js · citeproc-js · CSL 스타일·로케일 · KaTeX · marked · DOMPurify · supabase-js · d3/(d3-force · d3-dispatch · d3-quadtree · d3-timer UMD — 그래프 화면에서만 불러옴)
+├─ desktop/           (2 · 6단계) Windows 설치형 앱(Electron · NSIS, 현재 0.3.1) — 빌드 없는 JavaScript
+│  ├─ main/           main.js(생명주기 · 단일 실행 · 트레이 · 자동 시작 · 딥 링크 · 로그오프 정지) · window.js(앱 창 · 탐색 제한) · links.js(외부 링크 판정) · config.js · auth-bridge.js(시스템 브라우저 구글 로그인 ↔ `paperlab://`) · updater.js · ipc.js(출처 검사) · store.js(토큰 safeStorage) · sync-host.js(동기화 프로세스 · 휴지통 보내기)
+│  ├─ preload/        preload.js — 서버 출처에는 `paperlabDesktop`(7개 함수), `app://` 화면에는 `paperlabLocal`
+│  ├─ worker/         PC 워커(utilityProcess): entry · worker · api-client · cli-runner · resolve-exe · engines(claude · codex · gemini CLI 실행)
+│  ├─ sync/           폴더 동기화 엔진(별도 utilityProcess): entry · engine · reconcile · scanner · watcher · journal · transfer · paths · rootcheck · safe-remove
+│  ├─ lib/            log · redact · run · write-atomic (main · worker · sync 공용)
+│  ├─ ui/             앱 자체 화면(`app://`): setup · offline · status(이 PC 상태 · 폴더 동기화) · sync-look(문구) · theme · local.css
+│  ├─ build/ · scripts/  아이콘 · NSIS 추가 스크립트(installer.nsh) · app.css 복사 / electron-builder.config.js · test/
 ├─ tools/             record_extsources.py(5단계 녹화 도구 — 관리자가 키로 한 번 실행, 응답 본문만 tests/fixtures/extsources/에 저장 · 키 문자열이 있으면 멈춤, 이메일 모양은 redacted@example.invalid로 바꿔 저장 — deploy/server-pc/README.md 14절)
-├─ docs/              specs/(doc-formats.md · phase1-cloud.md · inha-proxy.md · citation-graph.md · writing-reference-pane.md · phase2-worker-electron.md · phase5-korean-db.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md · inha-proxy-ui.md · citation-graph-ui.md · writing-reference-pane-ui.md · phase5-korean-db-ui.md)
+├─ docs/              specs/(doc-formats.md · phase1-cloud.md · inha-proxy.md · citation-graph.md · writing-reference-pane.md · phase2-worker-electron.md · phase3-rag-verify-search.md · phase4-explain-translate.md · phase5-korean-db.md · phase6-folder-sync.md) · design/(doc-formats-ui.md · phase1-cloud-ui.md · inha-proxy-ui.md · citation-graph-ui.md · writing-reference-pane-ui.md · phase2-worker-electron-ui.md · phase3-ask-ui.md · phase4-explain-translate-ui.md · phase5-korean-db-ui.md · phase6-folder-sync-ui.md)
 └─ tests/             pytest (DB 테스트는 테스트용 Supabase 프로젝트, golden/ = 기본 (A4) 내보내기 골든 파일, js/ = Node 단위 테스트(extlinks · graph · refquote, codecheck.mjs = 화면 코드 검사 도우미),
                       fixtures/citegraph/ = 인용 그래프 가짜 OpenAlex · S2 세계, fixtures/extsources/ = 5단계 KCI · RISS · Europe PMC · OpenCitations · OpenAlex 응답 픽스처(키 전에는 손 픽스처 — 실제 외부 호출 없음))
 ```
+
+### 서버 동작 변경 (2026-10-14 전체 오류 점검 반영)
+- **태그 색**: `PATCH /api/tags/{id}`의 `color`는 `#RRGGBB`(16진수 6자리) 또는 빈 값만 받고, 그 밖은 400.
+- **읽기 상태**: `PATCH /api/papers/{id}` · `POST /api/papers/bulk`(`status`)는 `unread` · `reading` · `done`만 받고, 그 밖은 400(`GET /api/meta`의 `statuses`가 그 목록).
+- **폴더 지우기**: 하위 폴더를 상위로 올릴 때 이름이 겹치면 ` (2)` · ` (3)`…을 붙입니다(전에는 폴더 이름 유일 색인 위반으로 500).
+- **PC 파일 이름 겹침 경합**: 웹 경로(`POST /api/trash/restore` · `POST /api/papers/bulk`로 폴더 옮기기 · `POST /api/uploads/{id}/complete`)에서 같은 순간 같은 이름이 생기면 한 번 다시 시도하고, 그래도 겹치면 409 "같은 이름의 파일이 방금 생겼어요. 다시 시도해 주세요".
+- **프롬프트 주입 방어**: 자료(논문 본문 · 제목 · 초록 · 근거 글)를 AI 프롬프트에 넣기 전에 `ai.fence`(공용 하나)로 우리 태그 모양(`paper` · `page` · `context` · `selection` · `abstract` · `source(s)` · `evidence` · `claim` · `conversation` · `text`)을 무디게 만듭니다(`<` → `‹`).
+- **마이그레이션 `lock_timeout`**: 마이그레이션 트랜잭션마다 10초 — 서버가 표 잠금을 오래 잡고 있으면 실패하고(기록 없이 되돌림) 사용자가 적은 시간에 다시 실행합니다([deploy/server-pc/README.md](deploy/server-pc/README.md)).
 
 ### 주요 기술
 - 백엔드: Python 3.10+(서버 PC는 3.12 가상환경), FastAPI, Uvicorn, psycopg 3 · psycopg-pool, PyJWT, cryptography, boto3(R2, S3 호환), PyMuPDF, httpx, anthropic SDK, python-docx, python-hwpx
@@ -1288,3 +1325,6 @@ pytest
 - 화면의 링크 주소 모듈(`static/js/extlinks.js`)은 Node 내장 테스트 `tests/js/extlinks.test.mjs`로 시험합니다. `pytest`가 `tests/test_js_node.py`에서 함께 부르고(Node 테스트 파일마다 하나씩 — extlinks · graph · refquote), **Node.js 20.10 이상이 없으면 건너뜁니다**. 따로 돌리려면 저장소 루트에서 `node --test "tests/js/**/*.test.mjs"`(Node 22.7 이상, 따옴표 포함). 그보다 낮은 Node는 `node --experimental-detect-module --test tests/js/extlinks.test.mjs`(pytest 래퍼가 쓰는 방식).
 - CLI 엔진 테스트(`tests/test_ai.py::test_cli_engine_with_fake_claude`)는 Windows에서도 가짜 CLI만 써서 돕니다(실제 claude CLI 호출을 막는 단언 포함). 전체를 `pytest`로 그대로 돌리면 됩니다.
 - CI(자동 테스트 서버)는 지금 두지 않습니다.
+
+### 변경 기록
+- 2026-10-14 전체 오류 점검 반영(기획팀): 16장 구조에 2~6단계 모듈(`jobs` · `worker_api` · `api_runner` · `downloads` · `rag` · `find` · `verify` · `explain` · `translate` · `sync` · `desktop/` · `tools/`) 추가, 서버 동작 변경 절 신설, 2장 *키보드 · 화면 읽기 프로그램* · 5장 읽기 위 막대 560px 두 줄 · 3장 그래프 휴지통 안내 · 4장 태그 색 · 읽기 상태 · 6장 AI 답 링크 새 탭 · 12장 · 13장 단축키 표 반영.

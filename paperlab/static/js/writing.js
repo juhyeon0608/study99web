@@ -3,7 +3,7 @@
 
 import { api, downloadBlob, streamEvents } from "./api.js";
 import { sortVerify, vdName, verifyDoneText, verifyMarks, verifySummary } from "./ask.js";
-import { ICON_INFO, ICON_WARN, cancelJob, errorLabel, retryJob, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
+import { cancelJob, errorLabel, isActive, retryJob, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
 import { htmlToRuns, listStyles, renderClusters, styleOptions } from "./cite.js";
 import { settingsDialog } from "./dialogs.js";
 import {
@@ -14,8 +14,8 @@ import { ICON_REF, refPane } from "./refpane.js";
 import { CITE_RE, parseCitation } from "./refquote.js";
 import { state } from "./state.js";
 import {
-  $, $$, MD_PURIFY, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles, popupMenu,
-  toast,
+  $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles,
+  popupMenu, purifyMd, store, toast,
 } from "./ui.js";
 
 const W = { m: null, saver: null, previewTimer: null, papers: null, view: "split", seq: 0, formats: null, fmt: null, ref: null,
@@ -179,7 +179,7 @@ function runHtml(r, notes) {
   if (r.i) h = `<i>${h}</i>`;
   if (r.sup) h = `<sup>${h}</sup>`;
   if (r.sub) h = `<sub>${h}</sub>`;
-  if (r.warn) h = `<span class="cite-warn" title="서재에 없는 인용키예요">${h}</span>`;
+  if (r.warn) h = `<span class="cite-warn" title="서재에 없는 인용 키예요">${h}</span>`;
   return h;
 }
 
@@ -267,8 +267,8 @@ export async function renderWriteList(main) {
     row.onclick = () => { location.hash = `#/write/${m.id}`; };
     $("[data-del]", row).onclick = async (e) => {
       e.stopPropagation();
-      if (!(await confirmDialog(`'${m.title}' 원고를 삭제할까요? 되돌릴 수 없어요.`, { ok: "삭제", danger: true }))) return;
-      await api.del(`/api/manuscripts/${m.id}`);
+      if (!(await confirmDialog(`‘${m.title || "제목 없는 원고"}’ 원고를 삭제할까요? 되돌릴 수 없어요.`, { ok: "삭제", danger: true }))) return;
+      try { await api.del(`/api/manuscripts/${m.id}`); } catch (err) { if (err.status !== 404) return errorToast(err); }
       renderWriteList(main);
     };
     list.appendChild(row);
@@ -309,14 +309,14 @@ export async function openManuscript(main, id) {
     return;
   }
   if (seq !== W.seq) return;
-  const [styles, formats] = await Promise.all([listStyles().catch(() => []), listFormats(true).catch(() => null)]);
+  const [styles, formats] = await Promise.all([listStyles().catch(() => []), listFormats().catch(() => null)]);
   if (seq !== W.seq) return;
   W.m = m;
   W.formats = formats;
   m.cover = m.cover && typeof m.cover === "object" ? m.cover : {};
   const fmtId = formats && formats.some((f) => f.id === m.doc_format) ? m.doc_format : "default";
-  let viewMode = "split";
-  try { viewMode = localStorage.getItem("paperlab.writeView") || "split"; } catch { /* 무시 */ }
+  const saved = store.get("paperlab.writeView"); // 저장된 값은 class 이름에 들어가므로 아는 값만
+  const viewMode = ["edit", "split", "preview"].includes(saved) ? saved : "split";
   main.innerHTML = "";
   const view = el(`<section class="writer view-${viewMode}">
     <div class="writer-bar">
@@ -441,7 +441,7 @@ export async function openManuscript(main, id) {
   $$("[data-view] button", view).forEach((b) => (b.onclick = () => {
     view.className = `writer view-${b.dataset.v}`;
     $$("[data-view] button", view).forEach((x) => x.classList.toggle("active", x === b));
-    try { localStorage.setItem("paperlab.writeView", b.dataset.v); } catch { /* 무시 */ }
+    store.set("paperlab.writeView", b.dataset.v);
   }));
   $$("[data-view] button", view).forEach((x) => x.classList.toggle("active", x.dataset.v === viewMode));
   // 참고 패널 (docs/specs/writing-reference-pane.md): 넣기는 insertText 하나로, 서재 추가 뒤에는 목록 · 미리보기를 새로
@@ -524,7 +524,7 @@ async function setFormat(view, id) {
 async function refreshFormats(view) {
   const m = W.m;
   let list;
-  try { list = await listFormats(true); } catch (e) { return errorToast(e); }
+  try { list = await listFormats(); } catch (e) { return errorToast(e); }
   if (W.m !== m) return;
   W.formats = list;
   let id = W.fmt ? W.fmt.id : "default";
@@ -774,7 +774,7 @@ function showVerify(view, ta, data, { announce = false } = {}) {
   if (announce) sayWriter(view, verifyDoneText(data.counts));
   const job = data.job;
   if (vd.stop) { vd.stop(); vd.stop = null; }
-  if (job && ["queued", "running"].includes(job.status)) {
+  if (isActive(job)) {
     const me = vd;
     vd.stop = watchJob(job.id, (j) => {
       if (W.vd !== me || !j) return;
@@ -813,7 +813,7 @@ function drawVerify(view, ta) {
     const n = el(`<div class="notice" data-tone="warn" data-verify-stale>${ICON_WARN}<div>원고가 바뀌었어요 — 새로 쓴 인용 ${data.unverified}개는 아직 검증 전이에요. <button type="button" class="link" data-verify-again>다시 검증</button></div></div>`);
     box.appendChild(n);
   }
-  if (job && ["queued", "running"].includes(job.status)) {
+  if (isActive(job)) {
     const line = statusLineEl(async () => { try { await cancelJob(job.id); } catch (e) { errorToast(e); } });
     line.dataset.verifyJob = "";
     setStatusLine(line, job, "확인");
@@ -899,7 +899,7 @@ function drawCites(view, built) {
       box.appendChild(el(`<button type="button" class="cite-row" data-ref-open="${p.id}" ${p.id === cur ? `aria-current="true"` : ""}
         title="${esc(`참고 패널에서 보기 · ${it.title || ""}`)}"><code>@${esc(k)}</code><span class="muted">${esc((it.title || "").slice(0, 60))}</span>${warn}</button>`));
     } else {
-      box.appendChild(el(`<div class="cite-row ${it ? "" : "missing"}" title="${esc(it ? it.title : "서재에 이 인용키를 가진 논문이 없어요")}">
+      box.appendChild(el(`<div class="cite-row ${it ? "" : "missing"}" title="${esc(it ? it.title : "서재에 이 인용 키를 가진 논문이 없어요")}">
         <code>@${esc(k)}</code><div class="muted">${it ? esc((it.title || "").slice(0, 60)) : "⚠ 서재에 없는 키"}</div>${warn}</div>`));
     }
   }
@@ -944,10 +944,10 @@ export async function citePicker(ta, replaceFrom, { multi = true, onPick = null,
   let papers;
   try { papers = await libraryPapers(true); } catch (e) { return errorToast(e); }
   const chosen = new Set(preselected);
-  const box = el(`<div class="cite-picker">
-    <div class="row"><input class="input grow" placeholder="제목·저자·연도·인용키로 찾기"><button class="icon-btn" data-x>✕</button></div>
+  const box = el(`<div class="cite-picker" role="dialog" aria-label="인용 고르기">
+    <div class="row"><input class="input grow" placeholder="제목·저자·연도·인용 키로 찾기" aria-label="인용할 논문 찾기"><button class="icon-btn" data-x aria-label="닫기">✕</button></div>
     <div class="cp-list"></div>
-    <div class="row cp-foot"><input class="input" data-loc placeholder="쪽 (선택)" style="width:90px">
+    <div class="row cp-foot"><input class="input" data-loc placeholder="쪽 (선택)" aria-label="쪽 (선택)" style="width:90px">
       <span class="small muted" data-n></span><span class="spacer"></span><button class="btn sm primary" data-ok>넣기</button></div></div>`);
   document.body.appendChild(box);
   const rect = ta.getBoundingClientRect();
@@ -972,7 +972,7 @@ export async function citePicker(ta, replaceFrom, { multi = true, onPick = null,
     list.innerHTML = shown.length ? "" : `<div class="small muted" style="padding:12px">서재에 맞는 논문이 없어요. ‘논문 찾기’에서 먼저 추가하세요.</div>`;
     shown.forEach((p, i) => {
       const row = el(`<div class="cp-item ${i === active ? "active" : ""}">
-        <input type="checkbox" ${chosen.has(p.citekey) ? "checked" : ""}>
+        <input type="checkbox" aria-label="${esc(p.title || p.citekey)} 고르기" ${chosen.has(p.citekey) ? "checked" : ""}>
         <div style="min-width:0"><div class="t">${esc(p.title)}</div><div class="s">${esc(authorsShort(p.authors, 2))} · ${esc(p.year || "n.d.")} · <code>@${esc(p.citekey)}</code></div></div></div>`);
       $("input", row).onclick = (e) => { e.stopPropagation(); e.target.checked ? chosen.add(p.citekey) : chosen.delete(p.citekey); count(); };
       row.onclick = () => {
@@ -1001,7 +1001,6 @@ export async function citePicker(ta, replaceFrom, { multi = true, onPick = null,
     if (e.key === "ArrowDown") { e.preventDefault(); active = Math.min(shown.length - 1, active + 1); draw(); list.children[active]?.scrollIntoView({ block: "nearest" }); }
     else if (e.key === "ArrowUp") { e.preventDefault(); active = Math.max(0, active - 1); draw(); list.children[active]?.scrollIntoView({ block: "nearest" }); }
     else if (e.key === "Enter") { e.preventDefault(); done(); }
-    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
     else if (e.key === " " && e.ctrlKey && shown[active]) {
       e.preventDefault();
       const k = shown[active].citekey;
@@ -1009,6 +1008,8 @@ export async function citePicker(ta, replaceFrom, { multi = true, onPick = null,
       draw(); count();
     }
   };
+  // Esc: 이 상자만 닫음 (뒤의 창 · 편집 화면의 Esc로 넘기지 않음)
+  box.addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); } });
   $("[data-x]", box).onclick = close;
   $("[data-ok]", box).onclick = done;
   count();
@@ -1082,14 +1083,14 @@ async function runAi(mode, ta) {
   const m = modal({ title: "AI 글쓰기 도우미", body, foot, wide: true, onClose: () => {
     abort.abort();
     if (stopWatch) stopWatch();
-    if (job && (job.status === "queued" || job.status === "running")) cancelJob(job.id).catch(() => {});
+    if (isActive(job)) cancelJob(job.id).catch(() => {});
   } });
   const abort = new AbortController();
   let result = "";
   const out = $(".ai-out", body);
   const showResult = () => {
     out.style.whiteSpace = "normal";
-    out.innerHTML = window.DOMPurify.sanitize(window.marked.parse(result), MD_PURIFY);
+    out.innerHTML = purifyMd(window.marked.parse(result)) ?? esc(result);
   };
   let jobEv = null;
   try {
@@ -1241,7 +1242,7 @@ async function exportAs(format, view, ta) {
     }
     const built = await buildDocument(ta.value, { style: currentStyle(view), koreanFirst: state.settings.korean_first !== false });
     if (built.missingKeys.length && !(await confirmDialog(
-      `서재에 없는 인용키가 있어요: ${built.missingKeys.join(", ")}\n그대로 표시해서 내보낼까요?`, { ok: "그대로 내보내기" }))) return;
+      `서재에 없는 인용 키가 있어요: ${built.missingKeys.join(", ")}\n그대로 표시해서 내보낼까요?`, { ok: "그대로 내보내기" }))) return;
     const title = $("[data-title]", view).textContent.trim() || "원고";
     const payload = { format, blocks: stripWarn(built.blocks), meta: { title }, filename: title };
     if (office && fmtId !== "default") {
@@ -1249,7 +1250,7 @@ async function exportAs(format, view, ta) {
       Object.assign(payload, { doc_format: fmtId, cover: W.m.cover || {}, meta: { title: docTitle(ta) } });
     }
     const res = await api.raw("POST", "/api/export-document", payload);
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "내보내기 실패");
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "내보내지 못했어요");
     downloadBlob(await res.blob(), `${title.replace(/[\\/:*?"<>|]+/g, "_")}.${format}`);
     const label = format === "hwpx" ? "한글" : format === "docx" ? "워드" : "마크다운";
     if (office && kind !== "none" && fmtId !== "default") {
@@ -1293,7 +1294,7 @@ export async function composeDialog(initialFile = null) {
         <div style="font-weight:650">${esc(scan.filename)} <span class="chip">${scan.kind === "hwpx" ? "한글" : "워드"}</span></div>
         <div class="small" style="margin-top:4px">인용 표시 <b>${scan.citations.length}</b>곳 · 논문 <b>${keys.length - missing.length}</b>편
           · 참고문헌 자리 ${scan.has_bib_marker ? "<b>있음</b>" : "없음 (문서 끝에 붙여요)"}</div>
-        ${missing.length ? `<div class="status-line bad" style="margin-top:8px">서재에 없는 인용키: ${missing.map((k) => `<code>${esc(k)}</code>`).join(", ")} — 표시를 그대로 남겨요</div>` : ""}
+        ${missing.length ? `<div class="status-line bad" style="margin-top:8px">서재에 없는 인용 키: ${missing.map((k) => `<code>${esc(k)}</code>`).join(", ")} — 표시를 그대로 남겨요</div>` : ""}
         ${!scan.citations.length ? `<div class="status-line bad" style="margin-top:8px">[@인용키] 표시를 찾지 못했어요. 사용법을 확인해 주세요.</div>` : ""}
       </div>
       <div class="grid-2" style="margin-top:12px">
@@ -1347,7 +1348,7 @@ export async function composeDialog(initialFile = null) {
         bibliography: r.entries.map((e) => htmlToRuns(e.html)),
         bib_title: $("[data-bibtitle]", result).value || "참고문헌",
       });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "변환 실패");
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "파일을 변환하지 못했어요");
       const cd = res.headers.get("content-disposition") || "";
       const name = decodeURIComponent((cd.match(/filename\*=UTF-8''([^;]+)/) || [])[1] || `document.${scan.kind}`);
       downloadBlob(await res.blob(), name);

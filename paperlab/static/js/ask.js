@@ -5,11 +5,12 @@
 
 import { api, streamEvents } from "./api.js";
 import {
-  ICON_CLOCK, ICON_INFO, ICON_WARN, cancelJob, errorLabel, jobLine, jobState, retryJob, setStatusLine, statusLineEl,
-  watchJob,
+  cancelJob, errorLabel, isActive, jobLine, jobState, retryJob, setStatusLine, statusLineEl, watchJob,
 } from "./jobs.js";
 import { state } from "./state.js";
-import { $, $$, confirmDialog, el, errorToast, esc, renderMarkdown, toast } from "./ui.js";
+import {
+  $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, confirmDialog, el, errorToast, esc, liveSay, renderMarkdown, toast,
+} from "./ui.js";
 
 // ------------------------------------------------------------------ 순수 함수 (tests/js/ask.test.mjs)
 // #/ask · #/ask/c12 · #/ask/f3 · #/ask/find · #/ask/find/j55
@@ -100,7 +101,6 @@ export function verifyDoneText(counts = {}) {
 
 // ------------------------------------------------------------------ 화면
 const SUGGEST = ["이 논문들의 공통 연구 방법은?", "결론이 서로 다른 논문이 있어?", "가장 많이 쓴 측정 도구는?"];
-const ACTIVE = (j) => j && (j.status === "queued" || j.status === "running");
 let A = null; // 지금 화면 { view, tab, scope, … }
 
 export function closeAsk() {
@@ -152,8 +152,7 @@ function go(tab) {
 }
 
 function say(text) {
-  const live = A && $("[data-ask-live]", A.view);
-  if (live) { live.textContent = ""; setTimeout(() => { live.textContent = text; }, 50); }
+  liveSay(A && $("[data-ask-live]", A.view), text);
 }
 
 function applyHash(h) {
@@ -268,9 +267,9 @@ async function loadScope(scope, { quiet = false } = {}) {
     resumeJobs(scope);
   }
   const wasIndexing = A.wasIndexing;
-  A.wasIndexing = ACTIVE(data.job);
+  A.wasIndexing = isActive(data.job);
   if (wasIndexing && !A.wasIndexing) say("색인을 마쳤어요");
-  if (ACTIVE(data.job) || !data.index.loaded) A.poll = setTimeout(() => loadScope(scope, { quiet: true }), 3000);
+  if (isActive(data.job) || !data.index.loaded) A.poll = setTimeout(() => loadScope(scope, { quiet: true }), 3000);
 }
 
 // 진행 중인 범위 질문(PC 실행)을 이어서 보여 준다
@@ -383,7 +382,7 @@ async function openSource(c) {
   try {
     await api.get(`/api/papers/${Number(c.paper_id)}`);
   } catch (e) {
-    if (e.status === 404) return toast("이 논문은 서재에서 지워졌어요");
+    if (e.status === 404) return toast("이 논문은 서재에 없어요(휴지통에 있을 수 있어요)");
     return errorToast(e);
   }
   state.askSpot = { paper_id: Number(c.paper_id), page: Number(c.page) || 1, rect: Array.isArray(c.rect) ? c.rect : null, text: c.text || "" };
@@ -469,7 +468,7 @@ function addJobNode(job, question = job.question || "", fallback = null) {
   const me = A;
   const stop = watchJob(job.id, async (j) => {
     if (A !== me) return;
-    if (j && ACTIVE(j)) return setStatusLine(line, j, "답을 만드는");
+    if (j && isActive(j)) return setStatusLine(line, j, "답을 만드는");
     A.jobs = A.jobs.filter((x) => x !== entry);
     if (j && j.status === "failed") {
       const err = el(`<div class="msg error" role="alert"><div class="row"><span class="grow"></span><button type="button" class="btn sm">다시 시도</button></div></div>`);
@@ -554,11 +553,11 @@ function followFind(job, question) {
     <p class="graph-progress-msg" role="status"></p>
     <div class="graph-progress-foot"><a class="small" href="#/jobs">작업 목록에서 보기</a><button type="button" class="btn sm" data-job-cancel>취소</button></div></div>`);
   $("[data-job-cancel]", card).onclick = async () => { try { await cancelJob(job.id); } catch (e) { errorToast(e); } };
-  if (ACTIVE(job)) { out.appendChild(card); findBusy(true); }
+  if (isActive(job)) { out.appendChild(card); findBusy(true); }
   const stop = watchJob(job.id, (j) => {
     if (A !== me || A.findJob !== job) return;
     if (!j) { out.innerHTML = ""; findBusy(false); return; }
-    if (ACTIVE(j)) {
+    if (isActive(j)) {
       card.dataset.jobState = jobState(j);
       $(".graph-steps", card).innerHTML = findSteps(j).map((s) =>
         `<li data-step="${s.step}"${s.state ? ` data-state="${s.state}"` : ""}>${esc(s.name)} <span class="graph-step-msg">${esc(s.note)}</span></li>`).join("");

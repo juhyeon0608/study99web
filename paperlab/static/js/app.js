@@ -7,7 +7,8 @@ import {
   cancelUploads, folderIcon, folderPickDialog, folderSubtree, maskEmail, settingsDialog, uploadPdfs, uploadsRunning, usageInfo,
 } from "./dialogs.js";
 import { closeAsk, renderAsk, scopeFromFilter, scopeHash } from "./ask.js";
-import { renderDiscover } from "./discover.js";
+import { resetCiteCache } from "./cite.js";
+import { renderDiscover, resetDiscover } from "./discover.js";
 import { closeGraph, renderGraph, resetGraphMemory } from "./graph.js";
 import { flushLibrary, loadPapers, renderLibrary } from "./library.js";
 import { closeJobs, renderJobs, startJobBadge, stopJobBadge } from "./jobs.js";
@@ -17,7 +18,8 @@ import { resetRefMemory } from "./refpane.js";
 import { closeWriter, composeDialog, flushWriter, openManuscript, renderWriteList, unsavedDraft } from "./writing.js";
 import { actions, onRefresh, refreshAll, resetState, setUsageLoader, state } from "./state.js";
 import {
-  $, $$, avatarEl, closeMenus, confirmDialog, el, errorToast, esc, modalOpen, popupMenu, promptDialog, toast,
+  $, $$, avatarEl, closeMenus, confirmDialog, el, errorToast, esc, josa, modalOpen, popupMenu, promptDialog, saveError, store,
+  toast,
 } from "./ui.js";
 
 const main = $("#main");
@@ -30,8 +32,8 @@ const DRAFT_NOTE = "저장하지 못한 원고는 이 브라우저에 보관해 
 const LOGIN_FAILED = "로그인하지 못했어요. 잠시 후 다시 시도해 주세요.";
 const OFFLINE = "인터넷에 연결되지 않았어요. 연결을 확인하고 다시 시도해 주세요.";
 
-const loadSet = (key) => { try { return new Set(JSON.parse(localStorage.getItem(key) || "[]")); } catch { return new Set(); } };
-const saveSet = (key, set) => { try { localStorage.setItem(key, JSON.stringify([...set])); } catch { /* 무시 */ } };
+const loadSet = (key) => { const v = store.json(key, []); return new Set(Array.isArray(v) ? v : []); };
+const saveSet = (key, set) => store.set(key, [...set]);
 const collapsed = loadSet(COLLAPSE_KEY);
 const folderCollapsed = loadSet(FOLDER_COLLAPSE_KEY);
 
@@ -40,7 +42,7 @@ let authed = false; // 로그인을 마치고 서재를 그렸는지 (아니면 
 // ------------------------------------------------------------------ theme
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  try { localStorage.setItem("paperlab.theme", theme); } catch { /* 무시 */ }
+  store.set("paperlab.theme", theme);
 }
 if (!document.documentElement.dataset.theme) {
   applyTheme(matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
@@ -222,7 +224,7 @@ async function enterApp(me) {
   const [m, settings] = await Promise.all([api.get("/api/meta"), api.get("/api/settings")]);
   state.meta = m;
   state.settings = settings;
-  try { state.sort = localStorage.getItem("paperlab.sort") || "added"; } catch { /* 무시 */ }
+  state.sort = store.get("paperlab.sort") || "added";
   await loadSidebar(true);
   drawAccount();
   authed = true;
@@ -284,6 +286,11 @@ function endDesktopWait() {
   desktopWait = null;
 }
 
+// 앱 쪽 로그인 대기(loginUntil)도 바로 풀게 알린다 — 앱 0.3.1부터 있는 함수라 옛 앱에서는 부르지 않음. 결과는 기다리지 않음
+function cancelDesktopLogin() {
+  try { window.paperlabDesktop?.cancelGoogleLogin?.()?.catch?.(() => {}); } catch { /* 옛 앱 · 앱 쪽 오류는 무시 */ }
+}
+
 async function startDesktopLogin(btn, selectAccount) {
   if (btn) setBusy(btn, true);
   let ok = false;
@@ -297,14 +304,18 @@ async function startDesktopLogin(btn, selectAccount) {
   if (!ok) { endDesktopWait(); return showLogin({ error: "브라우저를 열지 못했어요. 다시 시도해 주세요." }); }
   resetGoogleButtons();
   endDesktopWait();
-  desktopWait = { selectAccount, timer: setTimeout(() => { desktopWait = null; showLogin({ note: "로그인 시간이 지났어요. 다시 시도해 주세요." }); }, DESKTOP_WAIT_MS) };
+  desktopWait = { selectAccount, timer: setTimeout(() => {
+    desktopWait = null;
+    cancelDesktopLogin();
+    showLogin({ note: "로그인 시간이 지났어요. 다시 시도해 주세요." });
+  }, DESKTOP_WAIT_MS) };
   showGate("desktop-wait");
   setTimeout(() => $(".gate-title", pane("desktop-wait")).focus(), 0);
 }
 
 if (window.paperlabDesktop) {
   $("[data-desktop-reopen]", gate).onclick = () => startDesktopLogin(null, desktopWait ? desktopWait.selectAccount : false);
-  $("[data-desktop-cancel]", gate).onclick = () => { endDesktopWait(); showLogin({ note: "로그인을 취소했어요." }); };
+  $("[data-desktop-cancel]", gate).onclick = () => { endDesktopWait(); cancelDesktopLogin(); showLogin({ note: "로그인을 취소했어요." }); };
   window.paperlabDesktop.onAuthCallback(async (code, error) => {
     if (document.body.dataset.auth === "in") return; // 이미 로그인한 창은 무시
     endDesktopWait();
@@ -375,7 +386,7 @@ async function restoreDrafts(uid) {
     } catch (e) {
       if (e.status === 404) {
         localStorage.removeItem(k);
-        toast(`보관해 둔 원고 ‘${d.title || "제목 없는 원고"}’은 이미 지워져서 저장하지 않았어요.`, "", { duration: 8000 });
+        toast(`보관해 둔 원고 ${josa(`‘${d.title || "제목 없는 원고"}’`, "은/는")} 이미 지워져서 저장하지 않았어요.`, "", { duration: 8000 });
       } else if (e.status === 401 || e.code === "not_allowed") {
         return; // 화면이 이미 로그인 · 거부 화면으로 바뀜
       } else {
@@ -436,10 +447,13 @@ actions.logout = logout;
 
 function clearApp() {
   closeJobs();
+  closeTrash();
   closeReader();
   closeWriter();
   resetGraphMemory(); // 다음 사용자에게 이전 계정의 그래프(서재 표시)가 남지 않게
   resetRefMemory(); // 참고 패널 추천 결과 · 진행 중인 추천(메모리만 — 1C 명세 9.8절)
+  resetCiteCache(); // 내 스타일 목록 · 스타일 XML
+  resetDiscover(); // 논문 찾기 검색어 · 결과
   resetState();
   main.innerHTML = "";
   for (const id of ["#collection-tree", "#folder-tree", "#tag-list"]) $(id).innerHTML = "";
@@ -569,7 +583,7 @@ function dropTarget(btn, onIds) {
     btn.classList.remove("drop-target");
     const ids = JSON.parse(e.dataTransfer.getData("application/x-paperlab-ids") || "[]");
     if (!ids.length) return;
-    try { await onIds(ids); } catch (err) { errorToast(err); }
+    try { await onIds(ids); } catch (err) { saveError(err); return; }
     refreshAll();
   };
 }
@@ -621,13 +635,13 @@ function renderSidebar() {
           { label: "하위 컬렉션 추가", action: () => newCollection(c.id) },
           { label: "이름 바꾸기", action: async () => {
             const name = await promptDialog("컬렉션 이름", { value: c.name });
-            if (name) { try { await api.patch(`/api/collections/${c.id}`, { name }); refreshAll(); } catch (err) { errorToast(err); } }
+            if (name) { try { await api.patch(`/api/collections/${c.id}`, { name }); refreshAll(); } catch (err) { saveError(err); } }
           } },
-          ...(c.parent_id ? [{ label: "최상위로 옮기기", action: async () => { await api.patch(`/api/collections/${c.id}`, { parent_id: null }); refreshAll(); } }] : []),
+          ...(c.parent_id ? [{ label: "최상위로 옮기기", action: () => api.patch(`/api/collections/${c.id}`, { parent_id: null }).then(refreshAll, saveError) }] : []),
           "-",
           { label: "삭제 (논문은 남아요)", danger: true, action: async () => {
-            if (!(await confirmDialog(`'${c.name}' 컬렉션과 하위 컬렉션을 삭제할까요? 논문 자체는 서재에 남아요.`, { ok: "삭제" }))) return;
-            await api.del(`/api/collections/${c.id}`);
+            if (!(await confirmDialog(`‘${c.name}’ 컬렉션과 하위 컬렉션을 삭제할까요? 논문 자체는 서재에 남아요.`, { ok: "삭제" }))) return;
+            try { await api.del(`/api/collections/${c.id}`); } catch (err) { return saveError(err); }
             if (state.filter.kind === "collection" && state.filter.id === c.id) state.filter = { kind: "all", id: null };
             refreshAll();
           } },
@@ -659,13 +673,13 @@ function renderSidebar() {
       popupMenu(e.currentTarget, [
         { label: "이름 바꾸기", action: async () => {
           const name = await promptDialog("태그 이름", { value: t.name });
-          if (name) { try { await api.patch(`/api/tags/${t.id}`, { name }); refreshAll(); } catch (err) { errorToast(err); } }
+          if (name) { try { await api.patch(`/api/tags/${t.id}`, { name }); refreshAll(); } catch (err) { saveError(err); } }
         } },
-        ...colors.map(([c, n]) => ({ label: `색: ${n}`, action: async () => { await api.patch(`/api/tags/${t.id}`, { color: c }); refreshAll(); } })),
+        ...colors.map(([c, n]) => ({ label: `색: ${n}`, action: () => api.patch(`/api/tags/${t.id}`, { color: c }).then(refreshAll, saveError) })),
         "-",
         { label: "태그 삭제", danger: true, action: async () => {
-          if (!(await confirmDialog(`'${t.name}' 태그를 모든 논문에서 지울까요?`, { ok: "삭제" }))) return;
-          await api.del(`/api/tags/${t.id}`);
+          if (!(await confirmDialog(`‘${t.name}’ 태그를 모든 논문에서 지울까요?`, { ok: "삭제" }))) return;
+          try { await api.del(`/api/tags/${t.id}`); } catch (err) { return saveError(err); }
           if (state.filter.kind === "tag" && state.filter.id === t.id) state.filter = { kind: "all", id: null };
           refreshAll();
         } },
@@ -767,7 +781,7 @@ async function newFolder(parentId = null) {
 async function renameFolder(f) {
   const name = await promptDialog("폴더 이름", { value: f.name });
   if (!name || name === f.name) return;
-  try { await api.patch(`/api/folders/${f.id}`, { name }); refreshAll(); } catch (e) { errorToast(e); }
+  try { await api.patch(`/api/folders/${f.id}`, { name }); refreshAll(); } catch (e) { saveError(e); }
 }
 
 async function moveFolder(f) {
@@ -780,7 +794,7 @@ async function moveFolder(f) {
     if (r.value) { folderCollapsed.delete(r.value); saveSet(FOLDER_COLLAPSE_KEY, folderCollapsed); }
     toast(`‘${f.name}’ 폴더를 옮겼어요`);
     refreshAll();
-  } catch (e) { errorToast(e); }
+  } catch (e) { saveError(e); }
 }
 
 async function deleteFolder(f, kidCount) {
@@ -793,7 +807,9 @@ async function deleteFolder(f, kidCount) {
     msg = `‘${f.name}’ 폴더를 삭제할까요? ${what} ${top ? "폴더 밖으로" : "상위 폴더로"} 옮겨져요.`;
   }
   // 6단계 9장: 폴더 동기화를 켠 PC가 있으면 한 줄 더
-  if (state.stats && state.stats.sync_on) msg += " 폴더 동기화를 쓰는 PC에서도 같은 폴더가 없어지고 파일은 위 폴더로 옮겨져요.";
+  if (state.stats && state.stats.sync_on) {
+    msg += ` 폴더 동기화를 쓰는 PC에서도 같은 폴더가 없어지고 파일은 ${top ? "동기화 폴더 맨 위로" : "위 폴더로"} 옮겨져요.`;
+  }
   if (!(await confirmDialog(msg, { ok: "삭제", danger: true }))) return;
   try {
     const r = await api.del(`/api/folders/${f.id}`);
@@ -805,7 +821,7 @@ async function deleteFolder(f, kidCount) {
     toast(parts.length ? `폴더를 지웠어요 · ${topic} ${top ? "폴더 밖으로" : "상위 폴더로"} 옮겼어요` : "폴더를 지웠어요");
     if (state.filter.kind === "folder" && state.filter.id === f.id) state.filter = { kind: "all", id: null };
     refreshAll();
-  } catch (e) { errorToast(e); }
+  } catch (e) { saveError(e); }
 }
 
 async function newCollection(parentId = null) {
@@ -853,6 +869,9 @@ async function route() {
   const m = hash.match(/^#\/read\/(\d+)(?:\/p(\d+))?/);
   if (!hash.startsWith("#/write")) closeWriter();
   if (!hash.startsWith("#/ask")) closeAsk();
+  if (!hash.startsWith("#/jobs")) closeJobs();
+  if (!hash.startsWith("#/trash")) closeTrash();
+  if (!/^#\/graph(\/|$)/.test(hash)) closeGraph();
   if (m) {
     state.view = "reader";
     app.classList.add("reading");
@@ -861,32 +880,24 @@ async function route() {
   }
   closeReader();
   if (hash.startsWith("#/jobs")) {
-    closeWriter();
-    closeGraph();
     app.classList.remove("reading");
     state.view = "jobs";
     renderSidebar();
     return renderJobs(main);
   }
-  closeJobs();
   if (hash.startsWith("#/trash")) { // 6단계 휴지통 (SW-1)
-    closeWriter();
-    closeGraph();
     app.classList.remove("reading");
     state.view = "trash";
     renderSidebar();
     return renderTrash(main);
   }
-  closeTrash();
   if (/^#\/graph(\/|$)/.test(hash)) {
     // 인용 그래프: 읽기 화면처럼 사이드바를 숨기고 전체 폭 (디자인 GD-1). 사이드바 메뉴 항목은 없음(K-12)
-    closeWriter();
     state.view = "graph";
     app.classList.add("reading");
     renderSidebar();
     return renderGraph(main);
   }
-  closeGraph();
   const w = hash.match(/^#\/write(?:\/(\d+))?/);
   if (w) {
     state.view = "write";

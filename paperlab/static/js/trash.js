@@ -30,10 +30,6 @@ export function leftChip(purgeAt, now = Date.now()) {
   return { text: `${Math.ceil(ms / DAY)}일 남음`, warn: false };
 }
 
-export function trashCount() {
-  return (state.stats && state.stats.trash) || 0;
-}
-
 export function closeTrash() {
   T = null;
 }
@@ -106,15 +102,16 @@ function row(p) {
   const who = p.deleted_by_label === "웹" ? "웹에서" : `‘${p.deleted_by_label}’에서`;
   const meta = [`원래 폴더: ${where}`, `${fmtDate(p.deleted_at)} ${who} 지움`, p.pdf_size ? fmtBytes(p.pdf_size) : ""].filter(Boolean);
   const sub = [authorsShort(p.authors || []), p.year].filter(Boolean).join(" · ");
-  const li = el(`<li class="trash-row" data-trash-id="${p.id}">
-    <input type="checkbox" aria-label="‘${esc(p.title)}’ 선택" ${t.selected.has(p.id) ? "checked" : ""}>
+  const name = p.title || "제목 없음"; // 단추 · 칸 이름용 (빈 제목이면 ‘’만 읽히지 않게)
+  const li = el(`<li class="trash-row" data-trash-id="${Number(p.id)}">
+    <input type="checkbox" aria-label="‘${esc(name)}’ 선택" ${t.selected.has(p.id) ? "checked" : ""}>
     <div class="trash-main"><div class="paper-title">${esc(p.title || "(제목 없음)")}</div>
       ${sub ? `<div class="paper-sub">${esc(sub)}</div>` : ""}
       <p class="trash-meta">${esc(meta.join(" · "))}</p>
       ${p.file_name ? `<p class="trash-file">${esc(p.file_name)}</p>` : ""}</div>
     <div class="trash-side"><span class="chip trash-left${chip.warn ? " warn" : ""}" title="${esc(fmtDate(p.purge_at))}에 영구 삭제돼요">${esc(chip.text)}</span>
-      <span class="item-actions"><button type="button" class="btn sm" data-trash-restore aria-label="‘${esc(p.title)}’ 되살리기">되살리기</button>
-        <button type="button" class="btn sm danger" data-trash-purge aria-label="‘${esc(p.title)}’ 영구 삭제">영구 삭제</button></span></div></li>`);
+      <span class="item-actions"><button type="button" class="btn sm" data-trash-restore aria-label="‘${esc(name)}’ 되살리기">되살리기</button>
+        <button type="button" class="btn sm danger" data-trash-purge aria-label="‘${esc(name)}’ 영구 삭제">영구 삭제</button></span></div></li>`);
   $("input", li).onchange = (e) => {
     if (e.target.checked) t.selected.add(p.id); else t.selected.delete(p.id);
     draw();
@@ -159,7 +156,7 @@ async function restore(ids) {
 async function purge(ids) {
   const t = T;
   const one = ids.length === 1 ? t.items.find((p) => p.id === ids[0]) : null;
-  const ok = await confirmDialog(one ? `‘${one.title}’의 PDF · 하이라이트 · 노트 · 요약이 모두 지워지고 되살릴 수 없어요.`
+  const ok = await confirmDialog(one ? `‘${one.title || "제목 없음"}’의 PDF · 하이라이트 · 노트 · 요약이 모두 지워지고 되살릴 수 없어요.`
     : "PDF · 하이라이트 · 노트 · 요약이 모두 지워지고 되살릴 수 없어요.",
   { title: one ? "영구 삭제할까요?" : `${ids.length}편을 영구 삭제할까요?`, ok: "영구 삭제", danger: true, focus: "cancel" });
   if (!ok) return;

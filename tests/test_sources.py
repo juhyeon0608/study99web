@@ -295,3 +295,15 @@ def test_download_pdf_hides_upstream_errors():
     with pytest.raises(sources.SourceError) as e:
         _pdf_sources(boom).download_pdf("https://example.org/a.pdf")
     assert str(e.value) == sources.PDF_FETCH_FAILED
+
+
+def test_year_is_int_or_none():
+    """웹 점검 L-2: OpenAlex · S2 · Crossref 연도는 int 또는 None (문자열 · 실수 · 엉뚱한 값)"""
+    assert sources.norm_openalex({"publication_year": "2020"})["year"] == 2020
+    assert sources.norm_openalex({"publication_year": "20x"})["year"] is None
+    assert sources.norm_s2({"year": 2019.0})["year"] == 2019
+    assert sources.norm_s2({"year": True})["year"] is None and sources.norm_s2({"year": 99999})["year"] is None
+    cr = sources.norm_crossref({"issued": {"date-parts": [["2021", "3", 5]]}})
+    assert cr["year"] == 2021 and cr["issued"] == "2021-03-05"
+    assert sources.norm_crossref({"issued": {"date-parts": [[None]]}, "created": {"date-parts": [[2018]]}})["year"] == 2018
+    assert sources.norm_crossref({"issued": {"date-parts": [["n.d."]]}})["year"] is None

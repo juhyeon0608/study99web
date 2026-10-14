@@ -2,13 +2,14 @@
 
 - 단계: 2단계 ([PLAN.md](../../PLAN.md) 6장 "2단계", 5장 "AI 라우팅 규칙", 10장 P2 · P8 · P12)
 - 작성: 기획팀 · 2026-10-07 (초안 — 20장 질문의 답을 받으면 개정)
-- **호스팅이 PC 서버(서버 PC + Tailscale Funnel)로 바뀜에 따라 개정 중입니다** (사용자 결정 2026-10-07 — [1단계 명세](phase1-cloud.md) 19.1절 Q14). 이 문서의 "서버"는 서버 PC `KIMJUHYEON`에서 도는 PaperLab 서버(공개 주소 `https://kimjuhyeon.tailac17f6.ts.net`)입니다. 개정 내용: 사용자 결정 **U1~U8 반영**(20.1절), 팀장 결정 K1~K17 **기획팀 추천 채택** 기록 + **K2(API 요약 실행 위치)를 Cloud Tasks → 서버 프로세스 안 백그라운드 실행기(jobs 표 기반)로**, **K14(새 환경 변수) 재검토 → 새 변수 없음**(팀장 결정(2026-10-07) — K2' · K14', K1' · K20 포함. **2a 구현 뒤 팀장 승인(2026-10-08)으로 설치 파일 폴더 변수 `PAPERLAB_RELEASES_DIR` 1개가 생김 — K14' 개정**), U2(세 회사 API 키)에 따른 9장 라우팅 · 설정 · 암호화 저장 확장, U6(서버 주소 내장), **서버 PC 워커 상시 운영(13.9절)**. 바뀐 곳: 1 · 3 · 4 · 5.5 · 5.6 · 6.3 · 6.6 · 6.7 · 8.2 · 9 · 10 · 11.2 · 13.5~13.9 · 14 · 15 · 16 · 17 · 19 · 20 · 21 · 22장.
+- **상태: 2a · 2b 구현 완료**(2026-10-14 기준 서버 PC 미반영 — [PLAN.md](../../PLAN.md) 6장 · [서버 PC 안내서](../../deploy/server-pc/README.md) 16절). **호스팅이 PC 서버(서버 PC + Tailscale Funnel)로 바뀜에 따라 개정했습니다** (사용자 결정 2026-10-07 — [1단계 명세](phase1-cloud.md) 19.1절 Q14). 이 문서의 "서버"는 서버 PC `KIMJUHYEON`에서 도는 PaperLab 서버(공개 주소 `https://kimjuhyeon.tailac17f6.ts.net`)입니다. 개정 내용: 사용자 결정 **U1~U8 반영**(20.1절), 팀장 결정 K1~K17 **기획팀 추천 채택** 기록 + **K2(API 요약 실행 위치)를 Cloud Tasks → 서버 프로세스 안 백그라운드 실행기(jobs 표 기반)로**, **K14(새 환경 변수) 재검토 → 새 변수 없음**(팀장 결정(2026-10-07) — K2' · K14', K1' · K20 포함. **2a 구현 뒤 팀장 승인(2026-10-08)으로 설치 파일 폴더 변수 `PAPERLAB_RELEASES_DIR` 1개가 생김 — K14' 개정**), U2(세 회사 API 키)에 따른 9장 라우팅 · 설정 · 암호화 저장 확장, U6(서버 주소 내장), **서버 PC 워커 상시 운영(13.9절)**. 바뀐 곳: 1 · 3 · 4 · 5.5 · 5.6 · 6.3 · 6.6 · 6.7 · 8.2 · 9 · 10 · 11.2 · 13.5~13.9 · 14 · 15 · 16 · 17 · 19 · 20 · 21 · 22장.
 - 개정 2026-10-07 (1A 연결): [인하대 프록시 · Scholar 명세](inha-proxy.md) 12장 · 확정 IK-6(①: 시스템 브라우저)에 맞춰 13.2절 탐색 제한 · 새 창 · `shell.openExternal` 규칙을 **13.2.1절 "외부 링크 열기"** 로 다시 씀(앱 안 창에서는 열지 않음, 스킴은 http(s)만). 수용 기준 AC-86, 팀장 결정 K21(①로 확정 — 목록 밖 http(s)도 시스템 브라우저로), 확인 필요 1줄, 21장 개발팀 표 1줄 추가.
 - **개정 2026-10-07 (사용자 결정 U9 · Q-S3 · U11 · U10 변경)**: **U9** 동시 실행 기본값 그대로(claude 2 · codex 1 · gemini 1 · 전체 2). **Q-S3 서버 PC에는 워커를 두지 않음** → 13.9절을 "하지 않음 + 서버 PC의 배포 역할"로 바꿈, AC-83 · K20 · **U11 해당 없음**. **U10 변경 — GitHub Releases를 쓰지 않고 서버 PC가 직접 배포**: 서버 PC `update.ps1`이 git 반영 뒤 데스크톱 앱이 바뀌었으면 Electron 설치 파일을 빌드(electron-builder · NSIS)해 `D:\PaperLab\releases`에 두고, PaperLab 서버가 `/downloads/`로 내려줌. 자동 업데이트는 electron-updater **generic provider**(`https://kimjuhyeon.tailac17f6.ts.net/downloads/`, U5 그대로). 서버 PC에 Node.js LTS 필요. 빌드 실패는 서버 업데이트 성공으로 두고 이전 설치 파일 유지 + WARN. 보안 검토(공개 여부 · 무결성 · 경로 순회 · 캐시)는 **13.7.1절**(기획팀 추천 — 팀장 결정 K22~K24). 바뀐 곳: 1 · 2 · 4장, 6.7 · 13.1 · 13.2.1 · 13.6 · 13.7 · 13.7.1(신규) · 13.9 · 14장, 16 · 17(AC-70 · 71 · 83 개정, AC-87~89 신규) · 18 · 19 · 20 · 21 · 22장. K19는 그대로(개발팀 제안 → 팀장 결정 — 2026-10-08에 확정, 아래 개정 줄)
 - **개정 2026-10-08 (사용자 결정 — 2단계를 2a · 2b로 나눔)**: 세션 사용량을 줄이고, 2a를 먼저 반영해 브라우저에서 OpenAI · Google 키를 바로 쓸 수 있게 하려는 것입니다. **2a = 서버 · 웹**(작업 큐, 기기 연결 · 워커 API, API 우선 · CLI 폴백 라우팅, API 키 3종, 설정 화면 "AI 엔진" · "연결된 PC", PC 앱 받기 화면과 `/downloads` 경로, 작업 목록). **2b = Electron 앱, PC 워커(CLI 실행), 서버 PC 빌드 단계(`update.ps1`), 실제 PC 실측**. 명세 본문(1~16 · 18~20 · 22장)은 바꾸지 않고, **17장 수용 기준마다 `[2a]` · `[2b]` 표시**(둘 다 걸치면 `[2a+2b]`와 나눠 적음)와 **21장 작업 목록을 2a · 2b로 나눔**. 2a만 반영된 동안 CLI 작업은 **워커가 없으면 대기**합니다(9.2절 "경로가 비면 400" 규칙과 대기 기한 6.6절은 그대로 — 21.0절 "2a만 반영된 동안의 동작" 참고). 화면 문구는 [디자인 문서](../design/phase2-worker-electron-ui.md)를 따릅니다. 2a 완료 뒤 2b를 시작하며 2b에서 2a 항목을 다시 돌려 회귀를 확인합니다(AC-95 · 96).
 - **개정 2026-10-08 (2a 개발 완료 — 팀장이 승인한 구현 차이 반영)**: 코드(`paperlab/jobs.py` · `worker_api.py` · `api_runner.py` · `downloads.py` · `ai.py` · `config.py` · `server.py`, 마이그레이션 `20261009000001_devices_jobs.sql`)를 읽고 실제 값과 맞춰 고침. ① 설치 파일 폴더 환경 변수 `PAPERLAB_RELEASES_DIR`(13.7.1절 · K14' · 21장) ② 작업 보기에 `route` · `route_index` · `question` · `result`(7장) ③ `jobs.leased_at`과 서버 쪽 절대 기한(5.3 · 6.3 · 11.5절) ④ CLI 대기 기한을 작업 만들 때 정하고 CLI 칸 폴백 때 다시 셈(6.6절) ⑤ 오류 코드 `bad_input`(9.6절) ⑥ 대화 · 글쓰기 SSE 작업 리스 660초 고정 — **사실만 기록, 영향은 품질팀 검증 중**(6.3절) ⑦ 연결 코드 알파벳 31자(8.2 · 12.1절 · AC-16) ⑧ `/downloads/` ETag 304 · `.exe` Range 요청 횟수(13.7.1절 · AC-87) ⑨ Gemini는 `responseMimeType`만(9.5절) ⑩ K19 확정(9.4절 · 20.2절) ⑪ 2b가 맞출 워커 계약(8장 · 13.3절)을 구현 기준으로 정리.
 - **개정 2026-10-08 (2a 품질 수정 반영 — 코드를 읽어 사실 확인한 뒤 고침)**: ① `jobs.interactive` 열(SSE에서 시작한 대화 · 글쓰기 작업) — 리스가 지나면 다시 실행하지 않고 `cancelled` · `interrupted`로 끝냄, 폴백으로 다음 칸에 가면 표시가 풀림, SSE는 0.05초마다 끊김 확인(5.3 · 6.1 · 6.3 · 9.3 · 15.2절 — 6.3절의 "660초 리스 영향 미정"을 이 결정으로 바꿈) ② `jobs.result_key` 열은 2b 대비로 2a 마이그레이션에 이미 있음(2 · 5.3 · 21.0절) ③ `/downloads` 한도: Range 요청은 시간당 횟수에 넣지 않음, 전체 `GET`은 같은 IP 시간당 10회, 127.0.0.1(XFF 없음)이면 전체 시간당 60회(13.7.1절 · AC-87 · 19장 — 수용 위험 1줄) ④ 연결 코드 한도 2개(IP별 분당 10 · 전체 분당 60, 127.0.0.1이면 전체만 — 8.2절) ⑤ 해지 · 다른 PC 재대기 때 `cancel_requested`면 `cancelled`(6.1 · 12.4절) ⑥ 하트비트 `id`가 bool이거나 범위 밖이면 400, 진행 중 작업을 돌려주는 retry는 200(7.1 · 8.5절) ⑦ 폴백 때 해지된 기기의 CLI 칸은 건너뜀(9.2절 예외) ⑧ 수용 위험: interactive 스트림이 660초를 넘기면 답 없이 끝날 수 있음(14 · 19장).
 - **개정 2026-10-08 (2b 개발 완료 — 팀장이 승인한 구현 차이 반영, `desktop/` 코드와 `deploy/server-pc/common.ps1` · `update.ps1`을 읽어 사실 확인한 뒤 고침)**: ① preload는 `preload/preload.js` 하나(출처에 따라 `paperlabDesktop` 또는 `paperlabLocal`), 경계는 main의 IPC 출처 검사(13.1 · 13.3절) ② 13.2.1절 7번 "요청한 프레임을 아는 방법"은 **대안으로 해결**(20.3절) ③ 서버 주소는 `deploy/server-pc/server.json`의 `public_url`을 빌드 때 `extraMetadata.paperlabServer`로 넣음 — `desktop/app-config.json` 없음(13.5 · 21장) ④ 설정 파일 `electron-builder.config.js`를 `--config`로 지정, `update.ps1`은 `npm run dist`를 부르고 빌드 함수는 `common.ps1`, `install.ps1`은 바뀌지 않음, releases 폴더 결정 순서(13.7.1절 "2b 확인 필요"는 **해결**) ⑤ 모델을 대체해 실행해도 결과 글에 문구를 붙이지 않음(11.6절) ⑥ codex · gemini 시스템 프롬프트는 stdin 앞에 붙임(11.4절) ⑦ gemini 로그인 판정(11.4 · 11.8절) ⑧ claude 2.1.259 미만 처리(11.7절) ⑨ 일시 중지 중 claim · bye(8.4 · 8.7절) ⑩ 연결 전 엔진 탐지(11.7절) ⑪ 401이면 토큰 삭제(12.4절) ⑫ 딥링크 콜백 전달(13.4절) ⑬ Fuses(13.2절) ⑭ 개발 실행 데이터 폴더 · 트레이 알림 · 임시 아이콘(13.1 · 13.5절) ⑮ OneDrive 폴더 EPERM(14장). 바뀐 곳: 8.4 · 8.7 · 11.4 · 11.6~11.8 · 12.4 · 13.1~13.7.1 · 14 · 20.3 · 21장.
+- **개정 2026-10-14 (전체 오류 점검 반영 — `desktop/main` · `preload` · `build/installer.nsh` 코드를 읽어 사실 확인한 뒤 고침)**: ① preload 함수 6개 → 7개, `cancelGoogleLogin`(IPC `pl:google-login-cancel`) 추가(13.3절 표 · AC-74) ② `paperlab://` 등록은 설치본 `boot()`의 `setAsDefaultProtocolClient('paperlab', execPath, ['--'])`, 명령 `"…\PaperLab.exe" -- "%1"`, 키는 제거할 때만 지우고 업데이트 때는 지우지 않음(13.4 · 13.7절) ③ 딥 링크 인자 검사: `paperlab://` 인자 하나만 · 4096자 이하 · `--` 앞 스위치만(13.4절) ④ 앱 버전 0.3.1(13.7절) ⑤ 워커 종료 대기 15초 · Windows 로그오프 정지, 트레이만 켠 상태의 한계(13.5절). 바뀐 곳: 13.1 · 13.3 · 13.4 · 13.5 · 13.7 · 17장(AC-74).
 - 앞 단계: [1단계 명세](phase1-cloud.md) (인증 · RLS · 서버 구조 · 요약 SSE 9.3절 · 19장 결정)
 - 표기: **확정** = 사용자 결정(PLAN 2장), **팀장 결정** = 팀장이 정함(사용자 이견 시 변경), **기획팀 추천** = 선택지 중 기획팀 안(팀장 결정 전 — 20.2절 질문 번호 `K…`), **가정** = 기획팀이 임시로 정한 값, **미정** = 사용자 확인 필요(20.1절 질문 번호 `U…`), **확인 필요** = 외부 사실을 공식 문서로 다 확인하지 못함(개발팀이 첫 작업 때 확인하고 이 문서를 고침)
 - 비밀값: 이 문서는 변수 **이름만** 씁니다. 기기 토큰 · API 키 · 배포 주소는 어떤 문서 · 코드 · 로그 · 커밋에도 쓰지 않습니다(1단계 AC-69와 같은 원칙).
@@ -747,7 +748,7 @@ returning j.*;
 ```
 desktop/                        (같은 저장소 study99web — 기획팀 추천 K11)
   package.json                  앱 이름 · 버전(SemVer — 배포의 기준) · 의존성. package-lock.json 커밋(npm ci)
-  electron-builder.config.js    NSIS · protocols · fuses · publish: generic — deploy/server-pc/server.json의
+  electron-builder.config.js    NSIS · fuses · publish: generic · (protocols는 적혀 있으나 NSIS는 등록하지 않음 — 13.4절) — deploy/server-pc/server.json의
                                 public_url을 빌드 때 읽어 extraMetadata.paperlabServer(앱 package.json)와
                                 publish url(= public_url + "/downloads/")에 넣음(주소 한 곳 원칙 — 1단계 S10 · AC-69).
                                 `--config electron-builder.config.js`로 지정(package.json의 pack · dist 스크립트)
@@ -847,7 +848,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 
 ### 13.3 클라우드 화면에 내주는 API (`window.paperlabDesktop`)
 
-`contextBridge`로 **아래만** 노출합니다(체크리스트 20번 "Electron API를 노출하지 않음"). preload는 `preload/preload.js` 하나이며, **서버 출처(http · https) 페이지에서만** `paperlabDesktop`을 내보내고 `app://` 페이지에는 별도 `paperlabLocal`(첫 실행 · 이 PC 상태 · 연결 불가 화면용 — `state` · `action` · `onState`)을 내보냅니다. 어느 쪽이든 **실제 경계는 main(`ipc.js`)의 IPC 출처 검사**입니다(클라우드 채널 `pl:*`은 서버 출처의 최상위 프레임만, 로컬 채널 `local:*`은 `app://ui`의 최상위 프레임만 — 맞지 않으면 거부하고 로그).
+`contextBridge`로 **아래 7개 함수만** 노출합니다(개정 2026-10-14: 6개 → 7개, `cancelGoogleLogin` 추가. 체크리스트 20번 "Electron API를 노출하지 않음"). preload는 `preload/preload.js` 하나이며, **서버 출처(http · https) 페이지에서만** `paperlabDesktop`을 내보내고 `app://` 페이지에는 별도 `paperlabLocal`(첫 실행 · 이 PC 상태 · 연결 불가 화면용 — `state` · `action` · `onState`)을 내보냅니다. 어느 쪽이든 **실제 경계는 main(`ipc.js`)의 IPC 출처 검사**입니다(클라우드 채널 `pl:*`은 서버 출처의 최상위 프레임만, 로컬 채널 `local:*`은 `app://ui`의 최상위 프레임만 — 맞지 않으면 거부하고 로그).
 
 | 함수 | 하는 일 | 돌려주는 값 |
 |---|---|---|
@@ -855,6 +856,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | `pair(code)` | 12.2절 ① | `{ok, deviceName}` 또는 `{ok:false, error}` |
 | `nudge()` | 작업을 만들었으니 즉시 잡기(10.2절) | 없음 |
 | `startGoogleLogin(authorizeUrl)` | 13.4절 — main이 **URL이 `{SUPABASE_URL}/auth/v1/authorize`로 시작하는지 검사** 후 시스템 브라우저로 엶 | `{ok}` |
+| `cancelGoogleLogin()` | (개정 2026-10-14) 화면의 로그인 대기 [취소] — IPC `pl:google-login-cancel`(응답 없는 `send`). main이 로그인 대기를 끝내(`loginUntil = 0`) **그 뒤 브라우저에서 로그인을 마쳐 오는 콜백은 받지 않음**(13.4절). 대기 중이 아니면 아무 일도 안 함. 화면은 `?.()`로만 부름(옛 앱에는 없음) | 없음 |
 | `onAuthCallback(fn)` | `paperlab://auth-callback?code=…`를 받으면 `fn(code, error)` — 성공이면 `error`는 빈 문자열, 실패 · 취소면 `code`가 빈 문자열이고 `error`에 이유(최대 80자). 2a 화면(`app.js`)이 이 두 인자 모양으로 부름 | 구독 해제 함수 |
 | `openStatusWindow()` | 앱의 "이 PC 상태" 창 열기 | 없음 |
 
@@ -864,7 +866,7 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 - `info()`는 **비동기(Promise)** 입니다 — 화면이 `await dk.info()`로 받고, 예외(reject)는 "앱 정보 없음"으로 처리(`try/catch`). 화면이 읽는 필드: `appVersion`(문자열), `paired`(불리언), `deviceId`(서버 `devices.id`와 같은 숫자 — 기기 목록의 "이 PC" 칩 비교), `deviceName`, `accountHint`(서버가 주는 `a***@example.com` 모양 그대로 — 화면이 로그인 계정을 같은 규칙으로 가려 문자열을 비교), `workerState`: 화면이 구분하는 값 `"paused"` · `"update_required"` · `"offline"`(그 밖 값 `idle` · `running`은 "연결됨"으로 표시). `engines`는 2a 화면이 읽지 않음. 연결 전(`paired: false`)에는 나머지 필드가 비어 있어도 됨.
 - `pair(code)`: 인자는 `POST /api/devices/pair-codes`가 준 문자열 **그대로**(`"K7QF-2M9X"` — 대시 포함, 서버가 정규화하므로 앱이 고치지 않아도 됨). 반환(Promise): 성공 `{ok: true, deviceName}`, 실패 `{ok: false, error: "<화면에 그대로 보일 문구>"}`. 화면은 `!r || !r.ok`이면 `r.error`(없으면 "잠시 후 다시 시도해 주세요.")를 알림에 씀. **성공 직후 `info()`가 `paired: true`와 새 `deviceId`를 돌려줘야 함**(화면이 다시 부름).
 - `openStatusWindow()`: 인자 없음, 반환값은 쓰지 않음. 계정 메뉴의 "이 PC 상태" 항목이 호출.
-- 세 함수 모두 토큰을 반환하지 않음(AC-74).
+- 7개 함수 모두 토큰을 반환하지 않음(AC-74).
 - 2a 화면은 `nudge()` · `startGoogleLogin()` · `onAuthCallback()`을 **아직 부르지 않음**(코드 검색 0건) — 10.2절 로컬 신호와 13.4절 로그인 흐름은 2b에서 화면 코드(`app.js` · `auth.js`)에 더해야 함(21.0절 2b 표). (2b 개발 뒤 확인 2026-10-08: `app.js` · `jobs.js`가 이 함수들을 부름 — `onAuthCallback` · `startGoogleLogin` · `nudge`.)
 
 ### 13.4 앱 창에서의 구글 로그인 (P12 — 기획팀 추천 K10)
@@ -879,6 +881,9 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 
 - 로그인 기다리는 동안 앱 창에 "브라우저에서 로그인을 마쳐 주세요 — [브라우저 다시 열기] [취소]"(16장 E5).
 - **콜백 전달(2b 구현)**: `paperlab://auth-callback?...`를 받으면(`second-instance`의 명령줄 · 처음 실행 인자) main은 `code`(모양 검사 `^[A-Za-z0-9._~-]{8,512}$`) 또는 `error`만 꺼내 **이 앱이 `startGoogleLogin`으로 로그인을 시작한 뒤 15분(`LOGIN_WAIT_MS`) 안에 들어온 콜백만** 앱 창이 서버 화면을 다 받은 뒤 화면에 넘깁니다(받는 때 화면이 로딩 중이면 `did-finish-load`에서 다시). 콜백을 한 번 받으면 대기를 끝냅니다. 그 밖의 콜백(처음 실행할 때 인자로 들어온 것 포함)은 무시하고 로그만 남깁니다. main은 그 창이 이미 로그인했는지 판단하지 않고, **이미 로그인된 화면은 콜백을 무시합니다**(화면 쪽 `app.js`가 로그인 상태면 건너뜀). PKCE 검증자는 처음 로그인을 시작한 화면의 저장소에만 있으므로, 다른 앱이 같은 스킴으로 코드를 보내도 교환되지 않습니다.
+- **[취소]**(개정 2026-10-14): 화면이 `cancelGoogleLogin()`을 부르면 main이 대기를 끝냄 — 그 뒤 브라우저에서 로그인을 마쳐도 앱은 콜백을 받지 않고 로그만 남김(`로그인 콜백 무시`).
+- **`paperlab://` 등록(개정 2026-10-14)**: NSIS(electron-builder `protocols`)는 등록해 주지 않으므로 **설치본이 `boot()`에서 매번** `app.setAsDefaultProtocolClient('paperlab', execPath, ['--'])`로 `HKCU\Software\Classes\paperlab`(사용자별 · 관리자 권한 없음)에 등록합니다(같은 값이면 그대로, 개발 실행은 건너뜀 — 이 PC 레지스트리를 바꾸지 않음). 등록되는 명령은 `"…\PaperLab.exe" -- "%1"` — `--` 뒤라 주소에 따옴표 · 스위치를 끼워 넣어도 Chromium 스위치로 읽히지 않습니다. **지우기는 제거(언인스톨) 때만**(`build/installer.nsh`의 `customUnInstall`, `${ifNot} ${isUpdated}` 안) — **업데이트 때는 지우지 않음**(업데이트 중 옛 제거기가 키를 지우면 새 버전이 처음 시작하기 전까지 로그인 콜백이 앱으로 오지 않음).
+- **딥 링크 인자 검사(개정 2026-10-14)**: 프로세스 인자(처음 실행 · `second-instance`)에서 `paperlab://` 인자가 **정확히 하나**일 때만 받음(둘 이상이면 무시), **4096자 이하**. 실행 스위치(`--hidden` 등)는 **`--` 앞(그리고 딥 링크 앞)의 것만** 읽음 — 주소 뒤에 끼워 넣은 스위치는 무시.
 - 1단계 AC-69(Edge `--app` 창 안 로그인)는 웹 바로가기 쪽 기준으로 그대로 둡니다.
 
 ### 13.5 트레이 · 자동 시작 · 백그라운드
@@ -888,7 +893,8 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | 창 닫기(X) | 앱을 끄지 않고 **트레이로 숨김**(워커 계속). 처음 한 번 "PaperLab은 트레이에서 계속 실행돼요" 안내 |
 | 트레이 메뉴 | 열기 · 이 PC 상태 · 작업 받기 일시 중지/다시 시작 · 업데이트 확인 · 로그 폴더 열기 · 종료 (메뉴 첫 줄 · 툴팁 · 업데이트 준비됨 항목 · [코드로 연결…] 등 세부 문구는 시안 11.5절) |
 | 트레이 아이콘 상태 | 보통 / 실행 중(작업 수) / 일시 중지 / 연결 안 됨 · 오류 — 디자인팀(16장 E3). 파일은 `desktop/build/tray-{idle,running,paused,error}.ico`(16 · 20 · 24 · 32px 한 파일 — PD-6, Windows 배율 100~200%에 맞는 크기를 OS가 고름) |
-| 종료 | 실행 중 작업이 있으면 확인 창("실행 중인 작업 n개는 다른 PC로 넘어가거나 다시 대기해요") → `bye` 후 종료 |
+| 종료 | 실행 중 작업이 있으면 확인 창("실행 중인 작업 n개는 다른 PC로 넘어가거나 다시 대기해요") → `bye` 후 종료. **워커 종료 대기 15초**(개정 2026-10-14 — 워커가 작업 정리 8초 + `bye` 5초까지 쓰므로 그보다 길게 기다린 뒤 `kill`) |
+| Windows 로그오프 · 끄기 | (개정 2026-10-14) 앱 창 · 이 PC 상태 창의 **`session-end`**(그리고 `powerMonitor`의 `shutdown`)를 받으면 종료 중으로 두고 워커 · 동기화를 **정상 정지**(다시 띄우지 않음, 위 15초 대기). `app.quit()`은 부르지 않음 — 앱 자체는 Windows가 끝내며, 받아 둔 업데이트 설치가 세션 끝과 겹치는 것을 피함. **한계**: ① Electron 타입 정의상 `powerMonitor`의 `shutdown`은 Linux · macOS 전용이라 Windows에서는 창의 `session-end`가 실제 신호임 ② **트레이만 켠 상태**(`--hidden` 자동 시작 뒤 창을 한 번도 안 열어 BrowserWindow가 없는 경우)에서는 `session-end`를 받을 창이 없어 신호가 오지 않을 수 있음 — 이때는 Windows가 프로세스를 그냥 끝내고, 작업은 리스 만료(6.3절) 뒤 다른 PC가 이어받음(PLAN 12장 남은 일) |
 | 자동 시작 | **켬**(기본) — Windows 로그인 때 트레이로만 시작(`app.setLoginItemSettings({openAtLogin:true, args:["--hidden"]})`). 앱 설정에서 끌 수 있음 |
 | 절전 | 작업 실행 중에만 `powerSaveBlocker.start('prevent-app-suspension')`, 끝나면 해제 |
 | 단일 실행 | `requestSingleInstanceLock()` — 두 번째 실행은 첫 창을 앞으로(워커 중복 방지 · 딥 링크 수신) |
@@ -911,8 +917,9 @@ Electron 공식 보안 체크리스트(20개 항목)를 따릅니다. 원격 페
 | 설치 형식 | **NSIS**, **사용자별 설치**(`perMachine: false`, 관리자 권한 없음 — **확정 U3**), 한 번에 설치(`oneClick: true`). 앱 이름 **PaperLab**, 아이콘 = 지금 `deploy/paperlab.ico`와 같은 모양(**확정 U3**) | electron-builder 공식: Windows 자동 업데이트는 **NSIS만**, Squirrel.Windows는 지원 안 함(확인) |
 | 설치 경로 | `%LOCALAPPDATA%\Programs\PaperLab`(NSIS 사용자별 기본), 데이터 `%APPDATA%\PaperLab` | 사용자별 설치라 업데이트 때 UAC 창 없음 |
 | 바로가기 | 시작 메뉴 + 바탕화면 `PaperLab` | 관리자 PC의 1단계 웹 바로가기 `PaperLab.lnk`와 이름이 같아 **덮어씀**(관리자 PC도 앱으로 바꿈 — **확정 U3**) |
-| 프로토콜 | `paperlab://` 등록(electron-builder `protocols`) | 13.4절 ① |
-| 제거 | 앱 데이터(토큰)는 남김(`deleteAppDataOnUninstall: false`, 가정) — 다시 설치하면 연결 유지 | |
+| 프로토콜 | `paperlab://` 등록 — (개정 2026-10-14) electron-builder `protocols`가 아니라 **설치본 `boot()`가 `setAsDefaultProtocolClient('paperlab', execPath, ['--'])`로 등록**, 명령 `"…\PaperLab.exe" -- "%1"`. 키는 제거할 때만 지움(업데이트 때는 지우지 않음) | 13.4절 ① |
+| 제거 | 앱 데이터(토큰)는 남김(`deleteAppDataOnUninstall: false`, 가정) — 다시 설치하면 연결 유지. 레지스트리는 제거할 때만(`--updated`가 아닐 때) 설치 ID(`HKCU\Software\PaperLab\InstallId`, 6단계)와 `HKCU\Software\Classes\paperlab`을 지움 | |
+| 앱 버전 | (개정 2026-10-14) 현재 `desktop/package.json` **0.3.1** — 배포의 기준(13.7.1절). 이 문서의 `0.2.0`은 예시 값 | |
 | 받는 곳(개정 U10) | **서버 PC가 내려주는 `https://kimjuhyeon.tailac17f6.ts.net/downloads/`**(13.7.1절). 처음 설치 파일은 클라우드 화면 설정 "연결된 PC"의 [PC 앱 받기](S4) | GitHub Releases 안 씀(사용자 결정 2026-10-07) |
 | 업데이트 확인 | 시작 때 + **6시간마다**(가정) | `electron-updater` + **generic provider**(`url` = 위 주소, 빌드가 `app-update.yml`에 넣음 — `setFeedURL`을 코드에서 부르지 않음, 공식 문서). 개정 전: GitHub provider |
 | 다운그레이드 | 하지 않음(`allowDowngrade: false` — 기본). 서버를 옛 커밋으로 되돌려도 앱은 그대로(13.7.1절) | |
@@ -1195,7 +1202,7 @@ PaperLab 서버 (FastAPI): GET /downloads/{허용된 파일 이름} → D:\Paper
 - **AC-71** [2b] **[실환경]** (개정 U10) 버전 X 설치 상태에서 버전 X+1 커밋을 서버 PC에 `update.ps1`로 반영(빌드 성공) → 앱이 6시간 안(시험은 [업데이트 확인] 메뉴)에 `https://kimjuhyeon.tailac17f6.ts.net/downloads/latest.yml`을 보고 받아 "업데이트 준비됨" → 종료(또는 [지금 다시 시작]) 때 설치되어 X+1(“이 PC 상태”의 버전). 업데이트 설치 때 SmartScreen · 관리자 권한 창이 뜨는지, 서명 없는 앱에서 Authenticode 검증으로 막히지 않는지 기록. 접근 로그에서 차등 받기(`.blockmap` 두 개 + `.exe` Range 요청)였는지 전체 받기였는지 기록. — PLAN 완료 기준
 - **AC-72** [2b] **[실환경]** 앱 첫 실행 → (주소 입력 없이 — U6) 내장 주소 `https://kimjuhyeon.tailac17f6.ts.net` 확인 → [Google로 계속] → **시스템 브라우저**가 열려 로그인 → 앱 창으로 돌아와 서재가 보임. 앱 창 안에서 구글 로그인 화면이 뜨지 않음. — PLAN 완료 기준
 - **AC-73** [2b] **[수동]** 앱 창에서 PDF 읽기 · 업로드 · 하이라이트 · 원고 · 워드/한글 내보내기(저장 대화상자) · 인용 복사가 브라우저와 같게 됨. "PDF 파일 열기"는 시스템 브라우저(또는 정한 방식)로 열림. 화면 안의 외부 링크(DOI 등)는 시스템 브라우저로.
-- **AC-74** [2b] **[수동]** 개발자 도구 콘솔에서 `typeof require`, `typeof process` → `"undefined"`, `window.paperlabDesktop`에 13.3절 함수 말고는 없음, `paperlabDesktop.info()`에 토큰이 없음. 앱 창에서 `location = "https://example.com"` → 앱 창은 이동하지 않음.
+- **AC-74** [2b] **[수동]** 개발자 도구 콘솔에서 `typeof require`, `typeof process` → `"undefined"`, `window.paperlabDesktop`에 13.3절 표의 **7개 함수**(`info` · `pair` · `nudge` · `startGoogleLogin` · `cancelGoogleLogin` · `onAuthCallback` · `openStatusWindow`) 말고는 없음, `paperlabDesktop.info()`에 토큰이 없음. 앱 창에서 `location = "https://example.com"` → 앱 창은 이동하지 않음.
 - **AC-75** [2b] **[수동]** 앱 창 [이 PC 연결] 한 번으로 연결 → 설정 "연결된 PC"에 이 PC가 켜짐으로, 엔진 칩이 실제 설치 · 로그인 상태와 같음. 다른 PC 브라우저에서 만든 코드를 [코드로 연결]로 넣어도 연결됨.
 - **AC-76** [2b] **[실환경]** PC 두 대(A1 · A2 실제 앱, API 키 없음)를 켜고 요약 → 한 대만 실행("이 PC 상태" 두 곳 확인), 실행 중인 PC의 앱을 [종료]가 아니라 **작업 관리자로 강제 종료** → 약 90초 뒤 다른 PC가 이어받아 완료. — PLAN 완료 기준
 - **AC-77** [2b] **[실환경]** codex가 없는 PC만 켜 두고 codex 경로 작업 → 그 PC가 잡지 않고 화면에 "codex가 있는 PC 없음". — PLAN 완료 기준

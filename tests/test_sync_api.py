@@ -369,6 +369,7 @@ def test_versions_revoked_busy_and_quota(env, project):
     r = pc.add(data, "q.pdf", upload_id=up, status=400)
     assert r["code"] == "sync_quota"
     assert sql(project, "select count(*) from paperlab.papers where user_id = %s", (env.a.id,))[0][0] == 0
+    assert f"incoming/{env.a.id}/{up}.pdf" not in env.storage.objects  # 실패하면 임시 파일도 지움 (QA D8)
     env.app.state.config.sync_user_cap_bytes = 2 * 1024 ** 3
     # R2 95%
     env.app.state.config.storage_limit_bytes = 1
