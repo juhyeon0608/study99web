@@ -1886,3 +1886,43 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .check-acts .btn { padding: 1px 8px; }
 .check-note { margin: 12px 2px 0; line-height: 1.5; }
 @media (max-width: 760px) { .check-pane { right: 8px; left: 8px; width: auto; max-width: none; } }
+
+/* ---------------- 원고 AI 대화 · 장 · 절 일괄 처리 (docs/specs/manuscript-ai-chat.md) ---------------- */
+/* AI 패널(aside#ai-pane) 머리줄 아래 보기 단추(결과 · 일괄 · 대화). 대화는 위(범위 칩 · 대상) · 가운데(대화 — 스크롤) · 아래(입력) */
+.ai-views { flex: none; align-self: flex-start; margin: 8px 12px 0; }
+.ai-views button { padding: 3px 12px; font-size: 12.5px; white-space: nowrap; }
+.ai-pane .ai-target { margin: 0; overflow-wrap: anywhere; }
+.ai-pane-chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mc { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.mc-scope { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding: 8px 12px 0; }
+.mc-scope-h { font-size: 12px; font-weight: 650; color: var(--text-2); margin-right: 2px; }
+.mc-chip { cursor: pointer; font: inherit; font-size: 12px; white-space: nowrap; }
+.mc-chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+.mc-chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.mc-target { flex: none; margin: 4px 12px 0; overflow-wrap: anywhere; }
+.mc-target[data-tone="warn"] { color: var(--warn); }
+.mc-log { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+.mc-msg { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mc-bubble { border-radius: 10px; padding: 7px 10px; font-size: 13.5px; line-height: 1.65; word-break: keep-all; overflow-wrap: anywhere; }
+.mc-user { align-items: flex-end; }
+.mc-user .mc-bubble { max-width: 92%; background: var(--accent-soft); white-space: pre-wrap; }
+.mc-ai .mc-bubble { background: var(--surface-2); }
+.mc-partial { white-space: pre-wrap; color: var(--text-2); }
+.mc-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 11.5px; color: var(--text-3); }
+.mc-scope-chip { font-size: 11px; max-width: 100%; overflow-wrap: anywhere; }
+.mc-props { display: flex; flex-direction: column; gap: 8px; }
+.mc-prop, .mb-item { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.mc-prop[data-state="applied"], .mb-item[data-state="applied"] { opacity: .78; }
+.mc-prop[data-state="discarded"], .mb-item[data-state="skipped"] { opacity: .62; }
+.mc-prop-h { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; }
+.mc-prop .ai-diff, .mb-item .ai-diff { max-height: 30vh; overflow-y: auto; font-size: 13px; line-height: 1.65; word-break: keep-all; overflow-wrap: anywhere; }
+.mc-warn { margin: 0; color: var(--warn); }
+.mc-writing { margin-top: 4px; }
+.mc-form { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 8px 12px 12px; border-top: 1px solid var(--border); }
+.mc-input { width: 100%; min-height: 60px; max-height: 30vh; resize: vertical; font-size: 13.5px; }
+.mc-form-row { display: flex; align-items: center; gap: 6px; }
+.mb { display: flex; flex-direction: column; gap: 10px; }
+.mb-pick { width: 100%; height: 30px; text-overflow: ellipsis; }
+.mb-body { display: flex; flex-direction: column; gap: 10px; }
+.mb-sum { display: flex; flex-direction: column; gap: 6px; }
+.mb-title { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }

@@ -9,9 +9,12 @@ import {
 } from "./jobs.js";
 // AI 글쓰기 결과를 나중에 안전하게 넣기 (2026-10-16 백그라운드 AI) · 결과 패널 (2026-10-17 — 결과를 보면서 글쓰기)
 import {
-  RESULT_STATE_TEXT, applyPreview, browserStorage, diffHtml, insertionText, loadPaneOpen, origSnippet, paneActions, paneKeyAction,
+  RESULT_STATE_TEXT, applyPreview, browserStorage, diffHtml, docHash, insertionText, loadPaneOpen, origSnippet, paneActions, paneKeyAction,
   paneList, pickResult, planApply, rerunPlan, resultState, resultsButtonText, savePaneOpen, trimRange, wordDiff, writeAnchor,
 } from "./writeai.js";
+// 원고 AI 대화 · 장 · 절 일괄 처리 · AI 범위 (docs/specs/manuscript-ai-chat.md)
+import { BATCH_MAX, BATCH_MODES, batchItems, isChatKey } from "./writechat.js";
+import { batchView, chatView } from "./writechatui.js";
 import { htmlToRuns, listStyles, renderClusters, styleOptions } from "./cite.js";
 import {
   applyDocFormat, coverDialog, exportWarnings, formatManagerDialog, formatOptions, getFormat, listFormats, listsNotice,
@@ -25,6 +28,7 @@ import {
   applyEditToValue, backspaceEdit, blockInsert, captionInfo, captionLabel, diffEdit, enterEdit, figureInfo, figureMarkdown, findFigures,
   findTables, headingEdit, indentEdit,
   newTable, resolveXrefs, splitXrefs, tableAt, tableMarkdown, toggleListEdit,
+  SCOPE_KINDS, SCOPE_NAMES, aiScope, scopeSummary,
 } from "./writeedit.js";
 import {
   applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
@@ -1307,26 +1311,40 @@ function setEnding(v) {
   toast(`AI 끝맺음: ${ENDINGS.find((x) => x[0] === v)[1]}`);
 }
 
+// AI에 보낼 범위 (2026-10-17 사용자 지적 "ai 보내는 범위가 좀 이상한"): 선택(없으면 커서 문단) · 문단 · 이 절 · 이 장.
+// 원고마다 이 브라우저에 기억. 문단은 진짜 문단만(제목 · 표 · 그림 · 캡션 · 코드 · 각주 정의 줄 없이 — writeedit.js aiScope)
+const SCOPE_MENU = { sel: "선택 (없으면 문단)", para: "문단", section: "이 절 (문단마다)", chapter: "이 장 (문단마다)" };
+const scopeKey = () => `paperlab.aiScope.${W.m ? W.m.id : 0}`;
+function getScope() {
+  try { const v = localStorage.getItem(scopeKey()); return SCOPE_KINDS.includes(v) ? v : "sel"; } catch { return "sel"; }
+}
+function setScope(v) {
+  try { localStorage.setItem(scopeKey(), v); } catch { /* 저장소 없음 — 이번만 */ }
+  toast(`AI 범위: ${SCOPE_NAMES[v]}`);
+}
+
 function aiMenu(anchor, ta) {
   const cur = getEnding();
+  const sc = getScope();
   popupMenu(anchor, [
     ...AI_MODES.map((m) => (m === "-" ? "-" : { label: m[1], action: () => runAi(m[0], ta) })),
     "-",
+    ...SCOPE_KINDS.map((v) => ({ label: `범위: ${SCOPE_MENU[v]}`, sub: v === sc ? "✓ 사용 중" : "", action: () => setScope(v) })),
+    "-",
     ...ENDINGS.map(([v, label]) => ({ label: `끝맺음: ${label}`, sub: v === cur ? "✓ 사용 중" : "", action: () => setEnding(v) })),
+    "-",
+    { label: "AI와 대화하며 고치기…", sub: "Alt+C", action: () => W.ai && W.ai.chat() },
   ], { left: true });
 }
 
-function selectionOrParagraph(ta) {
-  let s = ta.selectionStart;
-  let e = ta.selectionEnd;
-  if (s === e) {
-    const v = ta.value;
-    s = v.lastIndexOf("\n\n", s - 1);
-    s = s === -1 ? 0 : s + 2;
-    e = v.indexOf("\n\n", e);
-    e = e === -1 ? v.length : e;
-  }
-  return { s, e, text: ta.value.slice(s, e) };
+// 보낼 글을 편집기에서 잠깐 골라 보여 준다 — 1.2초 뒤 그 사이 아무것도 안 했으면 원래 커서 · 선택으로 되돌림
+function flashRange(view, ta, a, b) {
+  if (!ta.offsetParent) return;
+  const keep = [ta.selectionStart, ta.selectionEnd, ta.value];
+  selectRange(view, ta, a, b);
+  setTimeout(() => {
+    if (W.ta === ta && ta.value === keep[2] && ta.selectionStart === a && ta.selectionEnd === b) ta.setSelectionRange(keep[0], keep[1]);
+  }, 1200);
 }
 
 function currentHeading(ta) {
@@ -1345,10 +1363,18 @@ const MODE_LABEL = Object.fromEntries(AI_MODES.filter((x) => x !== "-"));
 async function runAi(mode, ta, at = null) {
   // 글쓰기 도우미 경로 기준 (요약 경로 기준인 ready가 아니라 kinds.write — 품질팀 M2). 없으면 연결된 PC · API 키 안내
   if (!(await ensureAiRoute("write"))) return;
-  let { s, e, text } = at ? { s: at.from, e: at.to, text: ta.value.slice(at.from, at.to) } : selectionOrParagraph(ta);
+  const insert = mode === "continue" || mode === "draft";
+  // 범위: [다시 실행]은 다시 찾은 원래 글, 이어 쓰기 · 초안은 커서 자리, 나머지는 고른 범위(선택 · 문단 · 이 절 · 이 장)
+  const sc = at || insert ? null : aiScope(ta.value, ta.selectionStart, ta.selectionEnd, getScope());
+  if (sc && !sc.ok) return toast(sc.message);
+  // 이 절 · 이 장 + 문단 모드 = 일괄 처리(문단마다 작업 하나). 문단이 하나뿐이면 그 문단만 보통 작업으로
+  if (sc && (sc.kind === "section" || sc.kind === "chapter") && BATCH_MODES.has(mode) && sc.paras.length > 1) return runBatch(mode, ta, sc);
+  if (sc && (sc.kind === "section" || sc.kind === "chapter") && !sc.paras.length) return toast(`${sc.label}에는 문단이 없어요`);
+  const one = sc && (sc.kind === "section" || sc.kind === "chapter") ? { ...sc, ...sc.paras[0] } : sc;
+  let { s, e } = at ? { s: at.from, e: at.to } : one ? { s: one.from, e: one.to } : { s: ta.selectionStart, e: ta.selectionEnd };
+  let text = ta.value.slice(s, e);
   let keys = [...new Set((text.match(CITE_RE) || []).flatMap((raw) => (parseCitation(raw.slice(1, -1)) || []).map((it) => it.key)))];
   let instruction = "";
-  const insert = mode === "continue" || mode === "draft";
   const pos = at ? at.to : ta.selectionEnd;
   if (mode === "continue") {
     text = ta.value.slice(Math.max(0, pos - 4000), pos);
@@ -1366,6 +1392,10 @@ async function runAi(mode, ta, at = null) {
   if (ENDING_MODES.has(mode)) instruction = [ENDING_RULES[getEnding()], instruction].filter(Boolean).join("\n");
   if (!insert) ({ s, e } = trimRange(ta.value, s, e)); // 서버는 글을 trim해서 저장 — 범위도 같은 글을 가리키게
   const context = mode === "draft" ? ta.value.slice(0, 3000) : "";
+  // 보내기 전에 보낼 글을 편집기에서 잠깐 골라 보여 주고, 패널에 "대상: 제2장 제1절 (문단 1개 · 230자)"
+  const view = ta.closest(".writer");
+  if (!insert && view) flashRange(view, ta, s, e);
+  const target = one ? scopeSummary({ ...one, chars: e - s, paras: one.kind === "sel" ? one.paras : [{ from: s, to: e }] }) : "";
   let job;
   try {
     job = (await api.post("/api/ai/write", { mode, text, keys, instruction, context, manuscript_id: W.m ? W.m.id : null,
@@ -1374,10 +1404,35 @@ async function runAi(mode, ta, at = null) {
     return errorToast(err);
   }
   trackJob(job);
+  if (W.ai && W.ta === ta) W.ai.target(job.id, target);
   // 결과는 창(모달)이 아니라 오른쪽 AI 결과 패널에 — 편집기를 가리지 않아 기다리는 동안에도 계속 쓸 수 있음 (2026-10-17)
   if (W.ai && W.ta === ta) W.ai.show(job, { fresh: true });
   // 메뉴 · 초안 창이 닫히며 초점이 빠졌으면 편집기로 (고른 범위 · 커서는 그대로) — 기다리지 않고 바로 이어 쓰기
   if (W.ta === ta && ta.offsetParent && (!document.activeElement || document.activeElement === document.body)) ta.focus();
+}
+
+// 장 · 절 일괄 처리 (docs/specs/manuscript-ai-chat.md): 문단마다 글쓰기 작업 하나 — 시작 전에 몇 개인지 보여 주고 묻는다.
+// 결과는 AI 패널 '일괄' 보기에서 문단마다 바뀐 부분 · [적용] · [건너뛰기] · [모두 적용]
+async function runBatch(mode, ta, sc) {
+  const items = batchItems(ta.value, sc);
+  const more = sc.paras.length - items.length;
+  const view = ta.closest(".writer");
+  if (view) flashRange(view, ta, sc.from, sc.to);
+  const ok = await confirmDialog(`${scopeSummary(sc)} — 문단 ${items.length}개를 하나씩 '${MODE_LABEL[mode]}' 할게요. `
+    + `AI 작업 ${items.length}개가 만들어지고, 결과는 AI 패널 '일괄'에서 문단마다 확인하고 넣어요.`
+    + `${more > 0 ? ` 한 번에 ${BATCH_MAX}개까지라 뒤 문단 ${more}개는 빠져요.` : ""}`,
+  { ok: `문단 ${items.length}개 시작`, title: "장 · 절 일괄 처리" });
+  if (!ok || W.ta !== ta) return;
+  const instruction = ENDING_MODES.has(mode) ? ENDING_RULES[getEnding()] : "";
+  let r;
+  try {
+    r = await api.post(`/api/manuscripts/${W.m.id}/ai-batch`, { mode, instruction, label: sc.label, doc_hash: docHash(ta.value), items });
+  } catch (err) {
+    return errorToast(err);
+  }
+  r.jobs.forEach((j) => trackJob(j));
+  toast(`문단 ${r.jobs.length}개를 고치기 시작했어요. 창을 닫아도 계속돼요`, "success");
+  if (W.ai && W.ta === ta) W.ai.batch(r.batch.id);
 }
 
 // ------------------------------------------------------------------ AI 결과 패널 (2026-10-17 사용자 요청)
@@ -1391,6 +1446,7 @@ function aiPane(view, ta, m) {
   const S = {
     open: false, jobs: [], extra: null, sel: null, detail: new Map(), stop: null, watching: null, timer: null,
     confirm: null, tab: "result", key: "", offer: null, offerFor: null, notice: "", dead: false,
+    view: "result", targets: new Map(), // 보기: 결과 · 일괄(장 · 절) · 대화 (docs/specs/manuscript-ai-chat.md), targets: 작업 → "대상: …"
   };
   const alive = () => !S.dead && W.m === m && W.ta === ta;
   aside.setAttribute("aria-labelledby", "ai-pane-h");
@@ -1399,15 +1455,24 @@ function aiPane(view, ta, m) {
       <select class="input ai-pick" data-ai-pick aria-label="볼 AI 결과 (새것이 위)"></select>
       <button type="button" class="btn sm ghost" data-ai-close title="AI 결과 패널 닫기 (Alt+A) — 만드는 중인 작업은 계속돼요">닫기</button>
     </div>
-    <div class="panel-body ai-pane-body" data-ai-body></div>`;
+    <div class="seg ai-views" role="group" aria-label="AI 패널 보기">${[["result", "결과", "글쓰기 도우미 결과"], ["batch", "일괄", "장 · 절 일괄 처리 결과"],
+      ["chat", "대화", "AI와 대화하며 원고 고치기 (Alt+C)"]].map(([v, label, title]) => `<button type="button" data-ai-view="${v}" title="${title}">${label}</button>`).join("")}</div>
+    <div class="panel-body ai-pane-body" data-ai-body></div>
+    <div class="panel-body ai-pane-body hidden" data-ai-batch></div>
+    <div class="ai-pane-chat hidden" data-ai-chat></div>`;
   const pick = $("[data-ai-pick]", aside);
   const body = $("[data-ai-body]", aside);
+  // 대화 · 일괄 보기 (writechatui.js) — 편집기 · 넣기 도우미를 넘겨줌
+  const helpers = { mid: m.id, ta, alive, select: (a, b) => selectRange(view, ta, a, b), flash: (a, b) => flashRange(view, ta, a, b),
+    say: (t) => sayWriter(view, t), ending: () => getEnding(), modeName: (md) => MODE_LABEL[md] || "AI 글쓰기" };
+  const chatV = chatView($("[data-ai-chat]", aside), helpers);
+  const batchV = batchView($("[data-ai-batch]", aside), helpers);
 
   const merged = (j) => S.detail.get(j.id) || j;
   const list = () => {
     const all = [...S.jobs];
     if (S.extra && !all.some((j) => j.id === S.extra.id)) all.push(S.extra);
-    return paneList(all.map(merged));
+    return paneList(all.map(merged).filter((j) => !(j.write && j.write.batch))); // 일괄 처리 문단은 '일괄' 보기에서
   };
   const cur = () => list().items.find((j) => j.id === S.sel) || null;
   const here = (j) => !!j && Number(j.manuscript_id) === m.id;
@@ -1504,6 +1569,7 @@ function aiPane(view, ta, m) {
     body.append(el(`<div class="ai-meta"><b class="ai-mode">${esc(modeName(j))}</b>
       <span class="chip ai-st" data-st="${esc(st)}">${esc(RESULT_STATE_TEXT[st] || "")}</span>
       <span class="small muted">${esc(fmtClock(j.created_at))} 시작</span></div>`));
+    if (S.targets.get(j.id)) body.append(el(`<p class="small muted ai-target">${esc(S.targets.get(j.id))}</p>`)); // "대상: 제2장 제1절 (문단 1개 · 230자)"
     if (!here(j)) body.append(el(`<div class="notice" data-tone="info">${ICON_INFO}<div>다른 원고의 결과예요. 그 원고를 열어 넣거나 복사해 주세요.</div></div>`));
     if (S.offerFor === j.id && S.offer) body.append(S.offer);
 
@@ -1696,8 +1762,27 @@ function aiPane(view, ta, m) {
     draw();
   };
 
+  // ---- 보기: 결과(글쓰기 도우미) · 일괄(장 · 절) · 대화 — 대화 · 일괄은 writechatui.js
+  const setView = (v, bid = null) => {
+    S.view = v;
+    aside.querySelectorAll("[data-ai-view]").forEach((b) => {
+      b.classList.toggle("active", b.dataset.aiView === v);
+      b.setAttribute("aria-pressed", String(b.dataset.aiView === v));
+    });
+    body.classList.toggle("hidden", v !== "result");
+    pick.classList.toggle("hidden", v !== "result");
+    $("[data-ai-batch]", aside).classList.toggle("hidden", v !== "batch");
+    $("[data-ai-chat]", aside).classList.toggle("hidden", v !== "chat");
+    if (v === "chat" && S.open) chatV.show(); else chatV.hide();
+    if (v === "batch" && S.open) batchV.show(bid); else batchV.hide();
+  };
+  $(".ai-views", aside).addEventListener("click", (e) => {
+    const b = e.target.closest("[data-ai-view]");
+    if (b) setView(b.dataset.aiView);
+  });
+
   // ---- 열기 · 닫기
-  const setOpen = (open, { save = true } = {}) => {
+  const setOpen = (open, { save = true, bid = null } = {}) => {
     if (!open && aside.contains(document.activeElement)) focusEditor(); // 숨기기 전에 초점을 편집기로
     S.open = open;
     if (open) view.dataset.aiPane = "open"; else delete view.dataset.aiPane;
@@ -1707,13 +1792,32 @@ function aiPane(view, ta, m) {
       S.key = "";
       draw();
       refresh();
+      setView(S.view, bid);
     } else {
       stopWatch();
+      setView(S.view); // 대화 · 일괄 따라가기도 멈춤 (작업은 서버에서 계속)
       Object.assign(S, { confirm: null, offer: null, offerFor: null, notice: "" });
     }
   };
+  // 대화 열기 (✦ AI 도우미 메뉴 · Alt+C · 대화 끝남 알림) — 입력 칸으로
+  const openChat = () => {
+    if (!alive()) return;
+    S.view = "chat";
+    if (!S.open) setOpen(true); else setView("chat");
+    chatV.focus();
+  };
+  // 일괄 처리 보기 (방금 만든 묶음 bid)
+  const openBatch = (bid) => {
+    if (!alive()) return;
+    S.view = "batch";
+    if (!S.open) setOpen(true, { bid }); else setView("batch", bid);
+    sayWriter(view, "AI 패널 '일괄'에서 문단마다 진행을 보여 드려요. 계속 쓰셔도 돼요");
+  };
   const show = (job, { fresh = false } = {}) => {
     if (!alive() || !job) return;
+    if (job.kind === "ms_chat") return openChat(); // 원고 AI 대화 답 (끝남 알림 [열기])
+    if (job.write && job.write.batch) return openBatch(job.write.batch.id); // 일괄 처리의 문단 하나
+    if (S.view !== "result") setView("result");
     if (!S.jobs.some((x) => x.id === job.id)) S.extra = job; // 목록을 다시 받기 전 · 다른 원고의 결과
     Object.assign(S, { sel: job.id, tab: "result", confirm: null, notice: "", key: "" });
     S.offer = fresh ? notifyOffer() : null;
@@ -1733,7 +1837,8 @@ function aiPane(view, ta, m) {
   const refresh = async () => {
     clearTimeout(S.timer);
     let data;
-    try { data = await api.get(`/api/jobs${qs({ status: "recent", kind: "write", manuscript_id: m.id, limit: 20 })}`); } catch { return; }
+    // 일괄 처리 문단(최대 30개)이 섞여도 보통 결과가 밀려나지 않게 넉넉히 받고 목록에서 뺀다(list)
+    try { data = await api.get(`/api/jobs${qs({ status: "recent", kind: "write", manuscript_id: m.id, limit: 80 })}`); } catch { return; }
     if (!alive()) return;
     S.jobs = data.jobs;
     for (const j of data.jobs) { // 한 작업 보기(원래 글 · 넣을 자리)는 두고 상태 · 결과 · 넣었는지만 새로
@@ -1752,6 +1857,7 @@ function aiPane(view, ta, m) {
   $("[data-ai-close]", aside).onclick = () => setOpen(false);
   // Alt+A: 열기 · 닫기 (열 때 초점은 그대로 — 쓰던 글을 끊지 않음). Esc: 초점이 패널 안일 때만 닫기
   const onKey = (e) => {
+    if (isChatKey(e) && !modalOpen() && alive()) { e.preventDefault(); return openChat(); } // Alt+C: AI 대화 (macOS ç 막기)
     const a = paneKeyAction(e, { open: S.open, inside: aside.contains(document.activeElement), modal: modalOpen() });
     if (!a || !alive()) return;
     e.preventDefault(); // macOS Option+A의 å 막기
@@ -1761,22 +1867,27 @@ function aiPane(view, ta, m) {
   document.addEventListener("keydown", onKey);
   const onOpenJob = (e) => { // 끝남 알림 [열기] · 작업 화면 [원고에 넣기] — 같은 원고면 다시 불러오지 않고 이 패널에서
     const j = e.detail;
-    if (!j || j.kind !== "write" || !alive() || Number(j.manuscript_id) !== m.id) return;
+    if (!j || (j.kind !== "write" && j.kind !== "ms_chat") || !alive() || Number(j.manuscript_id) !== m.id) return;
     e.preventDefault();
     show(j);
   };
   window.addEventListener("paperlab:open-job", onOpenJob);
 
   drawButton();
+  setView("result");
   if (loadPaneOpen(browserStorage())) setOpen(true, { save: false });
   else refresh();
   return {
     refresh, show,
     toggle: () => setOpen(!S.open),
+    chat: openChat, batch: openBatch,
+    target: (id, text) => { if (text) S.targets.set(id, text); }, // 보낸 범위 한 줄 (이 화면에서 만든 결과만)
     destroy: () => {
       S.dead = true;
       clearTimeout(S.timer);
       stopWatch();
+      chatV.destroy();
+      batchV.destroy();
       document.removeEventListener("keydown", onKey);
       window.removeEventListener("paperlab:open-job", onOpenJob);
     },
@@ -1790,7 +1901,7 @@ async function openAiJobFromHash(m, ta) {
   history.replaceState(history.state, "", `#/write/${m.id}`);
   let job;
   try { job = await api.get(`/api/jobs/${Number(hit[1])}`); } catch (err) { return errorToast(err); }
-  if (W.m !== m || W.ta !== ta || job.kind !== "write") return;
+  if (W.m !== m || W.ta !== ta || (job.kind !== "write" && job.kind !== "ms_chat")) return; // ms_chat: 원고 AI 대화 답
   if (W.ai) W.ai.show(job);
 }
 

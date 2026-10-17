@@ -23,7 +23,7 @@ from typing import Callable
 
 from psycopg.types.json import Jsonb
 
-from . import explain, find, jobs, rag, translate, verify
+from . import explain, find, jobs, mschat, rag, translate, verify
 from .ai import AIError, PaperContext
 from .db import Database, DBUnavailable, actor_claims
 from .storage import NotFound, UserStorage
@@ -217,6 +217,8 @@ class ApiRunner:
                     request = (system, prompt)
                 elif job["kind"] in jobs.EXPLAIN_KINDS:
                     request = explain.build_request(lib, job["paper_id"], params)
+                elif job["kind"] == "ms_chat":  # 원고 AI 대화 — 지난 대화 · 내 논문 자료는 지금 DB에서 (mschat.py)
+                    request = mschat.build_request(lib, job)
             except AIError as e:
                 jobs._end(lib, job, "failed", "bad_input", str(e))
                 return
@@ -257,6 +259,8 @@ class ApiRunner:
                 parsed = _collect(ai.complete(request[0], request[1], engine=engine, schema=request[2],
                                               schema_name="explanation"), progress)
                 parsed = jobs.parse_result(job, parsed["text"])
+            elif job["kind"] == "ms_chat":  # 중간 글은 진행(partial_text)으로 — 대화 탭이 폴링으로 보여 줌
+                parsed = _collect(ai.complete(*request, engine=engine), progress, partial=True)
             elif job["kind"] == "find":
                 parsed = self._find(ai, engine, uid, job, settings, progress)
             elif job["kind"] == "summary":
