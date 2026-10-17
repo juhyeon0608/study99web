@@ -1236,8 +1236,33 @@ const AI_MODES = [
   "-", ["to_en", "영어로 번역"], ["to_ko", "한국어로 번역"], "-", ["continue", "이어 쓰기"], ["draft", "논문을 골라 초안 쓰기…"],
 ];
 
+// 문장 끝맺음 (2026-10-17 사용자 지적: '학술 문체로 · 다듬기'가 개조식 '~함 · ~했음'을 '~이다'로 바꿈).
+// 원고마다 이 브라우저에 기억하고, 글을 새로 쓰는 모드의 추가 요청 맨 앞에 규칙을 붙인다(서버 2000자 자르기에도 남게)
+const ENDINGS = [["keep", "원문 유지"], ["bullet", "개조식 (~함 · ~임 · ~했음)"], ["plain", "서술체 (~이다 · ~한다)"]];
+const ENDING_RULES = {
+  keep: "문장 끝맺음은 원문을 따르세요. 원문이 개조식('~함', '~임', '~했음', '~됨')이면 개조식으로, 서술체('~이다', '~한다')면 "
+    + "서술체로 쓰고 끝맺음 방식을 바꾸지 마세요.",
+  bullet: "모든 문장을 개조식으로 끝맺으세요. '~함', '~임', '~했음', '~됨', '~필요함'처럼 명사형으로 끝내고 '~이다', '~한다', "
+    + "'~합니다'로 끝내지 마세요.",
+  plain: "모든 문장을 서술체로 끝맺으세요. '~이다', '~한다'로 끝내고 '~합니다', '~함', '~임'으로 끝내지 마세요.",
+};
+const ENDING_MODES = new Set(["polish", "academic", "concise", "expand", "to_ko", "continue", "draft"]);
+const endingKey = () => `paperlab.ending.${W.m ? W.m.id : 0}`;
+function getEnding() {
+  try { const v = localStorage.getItem(endingKey()); return ENDING_RULES[v] ? v : "keep"; } catch { return "keep"; }
+}
+function setEnding(v) {
+  try { localStorage.setItem(endingKey(), v); } catch { /* 저장소 없음 — 이번만 */ }
+  toast(`AI 끝맺음: ${ENDINGS.find((x) => x[0] === v)[1]}`);
+}
+
 function aiMenu(anchor, ta) {
-  popupMenu(anchor, AI_MODES.map((m) => (m === "-" ? "-" : { label: m[1], action: () => runAi(m[0], ta) })), { left: true });
+  const cur = getEnding();
+  popupMenu(anchor, [
+    ...AI_MODES.map((m) => (m === "-" ? "-" : { label: m[1], action: () => runAi(m[0], ta) })),
+    "-",
+    ...ENDINGS.map(([v, label]) => ({ label: `끝맺음: ${label}`, sub: v === cur ? "✓ 사용 중" : "", action: () => setEnding(v) })),
+  ], { left: true });
 }
 
 function selectionOrParagraph(ta) {
@@ -1284,6 +1309,7 @@ async function runAi(mode, ta) {
   } else if (!text.trim()) {
     return toast("다듬을 글을 선택하거나 문단 안에 커서를 두세요");
   }
+  if (ENDING_MODES.has(mode)) instruction = [ENDING_RULES[getEnding()], instruction].filter(Boolean).join("\n");
   if (!insert) ({ s, e } = trimRange(ta.value, s, e)); // 서버는 글을 trim해서 저장 — 범위도 같은 글을 가리키게
   const context = mode === "draft" ? ta.value.slice(0, 3000) : "";
   let job;
