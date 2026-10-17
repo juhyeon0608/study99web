@@ -46,8 +46,14 @@ TEMPLATES = {
     },
     "thesis": {
         "name": "학위논문",
-        "description": "장·절 구성 (제1장 서론 ~ 제5장 결론)",
+        "description": "국문 초록 · 장·절 구성 (제1장 서론 ~ 제5장 결론) · 참고문헌 · ABSTRACT · 부록",
         "content": """# 학위논문 제목
+
+## 국문 초록
+
+연구의 목적 · 방법 · 결과 · 결론을 한 쪽 안으로 요약해 주세요.
+
+주제어:
 
 ## 제1장 서론
 
@@ -78,6 +84,14 @@ TEMPLATES = {
 ### 제2절 연구의 한계 및 후속 연구 제언
 
 [참고문헌]
+
+## ABSTRACT
+
+Summarize the purpose, methods, results and conclusions in English.
+
+Keywords:
+
+## 부록
 """,
     },
     "imrad": {

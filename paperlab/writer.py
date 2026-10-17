@@ -51,6 +51,16 @@ def plain_text(runs: Iterable[Run]) -> str:
     return "".join(r.get("text", "") for r in runs if "footnote" not in r)
 
 
+# 앞부분 제목: 쪽 번호를 "첫 장부터 1쪽"으로 셀 때 장으로 보지 않는다 (띄어쓰기 · 대소문자 무시)
+FRONT_MATTER_TITLES = frozenset({"국문초록", "초록", "국문요약", "요약", "요지", "abstract", "감사의글", "감사의말씀", "사사",
+                                 "머리말", "서문", "preface", "acknowledgements", "acknowledgments", "목차", "차례"})
+
+
+def is_front_matter(block: dict) -> bool:
+    text = plain_text(block.get("runs") or []) if block.get("runs") else str(block.get("text") or "")
+    return re.sub(r"[\s<>〈〉()\[\]·.:]+", "", text).lower() in FRONT_MATTER_TITLES
+
+
 # ------------------------------------------------------------------ 그림 · 표 공통
 FIGURE_MISSING = "[그림을 찾을 수 없어요]"
 MAX_TABLE_ROWS, MAX_TABLE_COLS = 500, 30
@@ -685,8 +695,9 @@ def _render_formatted(builder, blocks: list[Block], fmt: dict, meta: dict, cover
     pn = fmt["page_number"]
     parts = [(lists + body, pn["show"])]
     if pn["show"] and pn["start"] == "first_chapter":
+        # 첫 장 = 앞부분 제목(국문 초록 · ABSTRACT · 감사의 글 · 머리말 등)이 아닌 첫 '##' 제목 (2026-10-17)
         idx = next((i for i, b in enumerate(body)
-                    if b.get("type") == "heading" and int(b.get("level") or 1) == 1), None)
+                    if b.get("type") == "heading" and int(b.get("level") or 1) == 1 and not is_front_matter(b)), None)
         if idx:
             before = body[:idx]
             # 첫 장 앞 부분(목차 · 국문초록 등)은 쪽 번호 없는 구역. 쪽 나눔만 있으면 버린다
