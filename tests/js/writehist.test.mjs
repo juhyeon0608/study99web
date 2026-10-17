@@ -94,10 +94,11 @@ test("연결: writing.js는 단추 한 줄 · historyTools · AI 넣기 전 save
   const w = src("writing.js");
   assert.match(w, /data-history[^\n]*aria-keyshortcuts="Alt\+H"/);
   assert.match(w, /historyTools\(view, \{ mid: m\.id, ta, flush: flushWriter \}\)/);
-  const apply = w.slice(w.indexOf("async function applyAiResult"), w.indexOf("function aiDiffDialog"));
-  assert.ok(apply.indexOf("saveVersion(") >= 0 && apply.indexOf("saveVersion(") < apply.indexOf("insertText(ta, next)"));
-  const lost = w.slice(w.indexOf("function aiLostDialog"), w.indexOf("function aiResultsBar"));
-  assert.ok(lost.indexOf("saveVersion(") >= 0 && lost.indexOf("saveVersion(") < lost.indexOf("insertText("));
+  // AI 결과 패널(2026-10-17): [바꾸기](commit) · [커서 위치에 넣기](atCursor) 모두 넣기 전에 버전을 남김
+  const commit = w.slice(w.indexOf("const commit = (j, pv) =>"));
+  assert.ok(commit.indexOf("saveVersion(") >= 0 && commit.indexOf("saveVersion(") < commit.indexOf("insertText(ta, pv.next)"));
+  const atCursor = w.slice(w.indexOf("const atCursor = (j) =>"));
+  assert.ok(atCursor.indexOf("saveVersion(") >= 0 && atCursor.indexOf("saveVersion(") < atCursor.indexOf("insertText("));
   const we = await import(pathToFileURL(join(JS, "writeedit.js")).href);
   assert.ok(we.shortcutHelp(false).keys.some((k) => k[1].includes("Alt+H")));
   assert.ok(we.shortcutHelp(true).keys.some((k) => k[1].includes("⌥+H")));

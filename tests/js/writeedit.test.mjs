@@ -196,7 +196,7 @@ test("그림 문단 찾기: 앞뒤 빈 줄인 그림 줄만 순서대로, 캡션
 test("단축키 도움말에 기존 · 새 단축키와 자동 서식이 모두 있음", () => {
   const h = we.shortcutHelp(false);
   const keys = h.keys.map((k) => k[1]).join(" ");
-  for (const k of ["Ctrl+S", "Ctrl+B", "Ctrl+I", "Ctrl+Shift+8", "Ctrl+Shift+7", "Tab", "Shift+Tab", "Enter", "Backspace", "Alt+R", "Ctrl+Enter", "Ctrl+/", "[@", "Esc"]) {
+  for (const k of ["Ctrl+S", "Ctrl+B", "Ctrl+I", "Ctrl+Shift+8", "Ctrl+Shift+7", "Tab", "Shift+Tab", "Enter", "Backspace", "Alt+R", "Alt+A", "Ctrl+Enter", "Ctrl+/", "[@", "Esc"]) {
     assert.ok(keys.includes(k), k);
   }
   const syn = h.syntax.map((s) => s[0]).join(" ");

@@ -4,10 +4,14 @@
 import { api, downloadBlob, qs } from "./api.js";
 import { sortVerify, vdName, verifyDoneText, verifyMarks, verifySummary } from "./ask.js";
 import {
-  cancelJob, ensureAiRoute, fmtClock, handledJob, isActive, notifyOffer, retryJob, setStatusLine, statusLineEl, trackJob, watchJob,
+  cancelJob, ensureAiRoute, fmtClock, handledJob, isActive, notifyOffer, nudgeDesktop, retryJob, setStatusLine, statusLineEl, trackJob,
+  watchJob,
 } from "./jobs.js";
-// AI 글쓰기 결과를 나중에 안전하게 넣기 (2026-10-16 백그라운드 AI)
-import { insertionText, planApply, trimRange, wordDiff, writeAnchor } from "./writeai.js";
+// AI 글쓰기 결과를 나중에 안전하게 넣기 (2026-10-16 백그라운드 AI) · 결과 패널 (2026-10-17 — 결과를 보면서 글쓰기)
+import {
+  RESULT_STATE_TEXT, applyPreview, browserStorage, diffHtml, insertionText, loadPaneOpen, origSnippet, paneActions, paneKeyAction,
+  paneList, pickResult, planApply, rerunPlan, resultState, resultsButtonText, savePaneOpen, trimRange, wordDiff, writeAnchor,
+} from "./writeai.js";
 import { htmlToRuns, listStyles, renderClusters, styleOptions } from "./cite.js";
 import {
   applyDocFormat, coverDialog, exportWarnings, formatManagerDialog, formatOptions, getFormat, listFormats, listsNotice,
@@ -30,8 +34,8 @@ import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
 import { checkPanel } from "./writecheckui.js"; // 제출 전 점검표 (docs/specs/writing-checklist.md)
 import {
-  $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles,
-  popupMenu, purifyMd, store, toast,
+  $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, modalOpen,
+  pickFiles, popupMenu, purifyMd, store, toast,
 } from "./ui.js";
 
 const W = { m: null, saver: null, previewTimer: null, papers: null, view: "split", seq: 0, formats: null, fmt: null, ref: null,
@@ -428,6 +432,8 @@ export async function openManuscript(main, id) {
       <button class="btn sm primary" data-cite title="[@ 를 입력해도 열려요">＋ 인용 넣기</button>
       <button class="btn sm ghost" data-bib title="참고문헌이 들어갈 자리">[참고문헌]</button>
       <span class="menu-wrap"><button class="btn sm" data-ai>✦ AI 도우미 ▾</button></span>
+      <button type="button" class="btn sm" data-ai-results aria-pressed="false" aria-controls="ai-pane" aria-keyshortcuts="Alt+A"
+        title="AI 결과 패널 (Alt+A) — 결과를 옆에 두고 계속 쓸 수 있어요. 결과는 7일 동안 남아요">AI 결과</button>
       <button type="button" class="btn sm" data-ref-toggle aria-pressed="false" aria-controls="ref-pane" aria-keyshortcuts="Alt+R"
         title="참고 패널 (Alt+R)">${ICON_REF}참고</button>
       <button type="button" class="btn sm" data-verify title="${VERIFY_TITLE}">${ICON_VERIFY}<span>인용 검증</span></button>
@@ -445,6 +451,7 @@ export async function openManuscript(main, id) {
       <div class="writer-edit"><textarea class="writer-ta" spellcheck="false" placeholder="# 제목\n\n## 1. 서론\n\n본문에 [@인용키] 로 인용을 넣으세요."></textarea></div>
       <div class="writer-preview"><div class="doc" data-doc></div></div>
       <aside class="panel ref-pane" id="ref-pane" aria-label="참고 패널"></aside>
+      <aside class="panel ai-pane" id="ai-pane" aria-label="AI 결과 패널"></aside>
     </div>
     <div class="writer-status small muted" data-status style="display:flex;align-items:center;gap:6px"><span data-status-text></span> <span data-verify-sum></span>
       <span class="spacer"></span><button type="button" class="btn sm ghost" data-shortcuts-hint>단축키 보기 (${MAC ? "⌘" : "Ctrl"}+/)</button></div>
@@ -659,8 +666,8 @@ export async function openManuscript(main, id) {
   // 서재 목록이 오면 왼쪽 "이 원고의 인용"을 누를 수 있는 줄로 다시 그림
   libraryPapers(true).then(() => { if (W.m === m && W.built) drawCites(view, W.built); }).catch(() => {});
   ta.focus();
-  // AI 글쓰기 결과 (2026-10-16 백그라운드 AI): 진행 중 · 넣지 않은 결과 단추 + 알림 [열기]로 온 주소(#/write/원고/j작업)
-  W.ai = aiResultsBar(view, ta, m);
+  // AI 글쓰기 결과 (2026-10-16 백그라운드 AI · 2026-10-17 패널): 오른쪽 AI 결과 패널 + 알림 [열기]로 온 주소(#/write/원고/j작업)
+  W.ai = aiPane(view, ta, m);
   openAiJobFromHash(m, ta);
   historyTools(view, { mid: m.id, ta, flush: flushWriter }); // [기록] · Alt+H (docs/specs/manuscript-history.md)
 }
@@ -1329,27 +1336,30 @@ function currentHeading(ta) {
 }
 
 // 글쓰기 도우미 = 서버 작업 (2026-10-16 백그라운드 AI): 창 · 탭 · 앱을 닫아도 내 API 키(서버) · 연결된 내 PC(CLI)에서 끝까지
-// 실행하고 결과는 7일 동안 남는다. 끝나면 알림(jobs.js), 결과는 이 창 · 원고의 "AI 결과" 줄 · 작업 화면에서 열어 넣는다.
-// 넣을 때 그 사이 원고가 바뀌었으면 바뀌는 부분을 보여 주고 물어본 뒤에만 바꾼다 (writeai.js — 새 글을 몰래 덮어쓰지 않음)
+// 실행하고 결과는 7일 동안 남는다. 끝나면 알림(jobs.js), 결과는 원고 오른쪽 AI 결과 패널(aiPane — 편집기를 가리지 않음) ·
+// 작업 화면에서 열어 넣는다. 넣을 때 그 사이 원고가 바뀌었으면 바뀌는 부분을 패널 안에서 보여 주고 물어본 뒤에만 바꾼다
+// (writeai.js — 새 글을 몰래 덮어쓰지 않음)
 const MODE_LABEL = Object.fromEntries(AI_MODES.filter((x) => x !== "-"));
 
-async function runAi(mode, ta) {
+// at = {from, to}: 패널의 [다시 실행] — 지금 원고에서 다시 찾은 원래 글(넣을 자리)로. 없으면 고른 글 · 커서 문단
+async function runAi(mode, ta, at = null) {
   // 글쓰기 도우미 경로 기준 (요약 경로 기준인 ready가 아니라 kinds.write — 품질팀 M2). 없으면 연결된 PC · API 키 안내
   if (!(await ensureAiRoute("write"))) return;
-  let { s, e, text } = selectionOrParagraph(ta);
+  let { s, e, text } = at ? { s: at.from, e: at.to, text: ta.value.slice(at.from, at.to) } : selectionOrParagraph(ta);
   let keys = [...new Set((text.match(CITE_RE) || []).flatMap((raw) => (parseCitation(raw.slice(1, -1)) || []).map((it) => it.key)))];
   let instruction = "";
   const insert = mode === "continue" || mode === "draft";
+  const pos = at ? at.to : ta.selectionEnd;
   if (mode === "continue") {
-    text = ta.value.slice(Math.max(0, ta.selectionEnd - 4000), ta.selectionEnd);
-    s = e = ta.selectionEnd;
+    text = ta.value.slice(Math.max(0, pos - 4000), pos);
+    s = e = pos;
   }
   if (mode === "draft") {
     const opts = await draftDialog(ta, keys);
     if (!opts) return;
     ({ keys, instruction } = opts);
     text = "";
-    s = e = ta.selectionEnd;
+    s = e = pos;
   } else if (!text.trim()) {
     return toast("다듬을 글을 선택하거나 문단 안에 커서를 두세요");
   }
@@ -1364,230 +1374,424 @@ async function runAi(mode, ta) {
     return errorToast(err);
   }
   trackJob(job);
-  aiJobDialog(job, ta, { fresh: true });
-  if (W.ai) W.ai.refresh();
+  // 결과는 창(모달)이 아니라 오른쪽 AI 결과 패널에 — 편집기를 가리지 않아 기다리는 동안에도 계속 쓸 수 있음 (2026-10-17)
+  if (W.ai && W.ta === ta) W.ai.show(job, { fresh: true });
+  // 메뉴 · 초안 창이 닫히며 초점이 빠졌으면 편집기로 (고른 범위 · 커서는 그대로) — 기다리지 않고 바로 이어 쓰기
+  if (W.ta === ta && ta.offsetParent && (!document.activeElement || document.activeElement === document.body)) ta.focus();
 }
 
-// 작업 하나를 따라가는 창: 진행 · 중간 글 · [취소] → 결과 · [바꾸기] · [고쳐서 넣기] · [넣지 않기]. 창을 닫아도 작업은 계속
-function aiJobDialog(first, ta, { fresh = false } = {}) {
-  const m = W.m;
-  const w = first.write || {};
-  const here = !!m && Number(first.manuscript_id) === m.id;
-  const body = el(`<div><div class="small muted" style="margin-bottom:8px" data-ai-head></div>
-    <div class="notice" data-tone="info" data-ai-bg>${ICON_INFO}<div data-ai-bg-text>창을 닫아도 작업은 계속돼요. 끝나면 알려 드리고, 결과는 이 원고의 <b>AI 결과</b>와 작업 화면에서 다시 열 수 있어요.</div></div>
-    <div data-ai-line style="margin-top:8px"></div>
-    <div class="ai-out prose" style="margin-top:8px"></div>
-    <textarea class="input hidden" style="width:100%;min-height:240px;margin-top:8px" aria-label="넣을 글 고치기"></textarea></div>`);
-  $("[data-ai-head]", body).textContent = `${MODE_LABEL[w.mode] || "AI 글쓰기"} · ${fmtClock(first.created_at)} 시작`;
-  const offer = fresh ? notifyOffer() : null;
-  if (offer) $("[data-ai-bg]", body).after(offer);
-  const foot = el(`<div style="display:contents"><div class="left"><button class="btn" data-edit disabled>고쳐서 넣기</button><button class="btn" data-copy disabled>복사</button></div>
-    <button class="btn" data-dismiss disabled title="결과를 원고에 넣지 않아요. 작업 화면에서 7일 동안 다시 열 수 있어요">넣지 않기</button>
-    <button class="btn" data-no>닫기</button><button class="btn primary" data-ok disabled>${w.insert ? "넣기" : "바꾸기"}</button></div>`);
-  let stop = null;
-  const dlg = modal({ title: "AI 글쓰기 도우미", body, foot, wide: true, onClose: () => stop && stop() });
-  const out = $(".ai-out", body);
-  const edit = $("textarea", body);
-  const bgText = $("[data-ai-bg-text]", body);
-  let job = first;
-  let result = "";
-  const line = statusLineEl(async () => {
-    try { await cancelJob(job.id); } catch (err) { errorToast(err); }
-  });
-  $("[data-ai-line]", body).appendChild(line);
-  const showResult = () => {
-    out.style.whiteSpace = "normal";
-    out.innerHTML = purifyMd(window.marked.parse(result)) ?? esc(result);
+// ------------------------------------------------------------------ AI 결과 패널 (2026-10-17 사용자 요청)
+// "AI 결과를 보면서 글을 쓸 수 있게": 결과는 편집기를 가리는 창(모달)이 아니라 편집 화면 오른쪽에 붙는 패널에 보인다.
+// 참고 패널 옆 칸(.writer-body의 다섯째 칸 — 둘 다 열 수 있음, 좁으면 개요 · 미리보기 칸을 먼저 숨김). 작업이 도는 동안에도
+// 편집기 · 도구 막대를 그대로 쓴다. 넣을 때 그 사이 원고가 바뀌었으면 바뀌는 부분을 패널 안에서 보여 주고 확인을 받은
+// 뒤에만 바꾼다(새 글을 몰래 덮어쓰지 않음). 순수 함수(목록 · 상태 · 단추 · 넣을 모양 · 단축키)는 writeai.js
+function aiPane(view, ta, m) {
+  const aside = $("#ai-pane", view);
+  const btn = $("[data-ai-results]", view);
+  const S = {
+    open: false, jobs: [], extra: null, sel: null, detail: new Map(), stop: null, watching: null, timer: null,
+    confirm: null, tab: "result", key: "", offer: null, offerFor: null, notice: "", dead: false,
   };
-  // 목록에서 온 작업(원래 글 · 자리 정보가 없음)은 한 작업 보기를 먼저 받는다 — 넣을 자리를 찾는 데 필요
-  const follow = (start) => {
-    const detailed = !!(start.write && "text" in start.write);
-    stop = watchJob(start.id, (j) => {
-      if (!j) {
-        line.remove();
-        out.innerHTML = `<div class="msg error">작업을 찾을 수 없어요. 7일이 지나 지워졌을 수 있어요.</div>`;
-        return;
-      }
-      job = j;
-      if (j.status === "succeeded") {
-        line.remove();
-        result = (j.result && j.result.text) || "";
-        if (!result) { out.innerHTML = `<div class="msg error">결과 글이 지워졌어요 (7일 보관).</div>`; return; }
-        handledJob(j.id); // 이 창에서 결과를 봤음 — 끝남 토스트는 생략
-        showResult();
-        const done = j.write && j.write.handled;
-        bgText.textContent = done === "applied" ? "이미 원고에 넣은 결과예요. 다시 넣으면 지금 원고에서 자리를 다시 찾아요."
-          : here ? "결과가 준비됐어요. 넣기 전에 확인해 주세요 — 그 사이 원고가 바뀌었으면 바뀌는 부분을 먼저 보여 드려요."
-            : "다른 원고의 결과예요. 그 원고를 열어 넣거나 복사해 주세요.";
-        for (const b of ["[data-edit]", "[data-copy]", "[data-dismiss]"]) $(b, foot).disabled = false;
-        $("[data-ok]", foot).disabled = !here;
-        $("[data-dismiss]", foot).disabled = !!done;
-        return;
-      }
-      if (j.status === "failed" || j.status === "cancelled") {
-        line.remove();
-        out.innerHTML = `<div class="msg error">${esc(j.status === "failed" ? j.error || "글을 만들지 못했어요" : "작업을 취소했어요")}</div>`;
-        bgText.textContent = j.status === "failed" ? "실패한 작업이에요. 다시 시도하면 같은 글로 새 작업을 만들어요." : "취소한 작업이에요.";
-        if (!$("[data-job-retry]", foot)) {
-          const again = el(`<button type="button" class="btn" data-job-retry>다시 시도</button>`);
-          again.onclick = async () => {
-            again.remove();
-            try {
-              const r = await retryJob(j.id);
-              trackJob(r.job);
-              out.innerHTML = "";
-              $("[data-ai-line]", body).appendChild(line);
-              follow(r.job);
-              if (W.ai) W.ai.refresh();
-            } catch (err) { errorToast(err); }
-          };
-          $(".left", foot).appendChild(again);
-        }
-        return;
-      }
-      const partial = (j.progress || {}).partial_text || "";
-      if (partial) out.textContent = partial;
-      else if (!out.textContent) out.innerHTML = `<span class="typing"><span></span><span></span><span></span></span>`;
-      setStatusLine(line, j, "글을 만드는");
-      if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "내 PC"}에서 글을 만드는 중 (${j.engine})`;
-    }, detailed ? { first: start } : {});
-  };
-  follow(first);
-  $("[data-edit]", foot).onclick = () => { edit.value = result; edit.classList.remove("hidden"); out.classList.add("hidden"); edit.focus(); };
-  $("[data-copy]", foot).onclick = () => copyText(edit.classList.contains("hidden") ? result : edit.value);
-  $("[data-no]", foot).onclick = () => dlg.close();
-  $("[data-dismiss]", foot).onclick = async () => {
-    try { await api.post(`/api/jobs/${job.id}/handled`, { state: "dismissed" }); } catch (err) { return errorToast(err); }
-    dlg.close();
-    toast("넣지 않았어요. 작업 화면에서 7일 동안 다시 열 수 있어요");
-    if (W.ai) W.ai.refresh();
-  };
-  $("[data-ok]", foot).onclick = async () => {
-    if (!here || W.m !== m || W.ta !== ta) return toast("이 원고가 열려 있을 때만 넣을 수 있어요", "error");
-    const finalText = edit.classList.contains("hidden") ? result : edit.value;
-    if (!(await applyAiResult(job, finalText, ta))) return;
-    dlg.close();
-    api.post(`/api/jobs/${job.id}/handled`, { state: "applied" }).catch(() => {}).then(() => W.ai && W.ai.refresh());
-  };
-  return dlg;
-}
+  const alive = () => !S.dead && W.m === m && W.ta === ta;
+  aside.setAttribute("aria-labelledby", "ai-pane-h");
+  aside.innerHTML = `<div class="ai-pane-head">
+      <h2 class="ai-pane-title" id="ai-pane-h">AI 결과</h2>
+      <select class="input ai-pick" data-ai-pick aria-label="볼 AI 결과 (새것이 위)"></select>
+      <button type="button" class="btn sm ghost" data-ai-close title="AI 결과 패널 닫기 (Alt+A) — 만드는 중인 작업은 계속돼요">닫기</button>
+    </div>
+    <div class="panel-body ai-pane-body" data-ai-body></div>`;
+  const pick = $("[data-ai-pick]", aside);
+  const body = $("[data-ai-body]", aside);
 
-// 결과를 원고에 넣기. 원고가 그대로면 바로, 바뀌었으면 바뀌는 부분을 보여 주고 물어봄, 자리를 못 찾으면 커서 위치에 넣기 · 복사만
-async function applyAiResult(job, text, ta) {
-  const w = job.write || {};
-  const cur = ta.value;
-  const plan = planApply(cur, w);
-  if (plan.state === "lost") return aiLostDialog(text, ta, !!w.insert);
-  const next = insertionText(cur, plan.from, text, w.insert);
-  if (plan.state === "moved") {
-    const ok = await aiDiffDialog(cur, plan, next, !!w.insert);
-    if (!ok) return false;
-    if (ta.value !== cur) { // 물어보는 동안 또 바뀜 — 처음부터 다시 확인
-      toast("그 사이 원고가 또 바뀌었어요. 다시 확인해 주세요");
-      return applyAiResult(job, text, ta);
+  const merged = (j) => S.detail.get(j.id) || j;
+  const list = () => {
+    const all = [...S.jobs];
+    if (S.extra && !all.some((j) => j.id === S.extra.id)) all.push(S.extra);
+    return paneList(all.map(merged));
+  };
+  const cur = () => list().items.find((j) => j.id === S.sel) || null;
+  const here = (j) => !!j && Number(j.manuscript_id) === m.id;
+  const detailed = (j) => !!(j && j.write && "text" in j.write);
+  const resultText = (j) => (j && j.result && j.result.text) || "";
+  const modeName = (j) => MODE_LABEL[(j.write || {}).mode] || "AI 글쓰기";
+  const optionText = (j) => `${modeName(j)} · ${fmtClock(j.created_at)} · ${RESULT_STATE_TEXT[resultState(j)]}`;
+  const focusEditor = () => { if (ta.offsetParent) ta.focus(); else btn.focus(); };
+
+  const drawButton = () => {
+    const l = list();
+    btn.textContent = resultsButtonText(l);
+    btn.classList.toggle("primary", l.ready > 0);
+  };
+
+  const stopWatch = () => {
+    if (S.stop) S.stop();
+    S.stop = null;
+    S.watching = null;
+  };
+  // 고른 결과 하나를 따라감: 원래 글 · 넣을 자리(한 작업 보기에만 있음)를 받고, 만드는 중이면 중간 글 · 진행을 1.5초마다
+  const watch = (j) => {
+    if (!j || S.watching === j.id) return;
+    stopWatch();
+    if (detailed(j) && !isActive(j)) return;
+    const id = j.id;
+    S.watching = id;
+    S.stop = watchJob(id, (x) => {
+      if (!alive() || S.watching !== id) return;
+      if (!x) { // 7일이 지나 지워짐
+        S.jobs = S.jobs.filter((y) => y.id !== id);
+        if (S.extra && S.extra.id === id) S.extra = null;
+        S.detail.delete(id);
+        Object.assign(S, { sel: null, notice: "그 AI 결과를 찾을 수 없어요. 7일이 지나 지워졌을 수 있어요.", watching: null, stop: null });
+        draw();
+        drawButton();
+        return;
+      }
+      const prev = list().items.find((y) => y.id === id);
+      S.detail.set(id, x);
+      if (S.extra && S.extra.id === id) S.extra = x;
+      if (!isActive(x)) {
+        if (S.open && x.status === "succeeded") handledJob(x.id); // 패널에서 결과를 봤음 — 끝남 토스트는 생략
+        if (prev && isActive(prev)) refresh(); // 막 끝남: 단추 숫자 · 목록을 맞춤
+      }
+      draw();
+    });
+  };
+
+  // ---- 그리기
+  const draw = () => {
+    if (!S.open) return;
+    const l = list().items;
+    S.sel = pickResult(l, S.sel);
+    const opts = l.map((j) => `<option value="${Number(j.id)}">${esc(optionText(j))}</option>`).join("");
+    if (pick.dataset.opts !== opts) {
+      pick.innerHTML = opts || `<option value="">아직 결과가 없어요</option>`;
+      pick.dataset.opts = opts;
     }
-  }
-  if (W.m) saveVersion(W.m.id, ta.value); // 넣기 전 원고를 버전 기록에 ('AI 넣기 전')
-  ta.focus();
-  ta.setSelectionRange(plan.from, plan.to);
-  insertText(ta, next);
-  toast(w.insert ? "AI 결과를 넣었어요" : "AI 결과로 바꿨어요", "success");
-  return true;
-}
+    pick.value = S.sel == null ? "" : String(S.sel);
+    pick.disabled = !l.length;
+    const j = cur();
+    if (j) pick.title = optionText(j); else pick.removeAttribute("title");
+    watch(j);
+    drawBody(j);
+  };
 
-// 원고가 바뀐 뒤: 바뀌는 부분(지운 글 · 넣는 글)과 앞뒤 문맥을 보여 주고 물어봄
-function aiDiffDialog(cur, plan, next, insert) {
-  return new Promise((resolve) => {
-    const seg = insert ? [{ op: "ins", text: next }] : wordDiff(plan.old, next);
-    const before = cur.slice(Math.max(0, plan.from - 120), plan.from);
-    const after = cur.slice(plan.to, plan.to + 120);
-    const html = seg.map((x) => (x.op === "same" ? esc(x.text) : `<${x.op}>${esc(x.text)}</${x.op}>`)).join("");
-    const body = el(`<div><p style="margin:4px 0 10px">작업을 시작한 뒤 원고가 바뀌었어요. ${insert ? "아래 자리에 결과를 넣을까요?" : "아래처럼 바꿀까요?"}
-      바꾸기 전에 확인해 주세요.</p>
-      <div class="ai-diff" aria-label="바뀌는 부분"><span class="muted">${before ? `…${esc(before)}` : ""}</span>${html}<span class="muted">${after ? `${esc(after)}…` : ""}</span></div>
-      <p class="small muted ai-diff-legend" style="margin:8px 0 0"><del>지우는 글</del> · <ins>넣는 글</ins></p></div>`);
-    const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn primary" data-yes>${insert ? "넣기" : "바꾸기"}</button></div>`);
-    let ok = false;
-    const m = modal({ title: "원고가 바뀌었어요", body, foot, wide: true, onClose: () => resolve(ok) });
-    $("[data-no]", foot).onclick = () => m.close();
-    $("[data-yes]", foot).onclick = () => { ok = true; m.close(); };
-  });
-}
+  const drawBody = (j) => {
+    const st = resultState(j);
+    const c = S.confirm && j && S.confirm.id === j.id ? S.confirm : null;
+    const key = [j ? j.id : "", st, detailed(j), S.tab, c ? `${c.kind}:${c.pv.from}:${c.pv.to}:${c.cur.length}` : "",
+      S.offerFor === (j && j.id) ? 1 : 0, S.notice].join("|");
+    if (key !== S.key) {
+      S.key = key;
+      build(j, st, c);
+    }
+    if (st === "running") live(j);
+  };
 
-// 원래 글(넣을 자리)을 지금 원고에서 찾지 못함 — 자동으로 바꾸지 않고 [커서 위치에 넣기](덮어쓰지 않음) · [복사]만
-function aiLostDialog(text, ta, insert) {
-  return new Promise((resolve) => {
-    const body = el(`<div><p style="margin:4px 0 8px">작업을 시작한 뒤 원고가 바뀌어 ${insert ? "넣을 자리를" : "바꿀 글을"} 찾지 못했어요.
-      원고를 덮어쓰지 않도록 자동으로 바꾸지 않았어요.</p><p class="small muted" style="margin:0">커서 위치에 새로 넣거나, 복사해서 직접 붙여 넣어 주세요.</p></div>`);
-    const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn" data-copy>복사</button>
-      <button class="btn primary" data-cursor>커서 위치에 넣기</button></div>`);
-    let ok = false;
-    const m = modal({ title: "원래 자리를 찾지 못했어요", body, foot, onClose: () => resolve(ok) });
-    $("[data-no]", foot).onclick = () => m.close();
-    $("[data-copy]", foot).onclick = () => { copyText(text); m.close(); };
-    $("[data-cursor]", foot).onclick = () => {
-      const at = ta.selectionEnd; // 고른 글을 덮어쓰지 않게 커서 뒤에
-      if (W.m) saveVersion(W.m.id, ta.value); // 넣기 전 원고를 버전 기록에 ('AI 넣기 전')
-      ta.focus();
-      ta.setSelectionRange(at, at);
-      insertText(ta, insertionText(ta.value, at, text, true));
-      ok = true;
-      m.close();
+  const build = (j, st, c) => {
+    const focused = body.contains(document.activeElement) ? document.activeElement.dataset.act || "" : "";
+    body.innerHTML = "";
+    if (S.notice) body.append(el(`<div class="notice" data-tone="warn">${ICON_WARN}<div>${esc(S.notice)}</div></div>`));
+    if (!j) {
+      body.append(el(`<div class="ai-empty"><p>아직 이 원고의 AI 결과가 없어요.</p>
+        <p class="small muted">글을 고르거나 문단에 커서를 두고 <b>✦ AI 도우미</b>에서 고르면 결과가 여기에 나와요. 결과를 옆에 둔 채 계속 쓸 수 있고, 7일 동안 남아요.</p></div>`));
+      return;
+    }
+    const w = j.write || {};
+    const insert = !!w.insert;
+    const act = paneActions(j, { here: here(j) });
+    const result = resultText(j);
+    const ready = detailed(j);
+    body.append(el(`<div class="ai-meta"><b class="ai-mode">${esc(modeName(j))}</b>
+      <span class="chip ai-st" data-st="${esc(st)}">${esc(RESULT_STATE_TEXT[st] || "")}</span>
+      <span class="small muted">${esc(fmtClock(j.created_at))} 시작</span></div>`));
+    if (!here(j)) body.append(el(`<div class="notice" data-tone="info">${ICON_INFO}<div>다른 원고의 결과예요. 그 원고를 열어 넣거나 복사해 주세요.</div></div>`));
+    if (S.offerFor === j.id && S.offer) body.append(S.offer);
+
+    // 원래 글 (바꿀 글 · 이어 쓸 자리 앞 글) — 누르면 편집기에서 그 자리를 골라 보여 줌
+    const snip = origSnippet(w, insert ? 110 : 240); // 넣기는 넣을 자리 바로 앞 글만 (4줄 안)
+    if (snip) {
+      const o = el(`<div class="ai-sec"><div class="ai-sec-h">${insert ? "넣을 자리 (앞 글)" : "원래 글"}</div>
+        <button type="button" class="ai-orig" data-act="locate" title="눌러서 원고에서 이 자리 보기"></button></div>`);
+      $(".ai-orig", o).textContent = snip;
+      body.append(o);
+    } else if (!ready && j.status === "succeeded") {
+      body.append(el(`<div class="small muted ai-sec"><span class="spinner" aria-hidden="true"></span> 원래 글을 불러오는 중…</div>`));
+    }
+
+    // 결과 (만드는 중이면 진행 · 중간 글)
+    const sec = el(`<div class="ai-sec"><div class="ai-sec-row"><span class="ai-sec-h">${st === "running" ? "만드는 중인 글" : "AI 결과"}</span></div></div>`);
+    if (st === "running") {
+      const line = statusLineEl(async () => { try { await cancelJob(j.id); } catch (err) { errorToast(err); } });
+      $("[data-job-cancel]", line).title = "이 작업 취소 — 원고는 바뀌지 않아요";
+      sec.append(line, el(`<div class="ai-out" data-ai-out></div>`));
+    } else if (st === "failed" || st === "cancelled") {
+      sec.append(el(`<div class="msg error">${esc(st === "failed" ? j.error || "글을 만들지 못했어요" : "작업을 취소했어요")}</div>`));
+    } else if (st === "expired") {
+      sec.append(el(`<div class="msg error">결과 글이 지워졌어요 (7일 보관).</div>`));
+    } else if (result) {
+      const canDiff = !insert && !!w.text;
+      if (canDiff) {
+        $(".ai-sec-row", sec).append(el(`<div class="seg ai-tabs" role="group" aria-label="결과 보기 방식">
+          <button type="button" data-act="tab-result" aria-pressed="${S.tab !== "diff"}" class="${S.tab !== "diff" ? "active" : ""}">결과</button>
+          <button type="button" data-act="tab-diff" aria-pressed="${S.tab === "diff"}" class="${S.tab === "diff" ? "active" : ""}">바뀐 부분</button></div>`));
+      }
+      const out = el(`<div data-ai-out></div>`);
+      if (canDiff && S.tab === "diff") {
+        out.className = "ai-diff";
+        out.setAttribute("aria-label", "원래 글과 바뀐 부분");
+        out.innerHTML = diffHtml(wordDiff(w.text, result.trim()));
+        sec.append(out, el(`<p class="small muted ai-diff-legend"><del>지우는 글</del> · <ins>넣는 글</ins></p>`));
+      } else {
+        out.className = "ai-out prose";
+        out.innerHTML = purifyMd(window.marked.parse(result)) ?? esc(result);
+        sec.append(out);
+      }
+    }
+    body.append(sec);
+
+    // 넣기 확인 (원고가 바뀌었음 · 자리를 못 찾음) — 창을 띄우지 않고 패널 안에서
+    if (c && c.kind === "moved") {
+      body.append(el(`<div class="notice ai-confirm" data-tone="warn" role="group" aria-label="원고가 바뀌었어요">${ICON_WARN}<div>
+        <b>작업을 시작한 뒤 원고가 바뀌었어요.</b> ${insert ? "아래 자리에 결과를 넣을까요?" : "아래처럼 바꿀까요?"} 넣기 전에 확인해 주세요.
+        <div class="ai-diff" aria-label="바뀌는 부분"><span class="muted">${c.pv.before ? `…${esc(c.pv.before)}` : ""}</span>${diffHtml(c.pv.seg)}<span class="muted">${c.pv.after ? `${esc(c.pv.after)}…` : ""}</span></div>
+        <p class="small muted ai-diff-legend"><del>지우는 글</del> · <ins>넣는 글</ins></p>
+        <div class="notice-actions"><button type="button" class="btn sm primary" data-act="confirm">${insert ? "이대로 넣기" : "이대로 바꾸기"}</button>
+          <button type="button" class="btn sm" data-act="unconfirm">그만두기</button></div></div></div>`));
+    } else if (c && c.kind === "lost") {
+      body.append(el(`<div class="notice ai-confirm" data-tone="warn" role="group" aria-label="원래 자리를 찾지 못했어요">${ICON_WARN}<div>
+        <b>원래 자리를 찾지 못했어요.</b> 작업을 시작한 뒤 원고가 바뀌어 ${insert ? "넣을 자리를" : "바꿀 글을"} 찾지 못했어요.
+        원고를 덮어쓰지 않도록 자동으로 바꾸지 않았어요. 커서 위치에 새로 넣거나 복사해서 붙여 넣어 주세요.
+        <div class="notice-actions"><button type="button" class="btn sm primary" data-act="cursor">커서 위치에 넣기</button>
+          <button type="button" class="btn sm" data-act="copy">복사</button><button type="button" class="btn sm" data-act="unconfirm">그만두기</button></div></div></div>`));
+    }
+
+    // 동작 단추 (좁은 칸에서 잘리지 않게 줄바꿈)
+    const acts = el(`<div class="ai-actions" role="group" aria-label="결과 동작"></div>`);
+    const add = (name, label, cls, on, title = "") => {
+      const b = el(`<button type="button" class="btn sm ${cls}" data-act="${name}">${esc(label)}</button>`);
+      b.disabled = !on;
+      if (title) b.title = title;
+      acts.append(b);
     };
-  });
-}
+    const waitDetail = !ready && !!result;
+    add("apply", act.applyLabel, "primary", act.apply && !waitDetail && !c,
+      insert ? "원래 자리에 넣어요 — 그 사이 원고가 바뀌었으면 먼저 보여 드려요" : "원래 글을 결과로 바꿔요 — 그 사이 원고가 바뀌었으면 먼저 보여 드려요");
+    add("cursor", "커서 위치에 넣기", "", act.cursor && !c, "편집기 커서 뒤에 새 문단으로 넣어요 (고른 글은 지우지 않아요)");
+    add("copy", "복사", "", act.copy);
+    add("rerun", "다시 실행", "", act.rerun && (ready || st === "failed" || st === "cancelled"),
+      st === "failed" || st === "cancelled" ? "같은 글로 새 작업을 만들어요" : "지금 원고의 같은 자리로 새 작업을 만들어요");
+    if (act.dismiss) add("dismiss", "넣지 않기", "ghost", true, "결과를 원고에 넣지 않아요. 작업 화면에서 7일 동안 다시 열 수 있어요");
+    body.append(acts);
+    body.append(el(`<p class="small muted ai-foot">패널을 닫아도 작업은 계속돼요. 결과는 7일 동안 남고 작업 화면에서도 열 수 있어요.</p>`));
+    if (focused) {
+      const again = $(`[data-act="${focused}"]`, body);
+      if (again && !again.disabled) again.focus();
+    }
+  };
 
-// 원고 화면의 [AI 결과] 단추(도구 줄 — 편집 화면 격자를 바꾸지 않음): 이 원고의 진행 중 · 넣지 않은 글쓰기 결과(7일).
-// 누르면 결과 창(여럿이면 목록)
-function aiResultsBar(view, ta, m) {
-  const btn = el(`<button type="button" class="btn sm hidden" data-ai-results aria-haspopup="dialog"
-    title="창을 닫아도 AI 글쓰기는 계속되고, 결과는 7일 동안 남아요. 눌러서 확인하고 원고에 넣어요"></button>`);
-  $("[data-ai]", view).closest(".menu-wrap").after(btn);
-  let list = [];
-  let timer = null;
+  // 만드는 중: 진행 줄 · 중간 글만 바꿈(단추 · 초점은 그대로)
+  const live = (j) => {
+    const line = $("[data-job-line]", body);
+    if (line) {
+      setStatusLine(line, j, "글을 작성"); // "…API로 글을 작성하는 중"
+      if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "내 PC"}에서 글을 만드는 중 (${j.engine})`;
+    }
+    const out = $("[data-ai-out]", body);
+    if (!out) return;
+    const partial = (j.progress || {}).partial_text || "";
+    if (partial && out.textContent !== partial) {
+      const atEnd = out.scrollHeight - out.scrollTop - out.clientHeight < 24;
+      out.textContent = partial;
+      if (atEnd) out.scrollTop = out.scrollHeight;
+    } else if (!partial && !out.firstChild) out.innerHTML = `<span class="typing" aria-hidden="true"><span></span><span></span><span></span></span>`;
+  };
+
+  // ---- 동작
+  const markApplied = (j) => {
+    const d = S.detail.get(j.id);
+    if (d) S.detail.set(j.id, { ...d, write: { ...d.write, handled: "applied" } });
+    S.confirm = null;
+    draw();
+    drawButton();
+    api.post(`/api/jobs/${j.id}/handled`, { state: "applied" }).catch(() => {}).then(() => alive() && refresh());
+  };
+  const commit = (j, pv) => {
+    if (W.m) saveVersion(W.m.id, ta.value); // 넣기 전 원고를 버전 기록에 ('AI 넣기 전')
+    ta.focus();
+    ta.setSelectionRange(pv.from, pv.to);
+    insertText(ta, pv.next);
+    toast((j.write || {}).insert ? "AI 결과를 넣었어요" : "AI 결과로 바꿨어요", "success");
+    markApplied(j);
+  };
+  const doApply = (j) => {
+    if (!alive() || !here(j)) return toast("이 원고가 열려 있을 때만 넣을 수 있어요", "error");
+    const pv = applyPreview(ta.value, j.write, resultText(j));
+    if (pv.state === "same") return commit(j, pv);
+    S.confirm = { id: j.id, kind: pv.state, pv, cur: ta.value };
+    draw();
+    const first = $(pv.state === "moved" ? '[data-act="confirm"]' : '.ai-confirm [data-act="cursor"]', body);
+    if (first) { first.focus(); first.scrollIntoView({ block: "nearest" }); }
+    sayWriter(view, pv.state === "moved" ? "원고가 바뀌었어요. 패널에서 바뀌는 부분을 확인해 주세요" : "원래 자리를 찾지 못했어요. 커서 위치에 넣거나 복사해 주세요");
+  };
+  const confirmApply = (j) => {
+    const c = S.confirm;
+    if (!c || c.id !== j.id || c.kind !== "moved") return;
+    if (ta.value !== c.cur) { // 확인하는 동안 또 바뀜 — 지금 원고로 처음부터 다시 확인
+      S.confirm = null;
+      toast("그 사이 원고가 또 바뀌었어요. 다시 확인해 주세요");
+      return doApply(j);
+    }
+    commit(j, c.pv);
+  };
+  const atCursor = (j) => {
+    if (!alive() || !here(j)) return toast("이 원고가 열려 있을 때만 넣을 수 있어요", "error");
+    const at = ta.selectionEnd; // 고른 글을 덮어쓰지 않게 커서 뒤에
+    if (W.m) saveVersion(W.m.id, ta.value); // 넣기 전 원고를 버전 기록에 ('AI 넣기 전')
+    ta.focus();
+    ta.setSelectionRange(at, at);
+    insertText(ta, insertionText(ta.value, at, resultText(j), true));
+    toast("커서 위치에 넣었어요", "success");
+    markApplied(j);
+  };
+  const rerun = async (j) => {
+    const plan = rerunPlan(j, ta.value);
+    if (plan.how === "retry") {
+      try {
+        const r = await retryJob(j.id);
+        trackJob(r.job);
+        if (alive()) show(r.job);
+      } catch (err) { errorToast(err); }
+      return;
+    }
+    if (plan.how === "lost") return toast("원고에서 원래 글을 찾지 못했어요. 글을 고르고 ✦ AI 도우미에서 다시 실행해 주세요", "error");
+    if (plan.how === "new") runAi(plan.mode, ta, { from: plan.from, to: plan.to });
+  };
+  const dismiss = async (j) => {
+    try { await api.post(`/api/jobs/${j.id}/handled`, { state: "dismissed" }); } catch (err) { return errorToast(err); }
+    toast("넣지 않았어요. 작업 화면에서 7일 동안 다시 열 수 있어요");
+    const d = S.detail.get(j.id);
+    if (d) S.detail.set(j.id, { ...d, write: { ...d.write, handled: "dismissed" } });
+    if (alive()) refresh();
+  };
+  // 원래 글을 누르면 편집기에서 그 자리를 골라 보여 줌 (사용자가 누른 때만 — 쓰는 중에 커서를 옮기지 않음)
+  const locate = (j) => {
+    const p = planApply(ta.value, j.write || {});
+    if (p.state === "lost") return toast("원고에서 원래 글을 찾지 못했어요. 그 사이 고쳐졌을 수 있어요");
+    selectRange(view, ta, p.from, p.to);
+  };
+
+  body.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]");
+    const j = cur();
+    if (!b || b.disabled || !j) return;
+    const a = b.dataset.act;
+    if (a === "tab-result" || a === "tab-diff") { S.tab = a === "tab-diff" ? "diff" : "result"; return draw(); }
+    if (a === "unconfirm") { S.confirm = null; draw(); return $('[data-act="apply"]', body)?.focus(); }
+    ({ locate, apply: doApply, confirm: confirmApply, cursor: atCursor, copy: (x) => copyText(resultText(x)), rerun, dismiss })[a]?.(j);
+  });
+  pick.onchange = () => {
+    const id = Number(pick.value);
+    if (!id) return;
+    Object.assign(S, { sel: id, tab: "result", confirm: null, notice: "" });
+    draw();
+  };
+
+  // ---- 열기 · 닫기
+  const setOpen = (open, { save = true } = {}) => {
+    if (!open && aside.contains(document.activeElement)) focusEditor(); // 숨기기 전에 초점을 편집기로
+    S.open = open;
+    if (open) view.dataset.aiPane = "open"; else delete view.dataset.aiPane;
+    btn.setAttribute("aria-pressed", String(open));
+    if (save) savePaneOpen(browserStorage(), open);
+    if (open) {
+      S.key = "";
+      draw();
+      refresh();
+    } else {
+      stopWatch();
+      Object.assign(S, { confirm: null, offer: null, offerFor: null, notice: "" });
+    }
+  };
+  const show = (job, { fresh = false } = {}) => {
+    if (!alive() || !job) return;
+    if (!S.jobs.some((x) => x.id === job.id)) S.extra = job; // 목록을 다시 받기 전 · 다른 원고의 결과
+    Object.assign(S, { sel: job.id, tab: "result", confirm: null, notice: "", key: "" });
+    S.offer = fresh ? notifyOffer() : null;
+    S.offerFor = S.offer ? job.id : null;
+    // 알림 안내의 [알림 켜기] · [괜찮아요]를 누르면 다시 그릴 때 또 붙이지 않게 비운다 (품질팀 지적)
+    if (S.offer) S.offer.addEventListener("click", (e) => {
+      if (e.target.closest("[data-notify-yes], [data-notify-no]")) { S.offer = null; S.offerFor = null; }
+    });
+    if (fresh) nudgeDesktop(job);
+    if (S.watching === job.id) stopWatch();
+    if (!S.open) setOpen(true);
+    else { draw(); refresh(); }
+    sayWriter(view, fresh ? "AI 결과 패널에서 진행을 보여 드려요. 계속 쓰셔도 돼요" : "AI 결과 패널에서 열었어요");
+  };
+
+  // 이 원고의 결과 목록(7일): 만드는 중이 있으면 5초마다(탭이 숨으면 15초) 다시 받음
   const refresh = async () => {
-    clearTimeout(timer);
+    clearTimeout(S.timer);
     let data;
     try { data = await api.get(`/api/jobs${qs({ status: "recent", kind: "write", manuscript_id: m.id, limit: 20 })}`); } catch { return; }
-    if (W.m !== m) return;
-    const active = data.jobs.filter((j) => isActive(j));
-    const ready = data.jobs.filter((j) => j.status === "succeeded" && j.result && j.result.text && !(j.write && j.write.handled));
-    list = [...active, ...ready];
-    const parts = [ready.length ? `AI 결과 ${ready.length}` : "", active.length ? `만드는 중 ${active.length}` : ""].filter(Boolean);
-    btn.classList.toggle("hidden", !parts.length);
-    btn.textContent = parts.join(" · ");
-    btn.classList.toggle("primary", ready.length > 0);
-    if (active.length) timer = setTimeout(refresh, document.hidden ? 15000 : 5000);
+    if (!alive()) return;
+    S.jobs = data.jobs;
+    for (const j of data.jobs) { // 한 작업 보기(원래 글 · 넣을 자리)는 두고 상태 · 결과 · 넣었는지만 새로
+      const d = S.detail.get(j.id);
+      if (d && S.watching !== j.id) S.detail.set(j.id, { ...d, ...j, write: { ...d.write, ...j.write } });
+    }
+    drawButton();
+    draw();
+    if (list().active) S.timer = setTimeout(refresh, document.hidden ? 15000 : 5000);
   };
+
   btn.onclick = (e) => {
     e.stopPropagation();
-    if (list.length === 1) return aiJobDialog(list[0], ta);
-    popupMenu(e.currentTarget, list.map((j) => ({
-      label: `${MODE_LABEL[(j.write || {}).mode] || "AI 글쓰기"} · ${isActive(j) ? "만드는 중" : `${fmtClock(j.finished_at)} 끝남`}`,
-      action: () => aiJobDialog(j, ta),
-    })));
+    setOpen(!S.open);
   };
-  const onOpenJob = (e) => { // 끝남 알림 [열기] · 작업 화면 — 같은 원고면 다시 불러오지 않고 이 화면에서 연다
+  $("[data-ai-close]", aside).onclick = () => setOpen(false);
+  // Alt+A: 열기 · 닫기 (열 때 초점은 그대로 — 쓰던 글을 끊지 않음). Esc: 초점이 패널 안일 때만 닫기
+  const onKey = (e) => {
+    const a = paneKeyAction(e, { open: S.open, inside: aside.contains(document.activeElement), modal: modalOpen() });
+    if (!a || !alive()) return;
+    e.preventDefault(); // macOS Option+A의 å 막기
+    if (a === "toggle") setOpen(!S.open);
+    else setOpen(false);
+  };
+  document.addEventListener("keydown", onKey);
+  const onOpenJob = (e) => { // 끝남 알림 [열기] · 작업 화면 [원고에 넣기] — 같은 원고면 다시 불러오지 않고 이 패널에서
     const j = e.detail;
-    if (!j || j.kind !== "write" || W.m !== m || Number(j.manuscript_id) !== m.id) return;
+    if (!j || j.kind !== "write" || !alive() || Number(j.manuscript_id) !== m.id) return;
     e.preventDefault();
-    aiJobDialog(j, ta);
+    show(j);
   };
   window.addEventListener("paperlab:open-job", onOpenJob);
-  refresh();
-  return { refresh, destroy: () => { clearTimeout(timer); window.removeEventListener("paperlab:open-job", onOpenJob); } };
+
+  drawButton();
+  if (loadPaneOpen(browserStorage())) setOpen(true, { save: false });
+  else refresh();
+  return {
+    refresh, show,
+    toggle: () => setOpen(!S.open),
+    destroy: () => {
+      S.dead = true;
+      clearTimeout(S.timer);
+      stopWatch();
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("paperlab:open-job", onOpenJob);
+    },
+  };
 }
 
-// #/write/원고/j작업 (끝남 알림 · 작업 화면에서 옴): 그 작업의 결과 창을 열고 주소는 원고 주소로 되돌림
+// #/write/원고/j작업 (끝남 알림 · 작업 화면 [원고에 넣기]에서 옴): AI 결과 패널에서 그 결과를 열고 주소는 원고 주소로 되돌림
 async function openAiJobFromHash(m, ta) {
   const hit = location.hash.match(/^#\/write\/\d+\/j(\d+)$/);
   if (!hit) return;
   history.replaceState(history.state, "", `#/write/${m.id}`);
   let job;
   try { job = await api.get(`/api/jobs/${Number(hit[1])}`); } catch (err) { return errorToast(err); }
-  if (W.m !== m) return;
-  if (job.kind !== "write") return;
-  aiJobDialog(job, ta);
+  if (W.m !== m || W.ta !== ta || job.kind !== "write") return;
+  if (W.ai) W.ai.show(job);
 }
 
 function draftDialog(ta, keys) {
