@@ -110,8 +110,10 @@ export function tableDialog(table, { existing = false } = {}) {
     let cur = { r: Math.min(1, t.rows.length - 1), c: 0 };
     const body = el(`<div class="tbl-dlg">
       <div class="grid-2">
-        <div class="field"><label for="tbl-cap">표 제목 (캡션 — 표 위에 "표 1. 제목"으로 들어가요)</label><input class="input" id="tbl-cap" data-cap></div>
-        <div class="field"><label for="tbl-label">참조 이름 (선택 — 본문에 @tbl:이름 으로 쓰면 "표 1"로 바뀌어요)</label><input class="input" id="tbl-label" data-label placeholder="예: result"></div>
+        <div class="field"><label for="tbl-cap">표 제목 (캡션)</label><input class="input" id="tbl-cap" data-cap aria-describedby="tbl-cap-hint">
+          <div class="hint small muted" id="tbl-cap-hint" style="margin-top:4px">표 위에 "표 1. 제목"으로 들어가요</div></div>
+        <div class="field"><label for="tbl-label">참조 이름 (선택)</label><input class="input" id="tbl-label" data-label placeholder="예: result" aria-describedby="tbl-label-hint">
+          <div class="hint small muted" id="tbl-label-hint" style="margin-top:4px">본문에 @tbl:이름 으로 쓰면 "표 1"로 바뀌어요</div></div>
       </div>
       <div class="row tbl-tools" role="toolbar" aria-label="표 편집">
         <button type="button" class="btn sm" data-op="row-above">위에 줄 추가</button>

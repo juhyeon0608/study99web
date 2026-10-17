@@ -411,7 +411,8 @@ export async function openManuscript(main, id) {
         title="참고 패널 (Alt+R)">${ICON_REF}참고</button>
       <button type="button" class="btn sm" data-verify title="${VERIFY_TITLE}">${ICON_VERIFY}<span>인용 검증</span></button>
       <span class="spacer"></span>
-      <button type="button" class="icon-btn writer-help-btn" data-shortcuts title="단축키 · 서식 도움말 (${MAC ? "⌘" : "Ctrl"}+/)" aria-label="단축키 · 서식 도움말" aria-keyshortcuts="Control+/">?</button>
+      <!-- '?'만으로는 단축키 도움말인 줄 몰라서(2026-10-17 사용자 지적) 글자로 보이게 -->
+      <button type="button" class="btn sm" data-shortcuts title="단축키 · 서식 도움말 (${MAC ? "⌘" : "Ctrl"}+/)" aria-keyshortcuts="Control+/">⌨ 단축키</button>
       <div class="seg" data-view><button data-v="edit">편집</button><button data-v="split">나란히</button><button data-v="preview">미리보기</button></div>
     </div>
     <div class="writer-body">
@@ -422,7 +423,8 @@ export async function openManuscript(main, id) {
       <div class="writer-preview"><div class="doc" data-doc></div></div>
       <aside class="panel ref-pane" id="ref-pane" aria-label="참고 패널"></aside>
     </div>
-    <div class="writer-status small muted" data-status><span data-status-text></span> <span data-verify-sum></span></div>
+    <div class="writer-status small muted" data-status style="display:flex;align-items:center;gap:6px"><span data-status-text></span> <span data-verify-sum></span>
+      <span class="spacer"></span><button type="button" class="btn sm ghost" data-shortcuts-hint>단축키 보기 (${MAC ? "⌘" : "Ctrl"}+/)</button></div>
     <div class="sr-only" role="status" data-ref-live></div></section>`);
   main.appendChild(view);
   const ta = $(".writer-ta", view);
@@ -510,6 +512,7 @@ export async function openManuscript(main, id) {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "/" || e.code === "Slash")) { e.preventDefault(); shortcutDialog(); }
   });
   $("[data-shortcuts]", view).onclick = () => shortcutDialog();
+  $("[data-shortcuts-hint]", view).onclick = () => shortcutDialog();
   $("[data-figure]", view).onclick = async () => insertFigures(ta, await pickFiles({ accept: "image/*", multiple: true }));
   $("[data-table]", view).onclick = () => editTable(ta);
   // 미리보기의 그림 · 표를 누르면 편집기의 그 그림 줄을 고르거나 표 고치기 창
@@ -846,7 +849,8 @@ function drawOutline(view, ta) {
   $("[data-title]", view).textContent = (heads.find((h) => h.level === 1) || {}).text || "제목 없는 원고";
   box.innerHTML = heads.length ? "" : `<div class="small muted">## 로 장 제목을 쓰면 여기에 보여요</div>`;
   heads.forEach((h, i) => {
-    const b = el(`<button class="outline-item" style="padding-left:${(h.level - 1) * 12 + 6}px">${esc(h.text)}</button>`);
+    // 긴 제목은 말줄임으로 잘리므로 마우스를 올리면 전체 제목이 보이게
+    const b = el(`<button class="outline-item" style="padding-left:${(h.level - 1) * 12 + 6}px" title="${esc(h.text)}">${esc(h.text)}</button>`);
     b.onclick = () => {
       ta.focus();
       ta.setSelectionRange(h.pos, h.pos);
