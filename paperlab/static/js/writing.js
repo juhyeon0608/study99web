@@ -28,6 +28,7 @@ import {
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
+import { checkPanel } from "./writecheckui.js"; // 제출 전 점검표 (docs/specs/writing-checklist.md)
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles,
   popupMenu, purifyMd, store, toast,
@@ -291,6 +292,8 @@ export function closeWriter() {
   W.vd = null;
   if (W.ai) W.ai.destroy(); // AI 결과 단추의 폴링 · 열기 이벤트 (작업 자체는 서버에서 계속)
   W.ai = null;
+  if (W.check) W.check.destroy(); // 제출 전 점검 패널 · Alt+K
+  W.check = null;
   if (W.saver) W.saver.flush();
   W.saver = null;
   W.m = null;
@@ -428,6 +431,7 @@ export async function openManuscript(main, id) {
       <button type="button" class="btn sm" data-ref-toggle aria-pressed="false" aria-controls="ref-pane" aria-keyshortcuts="Alt+R"
         title="참고 패널 (Alt+R)">${ICON_REF}참고</button>
       <button type="button" class="btn sm" data-verify title="${VERIFY_TITLE}">${ICON_VERIFY}<span>인용 검증</span></button>
+      <button type="button" class="btn sm" data-check aria-expanded="false" aria-keyshortcuts="Alt+K" title="제출 전 점검 (Alt+K) — 양식 · 번호 · 인용 · 글에서 고칠 곳">점검<span class="ck-badge" data-check-badge hidden></span></button>
       <span class="spacer"></span>
       <button type="button" class="btn sm" data-history aria-haspopup="dialog" aria-keyshortcuts="Alt+H" title="버전 기록 — 지난 버전과 비교 · 되돌리기 · 지금 버전 저장 (Alt+H)">기록</button>
       <!-- '?'만으로는 단축키 도움말인 줄 몰라서(2026-10-17 사용자 지적) 글자로 보이게 -->
@@ -644,6 +648,10 @@ export async function openManuscript(main, id) {
     const b = e.target.closest("button[data-ref-open]");
     if (b && W.ref) W.ref.open(Number(b.dataset.refOpen));
   });
+  // 제출 전 점검표 (docs/specs/writing-checklist.md): 미리보기가 받아 둔 인용 정보 · 양식 · 표지 · 인용 검증 결과로 점검 (AI 없음)
+  W.check = checkPanel(view, { ta, ctx: () => ({ format: W.fmt, coverKind: coverKind(), cover: m.cover, built: W.built, verify: W.vd && W.vd.data }),
+    select: (a, b) => selectRange(view, ta, a, b), openCover: () => openCoverDialog(view, ta), verify: () => runVerify(view, ta),
+    rerun: () => renderPreview(view, ta), say: (t) => sayWriter(view, t) });
   W.fmt = { id: fmtId, entry: null, data: null };
   setFormat(view, fmtId);
   refresh();
@@ -713,6 +721,7 @@ function updateCoverBtn(view) {
   btn.toggleAttribute("data-incomplete", missing.length > 0);
   btn.title = missing.length ? `표지 정보 — 비어 있는 칸: ${missing.join(", ")}` : "표지 · 속표지 · 인정서에 들어갈 정보";
   btn.setAttribute("aria-label", missing.length ? "표지 정보 (빈 칸 있음)" : "표지 정보");
+  if (W.check) W.check.refresh(); // 양식 · 표지 정보가 바뀌면 점검표도
 }
 
 async function openCoverDialog(view, ta) {
@@ -856,6 +865,7 @@ async function renderPreview(view, ta) {
     hydrateFigures(doc, W.m.id);
     drawCites(view, built);
     if (W.ref) W.ref.citesChanged();
+    if (W.check) W.check.refresh(); // 열어 둔 점검표 · 배지를 지금 원고로
   } catch (e) {
     if (seq === W.seq) doc.innerHTML = `<div class="status-line bad">${esc(e.message)}</div>`;
   }
