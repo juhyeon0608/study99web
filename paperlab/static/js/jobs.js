@@ -8,6 +8,7 @@ import { $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, copyText, el, errorToast, esc,
 export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" };
 const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증",
   explain: "쉬운 설명", translate: "선택 번역", translate_paper: "전체 번역" }; // 4단계 (시안 7.3절)
+KIND_LABEL.figure = "그림 만들기"; // 2026-10-17 그림 만들기 · 고치기 (writefigui.js)
 const XT_VIEW = { explain: "history", translate: "history", translate_paper: "paper" };
 // 아직 끝나지 않은 작업인지 (요약 · 대화 · 설명 · 찾기 화면이 함께 씀)
 export const isActive = (j) => !!j && (j.status === "queued" || j.status === "running");
@@ -277,6 +278,7 @@ export function stopJobBadge() {
 // AI 작업은 서버(내 API 키) · 내 PC(CLI)에서 끝까지 돌고, 화면은 어디에 있든 끝나면 알린다: 앱 안 토스트 + [열기],
 // 브라우저 알림(허락했을 때 · 화면을 보고 있지 않을 때). 그 화면이 이미 결과를 보여 줬으면(handledJob) 토스트는 생략.
 const NOTIFY_KINDS = new Set(["summary", "chat", "write", "find", "verify", "explain", "translate", "translate_paper"]);
+NOTIFY_KINDS.add("figure"); // 그림 만들기 — 끝나면 알림 [열기] → 그 원고의 그림 패널 (writefigui.js가 이벤트를 받음)
 const SEEN_AT_KEY = "paperlab.jobsSeenAt"; // 마지막으로 확인한 서버 시각 — 앱을 닫은 동안 끝난 작업 세기
 const ASKED_KEY = "paperlab.notifyAsked"; // 브라우저 알림 허락을 한 번 물어봤는지
 const N = { on: false, timer: null, since: "", fast: 0, seen: new Set(), handled: new Set() };
@@ -448,12 +450,14 @@ export function jobTitle(j) {
   if (j.kind === "write") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "글쓰기 도우미";
   if (j.kind === "verify") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "인용 검증 (원고가 지워졌어요)";
   if (j.kind === "index") return "서재 색인";
+  if (j.kind === "figure") return j.figure && j.figure.mode === "edit" ? "원고 그림 고치기" : "원고 그림";
   if (j.kind === "find") return j.question ? `“${j.question.length > 40 ? `${j.question.slice(0, 40)}…` : j.question}”` : "AI로 찾기 (결과가 지워졌어요)";
   if (j.kind === "chat" && !j.paper_id && j.scope) return SCOPE_LABEL[j.scope.type] || "서재 질문";
   return j.paper_title || "삭제된 논문";
 }
 export function jobHref(j) {
   if (j.kind === "index") return "#/ask";
+  if (j.kind === "figure") return j.figure && j.figure.manuscript_id ? `#/write/${Number(j.figure.manuscript_id)}` : "";
   if (j.kind === "find") return `#/ask/find/j${j.id}`;
   if (j.kind === "verify") return j.manuscript_id ? `#/write/${j.manuscript_id}` : "";
   if (j.kind === "chat" && !j.paper_id && j.scope) return j.scope.type === "library" ? "#/ask" : `#/ask/${j.scope.type[0]}${j.scope.id}`;

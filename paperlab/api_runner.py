@@ -24,6 +24,7 @@ from typing import Callable
 from psycopg.types.json import Jsonb
 
 from . import explain, find, jobs, rag, translate, verify
+from . import figgen  # 그림 만들기 · 고치기 (docs/specs/writing-figure-ai.md)
 from .ai import AIError, PaperContext
 from .db import Database, DBUnavailable, actor_claims
 from .storage import NotFound, UserStorage
@@ -217,6 +218,8 @@ class ApiRunner:
                     request = (system, prompt)
                 elif job["kind"] in jobs.EXPLAIN_KINDS:
                     request = explain.build_request(lib, job["paper_id"], params)
+                elif job["kind"] == "figure":
+                    request = figgen.build_request(params)
             except AIError as e:
                 jobs._end(lib, job, "failed", "bad_input", str(e))
                 return
@@ -259,6 +262,8 @@ class ApiRunner:
                 parsed = jobs.parse_result(job, parsed["text"])
             elif job["kind"] == "find":
                 parsed = self._find(ai, engine, uid, job, settings, progress)
+            elif job["kind"] == "figure":  # 결과 SVG는 정화한 것만 (틀리면 bad_output — 폴백 없음)
+                parsed = figgen.parse(_collect(ai.complete(*request, engine=engine), progress)["text"])
             elif job["kind"] == "summary":
                 if src is None:
                     return
