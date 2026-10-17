@@ -52,7 +52,7 @@ def format_issued(parts: list) -> str:
 # ---------------------------------------------------------- CSL-JSON
 CSL_TYPES = {"article": "article-journal", "conference": "paper-conference", "book": "book",
              "chapter": "chapter", "thesis": "thesis", "report": "report", "preprint": "article",
-             "dataset": "dataset"}
+             "dataset": "dataset", "document": "document"}
 CSL_TYPES_REV = {"article-journal": "article", "article": "article", "article-magazine": "article",
                  "article-newspaper": "article", "paper-conference": "conference", "book": "book",
                  "chapter": "chapter", "thesis": "thesis", "report": "report", "dataset": "dataset",
@@ -140,6 +140,10 @@ def citation_issues(p: dict) -> list[str]:
     issues = []
     if not (p.get("title") or "").strip():
         issues.append("제목")
+    if (p.get("item_type") or "") == "document":
+        # 서재에 넣은 내 문서(워드 · 한글 · PPT · 사진 등)는 논문이 아니므로 저자 · 연도를 빈칸으로 알리지 않는다.
+        # 인용할 거라면 유형을 논문 쪽으로 바꾸면 그 유형의 점검이 돈다
+        return issues
     if not p.get("authors"):
         issues.append("저자")
     if not p.get("year") and not p.get("issued"):
@@ -157,7 +161,8 @@ def citation_issues(p: dict) -> list[str]:
 
 # --------------------------------------------------------------- BibTeX
 BIB_TYPES = {"article": "article", "conference": "inproceedings", "book": "book", "chapter": "incollection",
-             "thesis": "phdthesis", "report": "techreport", "preprint": "misc", "dataset": "misc"}
+             "thesis": "phdthesis", "report": "techreport", "preprint": "misc", "dataset": "misc",
+             "document": "misc"}
 BIB_TYPES_REV = {"article": "article", "inproceedings": "conference", "conference": "conference",
                  "book": "book", "incollection": "chapter", "inbook": "chapter", "phdthesis": "thesis",
                  "mastersthesis": "thesis", "techreport": "report", "misc": "article",
@@ -369,7 +374,7 @@ def parse_bibtex(text: str) -> list[dict]:
 
 # ------------------------------------------------------------------- RIS
 RIS_TYPES = {"article": "JOUR", "conference": "CONF", "book": "BOOK", "chapter": "CHAP", "thesis": "THES",
-             "report": "RPRT", "preprint": "UNPB", "dataset": "DATA"}
+             "report": "RPRT", "preprint": "UNPB", "dataset": "DATA", "document": "GEN"}
 RIS_TYPES_REV = {"JOUR": "article", "JFULL": "article", "MGZN": "article", "CONF": "conference",
                  "CPAPER": "conference", "BOOK": "book", "CHAP": "chapter", "THES": "thesis",
                  "RPRT": "report", "UNPB": "preprint", "DATA": "dataset", "ELEC": "article", "GEN": "article"}

@@ -150,6 +150,29 @@ def test_r2_presigned_get_inline_pdf():
     assert q["X-Amz-Expires"] == ["600"]
 
 
+def test_source_key_and_attachment_download():
+    """문서 원본(워드 · 한글 · 사진): users/{uid}/sources/{id}.{gen}.bin — 내 키만, 받기는 올린 이름 그대로(attachment)"""
+    key = st.source_key(UID, 5)
+    assert re.fullmatch(rf"users/{UID}/sources/5\.[0-9a-f]{{8}}\.bin", key) and st.source_key(UID, 5) != key
+    assert st.check_user_key(UID, key) == key
+    for bad in (st.source_key(OTHER, 5), f"users/{UID}/sources/5.bin", f"users/{UID}/sources/5.0123abcd.docx"):
+        with pytest.raises(st.StorageKeyError):
+            st.check_user_key(UID, bad)
+    for bad_id in (0, True, "5"):
+        with pytest.raises(st.StorageKeyError):
+            st.source_key(UID, bad_id)
+    q = parse_qs(urlsplit(_r2().sign_get(key, filename="보고서 v1.2.docx", original=True)["url"]).query)
+    assert q["response-content-type"] == ["application/octet-stream"]
+    assert q["response-content-disposition"][0] == "attachment; filename*=UTF-8''%EB%B3%B4%EA%B3%A0%EC%84%9C%20v1.2.docx"
+    # UserStorage는 원본 키면 알아서 attachment
+    fake = st.FakeStorage()
+    calls = []
+    fake.sign_get = lambda k, ttl=600, filename="", original=False: calls.append(original) or {"url": "u", "expires_at": ""}
+    st.UserStorage(fake, UID).sign_get(key, filename="a.docx")
+    st.UserStorage(fake, UID).sign_get(st.paper_key(UID, 5), filename="a")
+    assert calls == [True, False]
+
+
 def test_r2_operations_with_stubbed_client():
     import io
 

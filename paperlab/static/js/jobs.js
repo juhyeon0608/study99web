@@ -3,7 +3,7 @@
 
 import { api, qs } from "./api.js";
 import { state } from "./state.js";
-import { $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, copyText, el, errorToast, esc, toast } from "./ui.js";
+import { $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, copyText, el, errorToast, esc, josa, store, toast } from "./ui.js";
 
 export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" };
 const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증",
@@ -237,7 +237,6 @@ export function updateSummaryCard(card, job) {
 }
 
 // ------------------------------------------------------------------ 사이드바 배지 (9.1절)
-let badgeTimer = null;
 export function setJobBadge(n) {
   state.stats.jobs = n || 0;
   for (const node of $$('[data-count="jobs"]')) {
@@ -249,15 +248,149 @@ export function setJobBadge(n) {
 export async function refreshJobBadge() {
   try { setJobBadge((await api.get("/api/jobs?status=active&limit=1")).total); } catch { /* 다음 주기에 */ }
 }
+// 배지와 끝남 알림은 같은 주기로 (진행 중이 있으면 5초, 없으면 30초 — 탭이 숨으면 15초 · 60초)
 export function startJobBadge() {
   stopJobBadge();
-  refreshJobBadge();
-  badgeTimer = setInterval(() => { if (!document.hidden) refreshJobBadge(); }, 30000);
+  N.on = true;
+  pollJobs();
 }
 export function stopJobBadge() {
-  clearInterval(badgeTimer);
-  badgeTimer = null;
+  clearTimeout(N.timer);
+  Object.assign(N, { on: false, timer: null, since: "", fast: 0 });
+  N.seen.clear();
+  N.handled.clear();
   setJobBadge(0);
+}
+
+// ------------------------------------------------------------------ 끝남 알림 (2026-10-16 백그라운드 AI)
+// AI 작업은 서버(내 API 키) · 내 PC(CLI)에서 끝까지 돌고, 화면은 어디에 있든 끝나면 알린다: 앱 안 토스트 + [열기],
+// 브라우저 알림(허락했을 때 · 화면을 보고 있지 않을 때). 그 화면이 이미 결과를 보여 줬으면(handledJob) 토스트는 생략.
+const NOTIFY_KINDS = new Set(["summary", "chat", "write", "find", "verify", "explain", "translate", "translate_paper"]);
+const SEEN_AT_KEY = "paperlab.jobsSeenAt"; // 마지막으로 확인한 서버 시각 — 앱을 닫은 동안 끝난 작업 세기
+const ASKED_KEY = "paperlab.notifyAsked"; // 브라우저 알림 허락을 한 번 물어봤는지
+const N = { on: false, timer: null, since: "", fast: 0, seen: new Set(), handled: new Set() };
+
+// 이 화면이 결과를 직접 보여 줬음 (대화 답이 SSE로 옴 · 글쓰기 창에서 결과를 봄) — 토스트를 띄우지 않음
+export function handledJob(id) {
+  if (id) N.handled.add(Number(id));
+}
+// 방금 만든 작업: 다음 확인을 앞당기고 10분 동안 빠른 주기로
+export function trackJob(job) {
+  if (!N.on || !job) return;
+  N.fast = Date.now() + 10 * 60 * 1000;
+  clearTimeout(N.timer);
+  N.timer = setTimeout(pollJobs, 1500);
+}
+
+async function pollJobs() {
+  clearTimeout(N.timer);
+  if (!N.on) return;
+  let active = 0;
+  try {
+    const a = await api.get("/api/jobs?status=active&limit=1");
+    active = a.total;
+    setJobBadge(a.total);
+    if (!N.since) await catchUp(a.now);
+    else {
+      // 트랜잭션 시각 차이를 덮으려고 1분 겹쳐 묻고 이미 본 작업은 건너뜀
+      const since = new Date(new Date(N.since).getTime() - 60000).toISOString();
+      const f = await api.get(`/api/jobs${qs({ status: "finished", since, limit: 50 })}`);
+      N.since = f.now;
+      store.set(SEEN_AT_KEY, f.now);
+      f.jobs.slice().reverse().forEach(announce);
+    }
+  } catch { /* 다음 주기에 */ }
+  if (!N.on) return;
+  const fast = active > 0 || Date.now() < N.fast;
+  N.timer = setTimeout(pollJobs, document.hidden ? (fast ? 15000 : 60000) : (fast ? 5000 : 30000));
+}
+
+// 앱을 열 때: 지난번 뒤로(7일 안) 끝난 AI 작업을 한 번에 알림
+async function catchUp(now) {
+  const last = store.get(SEEN_AT_KEY);
+  N.since = now;
+  store.set(SEEN_AT_KEY, now);
+  if (!last || Number.isNaN(Date.parse(last))) return;
+  const f = await api.get(`/api/jobs${qs({ status: "finished", since: last, limit: 50 })}`);
+  const done = f.jobs.filter((j) => NOTIFY_KINDS.has(j.kind) && j.status !== "cancelled");
+  f.jobs.forEach((j) => N.seen.add(j.id));
+  if (!done.length) return;
+  if (done.length === 1) return announce(done[0], { force: true });
+  const failed = done.filter((j) => j.status === "failed").length;
+  toast(`앱을 닫은 동안 AI 작업 ${done.length}개가 끝났어요${failed ? ` (실패 ${failed}개)` : ""}`, failed ? "error" : "success",
+    { duration: 10000, action: { label: "작업 보기", onClick: () => { location.hash = "#/jobs"; } } });
+}
+
+export function finishedText(j) {
+  const title = jobTitle(j);
+  if (j.status === "failed") return `${kindLabel(j)} 실패 — ${j.error || errorLabel(j.error_code, j.engine)} (${title})`;
+  if (j.kind === "write") return `AI 글쓰기 결과가 준비됐어요 — ${title}`;
+  return `${josa(kindLabel(j), "이/가")} 끝났어요 — ${title}`;
+}
+
+function announce(j, { force = false } = {}) {
+  if (!force && N.seen.has(j.id)) return;
+  N.seen.add(j.id);
+  if (!NOTIFY_KINDS.has(j.kind) || j.status === "cancelled") return;
+  // 그 화면이 이미 결과를 보여 줬으면(handledJob) 토스트도 브라우저 알림도 띄우지 않는다 — 같은 결과를 두 번 알리지 않음
+  if (N.handled.has(j.id)) return;
+  const text = finishedText(j);
+  osNotify(j, text);
+  toast(text, j.status === "failed" ? "error" : "success",
+    { duration: 12000, action: { label: j.status === "failed" ? "작업 보기" : "열기", onClick: () => (j.status === "failed" ? openJobs() : openJob(j)) } });
+}
+
+function osNotify(j, text) {
+  try {
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    if (!document.hidden && document.hasFocus()) return; // 화면을 보고 있으면 앱 안 토스트만
+    const n = new Notification("PaperLab", { body: text, tag: `paperlab-job-${j.id}` });
+    n.onclick = () => { try { window.focus(); } catch { /* 무시 */ } n.close(); openJob(j); };
+  } catch { /* 알림을 못 띄우는 환경 */ }
+}
+const openJobs = () => { location.hash = "#/jobs"; };
+
+// 작업 결과 열기: 지금 화면이 열 수 있으면 그 화면이 연다(같은 원고의 글쓰기 결과 — writing.js가 이벤트를 받음), 아니면 그 화면으로
+export function openJob(j) {
+  const ev = new CustomEvent("paperlab:open-job", { detail: j, cancelable: true });
+  if (!window.dispatchEvent(ev)) return;
+  rememberTab(j);
+  location.hash = jobHref(j) || "#/jobs";
+}
+function rememberTab(j) {
+  if (XT_VIEW[j.kind] && j.paper_id) state.readerTab = { pid: j.paper_id, tab: "explain", view: XT_VIEW[j.kind] };
+  else if (j.kind === "chat" && j.paper_id) state.readerTab = { pid: j.paper_id, tab: "chat" };
+}
+
+// 브라우저 알림을 켤지 한 번만 물어보는 안내 (사용자가 누른 단추 안에서 requestPermission — 브라우저 규칙).
+// 지원하지 않음 · 이미 정함 · 이미 물어봄 · PC 앱 창(앱이 알림 권한을 막음)이면 null
+export function notifyOffer() {
+  if (typeof Notification === "undefined" || window.paperlabDesktop || Notification.permission !== "default" || store.get(ASKED_KEY)) return null;
+  const box = el(`<div class="notice" data-tone="info" data-notify-offer>${ICON_INFO}<div><b>끝나면 알려 드릴까요?</b>
+    브라우저 알림을 켜 두면 다른 탭이나 창에 있어도 작업이 끝났을 때 알려 드려요. 알림 말고는 아무것도 보내지 않아요.
+    <div class="row" style="gap:6px;margin-top:6px"><button type="button" class="btn sm primary" data-notify-yes>알림 켜기</button>
+    <button type="button" class="btn sm ghost" data-notify-no>괜찮아요</button></div></div></div>`);
+  $("[data-notify-yes]", box).onclick = async () => {
+    store.set(ASKED_KEY, "1");
+    box.remove();
+    let p = "default";
+    try { p = await Notification.requestPermission(); } catch { /* 옛 브라우저 */ }
+    toast(p === "granted" ? "작업이 끝나면 알림으로 알려 드릴게요" : "알림을 켜지 않았어요. 앱 안에서만 알려 드릴게요", p === "granted" ? "success" : "");
+  };
+  $("[data-notify-no]", box).onclick = () => { store.set(ASKED_KEY, "1"); box.remove(); };
+  return box;
+}
+
+// AI를 시작하기 전에: 이 작업 종류의 경로(내 API 키 · 연결된 내 PC의 CLI)가 있는지. 없으면 안내 + [설정 열기] → false.
+// 서버 PC의 CLI · 서버 키로 대신하지 않는다 (2026-10-16 제품 책임자 결정)
+export const NO_ROUTE_TEXT = "AI를 실행할 방법이 없어요. 설정 → 연결된 PC에서 PaperLab 앱을 설치한 내 PC를 연결하거나, 설정 → AI 엔진에서 내 API 키를 넣어 주세요.";
+export async function ensureAiRoute(kind) {
+  let st;
+  try { st = await api.get("/api/ai/status"); } catch { return true; } // 상태를 못 받으면 서버가 판단(경로 없음 400 — 같은 문구)
+  const k = st && st.kinds && st.kinds[kind];
+  if (k && k.first) return true;
+  toast((k && k.message) || NO_ROUTE_TEXT, "error", { duration: 12000, action: { label: "설정 열기", onClick: openSettings } });
+  return false;
 }
 
 // ------------------------------------------------------------------ 작업 목록 화면 #/jobs (9.2절)
@@ -313,7 +446,9 @@ export function jobHref(j) {
   if (j.kind === "find") return `#/ask/find/j${j.id}`;
   if (j.kind === "verify") return j.manuscript_id ? `#/write/${j.manuscript_id}` : "";
   if (j.kind === "chat" && !j.paper_id && j.scope) return j.scope.type === "library" ? "#/ask" : `#/ask/${j.scope.type[0]}${j.scope.id}`;
-  return j.paper_id && j.kind !== "write" ? `#/read/${j.paper_id}` : "";
+  // 글쓰기 결과: 그 원고를 열고 결과 창을 띄움 (#/write/원고/j작업 — 2026-10-16 백그라운드 AI)
+  if (j.kind === "write") return j.manuscript_id && j.manuscript_title != null ? `#/write/${Number(j.manuscript_id)}/j${Number(j.id)}` : "";
+  return j.paper_id ? `#/read/${j.paper_id}` : "";
 }
 
 function drawList(list, jobs, tab, reload) {
@@ -326,7 +461,8 @@ function drawList(list, jobs, tab, reload) {
   $$("[data-job-id]", list).forEach((li) => { if (!keep.has(li.dataset.jobId)) li.remove(); });
   jobs.forEach((j, i) => {
     let li = $(`[data-job-id="${j.id}"]`, list);
-    const sig = JSON.stringify([j.status, j.cancel_requested, j.waiting_reason, j.device, j.error, j.route_index, j.history.length, j.manuscript_title, (j.progress || {}).message]);
+    const sig = JSON.stringify([j.status, j.cancel_requested, j.waiting_reason, j.device, j.error, j.route_index, j.history.length, j.manuscript_title, (j.progress || {}).message,
+      j.write && j.write.handled]);
     if (li && li.dataset.sig === sig) {
       const meta = $("[data-elapsed]", li);
       if (meta) meta.textContent = jobLine(j);
@@ -348,13 +484,15 @@ function jobItem(j, reload) {
   const title = jobTitle(j);
   const expired = j.kind === "find" && !j.question; // 24시간 정리로 질문 · 결과가 지워짐 (3단계 품질팀 L4)
   const href = jobHref(j);
-  // 4단계 작업은 읽기 화면을 "설명·번역" 탭으로 연다 (화면 메모리 — 시안 7.3절)
-  const remember = () => { if (XT_VIEW[j.kind] && j.paper_id) state.readerTab = { pid: j.paper_id, tab: "explain", view: XT_VIEW[j.kind] }; };
+  // 4단계 작업은 읽기 화면을 "설명·번역" 탭으로, 대화는 "대화" 탭으로 연다 (화면 메모리 — 시안 7.3절)
+  const remember = () => rememberTab(j);
+  const handled = j.kind === "write" && j.write && j.write.handled;
   const meta = [
     (j.route || []).map(slotName).join(" → "),
     j.started_at ? `${fmtClock(j.started_at)} 시작` : `${fmtClock(j.created_at)} 만듦`,
     st.endsWith("waiting") ? deadlineText(j) : "",
     j.status === "failed" && j.attempts > 1 ? `${j.attempts}번 시도` : "",
+    handled === "applied" ? "원고에 넣음" : handled === "dismissed" ? "넣지 않음" : "",
   ].filter(Boolean).join(" · ");
   const tone = j.status === "failed" ? " bad" : j.status === "succeeded" ? " ok" : "";
   const li = el(`<li class="item-card" data-job-id="${j.id}" data-job-state="${st}">
@@ -379,7 +517,9 @@ function jobItem(j, reload) {
   } else if (j.status === "failed" || j.status === "cancelled") {
     btn("다시 시도", "primary", async () => { try { await retryJob(j.id); toast("작업을 다시 시작했어요", "success"); } catch (e) { errorToast(e); } reload(); });
   } else if (j.kind === "write" && j.result && j.result.text) {
-    btn("결과 복사", "", () => copyText(j.result.text)).title = "결과 글은 24시간 동안 복사할 수 있어요";
+    // 글쓰기 결과는 7일 동안: 원고에서 열어 넣기(바뀐 부분 확인) · 복사
+    if (href) btn(handled ? "원고에서 보기" : "원고에 넣기", handled ? "" : "primary", () => openJob(j));
+    btn("결과 복사", "", () => copyText(j.result.text)).title = "결과 글은 7일 동안 열 수 있어요";
   } else if (href) {
     btn("열기", "", () => { remember(); location.hash = href; });
   }

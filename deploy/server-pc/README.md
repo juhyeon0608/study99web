@@ -90,6 +90,9 @@ Get-PSDrive C, D | Select-Object Name, @{n='FreeGB';e={[math]::Round($_.Free/1GB
 | Git | `git --version` | 2.53 | `winget install -e --id Git.Git` |
 | pg_dump 17 | `pg_dump --version` | `17.10` (`C:\Users\USER\tools\pgsql\bin`) | PATH에 없으면 `cloud.env`에 `PAPERLAB_PG_DUMP=<pg_dump.exe 전체 경로>` 줄을 **[사용자]** 가 추가(명세 S9). 주 버전은 운영 DB 이상이어야 함 — 설치 스크립트가 비교 |
 | Tailscale | 4.4절 | 1.102.4, `Running` | U-1 |
+| LibreOffice (서재에 워드 · 한글 · PPT · 엑셀 넣기 — 17절) | `& 'C:\Program Files\LibreOffice\program\soffice.exe' --version` | `LibreOffice 26.8…` | **[사용자]** 동의 후 libreoffice.org의 Windows 설치 파일(기본 옵션). 다른 곳에 깔았으면 `cloud.env`에 `PAPERLAB_SOFFICE=<soffice.exe 전체 경로>`. **없어도 서버는 뜨고** PDF · 사진만 올라감(문서는 "문서 변환기가 없어…" 오류) |
+| H2Orestart (한글 .hwp · .hwpx 읽기) | `& 'C:\Program Files\LibreOffice\program\unopkg.com' list --shared` 에 `H2Orestart` | 있음(공유 설치) | **[사용자]** 확장 파일(.oxt)을 받아 `unopkg.com add --shared <H2Orestart.oxt>` — **반드시 `--shared`**(서버는 자기 전용 LibreOffice 프로필로 돌아서 사용자 프로필에만 깐 확장은 못 씀) |
+| Java (H2Orestart가 씀) | `java -version` | Temurin 21 | **[사용자]** 동의 후 Temurin 21 JRE(64비트). 없으면 한글 파일만 "PDF로 바꾸지 못했어요" |
 | Node.js LTS · npm (PC 앱 설치 파일 빌드 — 2단계 13.7.1절) | `node -v` · `npm -v` | `v24.14` (주 버전 **22 이상**) | **[사용자]** 동의 후 nodejs.org의 LTS Windows 설치 파일(.msi, 기본 옵션 · "필요한 도구 자동 설치"는 끔). 없거나 22 미만이면 `update.ps1`이 **빌드 단계만 WARN으로 건너뛰고** 서버 업데이트는 그대로 함 |
 
 winget 패키지 이름은 설치 직전에 `winget search` 로 한 번 더 확인합니다(**확인 필요**).
@@ -123,6 +126,7 @@ tailscale version
    - (선택 — 3단계 AI 질문) `PAPERLAB_EMBED_MODEL_DIR=<폴더>` 임베딩 모델을 놓는 폴더. 없으면 기본값 `D:\PaperLab\models\embeddinggemma-300m`. 아래 11절 "임베딩 모델"
    - (선택 — 5단계 국내 DB 검색) `KCI_API_KEY=…` · `RISS_API_KEY=…` 한 줄씩. **없으면(또는 비어 있으면) 그 소스만 꺼질 뿐 서버는 그대로 뜹니다.** 키 값은 **채팅에 적지 말고 메모장으로 파일에 직접** 넣습니다. 신청 · 설명은 14절
    - (선택 — 6단계 폴더 동기화) `PAPERLAB_SYNC_USER_CAP_MB=…`(사용자당 동기화 올리기 상한, 기본 2048) · `PAPERLAB_DB_LIMIT_MB=…`(Supabase DB 한도, 기본 500). **없으면 기본값으로 동작**하고 값은 비밀이 아니지만 파일은 5절 규칙대로 직접 고칩니다. 설명 · 반영 순서는 15절
+   - (선택 — 서재 문서 넣기) `PAPERLAB_SOFFICE=<soffice.exe 전체 경로>` LibreOffice를 기본 위치(`C:\Program Files\LibreOffice`)가 아닌 곳에 깔았을 때만. 17절
    - (품질 검증을 이 PC에서 할 때만 — 질문 Q-S7) `SUPABASE_TEST_*` 4줄은 그대로 둠, 아니면 지움
    - `SUPABASE_APP_DB_URL`은 **비워 둡니다**(설치 스크립트가 채움)
 4. Claude Code 확인(값을 보지 않음):
@@ -256,7 +260,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 
 ## 10. [사용자] 설치 뒤 마무리
 
-1. Supabase 운영 프로젝트 → Authentication → URL Configuration: **Site URL**과 **Redirect URLs**에 `https://kimjuhyeon.tailac17f6.ts.net/`.
+1. Supabase 운영 프로젝트 → Authentication → URL Configuration: **Site URL**과 **Redirect URLs**에 `https://kimjuhyeon.tailac17f6.ts.net/`. 2단계(PC 앱)부터는 **Redirect URLs에 `paperlab://auth-callback`도 추가**합니다(2단계 명세 K10 ①). 빠지면 PC 앱 로그인이 브라우저의 웹 화면에서 끝나고 앱으로 돌아오지 않습니다(Supabase가 허용 안 된 주소 대신 Site URL로 보냄).
 2. Cloudflare R2 버킷 → Settings → CORS: `AllowedOrigins`에 `https://kimjuhyeon.tailac17f6.ts.net`(값 전체는 명세 20장 관리자 절 JSON).
 3. 관리자 PC에서 바탕화면 바로가기: `powershell -ExecutionPolicy Bypass -File deploy\make-shortcut.ps1` (주소는 `server.json`에서 읽음 — `-Url`은 다른 주소를 쓸 때만)
 4. Google Cloud 프로젝트는 PaperLab 서버로 더 쓰지 않지만, **Google 로그인(OAuth) 클라이언트가 그 프로젝트에 있으면 지우면 안 됩니다**(확인 필요).
@@ -282,6 +286,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 급히 공개를 막기 | `funnel.ps1 off` (서버는 계속 돌지만 바깥에서 못 들어옴) |
 | 임베딩 모델 받기(3단계 AI 질문 · 처음 한 번) | `D:\PaperLab\study99web`에서 서버 계정으로 `.venv\Scripts\python -m paperlab.admin rag-model --download` → `update.ps1 -RestartOnly`. 아래 "임베딩 모델". **3단계 코드를 반영한 뒤에 받습니다 — 옛 코드(`f9e748e`)에는 `rag-model` 명령이 없습니다** |
 | 색인 처음부터 다시(모델 · 규칙을 바꾼 뒤) | `.venv\Scripts\python -m paperlab.admin rag-reindex --all` — 모든 논문이 '색인 대기'가 되고, 사용자가 AI 질문 화면을 열 때 차례로 다시 색인(옛 벡터 파일은 교체 때 지워짐) |
+| 문서 변환기 확인 · 바꾸기(서재 문서 넣기) | 서버 시작 줄(`server.log`)의 `"converter": true` 확인. LibreOffice를 다른 곳에 깔았으면 `cloud.env`에 `PAPERLAB_SOFFICE=<soffice.exe 전체 경로>` → `update.ps1 -RestartOnly`. LibreOffice · H2Orestart · Java를 업데이트한 뒤에는 할 일 없음(다음 변환부터 새것). 자세한 내용 17절 |
 | 복원 | `deploy/README.md` 4장 복원 절차 |
 | 제거 | `deploy\server-pc\uninstall.ps1`(작업 삭제 · Funnel 끔, `-DryRun` 가능). 저장소 · `cloud.env`는 **[사용자]** 가 직접 지움 |
 
@@ -322,6 +327,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | 일부 사용자만 "허용되지 않은 계정" | 허용 목록을 켠 경우에만 생김 | 끄려면 `PAPERLAB_ALLOWLIST=off`, 켜 둘 거면 `ALLOWED_EMAILS` 수정 → `sync-allowlist` → `update.ps1 -RestartOnly` |
 | 서버가 `PAPERLAB_ALLOWLIST` 때문에 시작 안 함 | `serve --check` 출력 | 값이 `on`/`off`가 아님(오타) → 고침 |
 | 로그인 화면으로 계속 돌아감 | Supabase Redirect URLs | 10절 1번 |
+| PC 앱 로그인이 브라우저 웹 화면에서 끝나고 앱으로 안 돌아옴 | Supabase Redirect URLs에 `paperlab://auth-callback`이 있는지 | **[사용자]** 추가(10절 1번) → 앱에서 다시 로그인 |
 | PDF 업로드 · 보기 CORS 오류 | R2 CORS | 10절 2번 |
 | 백업 실패 | `backup.log`(값 없이 오류만), `admin pg-dump-check`, `admin latest-backup` | "pg_dump를 찾지 못했어요" → `PAPERLAB_PG_DUMP`(4절). 버전 오류 → PostgreSQL 클라이언트를 운영 DB 주 버전 이상으로. "SUPABASE_APP_DB_URL 이 비어 있어요" → `admin app-role --write-env --if-missing` |
 | 업데이트가 "마이그레이션 단계"에서 실패 · 되돌림 | `update.log`, Supabase 대시보드 | Supabase 일시정지면 **[사용자]** Restore 후 다시 `update.ps1`. 그 밖이면 팀장에게 보고(서버는 옛 코드로 계속 돎) |
@@ -332,6 +338,9 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 | "Node.js 22 이상 · npm 이 없어 … 건너뛰어요" WARN | `node -v` · `npm -v` | 4절 Node.js LTS 설치 → `update.ps1 -BuildDesktop` |
 | 논문 찾기에서 KCI · RISS가 "키 등록 전"으로 흐리게 보임 | 그 키 줄이 `cloud.env`에 있는지(**[사용자]** 가 메모장으로 — Claude Code는 내용을 읽지 않음), 넣은 뒤 서버를 다시 시작했는지 | 14절 — 키가 없으면 정상 동작(그 소스만 꺼짐). 넣었다면 `update.ps1 -RestartOnly` |
 | KCI · RISS 검색이 "키가 맞지 않거나 사용기간이 끝났어요"(관리자에게 알려 달라는 문구) | 키 유효기간 · 철자(**[사용자]** 가 신청처에서 확인 — 값은 채팅에 적지 않음) | 새 키를 받아 `cloud.env`에 직접 넣고 `update.ps1 -RestartOnly`. 서버 코드 문제가 아님 |
+| 워드 · 한글 · PPT를 올리면 "서버에 문서 변환기(LibreOffice)가 없어…" | 서버 시작 줄의 `"converter"`, `Test-Path 'C:\Program Files\LibreOffice\program\soffice.exe'` | 4절 LibreOffice 설치, 다른 경로면 `PAPERLAB_SOFFICE`(17절) → `update.ps1 -RestartOnly`. PDF · 사진(JPG · PNG 등)은 변환기 없이도 올라감 |
+| 한글(.hwp · .hwpx)만 "문서를 PDF로 바꾸지 못했어요" (워드는 됨) | `unopkg.com list --shared`에 H2Orestart, `java -version` | 4절 — H2Orestart를 **`--shared`로** 다시 설치 · Java(Temurin 21) 설치. 서버 재시작은 필요 없음 |
+| 문서 올리기가 오래 "PDF로 바꾸는 중…"에 머묾 · 다음 문서도 안 됨 | `Get-Process soffice* \| Select Id, StartTime` | 한 파일 180초가 넘으면 서버가 그 변환을 끝냄(오류 "PDF로 바꾸지 못했어요"). 그래도 오래된 `soffice.bin`이 남아 있으면 그 프로세스만 끝내고(`Stop-Process -Id <Id>`), 계속되면 `%TEMP%\paperlab-soffice-profile` 폴더를 지운 뒤 다시(다음 변환 때 새로 만듦) — 그래도 안 되면 팀장 보고 |
 | 감시 작업이 계속 재시작 | `watchdog.log`, `D:\PaperLab\tmp\diag-hang-health`가 남아 있는지 | 진단 파일이면 지움(9절 17번). 아니면 `server.log` 확인 · 팀장 보고 |
 | 작업이 로그온 없이 안 돔 | 작업 속성 "사용자가 로그온했는지 여부에 관계없이 실행", 저장된 비밀번호 | `install.ps1 -ReRegisterTasks -SkipFunnel` |
 | 재부팅 뒤 바깥에서 안 열림 | Tailscale 무인 실행(U-2) | U-2 다시 |
@@ -519,3 +528,50 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 - `update.ps1 -Ref f9e748e`는 **코드만** 되돌리고 DB는 그대로 둡니다(옛 코드와 호환됨 — 새 열 · 표는 남음).
 - 이때 **휴지통에 있는 논문은 옛 코드에서 보이지 않고**(데이터는 남음), **앱 0.3.0 이상(지금 0.3.1)은 서버에 연결되지 않습니다**(워커 · 동기화 — 앱은 다운그레이드되지 않음, 품질팀 D-11).
 - **DB까지** 되돌리려면 1번 백업으로 복원해야 하는데, **이 복원 절차는 아직 검증되지 않았습니다**(`deploy/README.md` 4장 "(초안)" · 품질팀 D-3). **위험으로 받아들이고**, 그래서 1번 백업 확인이 필수입니다. 복원이 필요한 상황이면 직접 시도하지 말고 팀장에게 보고합니다.
+
+## 17. 서재에 문서 · 사진 넣기 (2026-10-16) — 변환기 · 반영 순서
+
+서재에 PDF 말고도 **워드(.doc · .docx) · 한글(.hwp · .hwpx) · PPT(.ppt · .pptx) · 엑셀(.xls · .xlsx) · OpenDocument(.odt · .odp · .ods) · .rtf · 사진(.jpg · .jpeg · .png · .gif · .bmp · .tif · .tiff · .webp)** 을 넣을 수 있습니다. 서버가 올릴 때 **PDF 변환본**을 만들어 읽기 · 형광펜 · AI · 검색은 그 PDF로 하고, **올린 원본은 R2 `users/{uid}/sources/`에 따로 보관**해 화면의 **[원본 받기]** 로 내려받습니다. 자세한 규칙은 [명세](../../docs/specs/library-documents.md).
+
+### 17.1 필요한 것 (4절 표)
+
+| 무엇 | 쓰는 곳 | 없으면 |
+|---|---|---|
+| LibreOffice (`C:\Program Files\LibreOffice\program\soffice.exe`, 26.8 실측) | 워드 · 한글 · PPT · 엑셀 · OpenDocument · RTF · WebP 사진 → PDF | 그 파일만 "서버에 문서 변환기(LibreOffice)가 없어…" 오류. PDF와 JPG · PNG 등 사진은 그대로 올라감 |
+| H2Orestart 확장 (**공유 설치** `unopkg.com add --shared`) | 한글 .hwp · .hwpx | 한글 파일만 "문서를 PDF로 바꾸지 못했어요" |
+| Java (Temurin 21 JRE) | H2Orestart | 위와 같음 |
+| (선택) `cloud.env`의 `PAPERLAB_SOFFICE` | LibreOffice가 기본 위치가 아닐 때 그 `soffice.exe` 전체 경로 | 기본 위치 → PATH의 `soffice` 순서로 찾음 |
+
+- 서버는 **자기 전용 LibreOffice 프로필**(`%TEMP%\paperlab-soffice-profile` — 서버 계정의 임시 폴더)로 한 번에 한 파일씩 바꿉니다. 첫 변환 때 프로필을 만들고(몇 초 더 걸림) 다음부터 다시 씁니다. 사용자가 이 PC에서 LibreOffice를 직접 써도 서로 영향이 없습니다.
+- 보안: 그 프로필에 **문서 속 외부 링크 그림을 받지 않기(`BlockUntrustedRefererLinks`) · 매크로 끄기**를 서버가 넣습니다(올린 문서가 서버 PC에서 내부망 주소를 부르지 못하게). 프로필 폴더를 지워도 다음 변환 때 다시 넣습니다.
+- 한 파일 변환은 **180초 제한**(넘으면 그 LibreOffice 프로세스를 끝내고 오류). 문서 한 개는 보통 3~15초입니다.
+- 원본 크기도 저장 공간 사용량 · 휴지통 크기에 들어갑니다(R2 95% 규칙 그대로).
+
+### 17.2 반영 순서
+
+이 변경에는 **DB 마이그레이션 `20261016000001_source_files.sql`**(`papers`에 `source_key` · `source_name` · `source_size` 열 추가만 — 기존 행은 빈 값, 다시 돌려도 안전)이 있습니다. `update.ps1`이 다른 마이그레이션처럼 적용합니다.
+
+1. 4절 표의 LibreOffice · H2Orestart(`--shared`) · Java를 확인합니다(이 PC에는 2026-10-16 설치됨).
+2. 백업 확인(16절 1번과 같음) → `update.ps1 -Yes`.
+3. `server.log`의 서버 시작 줄에 `"converter": true`가 있는지 봅니다.
+4. **[사용자]** 로그인해서 서재에 작은 .docx · .hwpx · 사진을 하나씩 끌어다 놓아 봅니다 → 목록에 **DOCX · HWPX · 이미지** 배지, 상세의 **[원본 받기]** 로 원래 파일이 받아지는지 확인합니다.
+5. 되돌리기: `update.ps1 -Ref <옛 커밋>`은 코드만 되돌립니다. 새 열은 남고, 옛 코드에서는 문서 항목이 **PDF 변환본만 있는 논문**처럼 보입니다(원본 파일은 R2에 남지만 옛 화면에는 [원본 받기]가 없음 · 영구 삭제해도 원본 파일은 남아 `admin orphans`가 나중에 찾음).
+
+## 18. 논문 쓰기 그림 · 표 · 목록 · 단축키 도움말 (2026-10-16) — 반영
+
+논문 쓰기 화면에 **그림 넣기(캡션 "그림 1.") · 표 넣기/고치기(캡션 "표 1.") · 글머리/번호 목록 편집 · 단축키 도움말(? · Ctrl+/)** 이 생겼습니다. 자세한 규칙은 [명세](../../docs/specs/writing-figures-tables.md).
+
+- **DB 마이그레이션 · 새 설정값 · 새 프로그램 없음.** `update.ps1`로 코드만 반영하면 됩니다(서버 재시작 필요 — 새 API `POST/GET /api/manuscripts/{id}/figures`). PC 앱(Electron) 다시 만들기도 필요 없습니다.
+- 그림은 R2 `users/{uid}/figures/{원고 id}/` 아래에 저장됩니다(한 장 10MB · 원고 하나 200장 · 300MB까지). 원고를 지우면 함께 지워지고, `admin orphans`는 이 폴더를 건드리지 않습니다.
+- 그림 용량은 R2 사용량(설정 → 계정, 95% 규칙)에 더해집니다. 사용량을 잴 때 최대 5분에 한 번 R2 `users/` 목록을 읽어 그림 합계를 잽니다(목록 요청이 조금 늘어남). 사용량이 95%를 넘으면 그림 올리기도 "저장 공간이 거의 찼어요"로 막힙니다.
+- 확인: **[사용자]** 원고를 열어 [그림]으로 사진 하나 · [표]로 3×3 표를 넣고, 미리보기에 "그림 1." · "표 1."이 보이는지, 워드 · 한글로 내보내 그림과 표가 들어 있는지 봅니다.
+- 되돌리기: `update.ps1 -Ref <옛 커밋>`은 코드만 되돌립니다. 원고 글의 `![설명](fig:…)` 줄은 옛 화면에서 설명 글자로만 보이고(그림 파일은 R2에 남음), 표는 옛 방식(칸을 | 로 이은 문단)으로 내보내집니다.
+
+## 19. AI 백그라운드 실행 · 끝나면 알림 · AI 경로(내 PC · 내 키만) (2026-10-16) — 반영
+
+- **무엇이 바뀌나**: AI 글쓰기 도우미가 서버 작업(`POST /api/ai/write` → 202 `{job}`)이 되어 창 · 브라우저를 닫아도 끝까지 돌고 결과는 7일 동안 남습니다. 논문과 대화 · 서재 질문 · 쉬운 설명 · 선택 번역(SSE)은 화면 연결이 끊겨도 **취소하지 않고 서버가 끝까지 받아 저장**합니다(예전 품질팀 H1의 "끊기면 취소"를 바꿈). 화면은 어디서든 끝나면 토스트 · 브라우저 알림을 띄웁니다. 새 API: `POST /api/jobs/{id}/handled`, `GET /api/jobs?status=finished&since=…` · `manuscript_id=…`.
+- **AI 경로**: AI는 **사용자가 연결한 PC 앱의 CLI · 사용자가 넣은 API 키로만** 실행합니다. 서버 코드는 claude · codex · gemini CLI를 실행하지 않고(코드 검사 테스트가 막음), `serve.py`는 시작할 때 `ANTHROPIC_*` · `OPENAI_*` · `GEMINI_*` · `GOOGLE_GENAI_*` · `GOOGLE_API_KEY` · `CLAUDE_CODE_*` · `CODEX_*` 환경 변수를 지우고 이름만 `server.log`에 WARN으로 남깁니다(값은 남기지 않음). **이 서버 PC에는 계속 PaperLab PC 앱(워커)을 설치하지 않습니다**(11절 — 설치하면 그 PC가 연결된 PC로 작업을 가져감). `cloud.env`에 AI 키 줄을 넣지 않습니다(넣어도 쓰지 않음).
+- **DB 마이그레이션 · 새 설정값 · 새 프로그램 없음.** `update.ps1`로 코드만 반영하면 됩니다(서버 재시작 필요). PC 앱(Electron) 다시 만들기도 필요 없습니다 — 워커 프로토콜은 그대로입니다. 글쓰기 결과 보관이 24시간 → 7일로 늘어 `jobs.result`가 조금 더 오래 남습니다(30일 정리 규칙은 그대로).
+- **재시작 중인 작업**: 화면에 붙어 있던 SSE 작업이 서버 재시작으로 끊기면 예전처럼 "서버가 다시 시작돼 작업이 멈췄어요"(cancelled · interrupted)로 끝납니다. 화면을 떠나 백그라운드로 넘어간 작업 · 글쓰기 작업은 리스가 지나면(약 90초) 복구 스캔이 다시 실행합니다.
+- 확인: **[사용자]** 원고에서 문단을 고르고 ✦ AI 도우미 → 학술 문체로 → 창을 바로 닫고 → 다른 화면으로 갔다가 끝남 토스트의 [열기]로 결과 창이 열리는지, [바꾸기]로 원고에 들어가는지 봅니다. 결과를 기다리는 동안 그 문단을 고친 뒤 [바꾸기]를 누르면 "원래 자리를 찾지 못했어요"가 나와야 합니다. 키도 연결된 PC도 없는 계정이면 시작 전에 "설정 → 연결된 PC … 내 API 키 …" 안내가 나와야 합니다.
+- 되돌리기: `update.ps1 -Ref <옛 커밋>`은 코드만 되돌립니다. 옛 화면은 글쓰기를 SSE로 부르므로 새 서버와 섞이지 않게 서버와 화면을 함께 되돌립니다(같은 저장소라 함께 바뀜).

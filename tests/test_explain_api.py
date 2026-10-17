@@ -175,9 +175,12 @@ def test_explain_bad_output_is_not_saved(env, project):
     assert sql(project, "select count(*) from paperlab.explanations where user_id = %s", (env.a.id,))[0][0] == 0
 
 
-def test_explain_sse_disconnect_cancels(env, project):
-    """AC-E08: SSE를 중간에 끊으면 cancelled · interrupted, 행 없음 (2단계 회귀)"""
+def test_explain_sse_disconnect_continues(env, project):
+    """AC-E08 (2026-10-16 백그라운드 AI로 바뀜): SSE를 중간에 끊어도 작업은 계속되고(설명 목록의 진행 작업에 보임),
+    끝나면 카드가 저장된다"""
     import httpx
+
+    from .test_jobs import _wait_detached
     ca = env.client(env.a)
     ca.put("/api/settings", json={"anthropic_api_key": KEY})
     pid = add_paper(env, project, env.a, [EN])
@@ -203,11 +206,12 @@ def test_explain_sse_disconnect_cancels(env, project):
                         break
         jid = sql(project, "select id from paperlab.jobs where user_id = %s and kind = 'translate' order by id desc limit 1",
                   (env.a.id,))[0][0]
-        assert _wait_status(project, jid, ("cancelled", "succeeded", "failed"), 3) == "cancelled"
+        assert _wait_detached(project, jid) == ("running", False)
+        assert [j["id"] for j in ca.get(f"/api/papers/{pid}/explanations").json()["jobs"]] == [jid]  # 다시 연 화면의 진행 카드
         gate.set()
-        time.sleep(1)
-        assert sql(project, "select status, error_code from paperlab.jobs where id = %s", (jid,))[0] == ("cancelled", "interrupted")
-        assert sql(project, "select count(*) from paperlab.explanations where user_id = %s", (env.a.id,))[0][0] == 0
+        assert _wait_status(project, jid, ("cancelled", "succeeded", "failed"), 10) == "succeeded"
+        items = ca.get(f"/api/papers/{pid}/explanations").json()["items"]
+        assert len(items) == 1 and items[0]["text"] == "끊긴 뒤의 번역"
     finally:
         server.should_exit = True
         th.join(5)
@@ -447,7 +451,7 @@ def test_translation_start_rules(env, project):
     assert r.status_code == 400 and "저장 공간" in r.json()["detail"]
     # 글자 없는 논문
     blank = add_paper(env, project, env.a, ["", " "])
-    assert ca.post(f"/api/papers/{blank}/translation", json={}).json()["detail"] == "PDF 글자를 읽을 수 없는 논문이에요(스캔본)."
+    assert ca.post(f"/api/papers/{blank}/translation", json={}).json()["detail"] == "글자를 읽을 수 없는 항목이에요(스캔본 · 사진)."
 
 
 def test_translation_fairness_one_thread(env, project):

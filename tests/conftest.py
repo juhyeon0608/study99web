@@ -436,6 +436,9 @@ class Cloud:
         for op, key in self.storage.log:
             if op == "list" and key == "backups/":
                 continue
+            # 사용량 합계용 목록(FigureSizeCache — 크기 합계만 쓰고 키 · 내용은 사용자에게 가지 않음)
+            if op == "list" and key == "users/":
+                continue
             assert any(key.startswith(f"users/{u}/") or key.startswith(f"incoming/{u}/") for u in self.known_uids), \
                 (op, key)
 

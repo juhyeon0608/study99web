@@ -187,6 +187,16 @@ def test_scrub_ai_environment():
     assert env == {"PATH": "p"}
 
 
+def test_scrub_all_ai_provider_and_cli_environment():
+    """2026-10-16: 서버 PC의 키 · CLI 토큰은 사용자 AI 요청에 쓰지 않는다 — OpenAI · Google 키, claude · codex CLI 변수도 지움"""
+    env = {"OPENAI_API_KEY": "1", "OPENAI_BASE_URL": "2", "GEMINI_API_KEY": "3", "GOOGLE_API_KEY": "4",
+           "GOOGLE_GENAI_USE_VERTEXAI": "5", "CLAUDE_CODE_OAUTH_TOKEN": "6", "CODEX_HOME": "7",
+           "GOOGLE_APPLICATION_CREDENTIALS_X": "keep", "PATH": "p", "PAPERLAB_SOFFICE": "keep"}
+    assert set(serve.scrub_ai_environment(env)) == {"OPENAI_API_KEY", "OPENAI_BASE_URL", "GEMINI_API_KEY", "GOOGLE_API_KEY",
+                                                    "GOOGLE_GENAI_USE_VERTEXAI", "CLAUDE_CODE_OAUTH_TOKEN", "CODEX_HOME"}
+    assert env == {"GOOGLE_APPLICATION_CREDENTIALS_X": "keep", "PATH": "p", "PAPERLAB_SOFFICE": "keep"}
+
+
 def test_git_commit_reads_refs(tmp_path):
     sha = "0123456789abcdef0123456789abcdef01234567"
     git = tmp_path / ".git"

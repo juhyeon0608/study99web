@@ -74,10 +74,16 @@ def setup_logging(log_dir: str | Path | None) -> logging.Handler:
     return handler
 
 
+# 서버 계정 환경에 있어도 사용자 AI 요청에 쓰이면 안 되는 변수 (승인자 L3 + 2026-10-16 제품 책임자 결정 — AI는 내 PC의 CLI ·
+# 내가 넣은 API 키로만). Anthropic · OpenAI · Google 키 · 주소, CLI 로그인 토큰(claude · codex · gemini)
+AI_ENV_PREFIXES = ("ANTHROPIC_", "OPENAI_", "GEMINI_", "GOOGLE_GENAI_", "GOOGLE_API_KEY", "CLAUDE_CODE_", "CODEX_")
+
+
 def scrub_ai_environment(environ: dict | None = None) -> list[str]:
-    """ANTHROPIC_* 환경 변수를 지운다(서버 계정 환경에 있어도 사용자 요청에 쓰이지 않게 — 승인자 L3). 지운 이름 목록."""
+    """AI 회사 키 · 주소 · CLI 토큰 환경 변수(AI_ENV_PREFIXES)를 지운다 — 서버 계정 환경에 있어도 사용자 요청에 쓰이지
+    않게. 지운 이름 목록."""
     environ = os.environ if environ is None else environ
-    names = [k for k in list(environ) if k.upper().startswith("ANTHROPIC_")]
+    names = [k for k in list(environ) if k.upper().startswith(AI_ENV_PREFIXES)]
     for k in names:
         environ.pop(k, None)
     return names
@@ -238,7 +244,7 @@ def main(argv: list[str] | None = None, *, runner=run_server, acl_check=env_file
 
     setup_logging(args.log_dir)
     if scrubbed:
-        log.warning(json.dumps({"message": "서버 환경의 ANTHROPIC_* 변수를 지웠어요 (사용자 키만 씀)",
+        log.warning(json.dumps({"message": "서버 환경의 AI 키 · CLI 변수를 지웠어요 (사용자 키 · 사용자 PC만 씀)",
                                 "variables": scrubbed}, ensure_ascii=False))
     if not env_file.exists():
         log.error(json.dumps({"message": "설정 파일이 없어 시작하지 않아요", "path": str(env_file)}, ensure_ascii=False))
@@ -253,8 +259,10 @@ def main(argv: list[str] | None = None, *, runner=run_server, acl_check=env_file
     if warn:
         log.warning(json.dumps({"message": "cloud.env 권한 경고", "detail": warn}, ensure_ascii=False))
 
+    from . import convert
     from .server import create_app
     from .storage import StorageError
+    convert.configure(env.get("PAPERLAB_SOFFICE"))  # 서재 문서 변환기(LibreOffice) 경로 — 없으면 기본 설치 위치
     commit = git_commit()
     hang_file = Path(args.diag_hang_file) if args.diag_hang_file else None
     try:
@@ -272,7 +280,8 @@ def main(argv: list[str] | None = None, *, runner=run_server, acl_check=env_file
     log.info(json.dumps({"message": "서버 시작", "version": __version__, "commit": commit, "host": HOST,
                          "port": args.port, "storage": config.storage_backend,
                          "allowlist": "on" if config.allowlist_enabled else "off",
-                         "embed": app.state.rag.embedder is not None}, ensure_ascii=False))
+                         "embed": app.state.rag.embedder is not None, "converter": convert.available()},
+                        ensure_ascii=False))
     runner(app, args.port)
     return 0
 

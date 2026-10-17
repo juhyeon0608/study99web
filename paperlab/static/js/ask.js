@@ -5,7 +5,7 @@
 
 import { api, streamEvents } from "./api.js";
 import {
-  cancelJob, errorLabel, isActive, jobLine, jobState, retryJob, setStatusLine, statusLineEl, watchJob,
+  cancelJob, errorLabel, handledJob, isActive, jobLine, jobState, retryJob, setStatusLine, statusLineEl, watchJob,
 } from "./jobs.js";
 import { state } from "./state.js";
 import {
@@ -31,7 +31,7 @@ export function scopeFromFilter(filter) {
 // 색인 상태 (시안 3.2절) → { state: ok|indexing|pending|failed, text, html }
 export function indexState(index, job) {
   const active = job && (job.status === "queued" || job.status === "running");
-  const noText = index.no_text ? ` · ${index.no_text}편은 본문이 없어 빠져요(스캔본)` : "";
+  const noText = index.no_text ? ` · ${index.no_text}편은 본문이 없어 빠져요(스캔본 · 사진)` : "";
   if (active) {
     const msg = ((job.progress || {}).message || "").match(/(\d+)\/(\d+)/);
     return { state: "indexing", text: `${index.with_pdf}편 중 ${index.indexed}편 색인됨 · ${index.pending}편 색인 중${msg ? ` (${msg[1]}/${msg[2]})` : ""}` };
@@ -414,19 +414,33 @@ async function send(text) {
   log.appendChild(node);
   log.scrollTop = log.scrollHeight;
   setBusy(true);
-  A.abort = new AbortController();
+  const abort = (A.abort = new AbortController());
   let jobEv = null;
+  let cancelled = false;
+  // [취소]: 연결을 끊어도 서버 작업은 계속되므로(2026-10-16 백그라운드 AI) 작업 번호로 취소한 뒤 스트림을 끊는다 (explain.js cancelRun과 같음)
+  const cancelRow = el(`<div class="row" style="margin-top:4px"><span class="spacer"></span><button type="button" class="btn sm ghost" data-ask-cancel>취소</button></div>`);
+  const onJob = (id) => {
+    if (A !== me) return;
+    $("[data-ask-cancel]", cancelRow).onclick = () => {
+      cancelled = true;
+      cancelJob(id).catch(() => {});
+      abort.abort();
+    };
+    node.appendChild(cancelRow);
+  };
   try {
     await streamEvents("/api/ask", { scope, question }, (ev) => {
       if (A !== me) return;
       if (ev.type === "queued" || ev.type === "fallback") jobEv = ev;
       else if (ev.type === "delta") { pending.content += ev.text; updateAnswer(node, pending); }
       else if (ev.type === "done") {
+        handledJob(ev.job_id); // 이 화면에서 답을 봤음 — 끝남 토스트 생략 (화면을 떠나도 서버가 끝까지 받아 저장)
         Object.assign(pending, { content: ev.text, citations: ev.citations || [], pending: false });
         updateAnswer(node, pending);
       } else if (ev.type === "error") throw new Error(ev.error);
       if (log.scrollHeight - log.scrollTop - log.clientHeight < 140) log.scrollTop = log.scrollHeight;
-    }, A.abort.signal);
+    }, abort.signal, { onJob });
+    cancelRow.remove();
     if (A !== me) return;
     if (jobEv) { // PC(CLI)로 감: 이미 나온 API 글은 지우고 작업을 따라간다
       A.messages.pop();
@@ -439,7 +453,17 @@ async function send(text) {
     A.messages.push(pending);
     say(`답을 다 썼어요. 출처 ${pending.citations.length}개`);
   } catch (e) {
-    if (A !== me || e.name === "AbortError") return;
+    cancelRow.remove();
+    if (A !== me) return;
+    if (e.name === "AbortError") {
+      if (!cancelled) return;
+      A.messages.pop(); // 취소한 질문은 대화에 남기지 않고 입력 칸으로 되돌림
+      node.remove();
+      drawLog();
+      ta.value = question;
+      toast("취소했어요");
+      return;
+    }
     A.messages.pop();
     const msg = e.status === 503 ? "색인을 불러오는 데 시간이 오래 걸려요. 잠시 후 다시 물어봐 주세요." : e.message;
     const err = el(`<div class="msg error" role="alert"><div class="row"><span class="grow"></span><button type="button" class="btn sm">다시 보내기</button></div></div>`);
@@ -476,6 +500,7 @@ function addJobNode(job, question = job.question || "", fallback = null) {
       $("button", err).onclick = async () => { try { const r = await retryJob(j.id); err.remove(); addJobNode(r.job, question); } catch (e) { errorToast(e); } };
       node.replaceWith(err);
     } else if (j && j.status === "succeeded") {
+      handledJob(j.id);
       try { A.messages = (await api.get(`/api/ask?scope=${encodeURIComponent(A.scope)}`)).messages; } catch { /* 다음에 열면 보임 */ }
       if (A !== me) return;
       drawLog();
@@ -568,6 +593,7 @@ function followFind(job, question) {
     }
     findBusy(false);
     out.innerHTML = "";
+    handledJob(j.id); // 이 화면에서 결과를 보여 줌 — 끝남 토스트 생략
     if (j.status === "succeeded" && j.result) drawFindResult(out, j.result);
     else if (j.status === "succeeded" || !(question || j.question)) out.appendChild(el(`<div class="empty"><h3>이 결과는 24시간이 지나 지워졌어요</h3><p>다시 찾으려면 질문을 입력해 주세요.</p></div>`));
     else if (j.status === "failed") out.appendChild(failCard(FIND_FAIL[j.error_code] || j.error || "찾지 못했어요", question || j.question || ""));

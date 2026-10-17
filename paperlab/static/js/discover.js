@@ -28,7 +28,7 @@ const EMPTY_QUERY = "검색어를 입력하세요";
 const KDB_INTRO_KEY = "paperlab.kdbIntro";
 const OA_FIND_TITLE = "OpenAlex에서 무료 PDF를 찾아요. 라이선스가 확인되면 서재에 PDF까지 넣을 수 있어요.";
 const OA_OPEN_MARK = extMark("새 탭에서 열림 · 직접 받아 올려야 해요");
-const OA_AFTER_CARD = `<div class="notice oa-after" data-tone="info">${ICON_INFO}<div>라이선스를 확인하지 못해 PaperLab이 대신 받지 않아요. 직접 받은 뒤 서재에 추가하고 <b>[PDF 첨부]</b>로 올려 주세요.</div></div>`;
+const OA_AFTER_CARD = `<div class="notice oa-after" data-tone="info">${ICON_INFO}<div>라이선스를 확인하지 못해 PaperLab이 대신 받지 않아요. 직접 받은 뒤 서재에 추가하고 <b>[파일 첨부]</b>로 올려 주세요.</div></div>`;
 
 const freshDs = () => ({
   q: "", source: "openalex", yearFrom: "", yearTo: "", sort: "relevance", oa: false, page: 1,
@@ -274,7 +274,7 @@ function readIntroDismissed() {
 }
 
 function introNotice(box) {
-  const n = el(`<div class="notice" data-tone="info" data-kdb-intro>${ICON_INFO}<div>KCI · RISS 검색은 PaperLab 공용 키로 요청해요. 원문은 각 사이트(또는 <b>인하대에서 보기</b>)에서 직접 받아 <b>[PDF 첨부]</b>로 올려 주세요.</div>
+  const n = el(`<div class="notice" data-tone="info" data-kdb-intro>${ICON_INFO}<div>KCI · RISS 검색은 PaperLab 공용 키로 요청해요. 원문은 각 사이트(또는 <b>인하대에서 보기</b>)에서 직접 받아 <b>[파일 첨부]</b>로 올려 주세요.</div>
     <button type="button" class="icon-btn small" data-kdb-intro-close aria-label="안내 닫기">✕</button></div>`);
   $("[data-kdb-intro-close]", n).onclick = () => {
     store.set(KDB_INTRO_KEY, "1"); // 못 쓰면 다음에 또 보임

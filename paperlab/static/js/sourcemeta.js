@@ -135,4 +135,4 @@ export function substituteText(license) {
 
 // 무료 PDF 새 탭 버튼 글자 (4.2절)
 export const oaOpenLabel = (kind) => (kind === "landing" ? "무료 원문 페이지 열기" : "무료 PDF 열기");
-export const OA_OPEN_TITLE = "라이선스를 확인하지 못한 PDF예요. 새 탭에서 직접 받아 [PDF 첨부]로 올려 주세요.";
+export const OA_OPEN_TITLE = "라이선스를 확인하지 못한 PDF예요. 새 탭에서 직접 받아 [파일 첨부]로 올려 주세요.";

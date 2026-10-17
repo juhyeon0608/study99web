@@ -5,6 +5,8 @@
 - 올리는 중: incoming/{user_id}/{upload_id}.pdf        ← incoming_key()
 - 벡터 파일: users/{user_id}/rag/{paper_id}.v{ver}.{gen}.bin ← rag_key() (3단계 8.1절 — 서명 주소를 만들지 않음)
 - 번역 파일: users/{user_id}/translations/{paper_id}.{gen}.json ← tr_key() (4단계 8.2절 — 서명 주소를 만들지 않음)
+- 문서 원본: users/{user_id}/sources/{paper_id}.{gen}.bin ← source_key() (워드 · 한글 · PPT · 이미지. 변환본은 papers/{id}.pdf)
+- 원고 그림: users/{user_id}/figures/{manuscript_id}/{hex16}.{png|jpg|gif} ← figure_key() (서명 주소를 만들지 않음 — 서버가 내려줌)
 - DB 백업:  backups/db/{YYYYMMDD}.dump                ← backup_key() (관리 명령 전용)
 
 사용자 요청 경로는 `UserStorage`만 쓴다. 모든 동작이 키가 users/{uid}/ 또는 incoming/{uid}/로 시작하는지
@@ -37,6 +39,9 @@ _RAG_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/rag/([1-9][0-9]{0,18})\.v([a-z
 RAG_TYPE = "application/octet-stream"
 _TR_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/translations/([1-9][0-9]{0,18})\.([0-9a-f]{8})\.json$")
 TR_TYPE = "application/json"
+_SOURCE_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/sources/([1-9][0-9]{0,18})\.([0-9a-f]{8})\.bin$")
+SOURCE_TYPE = "application/octet-stream"
+_FIGURE_KEY_RE = re.compile(r"^users/([0-9a-f-]{36})/figures/([1-9][0-9]{0,18})/([0-9a-f]{16})\.(png|jpg|gif)$")
 _INCOMING_KEY_RE = re.compile(r"^incoming/([0-9a-f-]{36})/([0-9a-f-]{36})\.pdf$")
 _BACKUP_KEY_RE = re.compile(r"^backups/db/\d{8}\.dump$")
 
@@ -89,6 +94,30 @@ def tr_key(uid: str, paper_id: int) -> str:
     return key
 
 
+def source_key(uid: str, paper_id: int) -> str:
+    """문서 원본 키. gen = 올릴 때마다 새 16진수 8자리(새 키에 쓰고 DB 포인터만 바꿔 교체)"""
+    key = f"users/{_check_uuid(uid, '사용자 id')}/sources/{paper_id}.{secrets.token_hex(4)}.bin"
+    if isinstance(paper_id, bool) or not isinstance(paper_id, int) or not _SOURCE_KEY_RE.fullmatch(key):
+        raise StorageKeyError("원본 파일 키 형식이 틀렸어요")
+    return key
+
+
+def figure_prefix(uid: str, manuscript_id: int) -> str:
+    """원고 하나의 그림 폴더 (원고를 지울 때 이 아래를 모두 지운다)"""
+    _check_uuid(uid, "사용자 id")
+    if isinstance(manuscript_id, bool) or not isinstance(manuscript_id, int) or not 0 < manuscript_id < 10 ** 19:
+        raise StorageKeyError("원고 id 형식이 틀렸어요")
+    return f"users/{uid}/figures/{manuscript_id}/"
+
+
+def figure_key(uid: str, manuscript_id: int, name: str) -> str:
+    """원고 그림 키. name = 16진수 16자리 + .png|.jpg|.gif (서버가 만든 이름만 — figures.NAME_RE)"""
+    key = figure_prefix(uid, manuscript_id) + (name if isinstance(name, str) else "")
+    if not _FIGURE_KEY_RE.fullmatch(key):
+        raise StorageKeyError("그림 키 형식이 틀렸어요")
+    return key
+
+
 def backup_key(day: str) -> str:
     key = f"backups/db/{day}.dump"
     if not _BACKUP_KEY_RE.fullmatch(key):
@@ -98,12 +127,12 @@ def backup_key(day: str) -> str:
 
 def check_user_key(uid: str, key: str) -> str:
     """키가 그 사용자의 users/{uid}/papers/{id}.pdf · users/{uid}/rag/….bin · users/{uid}/translations/….json ·
-    incoming/{uid}/{uuid}.pdf 인지 확인한다."""
+    users/{uid}/figures/{원고 id}/{hex16}.{png|jpg|gif} · incoming/{uid}/{uuid}.pdf 인지 확인한다."""
     _check_uuid(uid, "사용자 id")
     if not isinstance(key, str) or not key:
         raise StorageKeyError("빈 키")
     m = (_PAPER_KEY_RE.fullmatch(key) or _RAG_KEY_RE.fullmatch(key) or _TR_KEY_RE.fullmatch(key)
-         or _INCOMING_KEY_RE.fullmatch(key))
+         or _SOURCE_KEY_RE.fullmatch(key) or _FIGURE_KEY_RE.fullmatch(key) or _INCOMING_KEY_RE.fullmatch(key))
     if not m or m.group(1) != uid:
         raise StorageKeyError("이 사용자의 저장소 키가 아니에요")
     return key
@@ -121,8 +150,11 @@ def _expires_at(ttl: int) -> str:
     return (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=ttl)).isoformat()
 
 
-def content_disposition(filename: str) -> str:
+def content_disposition(filename: str, original: bool = False) -> str:
+    """PDF는 브라우저에서 바로 열고(inline, 이름 + .pdf), 문서 원본은 올린 이름(확장자 포함) 그대로 내려받게(attachment)"""
     safe = re.sub(r'[\\/:*?"<>|\r\n]+', "_", filename or "paper").strip()[:150] or "paper"
+    if original:
+        return f"attachment; filename*=UTF-8''{quote(safe)}"
     return f"inline; filename*=UTF-8''{quote(safe + '.pdf')}"
 
 
@@ -135,7 +167,7 @@ class Storage:
     def create_upload(self, key: str, content_type: str = PDF_TYPE, ttl: int = SIGN_TTL) -> dict:
         raise NotImplementedError
 
-    def sign_get(self, key: str, ttl: int = SIGN_TTL, filename: str = "") -> dict:
+    def sign_get(self, key: str, ttl: int = SIGN_TTL, filename: str = "", original: bool = False) -> dict:
         raise NotImplementedError
 
     def get(self, key: str) -> bytes:
@@ -204,7 +236,7 @@ class FakeStorage(Storage):
         url = self._sign("PUT", key, int(time.time()) + ttl)
         return {"method": "PUT", "url": url, "headers": {"Content-Type": content_type}, "expires_at": _expires_at(ttl)}
 
-    def sign_get(self, key, ttl=SIGN_TTL, filename=""):
+    def sign_get(self, key, ttl=SIGN_TTL, filename="", original=False):
         self._record("sign_get", key)
         return {"url": self._sign("GET", key, int(time.time()) + ttl), "expires_at": _expires_at(ttl)}
 
@@ -317,10 +349,10 @@ class R2Storage(Storage):
             "put_object", Params={"Bucket": self.bucket, "Key": key, "ContentType": content_type}, ExpiresIn=ttl)
         return {"method": "PUT", "url": url, "headers": {"Content-Type": content_type}, "expires_at": _expires_at(ttl)}
 
-    def sign_get(self, key, ttl=SIGN_TTL, filename=""):
-        params = {"Bucket": self.bucket, "Key": key, "ResponseContentType": PDF_TYPE}
+    def sign_get(self, key, ttl=SIGN_TTL, filename="", original=False):
+        params = {"Bucket": self.bucket, "Key": key, "ResponseContentType": SOURCE_TYPE if original else PDF_TYPE}
         if filename:
-            params["ResponseContentDisposition"] = content_disposition(filename)
+            params["ResponseContentDisposition"] = content_disposition(filename, original)
         url = self.client.generate_presigned_url("get_object", Params=params, ExpiresIn=ttl)
         return {"url": url, "expires_at": _expires_at(ttl)}
 
@@ -429,7 +461,7 @@ class UserStorage:
 
     def _pdf_only(self, key: str) -> str:
         """서명 주소는 PDF · 올리는 중 키에만 — 벡터 · 번역 파일은 브라우저로 가지 않는다(3단계 8.1절 AC-S02 · 4단계 AC-D03)"""
-        if _RAG_KEY_RE.fullmatch(self.check(key)) or _TR_KEY_RE.fullmatch(key):
+        if _RAG_KEY_RE.fullmatch(self.check(key)) or _TR_KEY_RE.fullmatch(key) or _FIGURE_KEY_RE.fullmatch(key):
             raise StorageKeyError("서명 주소를 만들 수 없는 키예요")
         return key
 
@@ -437,7 +469,19 @@ class UserStorage:
         return self.storage.create_upload(self._pdf_only(key), PDF_TYPE)
 
     def sign_get(self, key: str, filename: str = "") -> dict:
-        return self.storage.sign_get(self._pdf_only(key), filename=filename)
+        return self.storage.sign_get(self._pdf_only(key), filename=filename,
+                                     original=bool(_SOURCE_KEY_RE.fullmatch(key)))
+
+    def source_key(self, paper_id: int) -> str:
+        return source_key(self.uid, paper_id)
+
+    def figure_key(self, manuscript_id: int, name: str) -> str:
+        return figure_key(self.uid, manuscript_id, name)
+
+    def list_figures(self, manuscript_id: int) -> list[tuple[str, int]]:
+        """원고 하나의 그림 [(키, 크기)] — 규칙에 맞는 키만"""
+        prefix = figure_prefix(self.uid, manuscript_id)
+        return [(k, s) for k, s in self.storage.list_prefix(prefix) if _FIGURE_KEY_RE.fullmatch(k)]
 
     def get(self, key: str) -> bytes:
         return self.storage.get(self.check(key))
@@ -473,11 +517,27 @@ class BackupSizeCache:
         self._value: int | None = None
         self._at = 0.0
 
+    def _measure(self) -> int:
+        return self.storage.list_prefix_size("backups/")
+
     def get(self) -> int:
         if self._value is None or time.monotonic() - self._at > self.ttl:
             try:
-                self._value = self.storage.list_prefix_size("backups/")
+                self._value = self._measure()
             except Exception:  # noqa: BLE001 - 사용량 표시는 실패해도 0으로
                 self._value = self._value or 0
             self._at = time.monotonic()
         return self._value
+
+
+class FigureSizeCache(BackupSizeCache):
+    """원고 그림(users/{uid}/figures/…) 크기 합계 (5분 캐시) — R2 사용량 · 95% 규칙에 더한다
+    (그림 크기는 DB papers 행에 없어서 R2 목록으로 잰다)"""
+
+    def _measure(self) -> int:
+        return sum(s for k, s in self.storage.list_prefix("users/") if _FIGURE_KEY_RE.fullmatch(k))
+
+    def add(self, n: int) -> None:
+        """방금 올린 그림을 캐시가 다시 잴 때까지 바로 더해 둔다"""
+        if self._value is not None:
+            self._value += int(n)

@@ -7,10 +7,11 @@ import { listStyles, render, styleOptions } from "./cite.js";
 import { EXT_MARK, bindExtLink, citeDialog, editPaperDialog, issuesBox, settingsDialog, uploadPdfs } from "./dialogs.js";
 import { INHA, paperProxyTarget } from "./extlinks.js";
 import {
-  cancelJob, errorLabel, isActive, retryJob, setStatusLine, statusLineEl, summaryCard, updateSummaryCard, watchJob,
+  cancelJob, errorLabel, handledJob, isActive, retryJob, setStatusLine, statusLineEl, summaryCard, updateSummaryCard, watchJob,
 } from "./jobs.js";
 import { BUSY_TIP, explainBusy, explainTab, followPage, resetExplain, startExplain } from "./explain.js";
-import { exportAnnotations } from "./library.js";
+import { LIB_ACCEPT, formatBadge } from "./filetypes.js";
+import { downloadSource, exportAnnotations } from "./library.js";
 import { quoteRuleText } from "./refquote.js";
 import { onRefresh, state } from "./state.js";
 import {
@@ -92,7 +93,7 @@ export async function openReader(main, pid, startPage = null) {
   // 작업 목록 [열기]에서 온 4단계 작업: 탭 "설명·번역" + 보기 (주소가 아니라 화면 메모리 — 시안 7.3절)
   const want = state.readerTab && state.readerTab.pid === pid ? state.readerTab : null;
   state.readerTab = null;
-  if (want) savePrefs({ tab: want.tab, xtView: want.view });
+  if (want) savePrefs(want.view ? { tab: want.tab, xtView: want.view } : { tab: want.tab }); // 대화 탭(끝남 알림 [열기])은 보기 없음
   const p0 = prefs();
   R = {
     pid, paper, annotations: [], pages: [], scale: 1, fit: p0.fit !== false, color: p0.color || "yellow",
@@ -105,6 +106,7 @@ export async function openReader(main, pid, startPage = null) {
       <div class="reader-bar">
         <a class="btn ghost sm" href="#/library" title="서재로 (Esc)">← 서재</a>
         <div class="title" title="${esc(paper.title)}">${esc(paper.title)}</div>
+        ${paper.has_source ? `<button class="btn sm ghost" data-source title="${esc(`올린 원본 파일(${paper.source_name || ""})을 받아요. 여기서는 PDF로 바꾼 것을 보여 줘요`)}">원본 받기 <span class="pdf-badge">${esc(formatBadge(paper.source_name))}</span></button>` : ""}
         <button class="icon-btn" data-panel title="오른쪽 패널 열고 닫기" aria-label="패널 열고 닫기">◧</button>
         <div class="pageno"><input class="input" data-page value="1" aria-label="쪽 번호"> / <span data-total>…</span></div>
         <button class="icon-btn" data-zoom="-1" title="축소" aria-label="축소">−</button>
@@ -127,6 +129,8 @@ export async function openReader(main, pid, startPage = null) {
   R.pagesEl = $(".pdf-pages", view);
 
   $$("[data-tab]", view).forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+  const srcBtn = $("[data-source]", view);
+  if (srcBtn) srcBtn.onclick = () => downloadSource(pid);
   markTabs($(".panel .tabs", view), "패널");
   wireBar(view);
   $("[data-panel]", view).onclick = () => {
@@ -242,22 +246,22 @@ function gotoPage(n) {
 }
 
 // ------------------------------------------------------------------- PDF
-// PDF 없는 논문: [인하대에서 보기](대상 있을 때) · [PDF 첨부] (docs/design/inha-proxy-ui.md 6장)
+// PDF 없는 논문: [인하대에서 보기](대상 있을 때) · [파일 첨부] (docs/design/inha-proxy-ui.md 6장 — 워드 · 한글 · 사진도 받음)
 function drawPdfMissing() {
   const target = paperProxyTarget(R.paper);
   R.pagesEl.innerHTML = `<div class="empty pdf-missing">
     <h3>PDF가 없어요</h3>
-    <p>${target ? "인하대에서 논문을 열어 PDF를 받은 뒤 [PDF 첨부]로 올려 주세요."
-      : "PDF 파일이 있으면 [PDF 첨부]로 올려 주세요. 무료 PDF는 서재 상세 패널의 [무료 PDF 찾기]로 찾을 수 있어요."}</p>
+    <p>${target ? "인하대에서 논문을 열어 PDF를 받은 뒤 [파일 첨부]로 올려 주세요."
+      : "파일이 있으면 [파일 첨부]로 올려 주세요(PDF · 워드 · 한글 · PPT · 엑셀 · 사진). 무료 PDF는 서재 상세 패널의 [무료 PDF 찾기]로 찾을 수 있어요."}</p>
     <div class="empty-actions">
       ${target ? `<a class="btn primary" href="${esc(target)}" target="_blank" rel="noopener noreferrer" data-inha-open>${esc(INHA.buttons.view)}${EXT_MARK}</a>` : ""}
-      <button type="button" class="btn${target ? "" : " primary"}" data-attach>PDF 첨부</button>
+      <button type="button" class="btn${target ? "" : " primary"}" data-attach>파일 첨부</button>
     </div></div>`;
   const link = $("[data-inha-open]", R.pagesEl);
   if (link) bindExtLink(link);
   const me = R;
   $("[data-attach]", R.pagesEl).onclick = async () => {
-    const [file] = await pickFiles({ accept: ".pdf,application/pdf" });
+    const [file] = await pickFiles({ accept: LIB_ACCEPT });
     if (!file || R !== me) return;
     me.awaitingPdf = true; // 올리기가 끝나면(refreshAll) 다시 불러 PDF를 표시
     uploadPdfs([file], { attachTo: me.pid });
@@ -838,6 +842,7 @@ async function onSummaryJob(pid, j) {
     return;
   }
   watches.delete(pid);
+  handledJob(j.id); // 아래에서 이 화면이 직접 알림 — 끝남 토스트 · 브라우저 알림을 겹치지 않음
   if (j.status === "succeeded") {
     let s = null;
     try { s = (await api.get(`/api/papers/${pid}/summary`)).summary; } catch { s = null; }
@@ -1023,6 +1028,7 @@ async function chatTab(body) {
       if (R !== me) { entry.stop && entry.stop(); return; }
       if (!j || j.status === "cancelled") return finishJob(job.id, null);
       if (j.status === "succeeded") {
+        handledJob(j.id);
         try { R.chat = await api.get(`/api/papers/${R.pid}/chat`); } catch { /* 다음에 열면 보임 */ }
         R.chatJobs = (R.chatJobs || []).filter((x) => x.id !== j.id);
         jobNodes.delete(j.id);
@@ -1080,8 +1086,20 @@ async function chatTab(body) {
     log.appendChild(node);
     log.scrollTop = log.scrollHeight;
     const me = R;
-    R.abort = new AbortController();
+    const abort = (R.abort = new AbortController());
     let jobEv = null;
+    let cancelled = false;
+    // [취소]: 연결을 끊어도 서버 작업은 계속되므로(2026-10-16 백그라운드 AI) 작업 번호로 취소한 뒤 스트림을 끊는다 (explain.js cancelRun과 같음)
+    const cancelRow = el(`<div class="row" style="margin-top:4px"><span class="spacer"></span><button type="button" class="btn sm ghost" data-chat-cancel>취소</button></div>`);
+    const onJob = (id) => {
+      if (R !== me) return;
+      $("[data-chat-cancel]", cancelRow).onclick = () => {
+        cancelled = true;
+        cancelJob(id).catch(() => {});
+        abort.abort();
+      };
+      node.appendChild(cancelRow);
+    };
     try {
       await streamEvents(`/api/papers/${R.pid}/chat`, { question }, (ev) => {
         if (R !== me) return;
@@ -1095,12 +1113,14 @@ async function chatTab(body) {
           pending.citations = ev.citations;
           pending.pending = false;
           updateMessage(node, pending);
+          handledJob(ev.job_id); // 이 화면에서 답을 봤음 — 끝남 토스트 생략 (화면을 떠나면 서버가 끝까지 받아 저장하고 알림)
         } else if (ev.type === "error") {
           throw new Error(ev.error);
         }
         const nearBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 140;
         if (nearBottom) log.scrollTop = log.scrollHeight;
-      }, R.abort.signal);
+      }, abort.signal, { onJob });
+      cancelRow.remove();
       if (R !== me) return;
       if (jobEv) {
         R.chat.pop();
@@ -1113,7 +1133,17 @@ async function chatTab(body) {
       if (pending.pending) throw new Error("응답이 끝나기 전에 연결이 끊겼어요");
       R.chat.push(pending);
     } catch (e) {
-      if (R !== me || e.name === "AbortError") return;
+      cancelRow.remove();
+      if (R !== me) return;
+      if (e.name === "AbortError") {
+        if (!cancelled) return;
+        R.chat.pop(); // 취소한 질문은 대화에 남기지 않고 입력 칸으로 되돌림
+        node.remove();
+        draw();
+        ta.value = text;
+        toast("취소했어요");
+        return;
+      }
       R.chat.pop();
       node.replaceWith(el(`<div class="msg error">${esc(e.message)}</div>`));
       ta.value = text;

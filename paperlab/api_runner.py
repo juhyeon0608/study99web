@@ -8,6 +8,8 @@
   AI로 찾기 CLI 경로의 서버 검색(13.2절 ②)도 여기서(`prepare_find`) — 워커 잡기 요청이 DB 연결을 오래 잡지 않게.
 - 4단계: explain · translate(선택 — 폴백 · 다시 시도로 API 칸이 된 것), translate_paper(전체 번역 — 잡기 한 번에 묶음 하나,
   끝나면 같은 작업을 대기열 뒤로 다시 넣음, K-6).
+- 2026-10-16 백그라운드 AI: 글쓰기 도우미(write)는 API 칸이면 언제나 여기서 실행(화면 SSE 없음 — 창을 닫아도 계속).
+  쓰는 키는 그 사용자가 설정에 넣은 키뿐이다(settings_loader — 서버 환경 변수 없음). 서버는 CLI를 실행하지 않는다.
 """
 
 from __future__ import annotations
@@ -261,11 +263,12 @@ class ApiRunner:
                 if src is None:
                     return
                 parsed = _collect(ai.chat(self._context(uid, src, engine), history, params.get("question") or "",
-                                          engine=engine), progress)
-            else:
+                                          engine=engine), progress, partial=True)
+            else:  # 글쓰기 = 백그라운드 작업 (2026-10-16): 창을 닫아도 여기서 끝까지 — 중간 글은 진행으로
                 parsed = _collect(ai.write(params.get("mode") or "polish", params.get("text") or "",
                                            instruction=params.get("instruction") or "",
-                                           context=params.get("context") or "", sources=sources, engine=engine), progress)
+                                           context=params.get("context") or "", sources=sources, engine=engine), progress,
+                                  partial=True)
             if state["cancel"].is_set():
                 raise _Cancelled()
         except _Cancelled:
@@ -505,11 +508,17 @@ class ApiRunner:
         return PaperContext(title=src["title"], pdf_bytes=data, page_texts=src["page_texts"], abstract=src["abstract"])
 
 
-def _collect(events, progress) -> dict:
-    """대화 · 글쓰기 이벤트 → 마지막 done. 중간 글은 진행(partial)으로는 남기지 않는다(실행기는 화면과 연결이 없음)"""
+def _collect(events, progress, partial: bool = False) -> dict:
+    """대화 · 글쓰기 이벤트 → 마지막 done. partial이면 중간 글을 진행(partial_text)으로 남긴다 — 글쓰기 창 · 다시 연 화면이
+    폴링으로 보여 줌(2026-10-16 백그라운드 AI, 쓰기는 progress가 1초에 한 번까지). JSON 결과(설명 · 검증 · 번역)는 남기지 않음"""
     done = None
+    text = ""
     for ev in events:
-        progress("답을 만드는 중", None)
+        if partial and ev.get("type") == "delta":
+            text += str(ev.get("text") or "")
+            progress("글을 만드는 중", None, partial_text=text)
+        else:
+            progress("답을 만드는 중", None)
         if ev.get("type") == "done":
             done = ev
     if not done:

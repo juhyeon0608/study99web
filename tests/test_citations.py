@@ -38,6 +38,12 @@ def test_citation_issues(sample):
     assert citations.citation_issues(pre) == []
     art = {"title": "x", "authors": [{"family": "a"}], "year": 2020, "item_type": "article"}
     assert citations.citation_issues(art) == ["학술지 이름", "권", "쪽"]
+    # 서재에 넣은 내 문서(유형 '문서')는 논문 필수 항목(저자 · 연도 · 학술지)을 묻지 않는다
+    assert citations.citation_issues({"title": "회의록", "item_type": "document"}) == []
+    assert citations.citation_issues({"title": "", "item_type": "document"}) == ["제목"]
+    doc = {"title": "회의록", "item_type": "document"}
+    assert citations.to_csl_item(doc)["type"] == "document" and "@misc{" in citations.to_bibtex([doc])
+    assert "TY  - GEN" in citations.to_ris([doc])
 
 
 def test_csl_import_tolerates_arrays():

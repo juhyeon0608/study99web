@@ -1,6 +1,7 @@
 // 2단계 작업 화면 문구 (docs/design/phase2-worker-electron-ui.md 5장 — S8 상태 문구 · 5.3 경로 단계 · 5.4 오류 이름) — 순수 함수만
 import { describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 // jobs.js → api.js가 불러올 때 document · window에 처리기를 거는 것만 흉내 (화면 없이 순수 함수만 시험)
 globalThis.document = { addEventListener() {}, hidden: false };
@@ -81,5 +82,55 @@ describe("코드 검사", () => {
     if (!D) return; // 화면 의존 모듈을 못 불러오면 건너뜀(서버 쪽은 pytest가 검사)
     assert.equal(D.maskEmail("alice@example.com"), "a***@example.com");
     assert.equal(D.maskEmail("bad"), "");
+  });
+});
+
+describe("백그라운드 AI · 끝남 알림 (2026-10-16)", () => {
+  test("글쓰기 결과는 그 원고를 열어 결과 창으로 (#/write/원고/j작업), 원고가 지워졌으면 주소 없음", () => {
+    assert.equal(J.jobHref(job({ id: 55, kind: "write", manuscript_id: 12, manuscript_title: "석사 논문" })), "#/write/12/j55");
+    assert.equal(J.jobHref(job({ id: 55, kind: "write", manuscript_id: 12, manuscript_title: null })), "");
+    assert.equal(J.jobHref(job({ id: 5, kind: "chat", paper_id: 7 })), "#/read/7");
+    assert.equal(J.jobHref(job({ id: 5, kind: "explain", paper_id: 7 })), "#/read/7");
+  });
+  test("끝남 문구", () => {
+    assert.equal(J.finishedText(job({ kind: "write", status: "succeeded", manuscript_title: "2장" })), "AI 글쓰기 결과가 준비됐어요 — 원고: 2장");
+    assert.equal(J.finishedText(job({ kind: "summary", status: "succeeded", paper_title: "ResNet" })), "요약이 끝났어요 — ResNet");
+    assert.equal(J.finishedText(job({ kind: "chat", status: "succeeded", paper_title: "ResNet" })), "대화가 끝났어요 — ResNet");
+    assert.equal(J.finishedText(job({ kind: "translate_paper", status: "failed", error: "API 키가 올바르지 않아요", paper_title: "P" })),
+      "전체 번역 실패 — API 키가 올바르지 않아요 (P)");
+  });
+  test("경로 없음 안내는 연결된 PC와 내 API 키를 함께 말한다 (서버 CLI 없음)", () => {
+    assert.match(J.NO_ROUTE_TEXT, /설정 → 연결된 PC/);
+    assert.match(J.NO_ROUTE_TEXT, /API 키/);
+  });
+  test("알림 허락 안내: Notification이 없거나 이미 정했으면 띄우지 않음", () => {
+    assert.equal(J.notifyOffer(), null); // Node: Notification 없음
+    globalThis.Notification = { permission: "granted" };
+    try { assert.equal(J.notifyOffer(), null); } finally { delete globalThis.Notification; }
+  });
+});
+
+describe("겹치는 알림 · 대기 기한 · [취소] (2026-10-17 팀장 후속)", () => {
+  const src = (f) => readFileSync(new URL(`../../paperlab/static/js/${f}`, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  const fn = (s, head) => s.match(new RegExp(`${head}[^]*?\\n}\\n`))[0]; // 함수 본문 (닫는 중괄호가 줄 맨 앞)
+  test("이미 화면에 보인 결과(handledJob)는 토스트도 브라우저 알림도 띄우지 않는다", () => {
+    const body = fn(src("jobs.js"), "function announce\\(");
+    assert.ok(body.indexOf("N.handled.has(j.id)") >= 0 && body.indexOf("N.handled.has(j.id)") < body.indexOf("osNotify("));
+  });
+  test("결과를 직접 그리는 화면은 handledJob을 부른다 (요약 카드 · 인용 검증 · 전체 번역)", () => {
+    assert.match(fn(src("reader.js"), "async function onSummaryJob"), /handledJob\(j\.id\)/);
+    assert.match(fn(src("writing.js"), "function showVerify"), /handledJob\(j\.id\)/);
+    assert.match(fn(src("explain.js"), "function watchTr"), /handledJob\(j\.id\)/);
+  });
+  test("대화 · 서재 질문 스트림은 작업 번호를 받아 [취소]로 작업을 취소한다", () => {
+    for (const f of ["reader.js", "ask.js"]) {
+      const s = src(f);
+      assert.match(s, /abort\.signal, \{ onJob \}\)/, f);
+      assert.match(s, /cancelJob\(id\)\.catch\(\(\) => \{\}\);\s*abort\.abort\(\);/, f);
+    }
+  });
+  test("대기 기한 24시간: 1시간보다 많이 남으면 남은 분은 붙이지 않음", () => {
+    const later = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+    assert.match(J.deadlineText(job({ deadline_at: later })), /까지 기다려요$/);
   });
 });

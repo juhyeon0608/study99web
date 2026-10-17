@@ -3,9 +3,13 @@
 화면이 인용·참고문헌을 citeproc-js로 서식화한 뒤 아래 '블록' 목록을 보낸다.
 
 블록: {"type": "title" | "heading" | "paragraph" | "list_item" | "quote" | "code" |
-         "bib_heading" | "bib_entry" | "page_break",
+         "bib_heading" | "bib_entry" | "page_break" | "figure" | "table",
        "level": 1~4 (heading), "ordered": bool, "number": int, "depth": int (list_item),
        "hanging": bool (bib_entry), "text": str (code·bib_heading), "runs": [런…]}
+그림: {"type": "figure", "src": 그림 이름, "alt": str, "caption": [런…] ("그림 1. …" — 그림 아래),
+       "image": {"data", "format", "width", "height"} ← 서버가 저장소에서 읽어 넣는다(figures.attach_images)}
+표:   {"type": "table", "rows": [[[런…] 칸…] 줄…], "header": bool(첫 줄이 머리글),
+       "align": ["left" | "center" | "right" | None …], "caption": [런…] ("표 1. …" — 표 위)}
 런:   {"text": str, "b": bool, "i": bool, "sup": bool, "sub": bool, "code": bool}
       또는 {"footnote": [런…]}  ← 그 자리에 각주 번호가 들어가고 쪽 아래에 내용이 붙는다
 """
@@ -18,6 +22,7 @@ import re
 from typing import Any, Iterable
 
 from . import doc_formats as df
+from . import figures as fig
 
 Block = dict[str, Any]
 Run = dict[str, Any]
@@ -32,12 +37,52 @@ def _clean_text(text: str) -> str:
     return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text or "")
 
 
+_BULLETS = ("•", "◦", "▪")  # 글머리 기호: 단계(depth)마다 바꾼다
+
+
 def _list_prefix(block: Block) -> str:
-    return f"{block.get('number') or 1}. " if block.get("ordered") else "• "
+    if block.get("ordered"):
+        return f"{block.get('number') or 1}. "
+    return _BULLETS[max(0, int(block.get("depth") or 0)) % len(_BULLETS)] + " "
 
 
 def plain_text(runs: Iterable[Run]) -> str:
     return "".join(r.get("text", "") for r in runs if "footnote" not in r)
+
+
+# ------------------------------------------------------------------ 그림 · 표 공통
+FIGURE_MISSING = "[그림을 찾을 수 없어요]"
+MAX_TABLE_ROWS, MAX_TABLE_COLS = 500, 30
+
+
+def _runs_of(value) -> list[Run]:
+    """런 목록만 (각주는 표 칸 · 캡션에 넣지 않고 글자로 둔다)"""
+    if not isinstance(value, list):
+        return []
+    out = []
+    for r in value:
+        if isinstance(r, dict) and "footnote" in r:
+            out.append({"text": plain_text(r["footnote"] if isinstance(r["footnote"], list) else [])})
+        elif isinstance(r, dict):
+            out.append(r)
+    return out
+
+
+def _table_rows(block: Block) -> list[list[list[Run]]]:
+    """표 칸 [[런…]…] — 줄마다 칸 수를 가장 긴 줄에 맞춘다. 비었으면 1×1"""
+    rows = [r for r in (block.get("rows") or []) if isinstance(r, list)][:MAX_TABLE_ROWS]
+    cols = min(MAX_TABLE_COLS, max((len(r) for r in rows), default=0)) or 1
+    return [[_runs_of(r[c]) if c < len(r) else [] for c in range(cols)] for r in rows] or [[[]]]
+
+
+def _table_align(block: Block, col: int) -> str:
+    align = block.get("align") or []
+    a = align[col] if isinstance(align, list) and col < len(align) else None
+    return a if a in ("left", "center", "right") else "left"
+
+
+def _cell_runs(block: Block, row: int, runs: list[Run]) -> list[Run]:
+    return [dict(r, b=True) for r in runs] if row == 0 and block.get("header", True) else runs
 
 
 # =================================================================== DOCX
@@ -157,6 +202,59 @@ def _docx_set_fonts(style, latin: str, east_asia: str, size_pt: float | None = N
         style.font.color.rgb = RGBColor(0, 0, 0)
 
 
+FIGURE_UNREADABLE_WARNING = "figure-unreadable"
+
+
+def _docx_picture(paragraph, image: dict, max_w_mm: float, max_h_mm: float) -> bool:
+    """그림을 넣으면 True. python-docx가 못 읽는 그림(JFIF · Exif 머리글 없는 JPEG 등)이면 아무것도 넣지 않고 False
+    — 부른 쪽이 '[그림을 찾을 수 없어요]'로 적고 경고를 남긴다(내보내기 전체가 500으로 실패하지 않게)"""
+    from docx.shared import Mm
+
+    w, h = fig.fit_mm(image["width"], image["height"], max_w_mm, max_h_mm)
+    run = paragraph.add_run()
+    try:
+        run.add_picture(io.BytesIO(image["data"]), width=Mm(w), height=Mm(h))
+    except Exception:  # noqa: BLE001 - docx.image.exceptions.UnrecognizedImageError 등 (ValueError가 아님)
+        run._r.getparent().remove(run._r)
+        return False
+    return True
+
+
+def _figure_warn(warnings: list[str] | None) -> None:
+    if warnings is not None and FIGURE_UNREADABLE_WARNING not in warnings:
+        warnings.append(FIGURE_UNREADABLE_WARNING)
+
+
+def _docx_single_spacing(paragraph) -> None:
+    """그림 문단은 줄간격을 '한 줄'로 (고정 줄간격이면 그림이 잘려 보인다)"""
+    from docx.oxml.ns import qn
+
+    sp = paragraph._p.get_or_add_pPr().get_or_add_spacing()
+    sp.set(qn("w:line"), "240")
+    sp.set(qn("w:lineRule"), "auto")
+
+
+def _docx_table(document, block: Block, fill):
+    """표 (Table Grid 테두리 · 가운데 정렬). fill(문단, 런, 정렬)로 칸을 채운다. 머리글 줄은 쪽마다 되풀이"""
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.oxml import OxmlElement
+
+    rows = _table_rows(block)
+    table = document.add_table(rows=len(rows), cols=len(rows[0]))
+    try:
+        table.style = document.styles["Table Grid"]
+    except KeyError:
+        pass
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    for r, row in enumerate(rows):
+        cells = table.rows[r].cells
+        for c, runs in enumerate(row):
+            fill(cells[c].paragraphs[0], _cell_runs(block, r, runs), _table_align(block, c))
+    if block.get("header", True) and len(rows) > 1:
+        table.rows[0]._tr.get_or_add_trPr().append(OxmlElement("w:tblHeader"))
+    return table
+
+
 def to_docx(blocks: list[Block], meta: dict | None = None, doc_format: dict | None = None,
             cover: dict | None = None, warnings: list[str] | None = None) -> bytes:
     """doc_format(검증된 양식 데이터)이 없으면 지금 서식 그대로(기본 A4) 만든다."""
@@ -248,11 +346,47 @@ def to_docx(blocks: list[Block], meta: dict | None = None, doc_format: dict | No
             add_runs(p, runs)
         elif kind == "page_break":
             document.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+        elif kind == "figure":
+            # 그림(가운데) → 아래에 "그림 n. 캡션"
+            p = document.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p.paragraph_format.keep_with_next = True
+            image = block.get("image")
+            if image and _docx_picture(p, image, 150, 200):  # A4 본문 폭 150mm
+                _docx_single_spacing(p)
+            else:
+                if image:
+                    _figure_warn(warnings)
+                add_runs(p, [{"text": FIGURE_MISSING}])
+            caption = _runs_of(block.get("caption"))
+            if caption:
+                cp = document.add_paragraph()
+                cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                add_runs(cp, caption)
+        elif kind == "table":
+            # "표 n. 캡션"(표 위, 다음과 함께) → 표
+            caption = _runs_of(block.get("caption"))
+            if caption:
+                cp = document.add_paragraph()
+                cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                cp.paragraph_format.keep_with_next = True
+                add_runs(cp, caption)
+
+            def fill(p, cell_runs, align):
+                p.alignment = {"center": WD_ALIGN_PARAGRAPH.CENTER, "right": WD_ALIGN_PARAGRAPH.RIGHT}.get(align)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.line_spacing = 1.15
+                add_runs(p, cell_runs)
+
+            _docx_table(document, block, fill)
         else:
             p = document.add_paragraph()
             p.paragraph_format.first_line_indent = Mm(meta.get("first_line_indent_mm", 0) or 0) or None
             add_runs(p, runs)
 
+    body_el = document.element.body
+    if len(body_el) > 1 and body_el[-2].tag.endswith("}tbl"):
+        document.add_paragraph()  # 표로 끝나는 문서는 뒤에 빈 문단(워드 규칙)
     buf = io.BytesIO()
     document.save(buf)
     return buf.getvalue()
@@ -304,6 +438,49 @@ class _HwpxWriter:
 
         layout.set_paragraph_format(self.doc, paragraphs=[paragraph], **kw)
 
+    def picture(self, paragraph, image: dict, max_w_mm: float, max_h_mm: float) -> None:
+        _hwpx_picture(self.doc, paragraph, image, max_w_mm, max_h_mm)
+
+    def table(self, block: Block, width_mm: float) -> None:
+        rows = _table_rows(block)
+        t = _hwpx_table(self.paragraph(), block, rows, width_mm, 7.0)
+        for r, row in enumerate(rows):
+            for c, runs in enumerate(row):
+                p = t.cell(r, c).paragraphs[0]
+                self.runs(p, _cell_runs(block, r, runs))
+                self.fmt(p, alignment=_HWPX_ALIGN[_table_align(block, c)], first_line_indent_mm=0,
+                         spacing_after_pt=0)
+
+
+def _hwpx_table(anchor, block: Block, rows: list, width_mm: float, row_mm: float, char_pr_id_ref=None):
+    """문단에 표를 놓는다. 줄 높이는 최소값(글이 길면 한글이 늘림) — 0에 가까우면 다른 프로그램에서 납작해진다.
+    머리글 줄은 쪽마다 되풀이"""
+    kw = {"char_pr_id_ref": char_pr_id_ref} if char_pr_id_ref is not None else {}
+    t = anchor.add_table(len(rows), len(rows[0]), width=df.mm_to_hwp(width_mm),
+                         height=df.mm_to_hwp(row_mm * len(rows)), **kw)
+    header = bool(block.get("header", True) and len(rows) > 1)
+    if header:
+        t.element.set("repeatHeader", "1")
+    for tc in t.element.iter(f"{_HP}tc"):
+        tc.set("hasMargin", "1")  # 칸 안 여백(cellMargin)을 쓰게 — 안 쓰면 글이 테두리에 붙는 프로그램이 있음
+        addr = tc.find(f"{_HP}cellAddr")
+        if header and addr is not None and addr.get("rowAddr") == "0":
+            tc.set("header", "1")
+    t.mark_dirty()
+    return t
+
+
+def _hwpx_picture(doc, paragraph, image: dict, max_w_mm: float, max_h_mm: float, char_pr_id_ref=None) -> None:
+    """그림을 문서에 넣고(BinData) 문단에 글자처럼 취급하는 그림으로 놓는다"""
+    w, h = fig.fit_mm(image["width"], image["height"], max_w_mm, max_h_mm)
+    # 같은 그림(attach_images가 같은 바이트를 돌려줌)을 여러 번 넣어도 BinData에는 한 번만
+    added = doc.__dict__.setdefault("_paperlab_media", {})
+    item_id = added.get(id(image["data"]))
+    if item_id is None:
+        item_id = added[id(image["data"])] = doc.media.add_image(image["data"], image["format"]).item_id
+    kw = {"char_pr_id_ref": char_pr_id_ref} if char_pr_id_ref is not None else {}
+    paragraph.add_picture(item_id, width=df.mm_to_hwp(w), height=df.mm_to_hwp(h), **kw)
+
 
 def to_hwpx(blocks: list[Block], meta: dict | None = None, doc_format: dict | None = None,
             cover: dict | None = None, warnings: list[str] | None = None) -> bytes:
@@ -348,6 +525,26 @@ def to_hwpx(blocks: list[Block], meta: dict | None = None, doc_format: dict | No
         elif kind == "page_break":
             p = w.paragraph()
             w.fmt(p, page_break_before=True)
+        elif kind == "figure":
+            p = w.paragraph()
+            image = block.get("image")
+            if image:
+                w.picture(p, image, 150, 200)  # 한글 기본 쪽 본문 폭 150mm
+            else:
+                w.runs(p, [{"text": FIGURE_MISSING}])
+            w.fmt(p, alignment="CENTER", keep_with_next=True, line_spacing_percent=100, spacing_before_pt=6)
+            caption = _runs_of(block.get("caption"))
+            if caption:
+                p = w.paragraph()
+                w.runs(p, caption)
+                w.fmt(p, alignment="CENTER", spacing_after_pt=6)
+        elif kind == "table":
+            caption = _runs_of(block.get("caption"))
+            if caption:
+                p = w.paragraph()
+                w.runs(p, caption)
+                w.fmt(p, alignment="CENTER", keep_with_next=True, spacing_before_pt=6)
+            w.table(block, 150)
         else:
             p = w.paragraph()
             w.runs(p, runs)
@@ -377,14 +574,35 @@ def to_markdown(blocks: list[Block]) -> str:
             s += t
         return s
 
+    list_cols: list[int] = []  # 단계별 바로 앞 항목의 내용 시작 칸 (하위 항목은 부모 기호 폭만큼 들여써야 하위 목록이 됨)
     for b in blocks:
         kind = b.get("type")
+        if kind != "list_item":
+            list_cols = []
         if kind == "title":
             out.append("# " + md(b.get("runs") or []))
         elif kind == "heading":
             out.append("#" * (int(b.get("level") or 1) + 1) + " " + md(b.get("runs") or []))
         elif kind == "list_item":
-            out.append("  " * int(b.get("depth") or 0) + _list_prefix(b).replace("•", "-") + md(b.get("runs") or []))
+            marker = _list_prefix(b) if b.get("ordered") else "- "
+            depth = max(0, int(b.get("depth") or 0))
+            # "10. 항목"의 하위는 4칸, "- 항목"의 하위는 2칸 (CommonMark: 부모 내용 칸 이상 들여써야 하위)
+            indent = (list_cols[depth - 1] if depth <= len(list_cols) else list_cols[-1]) if depth and list_cols else 0
+            list_cols = list_cols[:depth] + [indent] * (depth - len(list_cols)) + [indent + len(marker)]
+            out.append(" " * indent + marker + md(b.get("runs") or []))
+        elif kind == "figure":
+            src = b.get("src") if isinstance(b.get("src"), str) and fig.NAME_RE.fullmatch(b["src"]) else ""
+            alt = str(b.get("alt") or "").replace("]", "\\]")
+            out.append((f"![{alt}](fig:{src})\n\n" if src else "") + md(_runs_of(b.get("caption"))))
+        elif kind == "table":
+            rows = _table_rows(b)
+            cell = lambda runs: md(runs).replace("|", "\\|").replace("\n", " ")  # noqa: E731
+            sep = {"left": ":--", "center": ":-:", "right": "--:"}
+            lines = ["| " + " | ".join(cell(c) for c in rows[0]) + " |",
+                     "| " + " | ".join(sep[_table_align(b, i)] for i in range(len(rows[0]))) + " |"]
+            lines += ["| " + " | ".join(cell(c) for c in r) + " |" for r in rows[1:]]
+            caption = md(_runs_of(b.get("caption")))
+            out.append((caption + "\n\n" if caption else "") + "\n".join(lines))
         elif kind == "quote":
             out.append("> " + md(b.get("runs") or []))
         elif kind == "code":
@@ -440,6 +658,7 @@ def _neg(length: dict) -> dict:
 def _render_formatted(builder, blocks: list[Block], fmt: dict, meta: dict, cover: dict | None,
                       warnings: list[str] | None) -> bytes:
     warnings = warnings if warnings is not None else []
+    builder.warnings = warnings  # 그림을 못 넣으면 builder가 경고를 남긴다
     page = fmt["page"]
     title_text = (meta.get("title") or "").strip() or next(
         (plain_text(b.get("runs") or []).strip() for b in blocks if b.get("type") == "title"), "")
@@ -480,6 +699,7 @@ class _FormattedBuilder:
         self.fmt = fmt
         self.styles = {k: df.resolve_style(fmt, k) for k in
                        ("body", "title", "headings.1", "headings.2", "headings.3", "quote", "footnote", "bibliography")}
+        self.warnings: list[str] | None = None  # _render_formatted가 넣어 준다
         self.section_start = True   # 다음 문단이 구역 첫 문단이면 '새 쪽에서 시작'을 끈다(빈 쪽 방지)
         self.pending_break = False  # page_break 블록은 다음 문단의 '새 쪽에서 시작'으로 바꾼다
 
@@ -490,6 +710,16 @@ class _FormattedBuilder:
         override_indent = False
         if kind == "page_break":
             self.pending_break = True
+            return
+        if kind in ("figure", "table"):
+            # 첫 문단(그림 문단 · 표 캡션)이 쪽 나눔을 받고 다음 것과 함께 둔다
+            spec = self.caption_spec(keep_next=True)
+            spec["page_break"] = bool(self.pending_break and not self.section_start)
+            self.pending_break = self.section_start = False
+            if kind == "figure":
+                self.figure(block, spec)
+            else:
+                self.table(block, spec)
             return
         if kind == "title":
             key, spec = "title", _pspec(S["title"], keep_next=True)
@@ -523,6 +753,45 @@ class _FormattedBuilder:
         spec["page_break"] = bool((spec["page_break"] or self.pending_break) and not self.section_start)
         self.pending_break = self.section_start = False
         self.write(key, spec, runs, override_indent)
+
+    def caption_spec(self, keep_next: bool = False) -> dict:
+        """캡션 · 그림 문단: 본문 모양, 가운데, 들여쓰기 없음. 그림 · 표 위(keep_next)나 아래에 6pt 이상 띄운다"""
+        body = self.styles["body"]
+        before = max(float(body["space_before_pt"]), 6.0) if keep_next else float(body["space_before_pt"])
+        after = float(body["space_after_pt"]) if keep_next else max(float(body["space_after_pt"]), 6.0)
+        return _pspec(body, align="center", left=df.mm(0), right=df.mm(0), first=df.mm(0), before_pt=before,
+                      after_pt=after, page_break=False, keep_next=keep_next)
+
+    def cell_spec(self, align: str) -> dict:
+        """표 칸 문단: 본문 글자 크기, 줄간격은 130%까지, 위아래 간격 · 들여쓰기 없음"""
+        body = self.styles["body"]
+        return _pspec(body, align=align, left=df.mm(0), right=df.mm(0), first=df.mm(0), before_pt=0, after_pt=0,
+                      line_pct=min(float(body["line_spacing_pct"]), 130.0), page_break=False)
+
+    def text_area_mm(self) -> tuple[float, float]:
+        """본문 영역 (폭, 높이) mm — 그림 크기 상한"""
+        p, m = self.fmt["page"], self.body_margins()
+        width = p["width_mm"] - m["left"] - m["right"]
+        height = p["height_mm"] - m["top"] - m["bottom"] - m["header"] - m["footer"]
+        return max(20.0, width), max(20.0, height * 0.8)
+
+    def figure(self, block: Block, spec: dict) -> None:
+        """그림 문단(spec, 줄간격 100%) → 아래에 캡션 문단. 그림 문단 쓰기는 picture_paragraph(docx · hwpx 따로)"""
+        self.picture_paragraph(block.get("image"), dict(spec, line_pct=100))
+        caption = _runs_of(block.get("caption"))
+        if caption:
+            self.write_spec(self.caption_spec(), caption)
+
+    def table(self, block: Block, spec: dict) -> None:
+        """위에 캡션 문단(spec) → 표. 표 쓰기는 table_grid(docx · hwpx 따로)"""
+        caption = _runs_of(block.get("caption"))
+        if caption or spec["page_break"]:
+            self.write_spec(spec, caption)
+        self.table_grid(block)
+
+    def write_spec(self, spec: dict, runs: list[Run]) -> None:
+        """본문 모양 + spec의 정렬 · 간격 · 함께 두기를 모두 적용한 문단"""
+        self.write("body", spec, runs, True)
 
     def bib_spec(self) -> dict:
         """참고문헌 항목 문단 사양: 왼쪽 = 들여쓰기 + 내어쓰기 폭, 첫 줄 = −내어쓰기 폭."""
@@ -809,6 +1078,31 @@ class _DocxBuilder(_FormattedBuilder):
         self._runs(p, runs)
         self.last_p = p._p
 
+    def write_spec(self, spec: dict, runs: list[Run]) -> None:
+        p = self.document.add_paragraph(style="Normal")
+        _docx_ppr(p._p.get_or_add_pPr(), spec)
+        self._runs(p, runs)
+        self.last_p = p._p
+
+    def picture_paragraph(self, image: dict | None, spec: dict) -> None:
+        p = self.document.add_paragraph(style="Normal")
+        _docx_ppr(p._p.get_or_add_pPr(), spec)
+        if image and _docx_picture(p, image, *self.text_area_mm()):
+            _docx_single_spacing(p)
+        else:
+            if image:
+                _figure_warn(self.warnings)
+            self._runs(p, [{"text": FIGURE_MISSING}])
+        self.last_p = p._p
+
+    def table_grid(self, block: Block) -> None:
+        def fill(p, runs, align):
+            _docx_ppr(p._p.get_or_add_pPr(), self.cell_spec(align))
+            self._runs(p, runs)
+
+        _docx_table(self.document, block, fill)
+        self.last_p = None  # 표 뒤에 문단이 없으면 finish가 빈 문단을 붙인다 (구역 나눔은 따로 빈 문단을 만듦)
+
     def _runs(self, paragraph, runs: list[Run]) -> None:
         from docx.shared import Pt
 
@@ -1012,7 +1306,32 @@ class _HwpxBuilder(_FormattedBuilder):
     def write(self, key: str, spec: dict, runs: list[Run], override_indent: bool) -> None:
         p = self._paragraph()
         p.para_pr_id_ref = self.para_id(spec)
-        st = self.styles[key]
+        self._add_runs(p, self.styles[key], runs)
+
+    def picture_paragraph(self, image: dict | None, spec: dict) -> None:
+        p = self._paragraph()
+        p.para_pr_id_ref = self.para_id(spec)
+        if image:
+            _hwpx_picture(self.doc, p, image, *self.text_area_mm(),
+                          char_pr_id_ref=self.char_id(_rspec(self.styles["body"], bold=False, italic=False)))
+        else:
+            self._add_runs(p, self.styles["body"], [{"text": FIGURE_MISSING}])
+
+    def table_grid(self, block: Block) -> None:
+        rows = _table_rows(block)
+        anchor = self._paragraph()
+        anchor.para_pr_id_ref = self.para_id(dict(self.caption_spec(), line_pct=100))
+        body = self.styles["body"]
+        row_mm = body["size_pt"] * min(float(body["line_spacing_pct"]), 130.0) / 100 / df.PT_PER_MM + 1.5
+        t = _hwpx_table(anchor, block, rows, self.text_area_mm()[0], row_mm,
+                        self.char_id(_rspec(body, bold=False, italic=False)))
+        for r, row in enumerate(rows):
+            for c, runs in enumerate(row):
+                p = t.cell(r, c).paragraphs[0]
+                p.para_pr_id_ref = self.para_id(self.cell_spec(_table_align(block, c)))
+                self._add_runs(p, self.styles["body"], _cell_runs(block, r, runs))
+
+    def _add_runs(self, p, st: dict, runs: list[Run]) -> None:
         for r in runs:
             if "footnote" in r:
                 text = plain_text(r["footnote"]).strip()

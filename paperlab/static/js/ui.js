@@ -246,6 +246,21 @@ export function popupMenu(anchor, items, { left = false, head = null, className 
   if (r.bottom > window.innerHeight - 8) { menu.style.top = "auto"; menu.style.bottom = "calc(100% + 4px)"; }
   if (r.right > window.innerWidth - 8) { menu.style.right = "0"; menu.style.left = "auto"; }
   if (r.left < 8) { menu.style.left = "0"; menu.style.right = "auto"; }
+  // 스크롤 영역(왼쪽 사이드바 등) 안의 메뉴가 그 영역 밖으로 나가 잘리면 화면 기준(fixed)으로 띄운다.
+  // 그 영역이 스크롤되면 위치가 어긋나므로 닫는다
+  const clip = wrap.parentElement && wrap.parentElement.closest("#sidebar, .lib-list, .detail, .panel");
+  const cr = clip && clip.getBoundingClientRect();
+  const mr = menu.getBoundingClientRect();
+  if (cr && (mr.right > cr.right || mr.left < cr.left || mr.bottom > cr.bottom || mr.top < cr.top)) {
+    const a = anchor.getBoundingClientRect();
+    Object.assign(menu.style, { position: "fixed", right: "auto", bottom: "auto", left: "0px", top: "0px" });
+    const w = menu.offsetWidth, h = menu.offsetHeight;
+    const x = left ? a.left : a.right - w;
+    const y = a.bottom + 4 + h > window.innerHeight - 8 ? a.top - 4 - h : a.bottom + 4;
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - w - 8))}px`;
+    menu.style.top = `${Math.max(8, y)}px`;
+    clip.addEventListener("scroll", closeMenus, { once: true });
+  }
   // Esc = 메뉴만 닫고 연 버튼으로 포커스 (창 · 읽기 화면의 Esc보다 먼저 받는다).
   // ↑↓ · Home · End = 항목 사이 이동 (연 버튼에 초점이 있어도 첫 · 끝 항목으로 들어감)
   const onKey = (e) => {

@@ -84,7 +84,7 @@ kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px s
 /* ---------------- sidebar ---------------- */
 #sidebar {
   background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column;
-  overflow-y: auto; padding: 14px 10px 10px;
+  overflow-y: auto; overflow-x: hidden; padding: 14px 10px 10px;
 }
 .brand { display: flex; align-items: center; gap: 10px; padding: 4px 8px 14px; }
 .brand-mark {
@@ -239,6 +239,8 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 .paper-snippet { font-size: 12px; color: var(--text-2); margin-top: 6px; padding: 5px 8px; background: var(--surface-2); border-radius: 6px; }
 .row-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 12px; color: var(--text-3); }
 .pdf-badge { font-size: 10.5px; font-weight: 700; color: var(--danger); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
+/* 워드 · 한글 · PPT · 사진으로 올린 항목의 형식 배지(DOCX · HWP · 이미지) — PDF 배지와 구분 */
+.pdf-badge[data-format], .btn .pdf-badge { color: var(--accent); white-space: nowrap; }
 .empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 10px;
   padding: 70px 24px; color: var(--text-2);
@@ -1653,3 +1655,33 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
   .trash-side { grid-column: 2; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; }
   .trash-body > .notice { margin: 12px 16px 8px; }
 }
+
+/* 논문 쓰기 그림 · 표 · 캡션 (docs/specs/writing-figures-tables.md) — 문서 미리보기는 항상 흰 종이라 색 고정 */
+.doc .doc-fig { margin: 14px 0; text-align: center; text-indent: 0; cursor: pointer; }
+.doc .doc-fig img { display: block; max-width: 100%; max-height: 70vh; height: auto; margin: 0 auto; }
+.doc .doc-fig figcaption, .doc .doc-tbl .doc-cap { text-align: center; text-indent: 0; margin: 6px 0; padding: 0; font-size: .95em; }
+.doc .doc-fig-missing { display: inline-block; padding: 18px 24px; border: 1px dashed #cdd3dc; color: #626a7e; font-size: 12px; }
+.doc .doc-tbl { margin: 14px 0; cursor: pointer; overflow-x: auto; }
+.doc .doc-tbl table { border-collapse: collapse; margin: 0 auto; min-width: 60%; text-indent: 0; font-size: .95em; line-height: 1.4; }
+.doc .doc-tbl th, .doc .doc-tbl td { border: 1px solid #4a5161; padding: 3px 8px; vertical-align: top; }
+.doc .doc-tbl th { font-weight: 700; background: #f1f3f6; }
+.doc .doc-fig:hover, .doc .doc-tbl:hover, .doc .doc-fig:focus-visible, .doc .doc-tbl:focus-visible { outline: 2px solid #93b4f5; outline-offset: 3px; }
+.writer-help-btn { font-weight: 700; border: 1px solid var(--border-strong); width: 28px; height: 28px; }
+.tbl-dlg .tbl-tools { flex-wrap: wrap; gap: 4px; margin: 4px 0 8px; }
+.tbl-dlg .tbl-tools .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
+.tbl-grid-wrap { max-height: 50vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+.tbl-grid { border-collapse: collapse; width: 100%; }
+.tbl-grid td { padding: 2px; min-width: 90px; }
+.tbl-grid .input { width: 100%; height: 30px; }
+.tbl-grid .input.head { font-weight: 700; background: var(--surface-2); }
+.kbd-help { display: grid; gap: 12px; }
+.kbd-help h4 { margin: 4px 0 8px; font-size: 13px; }
+.kbd-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+.kbd-table th, .kbd-table td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); vertical-align: top; font-weight: 400; }
+.kbd-table th[scope="row"] { width: 55%; }
+.kbd-table td:first-child { width: 45%; }
+.kbd-table kbd { white-space: nowrap; }
+/* AI 글쓰기 결과 넣기 — 원고가 바뀐 뒤 바뀌는 부분 (2026-10-16 백그라운드 AI, writing.js aiDiffDialog) */
+.ai-diff { max-height: 50vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; line-height: 1.7; }
+.ai-diff del, .ai-diff-legend del { background: var(--danger-soft); color: var(--danger); text-decoration: line-through; }
+.ai-diff ins, .ai-diff-legend ins { background: var(--success-soft); color: var(--success); text-decoration: none; }

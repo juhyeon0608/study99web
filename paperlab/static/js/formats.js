@@ -161,6 +161,7 @@ export function warningText(codes, coverKind = "thesis") {
     const args = i < 0 ? [] : code.slice(i + 1).split(",").map((s) => s.trim()).filter(Boolean);
     if (head === "cover-missing") return `표지에 빈 칸이 있어 ○○○로 넣었어요: ${args.map((a) => COVER_FIELD_NAMES[a] || a).join(", ")}`;
     if (head === "cover-overflow") return `표지 내용이 한 쪽을 넘을 수 있어요 (${args.map((a) => pageName[a] || a).join(", ")})`;
+    if (head === "figure-unreadable") return "워드가 읽지 못하는 그림이 있어 [그림을 찾을 수 없어요]로 넣었어요. 그 그림을 PNG로 다시 넣어 주세요";
     return `내보내기 경고: ${code}`;
   }).join(" · ");
 }

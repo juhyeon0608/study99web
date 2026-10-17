@@ -3,8 +3,8 @@
 import { accessToken, refreshToken } from "./auth.js";
 
 // 원래 오래 걸리는 요청: 3초 넘어도 "서버에 연결하는 중" 띠를 띄우지 않는다
-// (PDF 추출 · URL에서 받기 · compose · 워드/한글 내보내기 · 외부 학술 DB 조회)
-const LONG_RE = /^\/api\/(uploads\/[^/]+\/complete|papers\/\d+\/(pdf\/complete|fetch-pdf|refresh|related)|compose\/|export-document|search|related|resolve|oa\/lookup)\b/;
+// (PDF 추출 · URL에서 받기 · compose · 워드/한글 내보내기 · 외부 학술 DB 조회 · 원고 그림 올리기/받기)
+const LONG_RE = /^\/api\/(uploads\/[^/]+\/complete|papers\/\d+\/(pdf\/complete|fetch-pdf|refresh|related)|compose\/|export-document|manuscripts\/\d+\/figures|search|related|resolve|oa\/lookup)\b/;
 
 let live = false; // 로그인을 마치고 화면을 쓰는 중인지 (시작 중에는 띠 · 만료 처리 대신 오류를 그대로 던진다)
 const hooks = { expired: null, denied: null, retry: null };
@@ -173,7 +173,8 @@ export function qs(params) {
 }
 
 // 서버가 보내는 text/event-stream을 읽어 이벤트마다 콜백을 부른다 (토큰은 시작할 때만 검사 — 명세 6.6)
-export async function streamEvents(url, body, onEvent, signal) {
+// onJob(id): 응답 머리글 X-PaperLab-Job(작업 번호) — 연결을 끊어도 작업은 계속되므로 [취소]는 이 번호로 (2026-10-16)
+export async function streamEvents(url, body, onEvent, signal, { onJob } = {}) {
   const res = await authedFetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -190,6 +191,8 @@ export async function streamEvents(url, body, onEvent, signal) {
     } catch { /* 본문 없음 */ }
     throw new ApiError(msg, { status: res.status, code });
   }
+  const jobId = Number(res.headers.get("x-paperlab-job")) || 0;
+  if (jobId && onJob) onJob(jobId);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";

@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
@@ -27,9 +27,11 @@ LEASE_S = 90            # 리스 (하트비트 3번을 놓치면 만료). 테스
 HEARTBEAT_S = 30
 MAX_ATTEMPTS = 3        # CLI 잡기 횟수(재할당 포함)
 API_MAX_ATTEMPTS = 2    # 같은 API 칸 다시 실행 한도 (15.2절)
-DEADLINE_S = {"summary": 24 * 3600, "chat": 30 * 60, "write": 30 * 60,   # CLI 대기 기한 (확정 U7)
-              "find": 30 * 60, "verify": 24 * 3600,                        # 3단계 14.2절
-              "explain": 30 * 60, "translate": 30 * 60, "translate_paper": 24 * 3600}  # 4단계 K-7
+# CLI 대기 기한 (확정 U7 · 3단계 14.2절 · 4단계 K-7). 2026-10-17 제품 책임자: 백그라운드 작업은 창을 닫아도 계속되므로
+# 대화 · 글쓰기 · 찾기 · 설명 · 번역도 요약처럼 24시간 — 30분이면 PC를 켜기 전에 조용히 실패했다("30분 켜 놓고 닫으면 사라진다").
+# 실행 중 시간 제한(TIMEOUT_S) · 리스는 그대로
+DEADLINE_S = {k: 24 * 3600 for k in ("summary", "chat", "write", "find", "verify", "explain", "translate",
+                                     "translate_paper")}
 TIMEOUT_S = {"summary": 1200, "chat": 600, "write": 600, "find": 600, "verify": 1200,  # CLI 시간 제한 (11.5절)
              "explain": 600, "translate": 600, "translate_paper": 900}                # 4단계 (전체 번역은 묶음당)
 # index는 서버 안 색인(엔진 local), translate_paper(전체 번역)는 translate 엔진 설정을 씀 — 작업별 엔진 설정에는 없음
@@ -53,7 +55,8 @@ PARTIAL_MAX = 64 * 1024
 PARAMS_MAX = 64 * 1024
 HISTORY_MAX = 20
 ERROR_MAX = 2000
-KEEP_DONE_DAYS, REVOKED_KEEP_DAYS, WRITE_RESULT_HOURS = 30, 30, 24
+# 글쓰기 결과는 7일 — 작업 화면 "최근 7일"과 원고 화면에서 나중에 열어 넣을 수 있게 (2026-10-16 백그라운드 AI)
+KEEP_DONE_DAYS, REVOKED_KEEP_DAYS, WRITE_RESULT_HOURS = 30, 30, 7 * 24
 MIN_PROTOCOL = 1
 MIN_APP_VERSION = "0.2.0"   # 작업 프로토콜이 깨지는 변경 때만 올림 (8.3절)
 
@@ -85,10 +88,28 @@ DEFAULT_ERRORS = {
     "pdf_changed": translate.PDF_CHANGED,
     "paper_trashed": PAPER_TRASHED,
 }
-INTERRUPTED = "화면 연결이 끊겨 멈췄어요"
-NO_ROUTE = "AI를 쓸 수 있는 방법이 없어요. 설정에서 API 키를 넣거나, PC에 PaperLab 앱을 설치하고 연결해 주세요."
+# 화면에 붙어 있던(SSE) 작업이 서버 재시작으로 끊김 — 화면을 닫는 것만으로는 멈추지 않는다(2026-10-16 백그라운드 AI)
+INTERRUPTED = "서버가 다시 시작돼 작업이 멈췄어요. 다시 시도해 주세요"
+# 재시작 없이 리스(660초)가 지남 — 응답이 너무 오래 걸림. 둘 다 error_code는 interrupted
+LEASE_TIMEOUT = "응답이 너무 오래 걸려 작업을 멈췄어요. 다시 시도해 주세요"
+# 이 서버 프로세스가 시작한 시각: 리스가 지난 화면 작업을 그 전에 잡았으면 재시작으로 끊긴 것 (create_app이 mark_started)
+STARTED_AT = datetime.now(timezone.utc)
+
+
+def mark_started() -> None:
+    global STARTED_AT
+    STARTED_AT = datetime.now(timezone.utc)
+
+
+def interrupted_message(leased_at) -> str:
+    return INTERRUPTED if leased_at is None or leased_at < STARTED_AT else LEASE_TIMEOUT
+# AI는 내 PC(연결된 PC 앱 워커)의 CLI 또는 내가 넣은 API 키로만 실행한다 — 서버 PC의 CLI · 서버 환경의 키는 쓰지 않음
+# (2026-10-16 제품 책임자 결정). 두 경로가 모두 없을 때 API 오류 · 화면 안내에 같은 문구
+NO_ROUTE = ("AI를 실행할 방법이 없어요. 설정 → 연결된 PC에서 PaperLab 앱을 설치한 내 PC를 연결하거나, "
+            "설정 → AI 엔진에서 내 API 키를 넣어 주세요. (서버의 CLI · 키는 쓰지 않아요)")
 # 팀장 결정 Q2a-1: 설치 파일이 아직 없으면(2a 동안) 키 등록만 안내
-NO_ROUTE_SOON = "설정 → AI 엔진에서 API 키를 등록해 주세요. (PC 앱 연결은 곧 지원돼요)"
+NO_ROUTE_SOON = ("AI를 실행할 방법이 없어요. 설정 → AI 엔진에서 내 API 키를 넣어 주세요. "
+                 "(PC 앱 연결은 곧 지원돼요 · 서버의 CLI · 키는 쓰지 않아요)")
 
 
 def no_route_message(has_release: bool) -> str:
@@ -280,8 +301,13 @@ def revoke_device(lib: Library, device_id: int) -> int:
 
 
 # ====================================================================== 경로 (9.2절)
+AI_RUNNERS = ("api", "cli")  # 사용자 AI 작업이 가는 곳은 이 둘뿐 — 서버가 CLI를 직접 실행하는 칸은 없다
+
+
 def build_route(kind: str, get, devices: list[dict]) -> list[dict]:
-    """작업 종류의 엔진 순서 → [{runner, engine}…]. 키가 있으면 API 칸, 그 엔진을 광고한 기기가 있으면 CLI 칸"""
+    """작업 종류의 엔진 순서 → [{runner, engine}…]. 키가 있으면 API 칸, 그 엔진을 광고한 기기가 있으면 CLI 칸.
+    get = 그 사용자의 설정(UserSettings.get — 내가 넣은 키만, 서버 환경 변수 없음), devices = 그 사용자가 연결한 PC
+    (워커가 그 PC에서 claude · codex · gemini CLI를 실행). 서버 PC의 CLI · 서버 키로 가는 칸은 만들지 않는다"""
     adv = advertised(devices)
     route = []
     for e in (get("ai_routing") or {}).get(ROUTE_KIND.get(kind, kind)) or ["claude"]:
@@ -307,16 +333,17 @@ def ai_status(get, devices: list[dict], has_release: bool) -> dict:
             slots.append({"runner": "api", "engine": e, "available": key, "reason": "" if key else "no_key"})
             slots.append({"runner": "cli", "engine": e, "available": e in adv, "reason": "" if e in adv else "no_device"})
         first = next(({"runner": s["runner"], "engine": s["engine"]} for s in slots if s["available"]), None)
-        kinds[kind] = {"route": slots, "first": first}
+        # 경로가 없는 작업은 화면이 시작하기 전에 이 문구를 보여 준다 (설정 → 연결된 PC · API 키 안내)
+        kinds[kind] = {"route": slots, "first": first, "message": "" if first else no_route_message(has_release)}
     first = kinds["summary"]["first"]
     if not first:
         msg = no_route_message(has_release)
     elif first["runner"] == "api":
-        msg = f"요약은 {ai.ENGINE_COMPANY[first['engine']]} API로 먼저 실행해요."
+        msg = f"요약은 내 {ai.ENGINE_COMPANY[first['engine']]} API 키로 먼저 실행해요."
     elif online_count(devices, first["engine"]):
-        msg = f"요약은 PC의 {first['engine']}로 실행해요."
+        msg = f"요약은 연결된 내 PC의 {first['engine']}로 실행해요."
     else:
-        msg = f"요약은 PC의 {first['engine']}로 실행해요. 지금은 켜진 PC가 없어 PC가 켜질 때까지 기다려요."
+        msg = f"요약은 연결된 내 PC의 {first['engine']}로 실행해요. 지금은 켜진 PC가 없어 PC가 켜질 때까지 기다려요."
     return {"ready": first is not None, "kinds": kinds, "message": msg}
 
 
@@ -335,6 +362,8 @@ def create_job(lib: Library, kind: str, route: list[dict], params: dict, paper_i
     (요청 안에서 바로 실행 — interactive 표시. 실행기 · 복구 스캔은 다시 실행하지 않고, 리스가 지나면 취소로 끝냄)."""
     if kind not in ALL_KINDS or kind == "index" or not route:
         raise JobError(400, NO_ROUTE, "no_route")
+    if any(s.get("runner") not in AI_RUNNERS or s.get("engine") not in ENGINES for s in route):
+        raise JobError(400, NO_ROUTE, "no_route")  # 내 PC · 내 키 말고 다른 실행 칸은 받지 않는다
     if len(json.dumps(params, ensure_ascii=False).encode("utf-8")) > PARAMS_MAX:
         raise JobError(400, "요청이 너무 커요", "too_large")
     active = lib._one("select count(*)::int as n from paperlab.jobs where user_id = %s and status in ('queued', 'running')",
@@ -392,7 +421,21 @@ def waiting_reason(job: dict, devices: list[dict], free: dict) -> str | None:
     return None
 
 
-def job_view(r: dict, devices: list[dict], free: dict) -> dict:
+WRITE_HANDLED = ("applied", "dismissed")  # 글쓰기 결과를 원고에 넣었음 · 넣지 않기로 함 (result.handled)
+
+
+def write_view(params: dict, result, detail: bool) -> dict:
+    """글쓰기 작업의 넣기 정보 (2026-10-16 백그라운드 AI): 원고 화면 · 작업 화면이 결과를 나중에 열어 안전하게 넣을 때 쓴다.
+    원래 글(text)은 한 작업을 볼 때만(목록에는 넣지 않음 — 크기)"""
+    out = {"mode": params.get("mode") or "polish", "insert": bool(params.get("insert")),
+           "handled": (result or {}).get("handled") if isinstance(result, dict) else None}
+    if detail:
+        out.update(text=params.get("text") or "", sel_start=params.get("sel_start"), sel_end=params.get("sel_end"),
+                   doc_hash=params.get("doc_hash") or "", before=params.get("before") or "")
+    return out
+
+
+def job_view(r: dict, devices: list[dict], free: dict, detail: bool = False) -> dict:
     params = r.get("params") or {}
     return {
         "id": r["id"], "kind": r["kind"], "status": r["status"], "runner": r["runner"], "engine": r["engine"],
@@ -411,6 +454,7 @@ def job_view(r: dict, devices: list[dict], free: dict) -> dict:
         # 4단계 선택 설명 · 번역: 진행 카드를 다시 그릴 때 (원문 앞부분 · 쪽 — 시안 3.1절)
         "source_text": (params.get("text") or "")[:200] if r["kind"] in EXPLAIN_KINDS else None,
         "page": params.get("page") if r["kind"] in EXPLAIN_KINDS else None,
+        "write": write_view(params, r["result"], detail) if r["kind"] == "write" else None,
         "result": r["result"],
         "created_at": iso(r["created_at"]), "started_at": iso(r["started_at"]), "finished_at": iso(r["finished_at"]),
     }
@@ -426,24 +470,55 @@ def get_job(lib: Library, job_id: int, free: dict) -> dict:
     r = lib._one(_JOB_SELECT + " and j.id = %(id)s", {"uid": lib.uid, "id": job_id})
     if not r:
         raise JobError(404, "작업을 찾을 수 없어요", "not_found")
-    return job_view(r, device_rows(lib), free)
+    return job_view(r, device_rows(lib), free, detail=True)
 
 
 def list_jobs(lib: Library, free: dict, status: str = "active", paper_id: int | None = None, kind: str = "",
-              limit: int = 50) -> dict:
+              limit: int = 50, since: str = "", manuscript_id: int | None = None) -> dict:
+    """status: active · recent(7일) · all · finished(since 뒤에 끝난 작업 — 화면의 끝남 알림, 2026-10-16).
+    manuscript_id: 그 원고의 글쓰기 · 인용 검증 작업만. now = 서버 시각(다음 finished 조회의 since)"""
     cond = {"active": " and j.status in ('queued', 'running')",
-            "recent": " and j.created_at > now() - interval '7 days'", "all": ""}.get(status)
+            "recent": " and j.created_at > now() - interval '7 days'", "all": "",
+            "finished": " and j.status in ('succeeded', 'failed', 'cancelled') and j.finished_at > %(since)s"}.get(status)
     if cond is None or (kind and kind not in ALL_KINDS):
         raise JobError(400, "조건이 올바르지 않아요", "bad_request")
-    params = {"uid": lib.uid, "pid": paper_id, "kind": kind, "limit": max(1, min(int(limit), 200))}
+    since_dt = None
+    if status == "finished":
+        try:
+            since_dt = datetime.fromisoformat(str(since or "").replace("Z", "+00:00"))
+        except ValueError:
+            raise JobError(400, "조건이 올바르지 않아요", "bad_request") from None
+        if since_dt.tzinfo is None:
+            raise JobError(400, "조건이 올바르지 않아요", "bad_request")
+        since_dt = max(since_dt, now_dt() - timedelta(days=7))  # 오래된 기준은 7일로 줄임
+    params = {"uid": lib.uid, "pid": paper_id, "kind": kind, "limit": max(1, min(int(limit), 200)), "since": since_dt,
+              "mid": str(manuscript_id) if manuscript_id is not None else None}
     if paper_id is not None:
         cond += " and j.paper_id = %(pid)s"
     if kind:
         cond += " and j.kind = %(kind)s"
+    if manuscript_id is not None:
+        if not valid_id(manuscript_id):
+            raise JobError(400, "조건이 올바르지 않아요", "bad_request")
+        cond += " and j.kind in ('write', 'verify') and j.params ->> 'manuscript_id' = %(mid)s"
     rows = lib._all(_JOB_SELECT + cond + " order by j.created_at desc, j.id desc limit %(limit)s", params)
     total = lib._one("select count(*)::int as n from paperlab.jobs j where j.user_id = %(uid)s" + cond, params)["n"]
     devices = device_rows(lib)
-    return {"jobs": [job_view(r, devices, free) for r in rows], "total": total}
+    return {"jobs": [job_view(r, devices, free) for r in rows], "total": total, "now": iso(now_dt())}
+
+
+def mark_write_handled(lib: Library, job_id: int, state: str) -> dict:
+    """글쓰기 결과를 원고에 넣었음(applied) · 넣지 않기로 함(dismissed) — 원고 화면의 'AI 결과' 줄에서 뺀다.
+    결과 글은 그대로 두어 작업 화면에서 다시 열 수 있다(7일 뒤 정리)"""
+    if state not in WRITE_HANDLED:
+        raise JobError(400, "상태가 올바르지 않아요", "bad_request")
+    n = valid_id(job_id) and lib._x(
+        "update paperlab.jobs set result = result || jsonb_build_object('handled', %s::text), updated_at = now() "
+        "where id = %s and user_id = %s and kind = 'write' and status = 'succeeded' and jsonb_typeof(result) = 'object'",
+        (state, job_id, lib.uid)).rowcount
+    if not n:
+        raise JobError(404, "결과를 찾을 수 없어요. 7일이 지나 지워졌을 수 있어요", "not_found")
+    return {"ok": True, "handled": state}
 
 
 def latest_job(lib: Library, free: dict, cond: str, params: dict | None = None) -> dict | None:
@@ -475,10 +550,11 @@ def expire(lib: Library) -> None:
         else:
             lib._x("update paperlab.jobs set status = 'queued', lease_token = null, lease_until = null, " + _KEEP_PROGRESS
                    + ", history = %s, updated_at = now() where id = %s and user_id = %s", (_history(j, entry), j["id"], lib.uid))
-    lib._x("update paperlab.jobs set status = 'cancelled', error_code = 'interrupted', error = %s, lease_token = null, "
+    lib._x("update paperlab.jobs set status = 'cancelled', error_code = 'interrupted', "
+           "error = case when leased_at is null or leased_at < %s then %s else %s end, lease_token = null, "
            "lease_until = null, progress = '{}'::jsonb, finished_at = now(), updated_at = now() "
            "where user_id = %s and interactive and status = 'running' and lease_until < now()",
-           (INTERRUPTED, lib.uid))
+           (STARTED_AT, INTERRUPTED, LEASE_TIMEOUT, lib.uid))
     lib._x("update paperlab.jobs set status = 'failed', error_code = 'no_worker_timeout', error = %s, finished_at = now(), "
            "updated_at = now() where user_id = %s and runner = 'cli' and status = 'queued' and deadline_at < now()",
            (DEFAULT_ERRORS["no_worker_timeout"], lib.uid))
@@ -907,7 +983,7 @@ def claim_api(lib: Library, job_id: int, guide: str = "") -> dict | None:
         if not j["expired"]:
             return None
         if j["interactive"]:
-            _end(lib, j, "cancelled", "interrupted", INTERRUPTED)
+            _end(lib, j, "cancelled", "interrupted", interrupted_message(j["leased_at"]))
             return None
         if j["cancel_requested"]:
             _end(lib, j, "cancelled")

@@ -230,7 +230,7 @@ async function enterApp(me) {
   authed = true;
   document.body.dataset.auth = "in";
   setApiLive(true);
-  startJobBadge(); // 사이드바 "작업" 진행 중 개수 (30초마다 — 디자인 9.1)
+  startJobBadge(); // 사이드바 "작업" 진행 중 개수 + AI 작업 끝남 알림(어느 화면에서든 — 2026-10-16 백그라운드 AI)
   // 구글에서 돌아오면 주소에서 code를 지운 뒤(supabase-js) 떠나기 전 화면으로, 없으면 서재로
   let back = "";
   try { back = sessionStorage.getItem(RETURN_HASH_KEY) || ""; sessionStorage.removeItem(RETURN_HASH_KEY); } catch { /* 무시 */ }
@@ -926,14 +926,15 @@ window.addEventListener("hashchange", route);
 onRefresh(() => loadSidebar());
 onRefresh(async () => { if (authed && state.view === "library") await loadPapers(); });
 
-// PDF 끌어다 놓기 (서재 화면 어디든) — 로그인한 뒤에만
+// 파일 끌어다 놓기 (서재 화면 어디든 — PDF · 워드 · 한글 · PPT · 엑셀 · 사진, uploadPdfs가 거름) — 로그인한 뒤에만.
+// 쓰기 화면은 예전처럼 .docx · .hwpx를 인용 넣기(composeDialog)로
 let dragDepth = 0;
 const isFileDrag = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
 const signedIn = () => document.body.dataset.auth === "in";
 window.addEventListener("dragenter", (e) => {
   if (!signedIn() || !isFileDrag(e) || state.view === "reader" || state.view === "graph" || /^#\/write\/\d/.test(location.hash)) return;
   dragDepth++;
-  $("#drop-overlay div").textContent = state.view === "write" ? "워드·한글 문서를 놓으면 인용을 넣어 드려요" : "PDF를 놓으면 서재에 추가돼요";
+  $("#drop-overlay div").textContent = state.view === "write" ? "워드·한글 문서를 놓으면 인용을 넣어 드려요" : "PDF · 워드 · 한글 · 사진 파일을 놓으면 서재에 추가돼요";
   $("#drop-overlay").classList.remove("hidden");
 });
 window.addEventListener("dragleave", (e) => { if (isFileDrag(e) && --dragDepth <= 0) { dragDepth = 0; $("#drop-overlay").classList.add("hidden"); } });

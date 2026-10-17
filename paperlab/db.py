@@ -48,7 +48,7 @@ SORTS = {
     "first_author": "lower(p.authors -> 0 ->> 'family') collate \"C\" asc nulls first, p.id",
 }
 # 응답에서 빼는 내부 열
-_HIDDEN_PAPER_COLS = ("user_id", "pdf_key", "title_norm", "rag_key", "rag_version", "sync_rev", "sync_xid",
+_HIDDEN_PAPER_COLS = ("user_id", "pdf_key", "source_key", "title_norm", "rag_key", "rag_version", "sync_rev", "sync_xid",
                       "deleted_by", "deleted_folder_path", "content_device_id")
 SEARCH_LIMIT = 1000
 # PGroonga 연산자는 extensions 스키마에 있다 (search_path에 기대지 않음)
@@ -352,6 +352,7 @@ class Library:
     def _paper_view(self, row: dict, detail: bool = False) -> dict:
         p = _row(row)
         p["has_pdf"] = bool(p.get("pdf_key"))
+        p["has_source"] = bool(p.get("source_key"))  # 워드 · 한글 · PPT · 이미지 원본 (PDF는 변환본)
         for k in _HIDDEN_PAPER_COLS:
             p.pop(k, None)
         p.pop("_total", None)
@@ -395,30 +396,36 @@ class Library:
                          "where id = %s and user_id = %s", (paper_id, self.uid))
 
     def find_duplicate(self, doi: str = "", arxiv_id: str = "", title: str = "",
-                       exclude_id: int | None = None, include_trash: bool = False) -> dict | None:
-        """내 서재 안에서만: DOI 정규화 일치 → arXiv 일치 → 정규화 제목(12자 이상) 일치.
+                       exclude_id: int | None = None, include_trash: bool = False, sha256: str = "") -> dict | None:
+        """내 서재 안에서만: 같은 PDF 파일(sha256) → DOI 정규화 일치 → arXiv 일치 → 정규화 제목(12자 이상) 일치.
+        sha256: 올린 PDF 그대로의 해시 — 유형('문서' 포함)과 상관없이 같은 파일이면 같은 항목.
         include_trash: 살아 있는 논문에 없으면 휴지통도 본다(가져오기 중복 — 찾으면 "trashed": True, 6단계 팀장 결정 3)"""
-        found = self._find_duplicate(doi, arxiv_id, title, exclude_id)
+        found = self._find_duplicate(doi, arxiv_id, title, exclude_id, sha256)
         if found or not include_trash:
             return found
         with self.trash_tx():
-            found = self._find_duplicate(doi, arxiv_id, title, exclude_id)
+            found = self._find_duplicate(doi, arxiv_id, title, exclude_id, sha256)
         if found:
             found["trashed"] = True
         return found
 
-    def _find_duplicate(self, doi: str, arxiv_id: str, title: str, exclude_id: int | None) -> dict | None:
+    def _find_duplicate(self, doi: str, arxiv_id: str, title: str, exclude_id: int | None,
+                        sha256: str = "") -> dict | None:
         doi = normalize_doi(doi)
         arxiv_id = (arxiv_id or "").strip()
         norm = normalize_title(title)
         base = _PAPER_SELECT.format(detail="") + " where p.user_id = %s and p.id is distinct from %s and "
         row = None
-        if doi:
+        if sha256:
+            row = self._one(base + "p.pdf_sha256 = %s and p.pdf_key <> '' order by p.id limit 1",
+                            (self.uid, exclude_id, sha256))
+        if not row and doi:
             row = self._one(base + "p.doi = %s order by p.id limit 1", (self.uid, exclude_id, doi))
         if not row and arxiv_id:
             row = self._one(base + "p.arxiv_id = %s order by p.id limit 1", (self.uid, exclude_id, arxiv_id))
-        if not row and len(norm) >= 12:
-            row = self._one(base + "p.title_norm = %s order by p.id limit 1", (self.uid, exclude_id, norm))
+        if not row and len(norm) >= 12:  # 문서(제목 = 파일 이름)는 제목으로 같은 논문이라 하지 않는다
+            row = self._one(base + "p.title_norm = %s and p.item_type <> 'document' order by p.id limit 1",
+                            (self.uid, exclude_id, norm))
         return self._paper_view(row) if row else None
 
     def match_library(self, items: list[dict]) -> list[int | None]:
@@ -540,6 +547,13 @@ class Library:
                                 [(self.uid, paper_id, i + 1, _clean_text(t)) for i, t in enumerate(page_texts)])
         self._reindex(paper_id)
         return old["rag_key"] if old else ""
+
+    def set_source(self, paper_id: int, key: str = "", name: str = "", size: int | None = None) -> str:
+        """문서 원본(PDF로 바꾸기 전 파일)을 적거나('' = 없음 — PDF를 바로 올림) → 옛 source_key(커밋 뒤 지울 것)"""
+        old = self._one("select source_key from paperlab.papers where id = %s and user_id = %s", (paper_id, self.uid))
+        self._x("update paperlab.papers set source_key = %s, source_name = %s, source_size = %s "
+                "where id = %s and user_id = %s", (key, name[:255], size, paper_id, self.uid))
+        return old["source_key"] if old else ""
 
     def page_texts(self, paper_id: int) -> list[str]:
         return [r["text"] for r in self._all(
@@ -683,14 +697,15 @@ class Library:
         return dict(row)
 
     def mine_pdf_bytes(self) -> int:
-        """살아 있는 내 논문의 PDF 합계 (휴지통은 RLS로 빠짐 — trash_bytes)"""
-        return self._one("select coalesce(sum(pdf_size), 0)::bigint as n from paperlab.papers "
-                         "where user_id = %s and pdf_key <> ''", (self.uid,))["n"]
+        """살아 있는 내 논문의 PDF(+ 문서 원본) 합계 (휴지통은 RLS로 빠짐 — trash_bytes)"""
+        return self._one("select coalesce(sum(coalesce(pdf_size, 0) + coalesce(source_size, 0)), 0)::bigint as n "
+                         "from paperlab.papers where user_id = %s and pdf_key <> ''", (self.uid,))["n"]
 
     def trash_bytes(self) -> int:
         with self.trash_tx():
-            return self._one("select coalesce(sum(pdf_size), 0)::bigint as n from paperlab.papers "
-                             "where user_id = %s and pdf_key <> '' and deleted_at is not null", (self.uid,))["n"]
+            return self._one("select coalesce(sum(coalesce(pdf_size, 0) + coalesce(source_size, 0)), 0)::bigint as n "
+                             "from paperlab.papers where user_id = %s and pdf_key <> '' and deleted_at is not null",
+                             (self.uid,))["n"]
 
     # ------------------------------------------------------------- collections
     def list_collections(self) -> list[dict]:
@@ -961,18 +976,19 @@ class Library:
                                                "order by deleted_at, id limit %(lim)s", params)]
 
     def purge_paper(self, paper_id: int) -> dict | None:
-        """영구 삭제(휴지통 논문만) → 저장소 키 {"pdf_key", "rag_key", "tr_key"}. 하위 표는 외래 키로 함께, 묘비는 트리거"""
+        """영구 삭제(휴지통 논문만) → 저장소 키 {"pdf_key", "source_key", "rag_key", "tr_key"}. 하위 표는 외래 키로 함께, 묘비는 트리거"""
         with self.trash_tx():
             return self._one("with t as (select tr_key from paperlab.translations where paper_id = %(id)s "
                              "and user_id = %(uid)s) delete from paperlab.papers where id = %(id)s and user_id = %(uid)s "
-                             "and deleted_at is not null returning pdf_key, rag_key, coalesce((select tr_key from t), '') "
+                             "and deleted_at is not null returning pdf_key, source_key, rag_key, coalesce((select tr_key from t), '') "
                              "as tr_key", {"id": paper_id, "uid": self.uid})
 
     def list_trash(self) -> list[dict]:
         with self.trash_tx():
             rows = self._all(
                 "select p.id, p.title, p.authors, p.year, p.file_name, p.deleted_folder_path, p.deleted_at, p.deleted_by, "
-                "p.pdf_size, p.pdf_key <> '' as has_pdf, d.name as device_name from paperlab.papers p "
+                "coalesce(p.pdf_size, 0) + coalesce(p.source_size, 0) as pdf_size, p.pdf_key <> '' as has_pdf, "
+                "d.name as device_name from paperlab.papers p "
                 "left join paperlab.devices d on p.deleted_by = 'device:' || d.id::text and d.user_id = p.user_id "
                 "where p.user_id = %s and p.deleted_at is not null order by p.deleted_at desc, p.id desc", (self.uid,))
         out = []
@@ -980,7 +996,7 @@ class Library:
             item = _row(r)
             item["purge_at"] = iso(r["deleted_at"] + timedelta(days=TRASH_DAYS))
             item["deleted_by_label"] = deleted_by_label(r["deleted_by"], r["device_name"])
-            item["pdf_size"] = (r["pdf_size"] or 0) if r["has_pdf"] else 0
+            item["pdf_size"] = (r["pdf_size"] or 0) if r["has_pdf"] else 0  # 문서 원본 크기 포함(비우면 생기는 공간)
             item["authors"] = r["authors"] if isinstance(r["authors"], list) else []
             for k in ("deleted_by", "device_name", "has_pdf"):
                 item.pop(k)

@@ -135,6 +135,57 @@ def test_server_env_api_key_is_never_used(monkeypatch):
     assert "Authorization" not in client.auth_headers and client.auth_headers.get("X-Api-Key") == "sk-ant-user"
 
 
+def test_server_env_openai_google_keys_are_never_used(monkeypatch):
+    """2026-10-16 AI 경로: 서버 환경의 OpenAI · Google 키도 쓰지 않는다 — 사용자 키가 없으면 api_no_key(전송 계층까지 가지 않음)"""
+    for k in ("OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        monkeypatch.setenv(k, "sk-server-env-should-not-be-used-000")
+    sent = []
+    svc = ai_mod.AIService(UserSettings({}, {}).get, http_client=type("C", (), {"post": lambda *a, **kw: sent.append(a)})())
+    for engine in ("codex", "gemini"):
+        with pytest.raises(ai_mod.AIError) as e:
+            svc.text_complete(engine, "s", "p")
+        assert e.value.code == "api_no_key"
+    assert sent == []
+
+
+def test_ai_routes_only_user_keys_and_user_pcs(monkeypatch):
+    """2026-10-16 AI 경로: 경로 칸은 '내 API 키'(api) · '내가 연결한 PC'(cli)뿐. 서버 환경 변수 키 · 서버가 직접 여는 CLI 칸은 없다"""
+    from paperlab import jobs
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-server-env-key-0000")
+    nothing = UserSettings({}, {})
+    assert jobs.build_route("write", nothing.get, []) == []  # 키도 PC도 없으면 경로 없음 (서버 CLI로 대신하지 않음)
+    st = jobs.ai_status(nothing.get, [], True)
+    assert st["ready"] is False and st["message"] == jobs.NO_ROUTE
+    assert st["kinds"]["write"]["first"] is None and st["kinds"]["write"]["message"] == jobs.NO_ROUTE
+    assert "연결된 PC" in jobs.NO_ROUTE and "API 키" in jobs.NO_ROUTE and "API 키" in jobs.NO_ROUTE_SOON
+    user = UserSettings({}, {"anthropic_api_key": "sk-ant-user-1234567890"})
+    pc = [{"id": 1, "revoked_at": None, "online": True, "paused": False,
+           "engines": [{"name": "claude", "logged_in": True, "slots": 1}]}]
+    assert jobs.build_route("write", user.get, pc) == [{"runner": "api", "engine": "claude"},
+                                                      {"runner": "cli", "engine": "claude"}]
+    assert jobs.ai_status(user.get, pc, True)["kinds"]["write"]["message"] == ""
+    # 작업은 api · cli 칸만 받는다 (DB에 닿기 전에 거절)
+    for bad in ([{"runner": "server", "engine": "claude"}], [{"runner": "local", "engine": "claude"}],
+                [{"runner": "cli", "engine": "bash"}]):
+        with pytest.raises(jobs.JobError) as e:
+            jobs.create_job(None, "write", bad, {})
+        assert e.value.code == "no_route" and e.value.detail == jobs.NO_ROUTE
+
+
+def test_server_never_spawns_ai_cli():
+    """2026-10-16 AI 경로: 서버 코드(paperlab/*.py)는 claude · codex · gemini CLI를 실행하지 않는다.
+    프로세스를 여는 곳은 정해진 도구뿐(pg_dump · LibreOffice 변환 · icacls)"""
+    spawners = set()
+    for f in PKG.glob("*.py"):
+        text = f.read_text(encoding="utf-8")
+        if re.search(r"\bsubprocess\.(run|Popen|call|check_output|check_call)\b|\bos\.(system|popen|spawn\w*|exec\w*)\(", text):
+            spawners.add(f.name)
+        for m in re.finditer(r"subprocess\.(?:run|Popen|call|check_output|check_call)\(([^\n]*)", text):
+            assert not re.search(r"claude|codex|gemini", m.group(1), re.I), (f.name, m.group(0))
+        assert not re.search(r"""which\(\s*["'](?:claude|codex|gemini)""", text), f.name
+    assert spawners <= {"admin.py", "convert.py", "serve.py"}, spawners
+
+
 def test_ai_error_messages_scrub_keys():
     svc = ai_mod.AIService({"anthropic_api_key": "sk-ant-user-secret-123456"}.get)
     assert "sk-ant-user-secret-123456" not in svc._scrub("bad key sk-ant-user-secret-123456 and sk-ant-another-999999")

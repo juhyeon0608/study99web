@@ -9,12 +9,13 @@ import {
 import {
   INHA, INHA_OPEN_TITLE, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl,
 } from "./extlinks.js";
+import { LIB_ACCEPT, formatBadge } from "./filetypes.js";
 import { openGraph } from "./graph.js";
 import { OA_OPEN_TITLE, OC_FAILED_TEXT, licenseLabel, oaOpenLabel, substituteText, viaHtml } from "./sourcemeta.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
 import { restoreFromTrash } from "./trash.js";
 import {
-  $, $$, ICON_INFO, ICON_WARN, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtDate, fmtNum,
+  $, $$, ICON_INFO, ICON_WARN, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtBytes, fmtDate, fmtNum,
   markTabs, modalOpen, pickFiles, copyText, popupMenu, promptDialog, renderMarkdown, safeUrl, saveError, selectTab, store, toast,
 } from "./ui.js";
 
@@ -27,10 +28,10 @@ let detailToken = 0;
 // 무료 PDF 찾기 (docs/design/phase5-korean-db-ui.md 4장 · AD-3 · AD-9)
 const OA_FIND_TITLE = "무료 PDF를 찾아요. 라이선스가 확인되면 바로 저장하고, 아니면 직접 받을 링크를 드려요.";
 const oaNotice = (html) => `<div class="notice oa-after" data-tone="info">${ICON_INFO}<div>${html}</div></div>`;
-const OA_AFTER_OPEN = oaNotice("무료 PDF가 있지만 라이선스를 확인하지 못해 PaperLab이 대신 받지 않았어요. <b>[무료 PDF 열기]</b>로 직접 받은 뒤 <b>[PDF 첨부]</b>로 올려 주세요.");
+const OA_AFTER_OPEN = oaNotice("무료 PDF가 있지만 라이선스를 확인하지 못해 PaperLab이 대신 받지 않았어요. <b>[무료 PDF 열기]</b>로 직접 받은 뒤 <b>[파일 첨부]</b>로 올려 주세요.");
 const oaAfterNone = (inha) => oaNotice(inha
-  ? "무료 PDF를 찾지 못했어요. 학교가 구독하는 논문이면 <b>[인하대에서 보기]</b>에서 받아 <b>[PDF 첨부]</b>로 올려 주세요."
-  : "무료 PDF를 찾지 못했어요. PDF 파일이 있으면 <b>[PDF 첨부]</b>로 올려 주세요.");
+  ? "무료 PDF를 찾지 못했어요. 학교가 구독하는 논문이면 <b>[인하대에서 보기]</b>에서 받아 <b>[파일 첨부]</b>로 올려 주세요."
+  : "무료 PDF를 찾지 못했어요. PDF 파일이 있으면 <b>[파일 첨부]</b>로 올려 주세요.");
 const TITLE_SEARCH_DBS = [["riss", "RISS"], ["dbpia", "DBpia"], ["kiss", "KISS"]];
 
 const SORTS = [["added", "추가한 순"], ["opened", "최근 연 순"], ["year", "연도 (최신)"], ["title", "제목"], ["first_author", "제1저자"], ["cited", "피인용 많은 순"]];
@@ -93,7 +94,7 @@ export function renderLibrary(main) {
   $("[data-add]", root).onclick = (e) => {
     e.stopPropagation();
     popupMenu(e.currentTarget, [
-      { label: "PDF 파일 추가", sub: "끌어다 놓기도 돼요", action: async () => uploadPdfs(await pickFiles({ accept: ".pdf,application/pdf", multiple: true })) },
+      { label: "파일 추가", sub: "PDF · 워드 · 한글 · PPT · 엑셀 · 사진 — 끌어다 놓기도 돼요", action: async () => uploadPdfs(await pickFiles({ accept: LIB_ACCEPT, multiple: true })) },
       { label: "DOI · arXiv · 제목으로 추가", action: addByIdentifierDialog },
       { label: "직접 입력", action: () => editPaperDialog() },
       "-",
@@ -164,9 +165,9 @@ function emptyState() {
   if (state.filter.kind === "folder") return el(`<div class="empty"><div class="big">▤</div><h3>이 폴더에 논문이 없어요</h3><p>논문을 끌어다 놓거나 ‘폴더로 이동…’으로 옮겨 보세요.</p></div>`);
   if (state.filter.kind !== "all") return el(`<div class="empty"><div class="big">▤</div><h3>아직 비어 있어요</h3><p>논문을 이 목록으로 끌어다 놓거나, 여기서 논문을 추가하면 이곳에 들어가요.</p></div>`);
   const e = el(`<div class="empty"><div class="big">📚</div><h3>서재가 비어 있어요</h3>
-    <p>PDF를 이 창에 끌어다 놓으면 DOI·arXiv 정보를 찾아 자동으로 정리해요.<br>또는 논문을 검색해서 바로 추가할 수 있어요.</p>
-    <div class="row" style="margin-top:8px"><button class="btn primary" data-up>PDF 추가</button><button class="btn" data-find>논문 찾기</button><button class="btn" data-imp>BibTeX/RIS 가져오기</button></div></div>`);
-  $("[data-up]", e).onclick = async () => uploadPdfs(await pickFiles({ accept: ".pdf", multiple: true }));
+    <p>PDF를 이 창에 끌어다 놓으면 DOI·arXiv 정보를 찾아 자동으로 정리해요.<br>워드 · 한글 · PPT · 엑셀 · 사진 파일도 넣을 수 있고, 논문을 검색해서 바로 추가할 수도 있어요.</p>
+    <div class="row" style="margin-top:8px"><button class="btn primary" data-up>파일 추가</button><button class="btn" data-find>논문 찾기</button><button class="btn" data-imp>BibTeX/RIS 가져오기</button></div></div>`);
+  $("[data-up]", e).onclick = async () => uploadPdfs(await pickFiles({ accept: LIB_ACCEPT, multiple: true }));
   $("[data-find]", e).onclick = () => { location.hash = "#/discover"; };
   $("[data-imp]", e).onclick = importDialog;
   return e;
@@ -190,7 +191,8 @@ function paperRow(p) {
       ${snippet ? `<div class="paper-snippet">…${snippet}…</div>` : ""}
     </div>
     <div class="row-side">
-      ${p.has_pdf ? `<span class="pdf-badge">PDF</span>` : ""}
+      ${p.has_source ? `<span class="pdf-badge" data-format title="${esc(`원본: ${p.source_name || ""} (PDF로 바꿔 읽어요)`)}">${esc(formatBadge(p.source_name))}</span>`
+        : p.has_pdf ? `<span class="pdf-badge">PDF</span>` : ""}
       ${p.cited_by_count != null ? `<span title="피인용">인용 ${fmtNum(p.cited_by_count)}</span>` : ""}
     </div></div>`);
   $("input", row).onclick = (e) => {
@@ -246,7 +248,7 @@ function onListKey(e) {
 
 export function openPaper(p) {
   if (p.has_pdf) location.hash = `#/read/${p.id}`;
-  else { setActive(p.id); toast("PDF가 없는 논문이에요. 상세 패널에서 무료 PDF를 찾거나 첨부해 주세요."); }
+  else { setActive(p.id); toast("PDF가 없는 논문이에요. 상세 패널에서 무료 PDF를 찾거나 파일을 첨부해 주세요."); }
 }
 
 // 6단계 U-2 · SW-2: [삭제]는 휴지통으로(30일). 되돌릴 수 있으므로 확인 버튼은 primary(AD-3) + 토스트 [되돌리기]
@@ -355,10 +357,11 @@ async function renderDetail() {
       <h2 class="grow">${esc(p.title)}</h2>
       <button class="icon-btn" data-close title="닫기">✕</button>
     </div>
-    <div class="authors">${esc((p.authors || []).map(authorName).join(", ") || "저자 미상")}</div>
+    <div class="authors">${esc((p.authors || []).map(authorName).join(", ") || (p.item_type === "document" ? "내 문서" : "저자 미상"))}</div>
     <div class="venue-line">${esc([venueBits, p.year].filter(Boolean).join(" · "))}</div>
     <div class="actions">
-      ${p.has_pdf ? `<button class="btn primary" data-read>읽기 · AI 요약</button>` : `${p.doi || p.arxiv_id || p.pdf_url ? `<button class="btn primary" data-fetch title="${esc(OA_FIND_TITLE)}">무료 PDF 찾기</button>` : ""}${inhaBtn}<button class="btn${p.doi || p.arxiv_id || p.pdf_url ? "" : " primary"}" data-attach>PDF 첨부</button>`}
+      ${p.has_pdf ? `<button class="btn primary" data-read>읽기 · AI 요약</button>` : `${p.doi || p.arxiv_id || p.pdf_url ? `<button class="btn primary" data-fetch title="${esc(OA_FIND_TITLE)}">무료 PDF 찾기</button>` : ""}${inhaBtn}<button class="btn${p.doi || p.arxiv_id || p.pdf_url ? "" : " primary"}" data-attach title="PDF · 워드 · 한글 · PPT · 엑셀 · 사진">파일 첨부</button>`}
+      ${p.has_source ? `<button class="btn" data-source title="${esc(`올린 원본 파일(${p.source_name || ""})을 받아요`)}">원본 받기 <span class="pdf-badge">${esc(formatBadge(p.source_name))}</span></button>` : ""}
       <button class="btn" data-cite>인용</button>
       <span class="menu-wrap"><button class="btn" data-more>⋯</button></span>
     </div>
@@ -422,7 +425,7 @@ async function renderDetail() {
       return;
     }
     if (r && r.open_url && !safeUrl(r.open_url)) { // 이상한 주소(http/https 아님): 열지 않고 버튼을 되돌림 (D4)
-      toast("무료 PDF 주소가 올바르지 않아 열 수 없어요. PDF 파일이 있으면 [PDF 첨부]로 올려 주세요.", "error");
+      toast("무료 PDF 주소가 올바르지 않아 열 수 없어요. PDF 파일이 있으면 [파일 첨부]로 올려 주세요.", "error");
       fetchBtn.disabled = false;
       fetchBtn.textContent = "무료 PDF 찾기";
       return;
@@ -441,6 +444,8 @@ async function renderDetail() {
   };
   const attach = $("[data-attach]", inner);
   if (attach) attach.onclick = () => attachPdf(p.id, false);
+  const srcBtn = $("[data-source]", inner);
+  if (srcBtn) srcBtn.onclick = () => downloadSource(p.id);
   // G-5: 실제로 새 탭을 연 뒤 한 줄 안내 — 패널을 다시 그릴 때까지 (D-1)
   const showAfter = () => { $("[data-inha-after]", inner).innerHTML = G5_NOTICE; };
   const inhaLink = $("[data-inha-open]", inner);
@@ -465,9 +470,10 @@ async function renderDetail() {
     popupMenu(e.currentTarget, [
       { label: "정보 수정", action: () => editPaperDialog(p) },
       { label: "폴더로 이동…", action: () => moveToFolderDialog([p.id], p.folder_id ?? null) },
-      { label: "온라인 정보로 채우기", sub: "DOI·arXiv·제목", action: () => fillOnline(p) },
-      ...(p.has_pdf ? [{ label: "PDF 바꾸기", action: () => attachPdf(p.id, true) },
-        { label: "PDF 파일 열기", action: () => openPdfFile(p.id) },
+      { label: "온라인 정보로 채우기", sub: p.item_type === "document" ? "DOI·arXiv" : "DOI·arXiv·제목", action: () => fillOnline(p) },
+      ...(p.has_pdf ? [{ label: "파일 바꾸기", sub: "PDF · 워드 · 한글 · 사진", action: () => attachPdf(p.id, true) },
+        { label: "PDF 파일 열기", ...(p.has_source ? { sub: "변환본" } : {}), action: () => openPdfFile(p.id) },
+        ...(p.has_source ? [{ label: "원본 받기", sub: p.source_name || "", action: () => downloadSource(p.id) }] : []),
         ...(inha ? [{ label: INHA.buttons.view, sub: "새 탭", action: () => openExternal(inha, { returnFocus: moreBtn }) }] : [])] : []),
       { label: "하이라이트·노트 내보내기 (.md)", action: () => exportAnnotations(p.id, p.title) },
       "-",
@@ -532,6 +538,7 @@ function infoView(p, ids) {
     <dl class="kv">
       ${ids}
       ${p.has_pdf && p.file_name ? `<dt>파일 이름</dt><dd data-file-name title="PC 폴더 동기화에서 쓰는 이름이에요. 이름은 PC에서 바꿔 주세요.">${esc(p.file_name)}</dd>` : ""}
+      ${p.has_source ? `<dt>원본</dt><dd data-source-name>${esc(p.source_name || "")}${p.source_size ? ` · ${esc(fmtBytes(p.source_size))}` : ""} <span class="small muted">(PDF로 바꿔 읽어요)</span></dd>` : ""}
       <dt>유형</dt><dd>${esc(state.meta.item_types[p.item_type] || p.item_type)}</dd>
       ${p.publisher ? `<dt>출판사</dt><dd>${esc(p.publisher)}</dd>` : ""}
       ${p.cited_by_count != null ? `<dt>피인용</dt><dd>${fmtNum(p.cited_by_count)}회</dd>` : ""}
@@ -653,11 +660,25 @@ async function fillOnline(p) {
   }
 }
 
-// PDF 첨부 · 바꾸기: 업로드 창에 한 줄로 (시안 12장)
+// 파일 첨부 · 바꾸기(PDF · 워드 · 한글 · 사진 등): 업로드 창에 한 줄로 (시안 12장)
 async function attachPdf(id, replace) {
-  const [file] = await pickFiles({ accept: ".pdf,application/pdf" });
+  const [file] = await pickFiles({ accept: LIB_ACCEPT });
   if (!file) return;
   uploadPdfs([file], { attachTo: id, replace });
+}
+
+// [원본 받기]: 워드 · 한글 · PPT · 사진으로 올린 항목의 원본 파일. 서명 주소는 attachment라 화면은 그대로 두고 받아진다
+// (PC 앱은 다른 출처 이동을 막고 시스템 브라우저로 넘긴다 — desktop/main/window.js)
+export async function downloadSource(pid) {
+  try {
+    const { url } = await api.get(`/api/papers/${pid}/source-url`);
+    const href = safeUrl(url);
+    if (!href) throw new Error("원본 파일 주소가 올바르지 않아요");
+    const a = el(`<a href="${esc(href)}" rel="noopener noreferrer" download hidden></a>`);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } catch (e) { errorToast(e); }
 }
 
 // 상세 패널 "폴더" 줄: 지금 폴더 경로 + [옮기기]

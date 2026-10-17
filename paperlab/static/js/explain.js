@@ -5,7 +5,7 @@
 // addAnnotation(page, rects, text, color, comment) } — 탭 그리기 함수는 export만(1C 참고 패널은 AI를 하지 않음 — 명세 3장).
 
 import { api, streamEvents } from "./api.js";
-import { COMPANY, cancelJob, errorLabel, isActive, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
+import { COMPANY, NO_ROUTE_TEXT, cancelJob, errorLabel, handledJob, isActive, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
 import {
   $, $$, ICON_INFO, ICON_WARN, confirmDialog, copyText, el, errorToast, esc, fmtDate, josa, liveSay, modal, popupMenu,
   renderMarkdown, renderSvg, toast,
@@ -351,7 +351,12 @@ function paintRun(run) {
 }
 
 async function cancelRun(run) {
-  if (run.abort) { run.abort.abort(); return; }
+  // 연결을 끊어도 서버 작업은 계속되므로(2026-10-16 백그라운드 AI) [취소]는 작업 번호로 취소한 뒤 스트림을 끊는다
+  if (run.abort) {
+    if (run.jobId) cancelJob(run.jobId).catch(() => {});
+    run.abort.abort();
+    return;
+  }
   if (run.job) {
     try { await cancelJob(run.job.id); } catch (e) { errorToast(e); }
   }
@@ -393,7 +398,7 @@ export async function startExplain(kind, sel, host, { force = false, redo = null
         else if (ev.type === "done") done = ev;
         else if (ev.type === "queued" || ev.type === "fallback") jobEv = ev;
         else if (ev.type === "error") throw Object.assign(new Error(ev.error || "실패했어요"), { job: ev.job });
-      }, run.abort.signal);
+      }, run.abort.signal, { onJob: (id) => { run.jobId = id; } });
   } catch (e) {
     run.abort = null;
     if (S !== s) return;
@@ -405,6 +410,7 @@ export async function startExplain(kind, sel, host, { force = false, redo = null
   if (S !== s) return;
   if (jobEv) return followJob(run, jobEv.job, jobEv.type === "fallback");
   if (!done) return failRun(run, "응답이 끝나기 전에 연결이 끊겼어요");
+  handledJob(done.job_id); // 이 화면에서 결과를 봤음 — 끝남 토스트 생략
   endRun(run, true);
   addItem(done.item, done.cached);
 }
@@ -444,6 +450,7 @@ function followJob(run, job, fallback = false) {
     if (!j || j.status === "cancelled") { endRun(run); redrawIfHistory(); if (j) toast("취소했어요"); return; }
     run.job = j;
     if (j.status === "succeeded") {
+      handledJob(j.id);
       endRun(run, true);
       try { await loadList(); } catch { /* 다음에 열면 보임 */ }
       const item = s.items.find((x) => x.id === (j.result || {}).explanation_id);
@@ -485,6 +492,8 @@ function watchTr(job) {
       await loadTr().catch(() => {});
       if (S !== s) return;
       const c = trCounts(s.tr.translation && s.tr.translation.page_state);
+      // 이 화면이 끝을 알림(live) · 번역 보기에 그림 — 끝남 토스트 · 브라우저 알림을 겹치지 않음
+      if (j.status === "succeeded" || s.view === "paper") handledJob(j.id);
       if (j.status === "succeeded") live(`전체 번역을 마쳤어요. ${c.total}쪽 중 ${c.done}쪽 완료${c.failed ? `, ${c.failed}쪽 실패` : ""}`);
       if (s.view === "paper") drawPaperKeepScroll();
       return;
@@ -518,7 +527,7 @@ async function drawPaper() {
     const cta = el(`<div class="ai-cta"><h3>이 논문을 통째로 번역해요</h3>
       <p class="small">끝난 쪽부터 PDF 옆에서 바로 읽을 수 있어요. 시작 전에 쪽 수와 예상 비용을 보여 드려요.</p>
       <button type="button" class="btn primary" data-xt-start ${off ? 'aria-disabled="true" aria-describedby="xt-off-why"' : ""}>전체 번역 시작…</button>
-      ${off ? `<p class="small" id="xt-off-why" style="margin-top:8px">PDF 글자를 읽을 수 없는 논문이에요(스캔본).</p>` : ""}</div>`);
+      ${off ? `<p class="small" id="xt-off-why" style="margin-top:8px">글자를 읽을 수 없는 항목이에요(스캔본 · 사진).</p>` : ""}</div>`);
     $("[data-xt-start]", cta).onclick = () => (off ? null : startDialog());
     if (isActive(job)) cta.prepend(trStatus(job));
     // 6단계 SW-7(K-28): PDF가 바뀌어 전체 번역을 지웠으면 안내 — 새로 번역을 시작하면 서버가 표시를 비워 사라짐
@@ -692,7 +701,7 @@ async function startDialog(current = "") {
   const settings = s.host.settings();
   const [status, devices] = await Promise.all([api.get("/api/ai/status").catch(() => null), api.get("/api/devices").catch(() => [])]);
   const first = status && status.kinds && status.kinds.translate && status.kinds.translate.first;
-  let how = "AI를 쓸 수 있는 방법이 없어요 — 설정에서 API 키를 넣거나 PC를 연결해 주세요.";
+  let how = (status && status.kinds && status.kinds.translate && status.kinds.translate.message) || NO_ROUTE_TEXT; // 연결된 PC · 내 API 키 안내
   if (first && first.runner === "api") how = `${COMPANY[first.engine]} API 키 — 쓰는 만큼 키 계정에 요금이 나가요`;
   else if (first) {
     const pc = (devices || []).find((d) => !d.revoked && d.online && (d.engines || []).some((e) => e.name === first.engine));

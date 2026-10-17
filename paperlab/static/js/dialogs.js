@@ -11,6 +11,7 @@ import {
   modal, pickFiles, promptDialog, safeUrl, store, toast,
 } from "./ui.js";
 import { substituteText } from "./sourcemeta.js";
+import { LIB_KINDS_TEXT, isLibFile, isPdfFile } from "./filetypes.js";
 import { actions, refreshAll, refreshUsage, state } from "./state.js";
 import { restoreFromTrash } from "./trash.js";
 
@@ -27,7 +28,7 @@ export const extMark = (note = "새 탭에서 열림") => `${ICON_EXT}<span clas
 export const EXT_MARK = extMark();
 const ICON_LOCK = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9.5" rx="2"/><path d="M8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></svg>`;
 const GUIDE_KEY = "paperlab.inhaGuideSeen";
-export const G5_NOTICE = `<div class="notice inha-after" data-tone="info">${ICON_INFO}<div>학교 사이트에서 PDF를 받았다면 <b>[PDF 첨부]</b>로 올려 주세요.</div></div>`;
+export const G5_NOTICE = `<div class="notice inha-after" data-tone="info">${ICON_INFO}<div>학교 사이트에서 PDF를 받았다면 <b>[파일 첨부]</b>로 올려 주세요.</div></div>`;
 export const SCHOOL_LOGIN_NOTE = "‘인하대에서 보기’를 누르면 학교 로그인이 필요할 때 자동으로 로그인 화면이 뜨고, 로그인하면 보려던 페이지로 돌아가요. 미리 로그인해 두고 싶으면 [학교 로그인]을 누르세요. 로그인은 학교 화면에서 직접 하고, PaperLab은 학교 계정을 저장하거나 사용하지 않아요. 학교 로그인이 끝나면 다시 로그인 화면이 떠요.";
 export const SCHOLAR_LIBRARY_NOTE = "Google Scholar: 설정 → 도서관 링크에서 ‘인하대학교’를 켜면 검색 결과에 학교 구독 원문 링크가 함께 나와요.";
 // 인용 그래프 아이콘 (docs/design/citation-graph-ui.md 1.2절) — 진입 상자 · [이 논문으로 새 그래프]
@@ -46,7 +47,7 @@ export function inhaGuideDialog({ onGo = null, returnFocus = null } = {}) {
     <ol class="inha-guide-list">
       <li>학교에 로그인하지 않았으면 <b>학교 로그인 화면이 자동으로 떠요.</b> <b>정석학술정보관 계정으로 학교 화면에서 직접</b> 로그인하면 <b>보려던 페이지로 돌아가요.</b></li>
       <li>시간이 지나거나 브라우저를 닫아 학교 로그인이 끝나면 다음에 열 때 <b>다시 로그인 화면이 떠요.</b></li>
-      <li>받은 PDF는 서재의 논문 상세에서 <b>[PDF 첨부]</b>로 올려 주세요.</li>
+      <li>받은 PDF는 서재의 논문 상세에서 <b>[파일 첨부]</b>로 올려 주세요.</li>
       <li>학교가 구독하지 않는 사이트면 학교 안내·오류 페이지나 출판사의 구매 화면이 뜰 수 있어요.</li>
     </ol>
     <div class="notice" data-tone="warn">${ICON_WARN}<div>구독 계약상 <b>논문을 한꺼번에 많이 받으면 학교 전체 접속이 막힐 수 있어요.</b> 필요한 논문만 한 편씩 받아 주세요.</div></div>
@@ -268,7 +269,7 @@ export async function settingsDialog({ focus = "" } = {}) {
   const user = state.user || {};
   const body = el(`<form autocomplete="off">
     <div class="section-title" id="set-ai-title" style="margin-top:0">AI 엔진</div>
-    <div class="notice" data-tone="info" data-ai-intro>${ICON_INFO}<div><b>API 키가 있으면 API로 먼저, 안 되면 연결된 PC의 CLI로 실행해요.</b> 키가 없는 엔진은 PC에서만 실행돼요. PC를 꺼도 AI를 쓰려면 API 키가 필요해요.</div></div>
+    <div class="notice" data-tone="info" data-ai-intro>${ICON_INFO}<div><b>AI는 내가 넣은 API 키나 연결된 내 PC의 CLI로만 실행해요</b> (서버의 CLI · 키는 쓰지 않아요). API 키가 있으면 API로 먼저, 안 되면 연결된 PC의 CLI로 실행해요. 키가 없는 엔진은 PC에서만 실행돼요. PC를 꺼도 AI를 쓰려면 API 키가 필요해요.</div></div>
     ${JOB_KINDS.map(([kind, label, hint]) => `<div class="field"><label id="rt-${kind}">${label} — 쓰는 순서</label>${hint ? `<div class="hint">${hint}</div>` : ""}
       <div class="row" role="group" aria-labelledby="rt-${kind}">${[0, 1, 2].map((i) => `<select class="input grow" data-route-kind="${kind}" data-route-i="${i}" aria-label="${label} ${i + 1}순위 엔진"${i === 0 ? ` aria-describedby="rl-${kind}"` : ""}></select>`).join("")}</div>
       <div class="hint" data-route-line="${kind}" id="rl-${kind}"></div></div>`).join("")}
@@ -785,6 +786,7 @@ export async function pcAppDialog() {
       $("[data-again]", body).onclick = load;
       return;
     }
+    // 서버는 같은 출처 상대 주소(/downloads/…)를 준다. safeUrl은 http(s)만 통과시켜 빈 href → 현재 페이지가 받아지던 문제
     const file = r.url.split("/").pop();
     const hashCmd = `Get-FileHash "$env:USERPROFILE\\Downloads\\${file}"`;
     const dk = desktop();
@@ -795,7 +797,7 @@ export async function pcAppDialog() {
       ${dk ? `<div class="notice" data-tone="info">${ICON_INFO}<div>지금 PaperLab 앱 ${esc(appVer)}을 쓰고 있어요. 업데이트는 자동으로 받아요. 다른 PC에 설치하려면 그 PC에서 이 화면을 열어 주세요.</div></div>`
         : !/Windows/.test(navigator.userAgent) ? `<div class="notice" data-tone="info">${ICON_INFO}<div>PC 앱은 Windows용이에요. Windows PC에서 이 화면을 열어 받아 주세요.</div></div>` : ""}
       <p class="small muted" data-release-meta style="margin-top:0">Windows 10 · 11용 · 버전 ${esc(r.version)} · ${esc(fmtBytes(r.size))}${r.built_at ? ` · ${esc(fmtAgo(r.built_at))} 만듦` : ""}</p>
-      <a class="btn primary" style="width:100%;justify-content:center" href="${esc(safeUrl(r.url))}" download data-release-download>${ICON_DOWNLOAD} 설치 파일 받기</a>
+      <a class="btn primary" style="width:100%;justify-content:center" href="${esc(/^\/downloads\/[\w.-]+$/.test(r.url) ? r.url : safeUrl(r.url))}" download data-release-download>${ICON_DOWNLOAD} 설치 파일 받기</a>
       <p class="small muted" style="margin:6px 0 12px">받기가 안 되면 1분 뒤 다시 눌러 주세요.</p>
       <div class="section-title" style="margin-top:0">설치 순서</div>
       <ol class="inha-guide-list" data-install-steps>
@@ -977,8 +979,6 @@ export function cancelUploads() {
   for (const b of batches) b.cancelAll();
 }
 
-const isPdf = (f) => /\.pdf$/i.test(f.name) || f.type === "application/pdf";
-
 function fmtSize(n) {
   if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))}KB`;
   if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)}MB`;
@@ -1007,13 +1007,14 @@ function putToStorage(slot, file, onProgress) {
 }
 
 const isFullError = (e) => e && e.status === 400 && /저장 공간이 거의 찼어요/.test(e.message || "");
-const noRetryError = (msg) => /100MB 초과|PDF 파일이 아니에요|PDF를 열 수 없어요/.test(msg || "");
+// 다시 시도해도 같은 결과인 오류(파일 자체 문제 — 서버 convert.py 문구 포함)
+const noRetryError = (msg) => /100MB 초과|PDF 파일이 아니에요|PDF를 열 수 없어요|올릴 수 없는 파일 형식|PDF로 바꾸지 못했어요|문서 변환기/.test(msg || "");
 
 // 저장 공간이 꽉 찼을 때 목록 대신 보이는 안내 (시안 12.1)
 function blockedView(u) {
   const v = el(`<div class="upload-blocked" data-upload-blocked>
-    <div class="notice" data-tone="danger" role="alert">${ICON_ALERT}<div><b>저장 공간이 거의 찼어요.</b> PDF를 더 올릴 수 없어요. 관리자에게 알려 주세요.</div></div>
-    <p class="small" style="margin:0;color:var(--text-2)">필요 없는 논문을 지우면 그 PDF만큼 공간이 생겨요.</p></div>`);
+    <div class="notice" data-tone="danger" role="alert">${ICON_ALERT}<div><b>저장 공간이 거의 찼어요.</b> 파일을 더 올릴 수 없어요. 관리자에게 알려 주세요.</div></div>
+    <p class="small" style="margin:0;color:var(--text-2)">필요 없는 항목을 지우면 그 파일만큼 공간이 생겨요.</p></div>`);
   const put = (x) => {
     const b = usageBlock(x, { hint: false, notice: false, level: "full" });
     b.style.margin = "0";
@@ -1031,12 +1032,15 @@ function blockedDialog(title, u) {
   setTimeout(() => $("[data-close-upload]", foot).focus(), 40);
 }
 
-// files: 올릴 PDF들. attachTo: 이미 있는 논문 id(PDF 첨부 · 바꾸기 — 파일 하나)
+// files: 올릴 파일들(PDF · 워드 · 한글 · PPT · 엑셀 · 사진 — filetypes.js). attachTo: 이미 있는 항목 id(파일 첨부 · 바꾸기 — 파일 하나).
+// PDF가 아닌 파일은 서버가 PDF 변환본을 만들고 원본은 [원본 받기]로 남긴다
 export async function uploadPdfs(files, { attachTo = null, replace = false } = {}) {
-  files = (files || []).filter(isPdf);
-  if (!files.length) return toast("PDF 파일만 올릴 수 있어요", "error");
+  const all = files || [];
+  files = all.filter(isLibFile);
+  if (!files.length) return toast(`올릴 수 없는 파일이에요. ${LIB_KINDS_TEXT} 파일을 올려 주세요.`, "error");
+  if (files.length < all.length) toast(`${all.length - files.length}개는 올릴 수 없는 형식이라 뺐어요 (${LIB_KINDS_TEXT}만)`, "");
   if (attachTo) files = files.slice(0, 1);
-  const title = attachTo ? (replace ? "PDF 바꾸기" : "PDF 첨부") : "PDF 추가";
+  const title = attachTo ? (replace ? "파일 바꾸기" : "파일 첨부") : "파일 추가";
   const known = state.usage;
   if (known && known.level === "full") return blockedDialog(title, known);
   // 지금 보고 있는 컬렉션 · 폴더에 넣는다
@@ -1089,7 +1093,8 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
     if (it.state === "uploading") bar.setAttribute("aria-valuenow", it.pct); else bar.removeAttribute("aria-valuenow");
     $(".upload-msg", r).textContent = it.state === "waiting" ? "기다리는 중"
       : it.state === "uploading" ? `올리는 중 · ${it.pct}%`
-        : it.state === "processing" ? (attachTo ? "PDF를 읽는 중…" : "논문 정보를 찾는 중…") : it.msg;
+        : it.state === "processing" ? (!isPdfFile(it.file) ? "PDF로 바꾸는 중… (문서는 조금 걸려요)"
+          : attachTo ? "PDF를 읽는 중…" : "논문 정보를 찾는 중…") : it.msg;
     $$(".upload-warn", r).forEach((w) => w.remove());
     for (const w of it.warnings) $(".upload-main", r).appendChild(el(`<div class="upload-warn">${esc(w)}</div>`));
     const btn = $("[data-retry]", r);
@@ -1139,11 +1144,12 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
       it.state = "processing";
       draw(it);
       if (attachTo) {
-        const r = await api.post(`/api/papers/${attachTo}/pdf/complete`, { upload_id: slot.upload_id });
+        // name: 서버가 확장자로 워드 · 한글 · 사진을 알아보고 PDF로 바꾼다(PC 파일 이름이 비었을 때도 이 이름)
+        const r = await api.post(`/api/papers/${attachTo}/pdf/complete`, { upload_id: slot.upload_id, name: it.file.name });
         it.state = "done";
         it.id = attachTo;
         it.title = (r.paper && r.paper.title) || "";
-        it.msg = `${it.file.name} · ${replace ? "PDF를 바꿨어요" : "PDF를 붙였어요"}`;
+        it.msg = `${it.file.name} · ${replace ? "파일을 바꿨어요" : "파일을 붙였어요"}`;
         it.warnings = r.warnings || [];
         // 6단계 SW-7 · K-34: 이 교체로 전체 번역을 지웠으면 바로 알림
         if (r.translation_cleared) toast("PDF를 바꿨어요. PDF가 바뀌어 번역을 지웠어요.", "", { duration: 8000 });
@@ -1223,7 +1229,7 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
     const summary = $("[data-upload-summary]", body);
     if (batch.running()) {
       summary.className = "status-line";
-      summary.innerHTML = `<span class="spinner"></span><span>PDF ${items.length}개를 올리고 있어요 · ${finished}개 끝남</span>`;
+      summary.innerHTML = `<span class="spinner"></span><span>파일 ${items.length}개를 올리고 있어요 · ${finished}개 끝남</span>`;
       if (!foot.querySelector("[data-cancel-all]")) {
         foot.innerHTML = `<div class="left"><span class="upload-foot-note">올리는 동안 이 탭을 닫지 마세요</span></div>
           <button class="btn" data-cancel-all>모두 취소</button>`;
@@ -1237,12 +1243,12 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
     const skipped = n("duplicate") + cancelled;
     if (attachTo) {
       summary.className = `status-line ${added ? "ok" : "bad"}`;
-      summary.textContent = added ? `✓ ${replace ? "PDF를 바꿨어요" : "PDF를 붙였어요"}` : `✕ ${replace ? "PDF를 바꾸지 못했어요" : "PDF를 붙이지 못했어요"}`;
+      summary.textContent = added ? `✓ ${replace ? "파일을 바꿨어요" : "파일을 붙였어요"}` : `✕ ${replace ? "파일을 바꾸지 못했어요" : "파일을 붙이지 못했어요"}`;
     } else {
       summary.className = `status-line ${added ? "ok" : failed ? "bad" : ""}`;
       summary.textContent = added ? `✓ ${added}개 추가 · ${skipped}개 건너뜀${failed ? ` · ${failed}개 실패` : ""}`
         : failed && !skipped ? `✕ ${failed}개 모두 추가하지 못했어요`
-          : `추가한 논문이 없어요 · ${skipped}개 건너뜀${failed ? ` · ${failed}개 실패` : ""}`;
+          : `추가한 항목이 없어요 · ${skipped}개 건너뜀${failed ? ` · ${failed}개 실패` : ""}`;
     }
     if (!foot.querySelector("[data-close-upload]")) {
       foot.innerHTML = `<button class="btn primary" data-close-upload>닫기</button>`;
@@ -1257,8 +1263,8 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
     if (added || n("duplicate")) { refreshAll(); refreshUsage(); }
     // 창을 닫은 뒤에 끝났으면 토스트로 알린다
     if (closed && (added || failed)) {
-      if (attachTo) toast(added ? (replace ? "PDF를 바꿨어요" : "PDF를 붙였어요") : (replace ? "PDF를 바꾸지 못했어요" : "PDF를 붙이지 못했어요"), added ? "success" : "error");
-      else toast(`PDF ${added}개를 추가했어요${failed ? ` · ${failed}개는 실패했어요` : ""}`, "", { duration: 8000 });
+      if (attachTo) toast(added ? (replace ? "파일을 바꿨어요" : "파일을 붙였어요") : (replace ? "파일을 바꾸지 못했어요" : "파일을 붙이지 못했어요"), added ? "success" : "error");
+      else toast(`파일 ${added}개를 추가했어요${failed ? ` · ${failed}개는 실패했어요` : ""}`, "", { duration: 8000 });
     }
   }
 

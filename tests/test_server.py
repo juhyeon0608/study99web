@@ -59,7 +59,7 @@ def test_upload_attaches_pdf_to_existing_paper(cloud, client):
     pid = client.post("/api/papers", json={"title": "Deep Residual Learning for Image Recognition",
                                            "doi": "10.1109/cvpr.2016.90"}).json()["paper"]["id"]
     res = cloud.upload(client, make_pdf(), "r.pdf")
-    assert res["id"] == pid and res["note"] == "이미 있는 논문에 PDF를 붙였어요"
+    assert res["id"] == pid and res["note"] == "이미 있는 항목에 파일을 붙였어요"
     assert client.get(f"/api/papers/{pid}").json()["has_pdf"]
 
 

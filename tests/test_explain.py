@@ -332,7 +332,7 @@ def test_translate_paper_uses_translate_routing():
     s = UserSettings({"ai_routing": {"translate": ["gemini"]}}, {"google_api_key": "g"})
     assert jobs.build_route("translate_paper", s.get, []) == [{"runner": "api", "engine": "gemini"}]
     assert "translate_paper" in jobs.ALL_KINDS and jobs.DEADLINE_S["translate_paper"] == 24 * 3600
-    assert jobs.TIMEOUT_S["translate_paper"] == 900 and jobs.DEADLINE_S["explain"] == 1800
+    assert jobs.TIMEOUT_S["translate_paper"] == 900 and jobs.DEADLINE_S["explain"] == 24 * 3600  # 2026-10-17: 30분 → 24시간
 
 
 # ====================================================================== D. R2 키 규칙 (AC-D03 · D07) · CSP (AC-G06)

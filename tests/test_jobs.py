@@ -472,23 +472,50 @@ def test_chat_and_write_cli_paths(env):
     assert ev[-1]["type"] == "fallback" and ev[-1]["job"]["runner"] == "cli"
     assert ev[-1]["job"]["history"][0]["error_code"] == "api_auth"
     ca.post(f"/api/jobs/{ev[-1]['job']['id']}/cancel")
-    # 글쓰기 CLI (키 지움)
+    # 글쓰기 CLI (키 지움) — 2026-10-16: 글쓰기는 SSE가 아니라 백그라운드 작업(202 {job}) + 넣을 자리 정보
     ca.put("/api/settings", json={"anthropic_api_key": None})
     mid = ca.post("/api/manuscripts", json={"title": "석사 논문 2장"}).json()["id"]
-    with ca.stream("POST", "/api/ai/write", json={"text": "고칠 글", "mode": "polish", "manuscript_id": mid}) as r:
-        ev = [json.loads(x[6:]) for x in r.iter_lines() if x.startswith("data: ")]
-    wjob = ev[0]["job"]
-    assert ev[0]["type"] == "queued" and wjob["kind"] == "write" and wjob["manuscript_title"] == "석사 논문 2장"
+    r = ca.post("/api/ai/write", json={"text": "고칠 글", "mode": "academic", "manuscript_id": mid, "sel_start": 10,
+                                       "sel_end": 14, "doc_hash": "h1a2b3", "before": "앞 글 " * 100, "insert": "yes"})
+    assert r.status_code == 202, r.text
+    wjob = r.json()["job"]
+    assert wjob["kind"] == "write" and wjob["manuscript_title"] == "석사 논문 2장" and wjob["runner"] == "cli"
+    w = wjob["write"]
+    assert (w["mode"], w["text"], w["sel_start"], w["sel_end"], w["doc_hash"], w["insert"], w["handled"]) == (
+        "academic", "고칠 글", 10, 14, "h1a2b3", False, None)
+    assert len(w["before"]) == 300
+    bad = ca.post("/api/ai/write", json={"text": "글", "sel_start": 5, "sel_end": 2, "doc_hash": "<x>", "manuscript_id": mid})
+    assert bad.status_code == 202 and (bad.json()["job"]["write"]["sel_start"], bad.json()["job"]["write"]["doc_hash"]) == (None, "")
+    ca.post(f"/api/jobs/{bad.json()['job']['id']}/cancel")
+    assert ca.post("/api/ai/write", json={"text": "글", "mode": "rm -rf"}).status_code == 400
+    # 문자열이 아닌 모드(목록 · 객체 · 숫자)는 500이 아니라 400 (해시할 수 없는 값의 in 검사)
+    for bad_mode in (["polish"], {"m": "polish"}, 3, True):
+        r = ca.post("/api/ai/write", json={"text": "글", "mode": bad_mode})
+        assert r.status_code == 400 and r.json()["detail"] == "알 수 없는 글쓰기 모드예요", bad_mode
     t = a1.claim()["job"]
     assert "<text>\n고칠 글\n</text>" in t["prompt"]
     assert a1.result(t, text="다듬은 글").json()["status"] == "succeeded"
     assert ca.get(f"/api/jobs/{wjob['id']}").json()["result"] == {"text": "다듬은 글"}
+    # 원고 화면: 그 원고의 글쓰기 결과 · 넣음 표시 (목록에는 원래 글을 넣지 않음)
+    listed = ca.get(f"/api/jobs?status=recent&kind=write&manuscript_id={mid}").json()
+    assert [j["id"] for j in listed["jobs"] if j["status"] == "succeeded"] == [wjob["id"]] and listed["now"]
+    assert "text" not in listed["jobs"][0]["write"]
+    assert ca.post(f"/api/jobs/{wjob['id']}/handled", json={"state": "nope"}).status_code == 400
+    assert env.client(env.b).post(f"/api/jobs/{wjob['id']}/handled", json={"state": "applied"}).status_code == 404
+    assert ca.post(f"/api/jobs/{wjob['id']}/handled", json={"state": "applied"}).json() == {"ok": True, "handled": "applied"}
+    v = ca.get(f"/api/jobs/{wjob['id']}").json()
+    assert v["write"]["handled"] == "applied" and v["result"]["text"] == "다듬은 글"
+    # 끝남 알림: since 뒤에 끝난 작업
+    fin = ca.get("/api/jobs", params={"status": "finished", "since": "2000-01-01T00:00:00+00:00"}).json()
+    assert wjob["id"] in [j["id"] for j in fin["jobs"]]
+    assert ca.get("/api/jobs", params={"status": "finished", "since": "어제"}).status_code == 400
+    assert ca.get("/api/jobs", params={"status": "finished", "since": "2000-01-01T00:00:00"}).status_code == 400  # 시간대 없음
+    assert ca.get("/api/jobs", params={"status": "finished", "since": "2999-01-01T00:00:00+00:00"}).json()["jobs"] == []
     ca.delete(f"/api/manuscripts/{mid}")
     assert ca.get(f"/api/jobs/{wjob['id']}").json()["manuscript_title"] is None  # 원고 삭제 → null
-    # PD-4: 창을 닫으면 대기 · 실행 중 모두 취소
+    # [취소]는 대기 · 실행 중 모두 취소 (창을 닫는 것은 취소가 아님 — 2026-10-16)
     for running in (False, True):
-        with ca.stream("POST", "/api/ai/write", json={"text": "글", "mode": "polish"}) as r:
-            jid = json.loads(next(x for x in r.iter_lines() if x.startswith("data: "))[6:])["job"]["id"]
+        jid = ca.post("/api/ai/write", json={"text": "글", "mode": "polish"}).json()["job"]["id"]
         if running:
             t = a1.claim()["job"]
         out = ca.post(f"/api/jobs/{jid}/cancel").json()
@@ -588,19 +615,34 @@ def test_cancel_retry_and_cleanup(env, project, monkeypatch):
         c = json.loads(next(x for x in lines if x.startswith("data: "))[6:])["job"]
     rows = dict(sql(project, "select kind, extract(epoch from deadline_at - created_at)::int from paperlab.jobs "
                              "where id = any(%s)", ([s["id"], c["id"]],)))
-    assert rows == {"summary": 24 * 3600, "chat": 30 * 60}
+    # 2026-10-17: 대화 · 글쓰기 등 백그라운드 작업도 요약처럼 24시간 (30분이면 창을 닫은 뒤 조용히 실패했음)
+    assert rows == {"summary": 24 * 3600, "chat": 24 * 3600}
+    assert set(jobs.DEADLINE_S.values()) == {24 * 3600} and set(jobs.DEADLINE_S) >= set(jobs.ALL_KINDS) - {"index"}
+    w0 = ca.post("/api/ai/write", json={"text": "글"}).json()["job"]
+    assert sql(project, "select extract(epoch from deadline_at - created_at)::int from paperlab.jobs where id = %s",
+               (w0["id"],))[0][0] == 24 * 3600
+    # 31분이 지나도 아직 대기 (예전엔 여기서 no_worker_timeout)
     sql(project, "update paperlab.jobs set created_at = created_at - interval '31 minutes', "
-                 "deadline_at = deadline_at - interval '31 minutes' where id = %s", (c["id"],))
+                 "deadline_at = deadline_at - interval '31 minutes' where id = any(%s)", ([c["id"], w0["id"]],))
+    assert ca.get(f"/api/jobs/{c['id']}").json()["status"] == "queued"
+    assert ca.get(f"/api/jobs/{w0['id']}").json()["status"] == "queued"
+    sql(project, "update paperlab.jobs set created_at = created_at - interval '24 hours', "
+                 "deadline_at = deadline_at - interval '24 hours' where id = %s", (c["id"],))
     sql(project, "update paperlab.jobs set created_at = created_at - interval '23 hours', "
                  "deadline_at = deadline_at - interval '23 hours' where id = %s", (s["id"],))
     assert ca.get(f"/api/jobs/{c['id']}").json()["error_code"] == "no_worker_timeout"
     assert ca.get(f"/api/jobs/{s['id']}").json()["status"] == "queued"
     ca.post(f"/api/jobs/{s['id']}/cancel")
-    with ca.stream("POST", "/api/ai/write", json={"text": "글"}) as r:
-        w = json.loads(next(x for x in r.iter_lines() if x.startswith("data: "))[6:])["job"]
+    ca.post(f"/api/jobs/{w0['id']}/cancel")
+    w = ca.post("/api/ai/write", json={"text": "글"}).json()["job"]
     t = a1.claim()["job"]
     a1.result(t, text="결과 글")
-    sql(project, "update paperlab.jobs set finished_at = now() - interval '25 hours' where id = %s", (w["id"],))
+    # 글쓰기 결과는 7일 동안 남김 (2026-10-16 — 작업 화면 · 원고 화면에서 나중에 넣기)
+    sql(project, "update paperlab.jobs set finished_at = now() - interval '6 days' where id = %s", (w["id"],))
+    env.app.state.workers.swept.clear()
+    ca.get("/api/jobs")
+    assert ca.get(f"/api/jobs/{w['id']}").json()["result"] == {"text": "결과 글"}
+    sql(project, "update paperlab.jobs set finished_at = now() - interval '7 days 1 hour' where id = %s", (w["id"],))
     old = sql(project, "select id from paperlab.jobs where user_id = %s and status = 'cancelled' order by id limit 1",
               (env.a.id,))[0][0]
     sql(project, "update paperlab.jobs set finished_at = now() - interval '31 days' where id = %s", (old,))
@@ -839,7 +881,51 @@ def test_sse_job_not_rerun_after_server_crash(env, project):
     t.join(5)
     assert ca.get(f"/api/papers/{pid}/chat").json() == []
     v = ca.get(f"/api/jobs/{jid}").json()
-    assert v["error_code"] == "interrupted"
+    assert v["error_code"] == "interrupted" and v["error"] == jobs.INTERRUPTED  # 재시작 문구
+
+
+def test_sse_job_lease_timeout_without_restart(env, project):
+    """재시작 없이 화면 작업의 리스(660초)가 지나면 같은 interrupted로 끝내되, 문구는 "서버가 다시 시작돼"가 아니라
+    "응답이 너무 오래 걸려" (2026-10-17 — 재시작이 없었는데 재시작이라고 하지 않음)"""
+    ca = env.client(env.a)
+    ca.put("/api/settings", json={"anthropic_api_key": KEY})
+    pid = paper(ca)
+    gate = threading.Event()
+
+    def slow_chat(ctx, history, question, engine="claude"):
+        yield {"type": "delta", "text": "부분"}
+        gate.wait(30)
+        yield {"type": "done", "text": "늦은 답", "citations": []}
+
+    env.fake_ai.chat = slow_chat
+
+    def run():
+        with ca.stream("POST", f"/api/papers/{pid}/chat", json={"question": "오래 걸리는 질문"}) as r:
+            for _ in r.iter_lines():
+                pass
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    for _ in range(100):
+        rows = sql(project, "select id, status, interactive from paperlab.jobs where user_id = %s and kind = 'chat'",
+                   (env.a.id,))
+        if rows:
+            break
+        time.sleep(0.1)
+    jid, status, interactive = rows[0]
+    assert status == "running" and interactive is True
+    # 같은 서버 프로세스에서 리스만 지남 (토큰 그대로)
+    sql(project, "update paperlab.jobs set lease_until = now() - interval '1 second' where id = %s", (jid,))
+    v = ca.get(f"/api/jobs/{jid}").json()
+    assert v["status"] == "cancelled" and v["error_code"] == "interrupted"
+    assert v["error"] == jobs.LEASE_TIMEOUT != jobs.INTERRUPTED
+    gate.set()
+    t.join(5)
+    assert ca.get(f"/api/papers/{pid}/chat").json() == []  # 끝난 뒤 온 늦은 답은 저장하지 않음
+    # claim_api(복구 스캔)도 같은 판단: 이 프로세스가 잡은 작업이면 시간 초과 문구, 그 전이면 재시작 문구
+    assert jobs.interrupted_message(jobs.STARTED_AT) == jobs.LEASE_TIMEOUT
+    from datetime import timedelta
+    assert jobs.interrupted_message(jobs.STARTED_AT - timedelta(seconds=1)) == jobs.INTERRUPTED
 
 
 def _serve(app):
@@ -860,50 +946,88 @@ def _serve(app):
     return server, th, port
 
 
+def _wait_detached(project, jid, timeout=5.0):
+    """화면 연결이 끊겨 백그라운드로 넘어갔는지 (interactive가 꺼짐)"""
+    t0 = time.monotonic()
+    row = None
+    while time.monotonic() - t0 < timeout:
+        row = sql(project, "select status, interactive from paperlab.jobs where id = %s", (jid,))[0]
+        if row[1] is False:
+            return row
+        time.sleep(0.1)
+    return row
+
+
 @pytest.mark.parametrize("mode", ["streaming", "nonstreaming"])
-def test_sse_disconnect_cancels_and_discards(env, project, mode):
-    """H1 (품질팀 P2): 실제 uvicorn에서 첫 이벤트 뒤 연결을 끊으면 곧바로 cancelled, 그 뒤 온 답은 저장하지 않음.
-    streaming = Anthropic처럼 글이 계속 옴 / nonstreaming = OpenAI · Google처럼 응답 전체를 기다림"""
+def test_sse_disconnect_continues_in_background(env, project, mode):
+    """2026-10-16 백그라운드 AI (품질팀 H1의 '끊기면 취소'를 바꿈): 실제 uvicorn에서 첫 이벤트 뒤 연결을 끊어도 작업은 멈추지 않고
+    (interactive 꺼짐 · 중간 글은 진행으로), 끝나면 답을 저장한다. 그 뒤 복구 스캔은 다시 실행하지 않는다(요금 · 저장 한 번).
+    끊긴 뒤 [취소]하면 cancelled · 저장 안 함. streaming = Anthropic처럼 글이 계속 옴 / nonstreaming = OpenAI · Google처럼 한 번에"""
     import httpx
     ca = env.client(env.a)
     ca.put("/api/settings", json={"anthropic_api_key": KEY})
     pid = paper(ca)
     gate = threading.Event()
+    calls = []
 
     def chat(ctx, history, question, engine="claude"):
+        calls.append(question)
         yield {"type": "delta", "text": "a"}
         if mode == "streaming":
-            for _ in range(60):
+            for _ in range(150):
                 if gate.wait(0.2):
                     break
                 yield {"type": "delta", "text": "b"}
         else:
             gate.wait(30)
-        yield {"type": "done", "text": "끊긴 뒤의 답", "citations": []}
+        yield {"type": "done", "text": f"끊긴 뒤의 답 ({question})", "citations": []}
 
     env.fake_ai.chat = chat
     server, th, port = _serve(env.app)
     try:
         headers = {"Authorization": f"Bearer {env.a.token}", "X-PaperLab": "1", "Host": "testserver"}
-        with httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=headers, timeout=20) as c:
-            with c.stream("POST", f"/api/papers/{pid}/chat", json={"question": "끊을 질문"}) as r:
-                assert r.status_code == 200
-                for line in r.iter_lines():
-                    if line.startswith("data: "):
-                        break
-        jid = sql(project, "select id from paperlab.jobs where user_id = %s and kind = 'chat' order by id desc limit 1",
-                  (env.a.id,))[0][0]
-        assert _wait_status(project, jid, ("cancelled", "succeeded", "failed"), 3) == "cancelled"  # GC에 기대지 않음
+
+        def ask_and_leave(question: str) -> int:
+            with httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=headers, timeout=20) as c:
+                with c.stream("POST", f"/api/papers/{pid}/chat", json={"question": question}) as r:
+                    assert r.status_code == 200
+                    jid = int(r.headers["x-paperlab-job"])  # 화면의 [취소]가 쓰는 작업 번호
+                    for line in r.iter_lines():
+                        if line.startswith("data: "):
+                            break
+            return jid
+
+        jid = ask_and_leave("끊을 질문")
+        assert _wait_detached(project, jid) == ("running", False)  # GC에 기대지 않음
+        if mode == "streaming":  # 중간 글은 진행(partial_text)으로 — 다시 연 화면이 보여 줌
+            for _ in range(50):
+                if (ca.get(f"/api/jobs/{jid}").json()["progress"].get("partial_text") or "").startswith("ab"):
+                    break
+                time.sleep(0.1)
+            assert ca.get(f"/api/jobs/{jid}").json()["progress"]["partial_text"].startswith("ab")
+        assert jid in [j["id"] for j in ca.get(f"/api/jobs?status=active&kind=chat&paper_id={pid}").json()["jobs"]]
         gate.set()
-        time.sleep(1)
-        assert sql(project, "select status from paperlab.jobs where id = %s", (jid,))[0][0] == "cancelled"
-        assert ca.get(f"/api/papers/{pid}/chat").json() == []
-        # 리스가 지난 뒤 복구 스캔도 다시 실행하지 않음
+        assert _wait_status(project, jid, ("cancelled", "succeeded", "failed"), 10) == "succeeded"
+        hist = ca.get(f"/api/papers/{pid}/chat").json()
+        assert [m["role"] for m in hist] == ["user", "assistant"] and hist[1]["content"] == "끊긴 뒤의 답 (끊을 질문)"
+        # 복구 스캔은 끝난 작업을 다시 실행하지 않음
         env.app.state.runner.start(scan=False)
         env.app.state.runner.scan_once()
         time.sleep(1)
-        assert sql(project, "select status from paperlab.jobs where id = %s", (jid,))[0][0] == "cancelled"
+        assert calls == ["끊을 질문"] and len(ca.get(f"/api/papers/{pid}/chat").json()) == 2
+        # 끊긴 뒤 [취소] → cancelled, 늦게 온 답은 저장하지 않음
+        gate.clear()
+        jid2 = ask_and_leave("취소할 질문")
+        _wait_detached(project, jid2)
+        assert ca.post(f"/api/jobs/{jid2}/cancel").json() == {"status": "running", "cancel_requested": True}
+        if mode == "nonstreaming":
+            gate.set()  # 한 번에 오는 답 — 반영할 때 취소를 봄
+        assert _wait_status(project, jid2, ("cancelled", "succeeded", "failed"), 15) == "cancelled"
+        gate.set()
+        time.sleep(1)
+        assert len(ca.get(f"/api/papers/{pid}/chat").json()) == 2
     finally:
+        gate.set()
         server.should_exit = True
         th.join(5)
 

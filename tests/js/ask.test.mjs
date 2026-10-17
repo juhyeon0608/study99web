@@ -35,7 +35,7 @@ describe("색인 상태 (3.2절)", () => {
     assert.equal(A.indexState(ix, { status: "cancelled" }).text, "2편이 아직 색인되지 않았어요");
     assert.equal(A.indexState(ix, { status: "failed", error_code: "index_failed" }).text, "색인하지 못한 논문이 있어요 (색인하지 못함)");
     const done = { ...ix, indexed: 30, pending: 0, no_text: 2 };
-    assert.equal(A.indexState(done, { status: "succeeded" }).text, "이 범위 30편 모두 색인됨 · 2편은 본문이 없어 빠져요(스캔본)");
+    assert.equal(A.indexState(done, { status: "succeeded" }).text, "이 범위 30편 모두 색인됨 · 2편은 본문이 없어 빠져요(스캔본 · 사진)");
   });
 });
 

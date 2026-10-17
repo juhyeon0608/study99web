@@ -1,11 +1,14 @@
 // 논문 쓰기: 원고 목록 · 마크다운 편집기 · 인용 넣기 · 서식 미리보기 · AI 글쓰기 도우미 · 참고 패널(refpane.js) ·
 // 워드(.docx)·한글(.hwpx) 내보내기 · 워드·한글 문서의 [@인용키] 변환
 
-import { api, downloadBlob, streamEvents } from "./api.js";
+import { api, downloadBlob, qs } from "./api.js";
 import { sortVerify, vdName, verifyDoneText, verifyMarks, verifySummary } from "./ask.js";
-import { cancelJob, errorLabel, isActive, retryJob, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
+import {
+  cancelJob, ensureAiRoute, fmtClock, handledJob, isActive, notifyOffer, retryJob, setStatusLine, statusLineEl, trackJob, watchJob,
+} from "./jobs.js";
+// AI 글쓰기 결과를 나중에 안전하게 넣기 (2026-10-16 백그라운드 AI)
+import { insertionText, planApply, trimRange, wordDiff, writeAnchor } from "./writeai.js";
 import { htmlToRuns, listStyles, renderClusters, styleOptions } from "./cite.js";
-import { settingsDialog } from "./dialogs.js";
 import {
   applyDocFormat, coverDialog, exportWarnings, formatManagerDialog, formatOptions, getFormat, listFormats,
   missingCoverFields, usesHancomFonts, warningText,
@@ -13,6 +16,15 @@ import {
 import { ICON_REF, refPane } from "./refpane.js";
 import { CITE_RE, parseCitation } from "./refquote.js";
 import { state } from "./state.js";
+// 그림 · 표 · 캡션 · 목록 편집 · 단축키 도움말 (docs/specs/writing-figures-tables.md)
+import {
+  applyEditToValue, backspaceEdit, blockInsert, captionInfo, captionLabel, diffEdit, enterEdit, figureInfo, figureMarkdown, findFigures,
+  findTables, indentEdit,
+  newTable, resolveXrefs, splitXrefs, tableAt, tableMarkdown, toggleListEdit,
+} from "./writeedit.js";
+import {
+  applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
+} from "./writetools.js";
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles,
   popupMenu, purifyMd, store, toast,
@@ -70,7 +82,10 @@ async function buildDocument(text, { style, locale, koreanFirst } = {}) {
     s.split(/(\d+)/).forEach((part) => {
       const m = part.match(/^(\d+)$/);
       if (m) out.push(...clusterRuns(Number(m[1]), fmt));
-      else if (part) out.push({ text: part, ...fmt });
+      else if (part) {
+        // @fig:이름 · @tbl:이름 상호 참조는 번호를 다 매긴 뒤 채운다(resolveXrefs)
+        for (const x of splitXrefs(part)) out.push(typeof x === "string" ? { text: x, ...fmt } : { text: "", ...fmt, xref: x.xref });
+      }
     });
     return out;
   };
@@ -101,14 +116,48 @@ async function buildDocument(text, { style, locale, koreanFirst } = {}) {
     return [{ type: "bib_heading", text: title },
       ...rendered.entries.map((e) => ({ type: "bib_entry", hanging: rendered.hangingIndent || !rendered.numeric, runs: htmlToRuns(e.html) }))];
   };
+  // 그림 · 표: 원고에 나온 순서대로 번호(옮기거나 지우면 다시 매겨짐). 꼬리표 {#fig:이름} · {#tbl:이름} → 번호(@fig:이름 참조)
+  const ko = /[가-힣]/.test(text);
+  const labels = new Map();
+  const count = { fig: 0, tbl: 0 };
+  const captioned = new WeakSet();
+  const numbered = (kind, label, body) => {
+    const n = ++count[kind];
+    if (label && !labels.has(label)) labels.set(label, { kind, n });
+    const head = { text: captionLabel(kind, n, ko), b: true };
+    return { n, caption: body.length ? [head, { text: " " }, ...body] : [head] };
+  };
+  const capRuns = (s) => inline(window.marked.Lexer.lexInline(s));
+  const nextIsTable = (tokens, k) => (tokens.slice(k + 1).find((x) => x.type !== "space") || {}).type === "table";
+  let pendingCap = null;
+  // 맨 바깥 문단이 그림(![캡션](fig:…))이나 표 캡션 줄(표: …)이면 처리하고 true
+  const figureOrCaption = (t, tokens, k, depth) => {
+    if (depth) return false;
+    const fig = figureInfo(t.text);
+    if (fig) {
+      const { n, caption } = numbered("fig", fig.label, capRuns(fig.alt));
+      blocks.push({ type: "figure", src: fig.src, alt: fig.alt, number: n, caption });
+      return true;
+    }
+    const cap = captionInfo(t.text);
+    if (!cap) return false;
+    if (nextIsTable(tokens, k)) { pendingCap = cap; return true; } // 표 위 캡션 줄
+    const last = blocks[blocks.length - 1];
+    if (!last || last.type !== "table" || captioned.has(last)) return false;
+    captioned.add(last); // 표 바로 아래 캡션 줄 (Pandoc 방식)
+    if (cap.label && !labels.has(cap.label)) labels.set(cap.label, { kind: "tbl", n: last.number });
+    const body = capRuns(cap.text);
+    last.caption = [last.caption[0], ...(body.length ? [{ text: " " }, ...body] : [])];
+    return true;
+  };
   const walk = (tokens, depth = 0) => {
-    for (const t of tokens) {
+    for (const [k, t] of tokens.entries()) {
       if (t.type === "heading") {
         if (t.depth === 1) blocks.push({ type: "title", runs: inline(t.tokens) });
         else blocks.push({ type: "heading", level: Math.min(t.depth - 1, 3), runs: inline(t.tokens) });
       } else if (t.type === "paragraph") {
         if (t.text.trim() === "") blocks.push(...bibBlocks());
-        else blocks.push({ type: "paragraph", runs: inline(t.tokens) });
+        else if (!figureOrCaption(t, tokens, k, depth)) blocks.push({ type: "paragraph", runs: inline(t.tokens) });
       } else if (t.type === "list") {
         t.items.forEach((item, i) => {
           const runs = [];
@@ -127,9 +176,13 @@ async function buildDocument(text, { style, locale, koreanFirst } = {}) {
       } else if (t.type === "hr") {
         blocks.push({ type: "page_break" });
       } else if (t.type === "table") {
-        const row = (cells) => cells.flatMap((c, i) => [...(i ? [{ text: " | " }] : []), ...inline(c.tokens)]);
-        blocks.push({ type: "paragraph", runs: row(t.header) });
-        t.rows.forEach((r) => blocks.push({ type: "paragraph", runs: row(r) }));
+        const cap = pendingCap;
+        pendingCap = null;
+        const { n, caption } = numbered("tbl", cap ? cap.label : "", cap ? capRuns(cap.text) : []);
+        const block = { type: "table", header: true, align: t.align || [], number: n, caption,
+          rows: [t.header.map((c) => inline(c.tokens)), ...t.rows.map((r) => r.map((c) => inline(c.tokens)))] };
+        if (cap) captioned.add(block);
+        blocks.push(block);
       } else if (t.type === "html" && t.text.trim()) {
         blocks.push({ type: "paragraph", runs: textRuns(t.text.replace(/<[^>]+>/g, "").trim(), {}) });
       }
@@ -137,6 +190,7 @@ async function buildDocument(text, { style, locale, koreanFirst } = {}) {
   };
   walk(window.marked.lexer(src));
   if (!bibPlaced && rendered.entries.length) blocks.push(...bibBlocks());
+  resolveXrefs(blocks, labels, ko);
   return { blocks, clusters, rendered, missingKeys, issues: lookup.issues, items: lookup.items };
 }
 
@@ -191,7 +245,15 @@ function blocksToHtml(blocks) {
     switch (b.type) {
       case "title": return `<h1 class="doc-title" data-h="${headingIndex++}">${r()}</h1>`;
       case "heading": return `<h${b.level + 1} data-h="${headingIndex++}">${r()}</h${b.level + 1}>`;
-      case "list_item": return `<p class="doc-li" style="padding-left:${1.4 + b.depth * 1.2}em;text-indent:-1em">${b.ordered ? `${b.number}.` : "•"} ${r()}</p>`;
+      case "list_item": return `<p class="doc-li" style="padding-left:${1.4 + b.depth * 1.2}em;text-indent:-1em">${b.ordered ? `${Number(b.number)}.` : ["•", "◦", "▪"][b.depth % 3]} ${r()}</p>`;
+      // 그림: 아래 캡션 · 표: 위 캡션 (누르면 편집기에서 그 그림 줄 · 표 고치기 창)
+      case "figure": return `<figure class="doc-fig" data-fig-i="${Number(b.number) - 1}" role="button" tabindex="0" title="눌러서 편집기에서 보기">`
+        + `<img data-fig="${esc(b.src)}" alt="${esc(b.alt || "")}"><figcaption>${runsHtml(b.caption || [], notes)}</figcaption></figure>`;
+      case "table": return `<div class="doc-tbl" data-tbl-i="${Number(b.number) - 1}" role="button" tabindex="0" title="눌러서 표 고치기">`
+        + `<p class="doc-cap">${runsHtml(b.caption || [], notes)}</p><table>${b.rows.map((row, ri) => `<tr>${row.map((cell, ci) => {
+          const tag = ri === 0 ? "th" : "td";
+          return `<${tag} style="text-align:${esc(b.align[ci] || "left")}">${runsHtml(cell, notes)}</${tag}>`;
+        }).join("")}</tr>`).join("")}</table></div>`;
       case "quote": return `<blockquote>${r()}</blockquote>`;
       case "code": return `<pre>${esc(b.text)}</pre>`;
       case "page_break": return `<div class="doc-pb">쪽 나눔</div>`;
@@ -210,12 +272,15 @@ export function closeWriter() {
   W.ref = null;
   if (W.vd && W.vd.stop) W.vd.stop();
   W.vd = null;
+  if (W.ai) W.ai.destroy(); // AI 결과 단추의 폴링 · 열기 이벤트 (작업 자체는 서버에서 계속)
+  W.ai = null;
   if (W.saver) W.saver.flush();
   W.saver = null;
   W.m = null;
   W.ta = null;
   clearTimeout(W.previewTimer);
   W.seq++;
+  revokeFigureUrls(); // 미리보기 그림의 blob 주소 풀기
   $$(".cite-picker").forEach((p) => p.remove());
   hideSuggest();
 }
@@ -333,8 +398,11 @@ export async function openManuscript(main, id) {
       <button class="icon-btn" data-md="italic" title="기울임 (Ctrl+I)"><i>I</i></button>
       <button class="btn sm ghost" data-md="h2" title="장 제목 (##)">장</button>
       <button class="btn sm ghost" data-md="h3" title="절 제목 (###)">절</button>
-      <button class="btn sm ghost" data-md="list" title="글머리 목록">• 목록</button>
+      <button class="btn sm ghost" data-md="list" title="글머리 목록 켜기 · 끄기 (${MAC ? "⌘" : "Ctrl"}+Shift+8 · 줄 앞에 - 와 띄어쓰기)" aria-keyshortcuts="Control+Shift+8">• 글머리</button>
+      <button class="btn sm ghost" data-md="olist" title="번호 목록 켜기 · 끄기 (${MAC ? "⌘" : "Ctrl"}+Shift+7 · 줄 앞에 1. 과 띄어쓰기)" aria-keyshortcuts="Control+Shift+7">1. 번호</button>
       <button class="btn sm ghost" data-md="quote" title="인용문 블록">❝</button>
+      <button class="btn sm ghost" data-figure title="그림 넣기 — 붙여넣기 · 끌어 놓기도 돼요. 아래에 '그림 1. 설명' 캡션이 붙어요">그림</button>
+      <button class="btn sm ghost" data-table title="표 넣기 · 고치기 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+T) — 커서가 표 안에 있으면 그 표를 고쳐요">표</button>
       <span class="sep"></span>
       <button class="btn sm primary" data-cite title="[@ 를 입력해도 열려요">＋ 인용 넣기</button>
       <button class="btn sm ghost" data-bib title="참고문헌이 들어갈 자리">[참고문헌]</button>
@@ -343,6 +411,7 @@ export async function openManuscript(main, id) {
         title="참고 패널 (Alt+R)">${ICON_REF}참고</button>
       <button type="button" class="btn sm" data-verify title="${VERIFY_TITLE}">${ICON_VERIFY}<span>인용 검증</span></button>
       <span class="spacer"></span>
+      <button type="button" class="icon-btn writer-help-btn" data-shortcuts title="단축키 · 서식 도움말 (${MAC ? "⌘" : "Ctrl"}+/)" aria-label="단축키 · 서식 도움말" aria-keyshortcuts="Control+/">?</button>
       <div class="seg" data-view><button data-v="edit">편집</button><button data-v="split">나란히</button><button data-v="preview">미리보기</button></div>
     </div>
     <div class="writer-body">
@@ -386,14 +455,81 @@ export async function openManuscript(main, id) {
     autocomplete(ta);
   });
   ta.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== ta) hideSuggest(); }, 150));
+  let softBreak = false; // Shift+Enter: 목록을 잇지 않는 줄바꿈 (아래 input 보정에서 뺌)
   ta.addEventListener("keydown", (e) => {
+    softBreak = e.key === "Enter" && e.shiftKey;
     if (suggestKey(e, ta)) return;
     const mod = e.ctrlKey || e.metaKey;
     if (mod && e.key === "b") { e.preventDefault(); wrap(ta, "**", "**"); }
     else if (mod && e.key === "i") { e.preventDefault(); wrap(ta, "*", "*"); }
     else if (mod && e.key === "s") { e.preventDefault(); save.flush(); }
-    else if (e.key === "Tab" && !e.shiftKey && !mod) { e.preventDefault(); insertText(ta, "  "); }
+    // 목록 (docs/specs/writing-figures-tables.md): Ctrl+Shift+8 글머리 · 7 번호, Enter 다음 항목, Backspace 기호 지우기, Tab 들여쓰기
+    else if (mod && e.shiftKey && !e.altKey && (e.code === "Digit8" || e.code === "Digit7")) {
+      e.preventDefault();
+      applyEdit(ta, toggleListEdit(ta.value, ta.selectionStart, ta.selectionEnd, e.code === "Digit7"));
+    } else if (mod && e.altKey && e.code === "KeyT") { e.preventDefault(); editTable(ta); }
+    else if (e.isComposing || e.keyCode === 229 || mod || e.altKey) return; // 한글 조합 중 Enter 등은 브라우저에 맡김
+    else if (e.key === "Enter" && !e.shiftKey) {
+      const edit = enterEdit(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (edit) { e.preventDefault(); applyEdit(ta, edit); }
+    } else if (e.key === "Backspace" && !e.shiftKey) {
+      const edit = backspaceEdit(ta.value, ta.selectionStart, ta.selectionEnd);
+      if (edit) { e.preventDefault(); applyEdit(ta, edit); }
+    } else if (e.key === "Tab") {
+      const edit = indentEdit(ta.value, ta.selectionStart, ta.selectionEnd, e.shiftKey);
+      if (edit) { e.preventDefault(); applyEdit(ta, edit); }
+      else if (!e.shiftKey) { e.preventDefault(); insertText(ta, "  "); } // Shift+Tab은 그대로 초점 이동
+    }
   });
+  // 한글 조합 중 Enter처럼 keydown에서 못 잡고 브라우저가 줄을 바꾼 경우: 바꾸기 전 글에 Enter 규칙을 적용해 맞춘다
+  ta.addEventListener("input", (e) => {
+    const pos = ta.selectionStart;
+    if (e.inputType !== "insertLineBreak" || e.isComposing || softBreak || pos !== ta.selectionEnd || ta.value[pos - 1] !== "\n") return;
+    const before = ta.value.slice(0, pos - 1) + ta.value.slice(pos);
+    const edit = enterEdit(before, pos - 1, pos - 1);
+    if (edit) applyEdit(ta, diffEdit(ta.value, applyEditToValue(before, edit), edit.selStart, edit.selEnd));
+  });
+  // 그림: 붙여넣기(글 없이 그림만 있을 때 — 워드에서 복사한 글은 그대로) · 끌어 놓기
+  ta.addEventListener("paste", (e) => {
+    const files = imageFiles(e.clipboardData && e.clipboardData.files);
+    if (!files.length || (e.clipboardData.getData("text/plain") || "").trim()) return;
+    e.preventDefault();
+    insertFigures(ta, files);
+  });
+  view.addEventListener("dragover", (e) => {
+    if (e.dataTransfer && [...e.dataTransfer.items || []].some((it) => it.kind === "file" && /^image\//.test(it.type))) e.preventDefault();
+  });
+  view.addEventListener("drop", (e) => {
+    const files = imageFiles(e.dataTransfer && e.dataTransfer.files);
+    if (!files.length) return; // 워드 · 한글 문서는 앱 전체 처리(인용 넣기)로
+    e.preventDefault();
+    e.stopPropagation();
+    insertFigures(ta, files);
+  });
+  view.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "/" || e.code === "Slash")) { e.preventDefault(); shortcutDialog(); }
+  });
+  $("[data-shortcuts]", view).onclick = () => shortcutDialog();
+  $("[data-figure]", view).onclick = async () => insertFigures(ta, await pickFiles({ accept: "image/*", multiple: true }));
+  $("[data-table]", view).onclick = () => editTable(ta);
+  // 미리보기의 그림 · 표를 누르면 편집기의 그 그림 줄을 고르거나 표 고치기 창
+  const docClick = (e) => {
+    if (e.type === "keydown" && e.key !== "Enter" && e.key !== " ") return;
+    const tbl = e.target.closest(".doc-tbl[data-tbl-i]");
+    const fig = !tbl && e.target.closest(".doc-fig[data-fig-i]");
+    if (!tbl && !fig) return;
+    e.preventDefault();
+    if (tbl) {
+      const t = findTables(ta.value)[Number(tbl.dataset.tblI)];
+      if (!t) return toast("편집기에서 이 표를 찾지 못했어요. 표 안에 커서를 두고 [표]를 눌러 주세요");
+      ta.setSelectionRange(t.from, t.from);
+      return editTable(ta);
+    }
+    const at = findFigures(ta.value)[Number(fig.dataset.figI)];
+    if (at) selectRange(view, ta, at.altFrom, at.altTo);
+  };
+  $("[data-doc]", view).addEventListener("click", docClick);
+  $("[data-doc]", view).addEventListener("keydown", docClick);
 
   $("[data-style]", view).onchange = async () => {
     const style = $("[data-style]", view).value;
@@ -428,7 +564,7 @@ export async function openManuscript(main, id) {
     else if (k === "italic") wrap(ta, "*", "*");
     else if (k === "h2") linePrefix(ta, "## ");
     else if (k === "h3") linePrefix(ta, "### ");
-    else if (k === "list") linePrefix(ta, "- ");
+    else if (k === "list" || k === "olist") applyEdit(ta, toggleListEdit(ta.value, ta.selectionStart, ta.selectionEnd, k === "olist"));
     else if (k === "quote") linePrefix(ta, "> ");
   }));
   $("[data-cite]", view).onclick = () => citePicker(ta, null);
@@ -488,6 +624,9 @@ export async function openManuscript(main, id) {
   // 서재 목록이 오면 왼쪽 "이 원고의 인용"을 누를 수 있는 줄로 다시 그림
   libraryPapers(true).then(() => { if (W.m === m && W.built) drawCites(view, W.built); }).catch(() => {});
   ta.focus();
+  // AI 글쓰기 결과 (2026-10-16 백그라운드 AI): 진행 중 · 넣지 않은 결과 단추 + 알림 [열기]로 온 주소(#/write/원고/j작업)
+  W.ai = aiResultsBar(view, ta, m);
+  openAiJobFromHash(m, ta);
 }
 
 // ------------------------------------------------------------------ 논문 양식 · 표지 정보
@@ -686,6 +825,7 @@ async function renderPreview(view, ta) {
     if (seq !== W.seq || token !== W.previewToken) return;
     W.built = built;
     doc.innerHTML = blocksToHtml(built.blocks) || `<p class="muted">왼쪽에 글을 쓰면 여기에 서식대로 보여요.</p>`;
+    hydrateFigures(doc, W.m.id);
     drawCites(view, built);
     if (W.ref) W.ref.citesChanged();
   } catch (e) {
@@ -721,7 +861,8 @@ function drawOutline(view, ta) {
 
 function drawStatus(view, ta) {
   const text = ta.value;
-  const body = text.replace(CITE_RE, "").replace(/^#+\s.*$/gm, "").replace(/[*_>`#-]/g, "");
+  const body = text.replace(CITE_RE, "").replace(/!\[((?:\\.|[^\]\\])*)\]\(fig:[^)\s]*\)(?:\{#[^}]*\})?/g, "$1") // 그림 줄은 캡션 글만
+    .replace(/^#+\s.*$/gm, "").replace(/[*_>`#|-]/g, "");
   const chars = body.replace(/\n/g, "").length;
   const noSpace = body.replace(/\s/g, "").length;
   const words = (body.match(/\S+/g) || []).length;
@@ -781,6 +922,7 @@ function showVerify(view, ta, data, { announce = false } = {}) {
       me.data.job = j;
       if (["queued", "running"].includes(j.status)) return drawVerify(view, ta);
       me.stop = null;
+      handledJob(j.id); // 이 원고 화면이 결과를 그리고 알림 — 끝남 토스트 · 브라우저 알림을 겹치지 않음
       api.get(`/api/manuscripts/${W.m.id}/verify`).then((d) => {
         if (W.vd !== me) return;
         showVerify(view, ta, d, { announce: j.status === "succeeded" });
@@ -933,6 +1075,73 @@ function linePrefix(ta, prefix) {
   ta.focus();
 }
 
+// ------------------------------------------------------------------ 그림 · 표 (docs/specs/writing-figures-tables.md)
+const koDoc = (ta) => /[가-힣]/.test(ta.value) || !ta.value.trim();
+
+// 편집기에서 a~b를 고르고 그 자리로 스크롤 (미리보기만 보이면 나란히 보기로)
+function selectRange(view, ta, a, b) {
+  if (view.classList.contains("view-preview")) $('[data-view] button[data-v="split"]', view)?.click();
+  ta.focus();
+  ta.setSelectionRange(a, a);
+  ta.blur();
+  ta.focus();
+  ta.setSelectionRange(a, b);
+}
+
+// 그림 올리기 → 커서 자리에 ![그림 설명](fig:이름) 문단. 마지막 그림의 '그림 설명'을 골라 바로 고쳐 쓰게
+async function insertFigures(ta, files) {
+  const m = W.m;
+  const list = imageFiles(files).slice(0, 10);
+  if (!m || !list.length) return;
+  const desc = koDoc(ta) ? "그림 설명" : "Figure caption";
+  let at = null;
+  for (const f of list) {
+    toast(`그림을 올리는 중이에요${f.name ? ` — ${f.name}` : ""}`);
+    let r;
+    try { r = await uploadFigure(m.id, f); } catch (e) { errorToast(e); continue; }
+    if (W.m !== m || !ta.isConnected) return;
+    const s = at ?? ta.selectionStart;
+    const e = at ?? ta.selectionEnd;
+    const edit = blockInsert(ta.value, s, e, figureMarkdown(r.name, desc), [2, 2 + desc.length]);
+    applyEdit(ta, edit);
+    at = edit.from + edit.text.length;
+  }
+}
+
+// 표 넣기 · 고치기: 커서가 표(또는 바로 위 캡션 줄) 안이면 그 표를 고치고, 아니면 크기를 골라 새 표
+async function editTable(ta) {
+  const ko = koDoc(ta);
+  const tables = findTables(ta.value);
+  const found = tableAt(ta.value, ta.selectionStart);
+  const idx = found ? tables.findIndex((t) => t.from === found.from) : -1;
+  const [s, e] = [ta.selectionStart, ta.selectionEnd];
+  let table = found;
+  if (!found) {
+    const size = await tableSizeDialog();
+    if (!size) return;
+    table = newTable(size.rows, size.cols, ko);
+  }
+  const res = await tableDialog(table, { existing: !!found });
+  if (!res || W.ta !== ta) return;
+  if (!found) {
+    applyEdit(ta, blockInsert(ta.value, s, e, tableMarkdown(res.table, ko), [0, 0]));
+    return;
+  }
+  const t = findTables(ta.value)[idx]; // 창을 연 동안 원고가 바뀌었을 수 있어 다시 찾는다
+  if (!t) return toast("원고에서 이 표를 찾지 못했어요", "error");
+  const from = t.captionFrom ?? t.from;
+  if (res.action === "delete") {
+    const v = ta.value;
+    // 표 앞뒤의 빈 줄이 겹치지 않게 뒤쪽 줄바꿈도 함께 지운다
+    const lead = from === 0 || v[from - 1] === "\n";
+    const to = lead && v.startsWith("\n\n", t.to) && (from < 2 || v.startsWith("\n\n", from - 2)) ? t.to + 2
+      : lead && v[t.to] === "\n" ? t.to + 1 : t.to;
+    applyEdit(ta, { from, to, text: "", selStart: from, selEnd: from });
+    return toast("표를 지웠어요 — Ctrl+Z로 되돌릴 수 있어요");
+  }
+  applyEdit(ta, { from, to: t.to, text: tableMarkdown(res.table, ko), selStart: from, selEnd: from });
+}
+
 async function libraryPapers(force = false) {
   if (!W.papers || force) W.papers = (await api.get("/api/papers?limit=2000&sort=added")).items;
   return W.papers;
@@ -1046,18 +1255,18 @@ function currentHeading(ta) {
   return h ? h.replace(/^#+\s*/, "") : "";
 }
 
+// 글쓰기 도우미 = 서버 작업 (2026-10-16 백그라운드 AI): 창 · 탭 · 앱을 닫아도 내 API 키(서버) · 연결된 내 PC(CLI)에서 끝까지
+// 실행하고 결과는 7일 동안 남는다. 끝나면 알림(jobs.js), 결과는 이 창 · 원고의 "AI 결과" 줄 · 작업 화면에서 열어 넣는다.
+// 넣을 때 그 사이 원고가 바뀌었으면 바뀌는 부분을 보여 주고 물어본 뒤에만 바꾼다 (writeai.js — 새 글을 몰래 덮어쓰지 않음)
+const MODE_LABEL = Object.fromEntries(AI_MODES.filter((x) => x !== "-"));
+
 async function runAi(mode, ta) {
-  const st = await api.get("/api/ai/status").catch(() => ({ ready: false, message: "" }));
-  // 글쓰기 도우미 경로 기준 (요약 경로 기준인 ready가 아니라 kinds.write.first — 품질팀 M2)
-  if (!(st.kinds && st.kinds.write && st.kinds.write.first)) {
-    toast(!st.ready && st.message ? st.message
-      : "글쓰기 도우미에 쓸 수 있는 엔진이 없어요. 설정에서 엔진 순서 · API 키 · 연결된 PC를 확인해 주세요.", "error");
-    return settingsDialog();
-  }
+  // 글쓰기 도우미 경로 기준 (요약 경로 기준인 ready가 아니라 kinds.write — 품질팀 M2). 없으면 연결된 PC · API 키 안내
+  if (!(await ensureAiRoute("write"))) return;
   let { s, e, text } = selectionOrParagraph(ta);
   let keys = [...new Set((text.match(CITE_RE) || []).flatMap((raw) => (parseCitation(raw.slice(1, -1)) || []).map((it) => it.key)))];
   let instruction = "";
-  const insertAfter = mode === "continue" || mode === "draft";
+  const insert = mode === "continue" || mode === "draft";
   if (mode === "continue") {
     text = ta.value.slice(Math.max(0, ta.selectionEnd - 4000), ta.selectionEnd);
     s = e = ta.selectionEnd;
@@ -1071,103 +1280,238 @@ async function runAi(mode, ta) {
   } else if (!text.trim()) {
     return toast("다듬을 글을 선택하거나 문단 안에 커서를 두세요");
   }
+  if (!insert) ({ s, e } = trimRange(ta.value, s, e)); // 서버는 글을 trim해서 저장 — 범위도 같은 글을 가리키게
   const context = mode === "draft" ? ta.value.slice(0, 3000) : "";
-  const body = el(`<div><div class="small muted" style="margin-bottom:8px">${esc(AI_MODES.find((m) => m[0] === mode)[1])}${keys.length ? ` · 참고 논문 ${keys.length}편` : ""}</div>
-    <div class="ai-out prose"><span class="typing"><span></span><span></span><span></span></span></div>
-    <textarea class="input hidden" style="width:100%;min-height:240px"></textarea></div>`);
-  const foot = el(`<div style="display:contents"><div class="left"><button class="btn" data-edit>고쳐서 넣기</button><button class="btn" data-copy>복사</button></div>
-    <button class="btn" data-no>취소</button><button class="btn primary" data-ok disabled>${insertAfter ? "커서 위치에 넣기" : "바꾸기"}</button></div>`);
-  // 창을 닫으면(✕ · Esc · 바깥 클릭 · [취소]) API 스트림은 끊고, PC 작업은 대기 중이든 실행 중이든 취소 (PD-4)
-  let job = null;
-  let stopWatch = null;
-  const m = modal({ title: "AI 글쓰기 도우미", body, foot, wide: true, onClose: () => {
-    abort.abort();
-    if (stopWatch) stopWatch();
-    if (isActive(job)) cancelJob(job.id).catch(() => {});
-  } });
-  const abort = new AbortController();
-  let result = "";
+  let job;
+  try {
+    job = (await api.post("/api/ai/write", { mode, text, keys, instruction, context, manuscript_id: W.m ? W.m.id : null,
+      ...writeAnchor(ta.value, s, e, insert) })).job;
+  } catch (err) {
+    return errorToast(err);
+  }
+  trackJob(job);
+  aiJobDialog(job, ta, { fresh: true });
+  if (W.ai) W.ai.refresh();
+}
+
+// 작업 하나를 따라가는 창: 진행 · 중간 글 · [취소] → 결과 · [바꾸기] · [고쳐서 넣기] · [넣지 않기]. 창을 닫아도 작업은 계속
+function aiJobDialog(first, ta, { fresh = false } = {}) {
+  const m = W.m;
+  const w = first.write || {};
+  const here = !!m && Number(first.manuscript_id) === m.id;
+  const body = el(`<div><div class="small muted" style="margin-bottom:8px" data-ai-head></div>
+    <div class="notice" data-tone="info" data-ai-bg>${ICON_INFO}<div data-ai-bg-text>창을 닫아도 작업은 계속돼요. 끝나면 알려 드리고, 결과는 이 원고의 <b>AI 결과</b>와 작업 화면에서 다시 열 수 있어요.</div></div>
+    <div data-ai-line style="margin-top:8px"></div>
+    <div class="ai-out prose" style="margin-top:8px"></div>
+    <textarea class="input hidden" style="width:100%;min-height:240px;margin-top:8px" aria-label="넣을 글 고치기"></textarea></div>`);
+  $("[data-ai-head]", body).textContent = `${MODE_LABEL[w.mode] || "AI 글쓰기"} · ${fmtClock(first.created_at)} 시작`;
+  const offer = fresh ? notifyOffer() : null;
+  if (offer) $("[data-ai-bg]", body).after(offer);
+  const foot = el(`<div style="display:contents"><div class="left"><button class="btn" data-edit disabled>고쳐서 넣기</button><button class="btn" data-copy disabled>복사</button></div>
+    <button class="btn" data-dismiss disabled title="결과를 원고에 넣지 않아요. 작업 화면에서 7일 동안 다시 열 수 있어요">넣지 않기</button>
+    <button class="btn" data-no>닫기</button><button class="btn primary" data-ok disabled>${w.insert ? "넣기" : "바꾸기"}</button></div>`);
+  let stop = null;
+  const dlg = modal({ title: "AI 글쓰기 도우미", body, foot, wide: true, onClose: () => stop && stop() });
   const out = $(".ai-out", body);
+  const edit = $("textarea", body);
+  const bgText = $("[data-ai-bg-text]", body);
+  let job = first;
+  let result = "";
+  const line = statusLineEl(async () => {
+    try { await cancelJob(job.id); } catch (err) { errorToast(err); }
+  });
+  $("[data-ai-line]", body).appendChild(line);
   const showResult = () => {
     out.style.whiteSpace = "normal";
     out.innerHTML = purifyMd(window.marked.parse(result)) ?? esc(result);
   };
-  let jobEv = null;
-  try {
-    await streamEvents("/api/ai/write", { mode, text, keys, instruction, context, manuscript_id: W.m ? W.m.id : null }, (ev) => {
-      if (ev.type === "queued" || ev.type === "fallback") jobEv = ev;
-      else if (ev.type === "delta") { result += ev.text; out.textContent = result; }
-      else if (ev.type === "done") { result = ev.text; showResult(); }
-      else if (ev.type === "error") throw new Error(ev.error);
-    }, abort.signal);
-  } catch (err) {
-    if (err.name !== "AbortError") out.innerHTML = `<div class="msg error">${esc(err.message)}</div>`;
-    return;
-  }
-  if (jobEv) {
-    // PC(CLI)에서 만드는 글: 상태 줄 + 중간 글. 결과는 작업의 result.text (디자인 8장)
-    result = "";
-    out.innerHTML = "";
-    const fb = jobEv.type === "fallback" && jobEv.job.history.length
-      ? el(`<div class="notice" data-tone="warn" data-job-fallback>${ICON_WARN}<div>API가 실패해서 PC로 넘겼어요 (${esc(errorLabel(jobEv.job.history[jobEv.job.history.length - 1].error_code))}).</div></div>`) : null;
-    const line = statusLineEl(null);
-    const note = el(`<p class="small muted" style="margin:4px 0 8px">창을 닫으면 이 작업은 취소돼요.</p>`);
-    out.before(...[fb, line, note].filter(Boolean));
-    const follow = (first) => {
-      stopWatch = watchJob(first.id, (j) => {
-        if (!j) return;
-        job = j;
-        if (j.status === "succeeded") {
-          line.remove();
-          note.remove();
-          result = (j.result && j.result.text) || "";
-          showResult();
-          $("[data-ok]", foot).disabled = false;
-          return;
-        }
-        if (j.status === "failed" || j.status === "cancelled") {
-          line.remove();
-          note.remove();
-          out.innerHTML = `<div class="msg error">${esc(j.status === "failed" ? j.error || "글을 만들지 못했어요" : "작업을 취소했어요")}</div>`;
+  // 목록에서 온 작업(원래 글 · 자리 정보가 없음)은 한 작업 보기를 먼저 받는다 — 넣을 자리를 찾는 데 필요
+  const follow = (start) => {
+    const detailed = !!(start.write && "text" in start.write);
+    stop = watchJob(start.id, (j) => {
+      if (!j) {
+        line.remove();
+        out.innerHTML = `<div class="msg error">작업을 찾을 수 없어요. 7일이 지나 지워졌을 수 있어요.</div>`;
+        return;
+      }
+      job = j;
+      if (j.status === "succeeded") {
+        line.remove();
+        result = (j.result && j.result.text) || "";
+        if (!result) { out.innerHTML = `<div class="msg error">결과 글이 지워졌어요 (7일 보관).</div>`; return; }
+        handledJob(j.id); // 이 창에서 결과를 봤음 — 끝남 토스트는 생략
+        showResult();
+        const done = j.write && j.write.handled;
+        bgText.textContent = done === "applied" ? "이미 원고에 넣은 결과예요. 다시 넣으면 지금 원고에서 자리를 다시 찾아요."
+          : here ? "결과가 준비됐어요. 넣기 전에 확인해 주세요 — 그 사이 원고가 바뀌었으면 바뀌는 부분을 먼저 보여 드려요."
+            : "다른 원고의 결과예요. 그 원고를 열어 넣거나 복사해 주세요.";
+        for (const b of ["[data-edit]", "[data-copy]", "[data-dismiss]"]) $(b, foot).disabled = false;
+        $("[data-ok]", foot).disabled = !here;
+        $("[data-dismiss]", foot).disabled = !!done;
+        return;
+      }
+      if (j.status === "failed" || j.status === "cancelled") {
+        line.remove();
+        out.innerHTML = `<div class="msg error">${esc(j.status === "failed" ? j.error || "글을 만들지 못했어요" : "작업을 취소했어요")}</div>`;
+        bgText.textContent = j.status === "failed" ? "실패한 작업이에요. 다시 시도하면 같은 글로 새 작업을 만들어요." : "취소한 작업이에요.";
+        if (!$("[data-job-retry]", foot)) {
           const again = el(`<button type="button" class="btn" data-job-retry>다시 시도</button>`);
           again.onclick = async () => {
             again.remove();
             try {
               const r = await retryJob(j.id);
+              trackJob(r.job);
               out.innerHTML = "";
-              out.before(line, note);
+              $("[data-ai-line]", body).appendChild(line);
               follow(r.job);
-            } catch (e) { errorToast(e); }
+              if (W.ai) W.ai.refresh();
+            } catch (err) { errorToast(err); }
           };
           $(".left", foot).appendChild(again);
-          return;
         }
-        const partial = (j.progress || {}).partial_text || "";
-        if (partial) out.textContent = partial;
-        setStatusLine(line, j, "글을 만드는");
-        if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "PC"}에서 글을 만드는 중 (${j.engine})`;
-      }, { first });
-    };
-    follow(jobEv.job);
-  } else {
-    $("[data-ok]", foot).disabled = false;
-  }
-  const edit = $("textarea", body);
+        return;
+      }
+      const partial = (j.progress || {}).partial_text || "";
+      if (partial) out.textContent = partial;
+      else if (!out.textContent) out.innerHTML = `<span class="typing"><span></span><span></span><span></span></span>`;
+      setStatusLine(line, j, "글을 만드는");
+      if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "내 PC"}에서 글을 만드는 중 (${j.engine})`;
+    }, detailed ? { first: start } : {});
+  };
+  follow(first);
   $("[data-edit]", foot).onclick = () => { edit.value = result; edit.classList.remove("hidden"); out.classList.add("hidden"); edit.focus(); };
   $("[data-copy]", foot).onclick = () => copyText(edit.classList.contains("hidden") ? result : edit.value);
-  $("[data-no]", foot).onclick = () => m.close();
-  $("[data-ok]", foot).onclick = () => {
-    const finalText = edit.classList.contains("hidden") ? result : edit.value;
-    ta.focus();
-    if (insertAfter) {
-      ta.setSelectionRange(s, s);
-      insertText(ta, (s > 0 && ta.value[s - 1] !== "\n" ? "\n\n" : "") + finalText.trim() + "\n");
-    } else {
-      ta.setSelectionRange(s, e);
-      insertText(ta, finalText.trim());
-    }
-    m.close();
+  $("[data-no]", foot).onclick = () => dlg.close();
+  $("[data-dismiss]", foot).onclick = async () => {
+    try { await api.post(`/api/jobs/${job.id}/handled`, { state: "dismissed" }); } catch (err) { return errorToast(err); }
+    dlg.close();
+    toast("넣지 않았어요. 작업 화면에서 7일 동안 다시 열 수 있어요");
+    if (W.ai) W.ai.refresh();
   };
+  $("[data-ok]", foot).onclick = async () => {
+    if (!here || W.m !== m || W.ta !== ta) return toast("이 원고가 열려 있을 때만 넣을 수 있어요", "error");
+    const finalText = edit.classList.contains("hidden") ? result : edit.value;
+    if (!(await applyAiResult(job, finalText, ta))) return;
+    dlg.close();
+    api.post(`/api/jobs/${job.id}/handled`, { state: "applied" }).catch(() => {}).then(() => W.ai && W.ai.refresh());
+  };
+  return dlg;
+}
+
+// 결과를 원고에 넣기. 원고가 그대로면 바로, 바뀌었으면 바뀌는 부분을 보여 주고 물어봄, 자리를 못 찾으면 커서 위치에 넣기 · 복사만
+async function applyAiResult(job, text, ta) {
+  const w = job.write || {};
+  const cur = ta.value;
+  const plan = planApply(cur, w);
+  if (plan.state === "lost") return aiLostDialog(text, ta, !!w.insert);
+  const next = insertionText(cur, plan.from, text, w.insert);
+  if (plan.state === "moved") {
+    const ok = await aiDiffDialog(cur, plan, next, !!w.insert);
+    if (!ok) return false;
+    if (ta.value !== cur) { // 물어보는 동안 또 바뀜 — 처음부터 다시 확인
+      toast("그 사이 원고가 또 바뀌었어요. 다시 확인해 주세요");
+      return applyAiResult(job, text, ta);
+    }
+  }
+  ta.focus();
+  ta.setSelectionRange(plan.from, plan.to);
+  insertText(ta, next);
+  toast(w.insert ? "AI 결과를 넣었어요" : "AI 결과로 바꿨어요", "success");
+  return true;
+}
+
+// 원고가 바뀐 뒤: 바뀌는 부분(지운 글 · 넣는 글)과 앞뒤 문맥을 보여 주고 물어봄
+function aiDiffDialog(cur, plan, next, insert) {
+  return new Promise((resolve) => {
+    const seg = insert ? [{ op: "ins", text: next }] : wordDiff(plan.old, next);
+    const before = cur.slice(Math.max(0, plan.from - 120), plan.from);
+    const after = cur.slice(plan.to, plan.to + 120);
+    const html = seg.map((x) => (x.op === "same" ? esc(x.text) : `<${x.op}>${esc(x.text)}</${x.op}>`)).join("");
+    const body = el(`<div><p style="margin:4px 0 10px">작업을 시작한 뒤 원고가 바뀌었어요. ${insert ? "아래 자리에 결과를 넣을까요?" : "아래처럼 바꿀까요?"}
+      바꾸기 전에 확인해 주세요.</p>
+      <div class="ai-diff" aria-label="바뀌는 부분"><span class="muted">${before ? `…${esc(before)}` : ""}</span>${html}<span class="muted">${after ? `${esc(after)}…` : ""}</span></div>
+      <p class="small muted ai-diff-legend" style="margin:8px 0 0"><del>지우는 글</del> · <ins>넣는 글</ins></p></div>`);
+    const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn primary" data-yes>${insert ? "넣기" : "바꾸기"}</button></div>`);
+    let ok = false;
+    const m = modal({ title: "원고가 바뀌었어요", body, foot, wide: true, onClose: () => resolve(ok) });
+    $("[data-no]", foot).onclick = () => m.close();
+    $("[data-yes]", foot).onclick = () => { ok = true; m.close(); };
+  });
+}
+
+// 원래 글(넣을 자리)을 지금 원고에서 찾지 못함 — 자동으로 바꾸지 않고 [커서 위치에 넣기](덮어쓰지 않음) · [복사]만
+function aiLostDialog(text, ta, insert) {
+  return new Promise((resolve) => {
+    const body = el(`<div><p style="margin:4px 0 8px">작업을 시작한 뒤 원고가 바뀌어 ${insert ? "넣을 자리를" : "바꿀 글을"} 찾지 못했어요.
+      원고를 덮어쓰지 않도록 자동으로 바꾸지 않았어요.</p><p class="small muted" style="margin:0">커서 위치에 새로 넣거나, 복사해서 직접 붙여 넣어 주세요.</p></div>`);
+    const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn" data-copy>복사</button>
+      <button class="btn primary" data-cursor>커서 위치에 넣기</button></div>`);
+    let ok = false;
+    const m = modal({ title: "원래 자리를 찾지 못했어요", body, foot, onClose: () => resolve(ok) });
+    $("[data-no]", foot).onclick = () => m.close();
+    $("[data-copy]", foot).onclick = () => { copyText(text); m.close(); };
+    $("[data-cursor]", foot).onclick = () => {
+      const at = ta.selectionEnd; // 고른 글을 덮어쓰지 않게 커서 뒤에
+      ta.focus();
+      ta.setSelectionRange(at, at);
+      insertText(ta, insertionText(ta.value, at, text, true));
+      ok = true;
+      m.close();
+    };
+  });
+}
+
+// 원고 화면의 [AI 결과] 단추(도구 줄 — 편집 화면 격자를 바꾸지 않음): 이 원고의 진행 중 · 넣지 않은 글쓰기 결과(7일).
+// 누르면 결과 창(여럿이면 목록)
+function aiResultsBar(view, ta, m) {
+  const btn = el(`<button type="button" class="btn sm hidden" data-ai-results aria-haspopup="dialog"
+    title="창을 닫아도 AI 글쓰기는 계속되고, 결과는 7일 동안 남아요. 눌러서 확인하고 원고에 넣어요"></button>`);
+  $("[data-ai]", view).closest(".menu-wrap").after(btn);
+  let list = [];
+  let timer = null;
+  const refresh = async () => {
+    clearTimeout(timer);
+    let data;
+    try { data = await api.get(`/api/jobs${qs({ status: "recent", kind: "write", manuscript_id: m.id, limit: 20 })}`); } catch { return; }
+    if (W.m !== m) return;
+    const active = data.jobs.filter((j) => isActive(j));
+    const ready = data.jobs.filter((j) => j.status === "succeeded" && j.result && j.result.text && !(j.write && j.write.handled));
+    list = [...active, ...ready];
+    const parts = [ready.length ? `AI 결과 ${ready.length}` : "", active.length ? `만드는 중 ${active.length}` : ""].filter(Boolean);
+    btn.classList.toggle("hidden", !parts.length);
+    btn.textContent = parts.join(" · ");
+    btn.classList.toggle("primary", ready.length > 0);
+    if (active.length) timer = setTimeout(refresh, document.hidden ? 15000 : 5000);
+  };
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    if (list.length === 1) return aiJobDialog(list[0], ta);
+    popupMenu(e.currentTarget, list.map((j) => ({
+      label: `${MODE_LABEL[(j.write || {}).mode] || "AI 글쓰기"} · ${isActive(j) ? "만드는 중" : `${fmtClock(j.finished_at)} 끝남`}`,
+      action: () => aiJobDialog(j, ta),
+    })));
+  };
+  const onOpenJob = (e) => { // 끝남 알림 [열기] · 작업 화면 — 같은 원고면 다시 불러오지 않고 이 화면에서 연다
+    const j = e.detail;
+    if (!j || j.kind !== "write" || W.m !== m || Number(j.manuscript_id) !== m.id) return;
+    e.preventDefault();
+    aiJobDialog(j, ta);
+  };
+  window.addEventListener("paperlab:open-job", onOpenJob);
+  refresh();
+  return { refresh, destroy: () => { clearTimeout(timer); window.removeEventListener("paperlab:open-job", onOpenJob); } };
+}
+
+// #/write/원고/j작업 (끝남 알림 · 작업 화면에서 옴): 그 작업의 결과 창을 열고 주소는 원고 주소로 되돌림
+async function openAiJobFromHash(m, ta) {
+  const hit = location.hash.match(/^#\/write\/\d+\/j(\d+)$/);
+  if (!hit) return;
+  history.replaceState(history.state, "", `#/write/${m.id}`);
+  let job;
+  try { job = await api.get(`/api/jobs/${Number(hit[1])}`); } catch (err) { return errorToast(err); }
+  if (W.m !== m) return;
+  if (job.kind !== "write") return;
+  aiJobDialog(job, ta);
 }
 
 function draftDialog(ta, keys) {
@@ -1244,7 +1588,8 @@ async function exportAs(format, view, ta) {
     if (built.missingKeys.length && !(await confirmDialog(
       `서재에 없는 인용 키가 있어요: ${built.missingKeys.join(", ")}\n그대로 표시해서 내보낼까요?`, { ok: "그대로 내보내기" }))) return;
     const title = $("[data-title]", view).textContent.trim() || "원고";
-    const payload = { format, blocks: stripWarn(built.blocks), meta: { title }, filename: title };
+    // manuscript_id: 서버가 이 원고의 그림 폴더에서 그림을 읽어 넣는다(그림 바이트는 보내지 않음)
+    const payload = { format, blocks: stripWarn(built.blocks), meta: { title }, filename: title, manuscript_id: W.m.id };
     if (office && fmtId !== "default") {
       // 표지의 국문 제목 기본값은 원고의 # 제목 (없으면 빈 칸으로 두어 ○○○로 들어가게)
       Object.assign(payload, { doc_format: fmtId, cover: W.m.cover || {}, meta: { title: docTitle(ta) } });
@@ -1266,7 +1611,13 @@ async function exportAs(format, view, ta) {
 }
 
 function stripWarn(blocks) {
-  return blocks.map((b) => (b.runs ? { ...b, runs: b.runs.map(({ warn, cite, ...r }) => r) } : b));
+  const clean = (runs) => runs.map(({ warn, cite, xref, ...r }) => r);
+  return blocks.map((b) => {
+    const out = b.runs ? { ...b, runs: clean(b.runs) } : { ...b };
+    if (b.caption) out.caption = clean(b.caption); // 그림 · 표 캡션
+    if (b.rows) out.rows = b.rows.map((row) => row.map(clean)); // 표 칸
+    return out;
+  });
 }
 
 function copyFormatted(view) {

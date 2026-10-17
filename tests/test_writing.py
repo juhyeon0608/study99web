@@ -197,11 +197,13 @@ def test_docx_compose_footnotes_follow_document_order():
 @pytest.mark.db
 def test_ai_write_endpoint_passes_sources(project, session_db, users):
     from .conftest import Cloud
-    import json as _json
 
     class FakeAI:
         def status(self):
             return {"ready": True, "message": ""}
+
+        def model_name(self, engine="claude"):
+            return f"fake-{engine}"
 
         def write(self, mode, text, instruction="", context="", sources=None, engine="claude"):
             self.seen = (mode, text, sources)
@@ -210,13 +212,20 @@ def test_ai_write_endpoint_passes_sources(project, session_db, users):
 
     fake = FakeAI()
     cloud = Cloud(project, session_db, users, ai=fake)
-    c = cloud.client(cloud.user())
-    c.put("/api/settings", json={"anthropic_api_key": "sk-ant-test-key-0001"})  # 2단계: 경로(키 또는 연결된 PC)가 있어야 함
-    pid = c.post("/api/papers", json=SAMPLE).json()["paper"]["id"]
-    key = c.get(f"/api/papers/{pid}").json()["citekey"]
-    c.put(f"/api/papers/{pid}/note", json={"content": "중요한 논문"})
-    with c.stream("POST", "/api/ai/write", json={"mode": "draft", "text": "", "keys": [key]}) as r:
-        evs = [_json.loads(line[6:]) for line in r.iter_lines() if line.startswith("data: ")]
-    assert evs[-1]["text"] == f"초안 [@{key}]"
-    assert fake.seen[2][0]["note"] == "중요한 논문" and fake.seen[2][0]["title"] == SAMPLE["title"]
-    assert c.post("/api/ai/write", json={"mode": "polish", "text": ""}).status_code == 400
+    cloud.app.state.runner.start(scan=False)
+    try:
+        c = cloud.client(cloud.user())
+        c.put("/api/settings", json={"anthropic_api_key": "sk-ant-test-key-0001"})  # 2단계: 경로(키 또는 연결된 PC)가 있어야 함
+        pid = c.post("/api/papers", json=SAMPLE).json()["paper"]["id"]
+        key = c.get(f"/api/papers/{pid}").json()["citekey"]
+        c.put(f"/api/papers/{pid}/note", json={"content": "중요한 논문"})
+        # 2026-10-16: 글쓰기 도우미 = 백그라운드 작업 (202 {job}) — 창을 닫아도 서버의 API 실행기가 끝까지 실행
+        r = c.post("/api/ai/write", json={"mode": "draft", "text": "", "keys": [key], "insert": True, "sel_start": 3,
+                                          "sel_end": 3})
+        assert r.status_code == 202 and r.json()["job"]["runner"] == "api" and r.json()["job"]["write"]["insert"] is True
+        job = cloud.wait_job(c, r.json()["job"]["id"])
+        assert job["status"] == "succeeded" and job["result"]["text"] == f"초안 [@{key}]"
+        assert fake.seen[2][0]["note"] == "중요한 논문" and fake.seen[2][0]["title"] == SAMPLE["title"]
+        assert c.post("/api/ai/write", json={"mode": "polish", "text": ""}).status_code == 400
+    finally:
+        cloud.app.state.runner.stop()

@@ -33,13 +33,14 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
-from . import __version__, citations, compose, csl_style, doc_formats, downloads, explain, find, format_import, jobs, \
+from . import __version__, citations, compose, convert, csl_style, doc_formats, downloads, explain, find, format_import, jobs, \
     pdf, rag, sync, translate, verify, worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
-from .ai import MODELS, AIError, AIService, PaperContext
+from .ai import MODELS, WRITE_MODES, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
 from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
 from . import extsources
+from . import figures
 from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
@@ -52,8 +53,8 @@ from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, FIELDS_META, WARNI
 from .manuscripts import TEMPLATES
 from .sources import (GraphCancelled, GraphSources, SourceError, Sources, UpstreamError, check_doi, detect_identifier,
                       merge)
-from .storage import (MAX_PDF_BYTES, BackupSizeCache, FakeStorage, NotFound, Storage, StorageError, StorageKeyError,
-                      UserStorage, create_storage, is_upload_id, new_upload_id)
+from .storage import (MAX_PDF_BYTES, BackupSizeCache, FakeStorage, FigureSizeCache, NotFound, Storage, StorageError,
+                      StorageKeyError, UserStorage, create_storage, is_upload_id, new_upload_id)
 
 log = logging.getLogger("paperlab.server")
 access_log = logging.getLogger("paperlab.access")
@@ -65,7 +66,9 @@ for _ext, _type in ((".js", "text/javascript"), (".mjs", "text/javascript"), (".
                     (".woff2", "font/woff2"), (".svg", "image/svg+xml")):
     mimetypes.add_type(_type, _ext)
 ITEM_TYPES = {"article": "학술지 논문", "conference": "학회 발표", "preprint": "프리프린트", "book": "단행본",
-              "chapter": "책의 장", "thesis": "학위논문", "report": "보고서", "dataset": "데이터셋"}
+              "chapter": "책의 장", "thesis": "학위논문", "report": "보고서", "dataset": "데이터셋",
+              "document": "문서"}
+DOC_ONLY = "문서 (논문 정보 없음)"
 STATUSES = {"unread": "읽을 예정", "reading": "읽는 중", "done": "다 읽음"}
 PUBLIC_API = {("GET", "/api/health"), ("HEAD", "/api/health"), ("GET", "/api/public-config")}
 SAFE_METHODS = ("GET", "HEAD", "OPTIONS")
@@ -78,6 +81,7 @@ DB_LEVEL, DB_PER_PAPER, DB_FIRST_ALLOC = 0.90, int(0.26 * 1024 ** 2), 55 * 1024 
 SYSTEM_TTL = 30.0  # 사용자 트랜잭션 안에서 저장 공간 · DB 크기 합계를 다시 쓰는 시간(초 — QA D7)
 HEALTH_DB_TIMEOUT = 4.0  # /api/health?deep=1 의 DB 연결 대기 · 문 실행 제한(초)
 SSE_HEADERS = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+DETACH_CHECK_S = 5.0  # 화면이 떠나 백그라운드로 넘긴 SSE 작업: [취소] 읽기 · 리스 연장 간격(초 — 리스 90초 안)
 CSP = "img-src 'self' data: blob: https://*.googleusercontent.com; font-src 'self' data:; form-action 'self'"
 KST = timezone(timedelta(hours=9))
 TAG_COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}")  # 빈 값('') = 색 없음
@@ -100,6 +104,7 @@ class BadPdf(Exception):
 
 
 BAD_PDF = "PDF를 열 수 없어요. 손상되었거나 암호가 걸린 파일인지 확인해 주세요"
+IMAGE_NO_TEXT = "사진(이미지)은 글자를 읽지 않아요. 본문 검색과 AI 기능은 쓸 수 없어요."
 
 
 def _md_title(content: str) -> str:
@@ -299,6 +304,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     st.sources_factory = sources_factory or (lambda get: Sources(get))
     st.ai_factory = ai_factory or (lambda get: AIService(get))
     st.backup_sizes = BackupSizeCache(store)
+    st.figure_sizes = FigureSizeCache(store)  # 원고 그림 합계 (사용량 · 95% 규칙에 더함)
     # 5단계 KCI · RISS · Europe PMC 검색(공용 키 — U-1). 테스트는 transport를 넣은 것으로 바꿈
     st.ext = extsources.ExtSources(config.kci_api_key, config.riss_api_key)
     st.ext_busy = {}  # 사용자당 외부 검색 동시 수(메모리만 — 11장)
@@ -307,6 +313,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     st.compose_lock = threading.Lock()
     # 2단계: 작업 큐 · 연결된 PC · 설치 파일 (명세 2단계 7 · 8 · 13.7.1 · 15장)
     st.workers = ws = worker_api.WorkerState()
+    jobs.mark_started()  # 이 시각 전에 잡힌 화면 작업의 리스가 지나면 "서버가 다시 시작돼" (뒤면 "너무 오래 걸려")
     downloads.register(app, Path(releases) if releases else downloads.releases_dir())
 
     def guide() -> str:
@@ -492,10 +499,31 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         attach_from_incoming(ctx, pid, incoming, data, info)  # 파일 이름은 `{저자} {연도} - {제목}.pdf`(8.2절)
         return info
 
+    def prepare_upload(ctx: RequestCtx, incoming: str, raw: bytes, name: str) -> tuple[str, bytes, pdf.PdfInfo, dict | None]:
+        """올린 파일 → (PDF 임시 키, PDF 내용, 본문, 원본). PDF는 그대로. 워드 · 한글 · PPT · 이미지는 PDF 변환본을 새 임시 키에
+        올리고, 원본은 {"incoming", "name", "size"}로 넘긴다(attach_from_incoming이 sources/로 복사).
+        변환 동안 DB 연결을 잡지 않게 ctx.release() 뒤에 부른다. 실패하면 BadPdf · convert.ConvertError"""
+        if raw.startswith(b"%PDF"):
+            return incoming, raw, extract_pdf(raw), None
+        data = convert.to_pdf(raw, name)
+        info = extract_pdf(data)
+        if convert.kind(raw, name) == "image" and info.warnings:  # "텍스트가 없는 PDF예요(스캔본…)" 대신 사진에 맞게
+            info.warnings = [IMAGE_NO_TEXT if "텍스트가 없는" in w else w for w in info.warnings]
+        pdf_incoming = ctx.storage.incoming_key(new_upload_id())
+        ctx.storage.put(pdf_incoming, data)
+        for k in (incoming, pdf_incoming):  # 붙이든(attach) 중복이라 버리든 임시 파일 둘 다 지운다
+            ctx.on_rollback.append(lambda k=k: ctx.storage.delete_quietly(k))
+            ctx.after_commit.append(lambda k=k: ctx.storage.delete_quietly(k))
+        source_name = re.sub(r"[\x00-\x1f\x7f-\x9f/\\]", "_", re.split(r"[/\\]", name)[-1]).strip()[:255]
+        return pdf_incoming, data, info, {"incoming": incoming, "name": source_name, "size": len(raw)}
+
     def attach_from_incoming(ctx: RequestCtx, pid: int, incoming: str, data: bytes, info: pdf.PdfInfo, *,
-                             name: str = "", device_id: int | None = None, content_at=None) -> bool:
+                             name: str = "", device_id: int | None = None, content_at=None,
+                             source: dict | None = None) -> bool:
         """임시 파일을 최종 키로 복사하고 DB에 기록. 임시 파일은 커밋 뒤에 지운다. → 전체 번역을 지웠는지(K-28).
         name: 올린 파일 이름(PC 파일 이름이 비었을 때만 씀), device_id · content_at: 동기화 올리기(10.1절).
+        source: 문서 원본(prepare_upload) — sources/로 복사해 [원본 받기]. 없으면(웹에서 PDF를 바로 붙임) 옛 원본을
+        지운다 — 동기화(device_id)는 원본을 그대로 둔다.
         논문 행을 **먼저** 잠그고(없거나 휴지통이면 404 — RLS가 숨김) R2에 복사한다: 그 사이 휴지통으로 간 논문의 PDF를
         덮어쓰지 않게(QA D2 — 휴지통 보내기도 같은 행을 for update로 잠금). 휴지통 논문을 되살리는 동기화는 trash_tx 안에서 부름"""
         row = ctx.lib._one("select pdf_key from paperlab.papers where id = %s and user_id = %s for update", (pid, ctx.uid))
@@ -508,6 +536,18 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))
         cleared = pdf_changed(ctx, pid, ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(),
                                                         len(data), device_id, content_at))
+        if source:
+            skey = ctx.storage.source_key(pid)
+            ctx.storage.storage.copy(ctx.storage.check(source["incoming"]), ctx.storage.check(skey))
+            ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(skey))
+            old_source = ctx.lib.set_source(pid, skey, source["name"], source["size"])
+            name = re.sub(r"\.[^./\\]*$", "", name) + ".pdf" if name else name  # PC 파일 이름은 변환본 기준(.pdf)
+        elif device_id is None:  # 웹에서 PDF를 바로 붙이거나 바꿈 → 옛 원본은 이제 이 PDF와 다르므로 지운다
+            old_source = ctx.lib.set_source(pid)
+        else:  # PC 동기화로 PDF(변환본)가 바뀜(PC에서 메모 · 저장 등): 사용자가 올린 원본은 그대로 둔다
+            old_source = ""
+        if old_source:
+            ctx.after_commit.append(lambda: ctx.storage.delete_quietly(old_source))
         ctx.lib.ensure_file_name(pid, name)
         return cleared
 
@@ -532,7 +572,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             if not gone:
                 continue
             n += 1
-            for k in (gone["pdf_key"], gone["tr_key"]):
+            for k in (gone["pdf_key"], gone["source_key"], gone["tr_key"]):
                 if k:
                     ctx.storage.check(k)
                     ctx.after_commit.append(lambda k=k: ctx.storage.delete_quietly(k))
@@ -567,8 +607,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     def open_reply(plan: dict) -> dict:
         return {"open_url": plan["open_url"], "open_kind": plan["open_kind"], "reason": "license_unknown"}
 
-    def metadata_from_pdf(ctx: RequestCtx, info: pdf.PdfInfo) -> tuple[dict, str]:
-        """PDF에서 찾은 식별자로 메타데이터를 채운다. (메타데이터, 출처 설명)"""
+    def metadata_from_pdf(ctx: RequestCtx, info: pdf.PdfInfo, document: bool = False) -> tuple[dict, str]:
+        """PDF에서 찾은 식별자로 메타데이터를 채운다. (메타데이터, 출처 설명).
+        document: 워드 · 한글 · PPT · 이미지에서 바꾼 PDF — 논문이 아닐 수 있으므로(내가 쓰던 문서 등) DOI · arXiv가 있을 때만
+        논문 정보를 찾고 제목 검색은 하지 않는다. 못 찾으면 유형 '문서', 제목은 파일 이름(부르는 쪽)"""
         sources = ctx.sources
         if info.doi:
             try:
@@ -580,16 +622,18 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 return sources.lookup_arxiv(info.arxiv_id), f"arXiv {info.arxiv_id}"
             except SourceError:
                 pass
-        if info.title:
+        if info.title and not document:
             match = sources.match_title(info.title)
             if match:
                 return match, "제목 검색"
-        meta = {"title": info.title, "doi": info.doi, "arxiv_id": info.arxiv_id, "year": info.year,
-                "authors": [], "item_type": "article"}
+        # 논문 정보를 못 찾은 PDF도 유형은 '문서' — 내가 쓰던 원고 같은 것에 학술지 이름 · 권 · 쪽 경고를 띄우지 않는다.
+        # 논문이면 사용자가 [정보 수정]에서 유형을 바꾼다 (2026-10-16 사용자 지적). 중복은 save_upload가 파일 해시로 본다
+        meta = {"title": "" if document else info.title, "doi": info.doi, "arxiv_id": info.arxiv_id, "year": info.year,
+                "authors": [], "item_type": "document"}
         if info.meta_author:
             from .sources import split_name
             meta["authors"] = [split_name(a) for a in re.split(r"\s*(?:;|,| and )\s*", info.meta_author) if a]
-        return meta, "PDF 정보만 사용"
+        return meta, DOC_ONLY if document else "PDF 정보만 사용"
 
     sys_sizes: dict = {}
 
@@ -600,14 +644,15 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if sys_sizes and ctx._tx is not None and time.monotonic() - sys_sizes["at"] < SYSTEM_TTL:
             return sys_sizes
         with db.system_tx("storage usage") as conn:
-            r = conn.execute("select (select coalesce(sum(pdf_size), 0) from paperlab.papers where pdf_key <> '')::bigint "
-                             "as pdf, pg_database_size(current_database())::bigint as size, "
+            r = conn.execute("select (select coalesce(sum(coalesce(pdf_size, 0) + coalesce(source_size, 0)), 0) "
+                             "from paperlab.papers where pdf_key <> '')::bigint as pdf, "
+                             "pg_database_size(current_database())::bigint as size, "
                              "exists (select 1 from paperlab.page_texts) as allocated").fetchone()
         sys_sizes.update(at=time.monotonic(), pdf=int(r["pdf"]), size=int(r["size"]), allocated=bool(r["allocated"]))
         return sys_sizes
 
     def storage_used(ctx: RequestCtx) -> int:
-        return system_sizes(ctx)["pdf"] + st.backup_sizes.get()
+        return system_sizes(ctx)["pdf"] + st.backup_sizes.get() + st.figure_sizes.get()
 
     def usage(ctx: RequestCtx) -> dict:
         used = storage_used(ctx)
@@ -785,9 +830,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.get("/api/jobs")
     def list_jobs(status: str = "active", paper_id: int | None = None, kind: str = "", limit: int = 50,
-                  ctx: RequestCtx = Ctx):
+                  since: str = "", manuscript_id: int | None = None, ctx: RequestCtx = Ctx):
         maintain(ctx)
-        return jobs.list_jobs(ctx.lib, ws.free, status, paper_id, kind, limit)
+        return jobs.list_jobs(ctx.lib, ws.free, status, paper_id, kind, limit, since, manuscript_id)
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: int, ctx: RequestCtx = Ctx):
@@ -799,6 +844,11 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         out = jobs.cancel_job(ctx.lib, job_id)
         log.info(f"job cancel job={job_id} status={out['status']}")
         return out
+
+    @app.post("/api/jobs/{job_id}/handled")
+    def job_handled(job_id: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """글쓰기 결과를 원고에 넣었음 · 넣지 않기로 함 (2026-10-16 백그라운드 AI — 원고 화면 'AI 결과' 줄에서 뺌)"""
+        return jobs.mark_write_handled(ctx.lib, job_id, str(data.get("state") or ""))
 
     @app.post("/api/jobs/{job_id}/retry")
     def retry_job(job_id: int, ctx: RequestCtx = Ctx):
@@ -950,8 +1000,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 "upload": {"method": upload["method"], "url": upload["url"], "headers": upload["headers"]},
                 "expires_at": upload["expires_at"]}
 
-    def read_incoming(ctx: RequestCtx, upload_id: str) -> tuple[str, bytes | None, str]:
-        """(임시 키, 내용, 오류). 내 incoming/ 경로에 없으면 404"""
+    def read_incoming(ctx: RequestCtx, upload_id: str, name: str = "") -> tuple[str, bytes | None, str]:
+        """(임시 키, 내용, 오류). 내 incoming/ 경로에 없으면 404.
+        name: 웹에서 올린 파일 이름 — 주면 워드 · 한글 · PPT · 이미지도 받는다(convert.kind). 없으면(동기화) PDF만"""
         if not is_upload_id(upload_id):
             raise HTTPException(404, "올린 파일을 찾을 수 없어요")
         key = ctx.storage.incoming_key(upload_id)
@@ -968,9 +1019,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if len(data) > MAX_PDF_BYTES:
             ctx.storage.delete_quietly(key)
             return key, None, "파일이 너무 커요 (100MB 초과)"
-        if not data.startswith(b"%PDF"):
+        if not data.startswith(b"%PDF") and not (name and convert.kind(data, name)):
             ctx.storage.delete_quietly(key)
-            return key, None, "PDF 파일이 아니에요"
+            pdf_named = convert.ext_of(name) in (".pdf", "")  # 이름이 .pdf(또는 없음 — 동기화)면 예전 문구 그대로
+            return key, None, "PDF 파일이 아니에요" if pdf_named else convert.NOT_SUPPORTED
         ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))  # 요청이 실패로 끝나면 임시 파일도 (QA D8 · D9b)
         return key, data, ""
 
@@ -1013,20 +1065,26 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             ctx.sources  # noqa: B018 - 사용자 설정(연락처 · API 키)을 먼저 읽어 둔다
         # R2 받기 · PDF 추출 · 외부 메타데이터 조회 동안 DB 연결을 잡지 않는다 (F9)
         ctx.release()
-        incoming, raw, error = read_incoming(ctx, upload_id)
+        incoming, raw, error = read_incoming(ctx, upload_id, name)
         if error:
             return {"file": name, "error": error}
         try:
-            info = extract_pdf(raw)
+            incoming, raw, info, source = prepare_upload(ctx, incoming, raw, name)
         except BadPdf:
             ctx.storage.delete_quietly(incoming)
             return {"file": name, "error": BAD_PDF}
+        except convert.ConvertError as e:
+            ctx.storage.delete_quietly(incoming)
+            return {"file": name, "error": str(e)}
         if lookup:
-            meta_, matched_by = metadata_from_pdf(ctx, info)
+            meta_, matched_by = metadata_from_pdf(ctx, info, document=bool(source))
+        elif source:
+            meta_, matched_by = {"title": "", "doi": info.doi, "arxiv_id": info.arxiv_id, "item_type": "document"}, DOC_ONLY
         else:
             meta_, matched_by = {"title": info.title, "doi": info.doi, "arxiv_id": info.arxiv_id}, "PDF 정보만 사용"
-        if not meta_.get("title"):
-            meta_["title"] = re.sub(r"\.pdf$", "", name, flags=re.I)
+        if not meta_.get("title"):  # 파일 이름에서 아는 확장자만 뗀다("보고서 v1.2.docx" → "보고서 v1.2")
+            stem, ext = os.path.splitext(name)
+            meta_["title"] = (stem if ext.lower() in convert.ACCEPT_EXTS else name).strip() or name
         lib = ctx.lib  # 새 트랜잭션: 그 사이 컬렉션 · 폴더가 지워졌으면 넣지 않는다
         if collection_id and not lib.has_collection(collection_id):
             collection_id = None
@@ -1034,21 +1092,27 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             folder_id = None
         # PC 파일 이름 겹침 경합(23505)은 저장점에서 한 번 더, 그래도 겹치면 409 (QA D3)
         return ctx.retry_names(lambda: save_upload(ctx, name, incoming, raw, info, meta_, matched_by, collection_id,
-                                                   folder_id))
+                                                   folder_id, source))
 
     def save_upload(ctx: RequestCtx, name: str, incoming: str, raw: bytes, info, meta_: dict, matched_by: str,
-                    collection_id: int | None, folder_id: int | None) -> dict:
+                    collection_id: int | None, folder_id: int | None, source: dict | None = None) -> dict:
         lib = ctx.lib
-        dup = lib.find_duplicate(meta_.get("doi", ""), meta_.get("arxiv_id", ""), meta_.get("title", ""), include_trash=True)
+        # 문서(제목 = 파일 이름)는 제목으로 같은 항목을 찾지 않는다 — "초안.docx"가 둘이어도 다른 문서 (DOI · arXiv만)
+        dup_title = "" if meta_.get("item_type") == "document" else meta_.get("title", "")
+        # PDF를 그대로 올렸으면 같은 파일(해시)도 중복 — 정보를 못 찾아 '문서'가 된 PDF를 두 번 올려도 하나만 남게.
+        # 문서 · 이미지의 변환본은 변환할 때마다 바이트가 달라 해시로 보지 않는다
+        sha = "" if source else hashlib.sha256(raw).hexdigest()
+        dup = lib.find_duplicate(meta_.get("doi", ""), meta_.get("arxiv_id", ""), dup_title, include_trash=True,
+                                 sha256=sha)
         if dup and dup.get("trashed"):  # 6단계 K-40: 휴지통에 같은 논문 — 새로 만들지 않고 [되살리기] 안내 (SW-8)
             ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
             return {"file": name, "id": dup["id"], "title": dup["title"], "duplicate": True, "trashed": True,
                     "note": TRASHED_DUP}
         if dup:
             if not dup["has_pdf"]:
-                attach_from_incoming(ctx, dup["id"], incoming, raw, info, name=name)
+                attach_from_incoming(ctx, dup["id"], incoming, raw, info, name=name, source=source)
                 result = {"file": name, "id": dup["id"], "title": dup["title"], "matched_by": matched_by,
-                          "note": "이미 있는 논문에 PDF를 붙였어요"}
+                          "note": "이미 있는 항목에 파일을 붙였어요"}
             else:
                 ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))
                 result = {"file": name, "id": dup["id"], "title": dup["title"], "duplicate": True,
@@ -1059,7 +1123,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         pid = lib.add_paper(meta_)
         if folder_id:
             lib.move_papers_to_folder([pid], folder_id)
-        attach_from_incoming(ctx, pid, incoming, raw, info, name=name)
+        attach_from_incoming(ctx, pid, incoming, raw, info, name=name, source=source)
         if collection_id:
             lib.set_paper_collections([pid], collection_id, True)
         return {"file": name, "id": pid, "title": meta_["title"], "matched_by": matched_by, "warnings": info.warnings}
@@ -1144,6 +1208,18 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         signed = ctx.storage.sign_get(info["pdf_key"], filename=info["title"])
         return {"url": signed["url"], "expires_at": signed["expires_at"]}
 
+    @app.get("/api/papers/{pid}/source-url")
+    def source_url(pid: int, ctx: RequestCtx = Ctx):
+        """문서 원본(워드 · 한글 · PPT · 이미지) 내려받기 주소 — 올린 이름 그대로(attachment)"""
+        row = ctx.lib._one("select source_key, source_name from paperlab.papers where id = %s and user_id = %s",
+                           (pid, ctx.uid))
+        if not row:
+            raise HTTPException(404, "논문을 찾을 수 없어요")
+        if not row["source_key"]:
+            raise HTTPException(404, "원본 파일이 없어요")
+        signed = ctx.storage.sign_get(row["source_key"], filename=row["source_name"] or "document")
+        return {"url": signed["url"], "expires_at": signed["expires_at"], "name": row["source_name"]}
+
     @app.post("/api/papers/{pid}/pdf/upload")
     def pdf_upload_slot(pid: int, ctx: RequestCtx = Ctx):
         system_sizes(ctx)  # 사용자 트랜잭션을 열기 전에 (QA D7)
@@ -1155,15 +1231,18 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     def pdf_complete(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
         need_paper(ctx, pid)
         ctx.release()  # R2 받기 · 추출 동안 DB 연결을 잡지 않는다 (F9)
-        incoming, raw, error = read_incoming(ctx, str(data.get("upload_id") or ""))
+        name = str(data.get("name") or "")[:255]
+        incoming, raw, error = read_incoming(ctx, str(data.get("upload_id") or ""), name)
         if error:
             raise HTTPException(400, error)
         try:
-            info = extract_pdf(raw)
+            incoming, raw, info, source = prepare_upload(ctx, incoming, raw, name)
         except BadPdf:
             raise HTTPException(400, BAD_PDF) from None  # 임시 파일은 on_rollback이 지움
+        except convert.ConvertError as e:
+            raise HTTPException(400, str(e)) from None
         # 그 사이 지워졌거나 휴지통으로 갔으면 404 — attach가 행을 먼저 잠그고 확인한다 (QA D2)
-        cleared = attach_from_incoming(ctx, pid, incoming, raw, info, name=str(data.get("name") or ""))
+        cleared = attach_from_incoming(ctx, pid, incoming, raw, info, name=name, source=source)
         # 6단계 K-34: 이 교체로 전체 번역을 지웠는지 (웹 토스트 "PDF가 바뀌어 번역을 지웠어요")
         return {"paper": ctx.lib.get_paper(pid), "warnings": info.warnings, "translation_cleared": cleared}
 
@@ -1213,13 +1292,16 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 fresh = sources.lookup_arxiv(p["arxiv_id"])
             elif data.get("identifier"):
                 fresh = sources.resolve(data["identifier"])
+            elif p.get("item_type") == "document":  # 문서는 제목이 파일 이름이라 제목으로 찾지 않는다
+                raise SourceError("문서는 제목으로 논문 정보를 찾지 않아요. DOI나 arXiv 번호를 입력해 주세요.")
             else:
                 fresh = sources.match_title(p["title"])
                 if not fresh:
                     raise SourceError("제목으로 일치하는 논문을 찾지 못했어요. DOI를 입력해 주세요.")
         except SourceError as e:
             raise HTTPException(404, str(e)) from e
-        if data.get("overwrite"):
+        # 문서(제목 = 파일 이름 · 유형 '문서')에 논문 정보를 찾았으면 빈칸 채우기가 아니라 덮어쓴다
+        if data.get("overwrite") or p.get("item_type") == "document":
             update = {k: v for k, v in fresh.items() if v not in (None, "", [])}
         else:
             merged = merge(p, fresh)
@@ -1956,21 +2038,23 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     def stream_job(ctx: RequestCtx, request: Request, kind: str, params: dict, paper_id: int | None,
                    run) -> StreamingResponse:
-        """대화 · 글쓰기 (9.3절): 첫 칸이 API면 요청 안 SSE 그대로, CLI면 {"type":"queued","job"} 하나 보내고 끝.
-        API가 폴백 대상 오류로 실패하면 작업을 다음 칸으로 넘기고 {"type":"fallback","job"}.
-        run(engine) → 이벤트 반복자 (done 이벤트 → 결과 반영).
+        """대화 · 서재 질문 · 선택 설명 · 번역 (9.3절): 첫 칸이 API면 요청 안 SSE 그대로, CLI면 {"type":"queued","job"}
+        하나 보내고 끝. API가 폴백 대상 오류로 실패하면 작업을 다음 칸으로 넘기고 {"type":"fallback","job"}.
+        run(engine) → 이벤트 반복자 (done 이벤트 → 결과 반영). 응답 머리글 X-PaperLab-Job = 작업 번호(화면의 [취소]).
 
-        화면 연결이 끊기면(탭 · 창 닫음) 곧바로 작업을 취소하고 그 뒤에 온 결과는 저장하지 않는다(품질팀 H1).
-        AI 호출은 별도 스레드가 돌리고, 이 비동기 생성기는 0.05초마다 끊김을 확인한다 — 한 번에 응답이 오는
-        OpenAI · Google 경로도 기다리는 동안 끊김을 본다. 가비지 수집에 기대지 않는다."""
+        화면 연결이 끊겨도(창 · 탭을 닫음 · 다른 화면으로 감) 작업은 멈추지 않는다 — 백그라운드로 넘겨 끝까지 받아 저장하고
+        (drain), 화면은 작업 목록 · 끝남 알림으로 결과를 다시 연다 (2026-10-16 제품 책임자 결정, 품질팀 H1의 '끊기면 취소'를 바꿈).
+        취소는 [취소](POST /api/jobs/{id}/cancel)로만. AI 호출은 별도 스레드가 돌리고, 이 비동기 생성기는 0.05초마다 끊김을
+        확인한다 — 한 번에 응답이 오는 OpenAI · Google 경로도 기다리는 동안 끊김을 본다. 가비지 수집에 기대지 않는다."""
         row, _ = jobs.create_job(ctx.lib, kind, route_for(ctx, kind), params, paper_id, running_api=True)
         job_id, uid, claims, engine = row["id"], ctx.uid, ctx.claims, row["engine"]
         model = ctx.ai.model_name(engine) if kind in jobs.EXPLAIN_KINDS else engine
         log.info(f"job created job={job_id} kind={kind} runner={row['runner']} engine={engine}")
+        headers = {**SSE_HEADERS, "X-PaperLab-Job": str(job_id)}
         if row["runner"] == "cli":
             view = jobs.get_job(ctx.lib, job_id, ws.free)
             return StreamingResponse(iter([_sse({"type": "queued", "job": view})]), media_type="text/event-stream",
-                                     headers=SSE_HEADERS)
+                                     headers=headers)
         token = str(row["lease_token"])
         events_src = run(engine)  # 여기서 PDF · 본문을 준비(트랜잭션은 커밋 — F9)
         ctx.release()
@@ -2049,16 +2133,76 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 return [_sse({"type": "fallback", "job": view})]
             return [_sse({"type": "error", "error": view["error"], "job": view})]
 
-        def cancel_now() -> None:
+        def outcome(kind_: str, item) -> list[str]:
+            """마지막 이벤트(done · 오류 · 끝) → 반영 · 실패 판정 → 화면에 보낼 SSE 줄"""
+            if kind_ == "ev":
+                return save_done(item)
+            if kind_ == "err":
+                return fail(item.code or "api_server", str(item))
+            if kind_ == "exc":
+                log.warning("sse job crashed job=%s: %s", job_id, type(item).__name__)
+                return fail("api_server", "AI 응답을 처리하지 못했어요")
+            return fail("bad_output", "AI 응답이 끝나기 전에 멈췄어요")
+
+        def drain(pending=None) -> None:
+            """화면 연결이 끊긴 뒤: 작업을 멈추지 않고 이 스레드가 끝까지 받아 저장한다 (2026-10-16 백그라운드 AI).
+            interactive를 끄고 리스를 이어 가므로, 그 사이 서버가 죽으면 복구 스캔이 API 실행기로 다시 실행한다(결과를 잃지 않음).
+            중간 글은 1초에 한 번 진행(partial_text)으로 남기고 — 다시 연 화면 · 작업 목록이 보여 줌 — 그때 [취소]를 읽는다."""
             try:
                 with db.user_tx(claims) as lib:
-                    jobs._end(lib, jobs.lock_leased(lib, job_id, token), "cancelled", "interrupted", jobs.INTERRUPTED)
-                log.info(f"job cancelled job={job_id} (화면 연결 끊김)")
-            except (jobs.JobError, DBUnavailable):
-                pass
+                    ok = lib._x("update paperlab.jobs set interactive = false, lease_until = greatest(lease_until, now() "
+                                "+ make_interval(secs => %s)), updated_at = now() where id = %s and user_id = %s "
+                                "and lease_token = %s::uuid and status = 'running'",
+                                (jobs.LEASE_S, job_id, uid, token)).rowcount
+            except DBUnavailable:
+                ok = 1  # 지금은 못 썼어도 결과는 받아 둔다 (반영 때 다시 시도)
+            if not ok:
+                stop.set()
+                return
+            log.info(f"job detached job={job_id} (화면 연결 끊김 — 백그라운드로 계속)")
+            text, last, changed = acc["text"], time.monotonic(), True  # 끊기기 전에 화면에 보낸 글부터 이어서
+            while True:
+                if pending is not None:
+                    kind_, item = pending
+                    pending = None
+                else:
+                    try:
+                        kind_, item = q.get(timeout=1.0)
+                    except queue.Empty:
+                        kind_, item = "", None
+                if kind_ in ("err", "exc", "end") or (kind_ == "ev" and item.get("type") == "done"):
+                    try:
+                        outcome(kind_, item)
+                    except DBUnavailable:
+                        log.warning("detached job save failed job=%s: db unavailable", job_id)
+                    return
+                if kind_ == "ev" and item.get("type") == "delta":
+                    text += str(item.get("text") or "")
+                    changed = True
+                now = time.monotonic()
+                if not ((changed and now - last >= 1.0) or now - last >= DETACH_CHECK_S):
+                    continue
+                last, changed = now, False
+                try:
+                    with db.user_tx(claims) as lib:
+                        res = jobs.touch_lease(lib, job_id, token, renew=True, progress=jobs.clean_progress(
+                            {"message": "백그라운드에서 만드는 중", "partial_text": text}))
+                        if res is not None and res["cancel"]:
+                            jobs._end(lib, jobs.lock_leased(lib, job_id, token), "cancelled")
+                except jobs.JobError:
+                    res = None
+                except DBUnavailable:
+                    continue  # 다음 주기에 다시 (리스는 90초)
+                if res is None or res["cancel"]:
+                    stop.set()  # 리스를 잃음 · [취소] — 스트림을 닫아 회사 API 연결도 끊는다
+                    log.info(f"job detached stopped job={job_id} cancel={bool(res and res['cancel'])}")
+                    return
+
+        acc = {"text": ""}  # 화면에 보낸 중간 글 (끊긴 뒤 진행 partial_text의 앞부분)
 
         async def events():
             ended = False
+            pending = None
             threading.Thread(target=produce, name=f"sse-job-{job_id}", daemon=True).start()
             try:
                 while True:
@@ -2070,32 +2214,27 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                         await asyncio.sleep(0.05)
                         continue
                     if kind_ == "ev" and item["type"] != "done":
+                        if item["type"] == "delta":
+                            acc["text"] += str(item.get("text") or "")
                         yield _sse(item)
                         continue
                     if await request.is_disconnected():
-                        return  # 끊긴 뒤에 온 결과는 저장하지 않는다
+                        pending = (kind_, item)  # 끊긴 뒤에 온 결과도 백그라운드에서 저장한다
+                        return
                     ended = True
-                    if kind_ == "ev":
-                        out = await run_in_threadpool(save_done, item)
-                    elif kind_ == "err":
-                        out = await run_in_threadpool(fail, item.code or "api_server", str(item))
-                    elif kind_ == "exc":
-                        log.warning("sse job crashed job=%s: %s", job_id, type(item).__name__)
-                        out = await run_in_threadpool(fail, "api_server", "AI 응답을 처리하지 못했어요")
-                    else:
-                        out = await run_in_threadpool(fail, "bad_output", "AI 응답이 끝나기 전에 멈췄어요")
-                    for x in out:
+                    for x in await run_in_threadpool(outcome, kind_, item):
                         yield x
                     return
             except DBUnavailable:
                 yield _sse({"type": "error", "error": DB_UNAVAILABLE["detail"]})
             finally:
-                stop.set()
-                if not ended:
-                    # 끊김 · 취소된 스트림: 곧바로 취소로 (취소 영역 안에서는 await할 수 없으므로 스레드로)
-                    threading.Thread(target=cancel_now, name=f"sse-cancel-{job_id}", daemon=True).start()
+                if ended:
+                    stop.set()
+                else:
+                    # 끊김: 취소하지 않고 백그라운드로 (취소 영역 안에서는 await할 수 없으므로 스레드로)
+                    threading.Thread(target=drain, args=(pending,), name=f"sse-drain-{job_id}", daemon=True).start()
 
-        return StreamingResponse(events(), media_type="text/event-stream", headers=SSE_HEADERS)
+        return StreamingResponse(events(), media_type="text/event-stream", headers=headers)
 
     @app.post("/api/papers/{pid}/chat")
     def chat(pid: int, request: Request, data: dict = Body(...), ctx: RequestCtx = Ctx):
@@ -2114,10 +2253,14 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         return stream_job(ctx, request, "chat", {"question": question}, pid, run)
 
     @app.post("/api/ai/write")
-    def ai_write(request: Request, data: dict = Body(...), ctx: RequestCtx = Ctx):
-        """원고 글쓰기 도우미 (스트리밍 · CLI면 작업)"""
+    def ai_write(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """원고 글쓰기 도우미 = 백그라운드 작업 (2026-10-16 제품 책임자 결정): 202 {job}. 창 · 탭 · 앱을 닫아도 서버(API 키) ·
+        내 PC(CLI)가 끝까지 실행하고 결과(result.text)를 7일 동안 남긴다 — 작업 화면 · 원고 화면에서 열어 넣는다.
+        넣기 정보(sel_start · sel_end · insert · doc_hash · before)는 그 사이 원고가 바뀌었는지 화면이 확인하는 데 쓴다"""
         text = str(data.get("text") or "").strip()
         mode = data.get("mode") or "polish"
+        if not isinstance(mode, str) or mode not in WRITE_MODES:  # 목록 · 객체면 in 검사가 500이 되므로 먼저 거름
+            raise HTTPException(400, "알 수 없는 글쓰기 모드예요")
         if not text and mode != "draft":
             raise HTTPException(400, "다듬을 글을 선택해 주세요")
         mid = data.get("manuscript_id")
@@ -2125,14 +2268,19 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             raise HTTPException(400, "원고 번호가 올바르지 않아요")
         keys = [str(k)[:200] for k in data.get("keys") or []][:30]
         params = {"mode": str(mode)[:20], "text": text, "instruction": str(data.get("instruction") or "")[:2000],
-                  "context": str(data.get("context") or "")[:6000], "keys": keys, "manuscript_id": mid}
+                  "context": str(data.get("context") or "")[:6000], "keys": keys, "manuscript_id": mid,
+                  **write_anchor(data)}
+        view, _ = new_job(ctx, "write", params, None)
+        return JSONResponse({"job": view}, status_code=202)
 
-        def run(engine: str):
-            sources = jobs.write_sources(ctx.lib, keys)
-            return ctx.ai.write(params["mode"], text, instruction=params["instruction"], context=params["context"],
-                                sources=sources, engine=engine)
-
-        return stream_job(ctx, request, "write", params, None, run)
+    def write_anchor(data: dict) -> dict:
+        """넣을 자리 (화면이 보냄 — 틀린 값은 버림): 원래 고른 범위 · 커서 뒤에 넣기 · 원고 전체 해시 · 자리 앞 글(다시 찾기)"""
+        s, e = data.get("sel_start"), data.get("sel_end")
+        ok = all(isinstance(x, int) and not isinstance(x, bool) and 0 <= x < 10 ** 8 for x in (s, e)) and s <= e
+        doc_hash = str(data.get("doc_hash") or "")
+        return {"sel_start": s if ok else None, "sel_end": e if ok else None, "insert": data.get("insert") is True,
+                "doc_hash": doc_hash if re.fullmatch(r"[0-9a-z]{1,64}", doc_hash) else "",
+                "before": str(data.get("before") or "")[-300:]}
 
     # ------------------------------------------- 4단계: 쉬운 설명 · 선택 번역 · 전체 번역 (docs/specs/phase4-explain-translate.md 10장)
     @app.post("/api/papers/{pid}/explain")
@@ -2166,7 +2314,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.get("/api/papers/{pid}/explanations")
     def explanations(pid: int, ctx: RequestCtx = Ctx):
-        """이 논문의 카드(최신 100개) + 진행 중인 PC · 백그라운드 작업(화면 연결에 묶인 SSE 작업은 빼고)"""
+        """이 논문의 카드(최신 100개) + 진행 중인 PC · 백그라운드 작업(화면에 붙은 SSE 작업은 빼고 — 화면을 떠나
+        백그라운드로 넘어간 작업은 interactive가 꺼져 여기 들어온다)"""
         need_paper(ctx, pid)
         maintain(ctx)
         running = [j for k in jobs.EXPLAIN_KINDS for j in jobs.list_jobs(ctx.lib, ws.free, "active", pid, k, 20)["jobs"]
@@ -2180,7 +2329,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             raise HTTPException(404, "찾을 수 없어요")
         return {"ok": True}
 
-    TR_NO_TEXT = "PDF 글자를 읽을 수 없는 논문이에요(스캔본)."
+    TR_NO_TEXT = "글자를 읽을 수 없는 항목이에요(스캔본 · 사진)."
     TR_NONE = "번역이 없어요"
 
     def tr_job(ctx: RequestCtx, pid: int, active: bool = False) -> dict | None:
@@ -2689,7 +2838,53 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     def delete_manuscript(mid: int, ctx: RequestCtx = Ctx):
         if not ctx.lib.delete_manuscript(mid):
             raise HTTPException(404, "원고를 찾을 수 없어요")
+        # 원고 그림은 커밋 뒤에 지운다(목록을 못 읽으면 남겨 둠 — 원고 삭제는 그대로 성공)
+        try:
+            keys = [k for k, _ in ctx.storage.list_figures(mid)] if jobs.valid_id(mid) else []
+        except StorageError:
+            keys = []
+        for k in keys:
+            ctx.after_commit.append(lambda k=k: ctx.storage.delete_quietly(k))
         return {"ok": True}
+
+    # -------------------------------------------------------- 원고 그림 (docs/specs/writing-figures-tables.md)
+    @app.post("/api/manuscripts/{mid}/figures")
+    def upload_figure(mid: int, file: UploadFile = File(...), ctx: RequestCtx = Ctx):
+        """그림 한 장을 올린다 → {name, ref: "fig:{name}", width, height, size}. 본문에는 화면이 ![캡션](fig:이름)으로 넣는다"""
+        need_manuscript(ctx, mid)
+        ensure_space(ctx)  # R2 95% 규칙 (PDF · 원본 올리기와 같게)
+        data = file.file.read(figures.MAX_FIGURE_BYTES + 1)
+        try:
+            info = figures.validate(data)
+        except figures.FigureError as e:
+            raise HTTPException(400, str(e)) from e
+        existing = ctx.storage.list_figures(mid)
+        if len(existing) >= figures.MAX_FIGURES_PER_MANUSCRIPT:
+            raise HTTPException(400, f"원고 하나에 그림은 {figures.MAX_FIGURES_PER_MANUSCRIPT}장까지 넣을 수 있어요")
+        if sum(s for _, s in existing) + info["size"] > figures.MAX_FIGURE_BYTES_PER_MANUSCRIPT:
+            raise HTTPException(400, "이 원고의 그림 용량이 가득 찼어요 (300MB)")
+        name = f"{uuid.uuid4().hex[:16]}.{info['ext']}"
+        key = ctx.storage.figure_key(mid, name)
+        ctx.storage.put(key, data, info["content_type"])
+        ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))
+        st.figure_sizes.add(info["size"])
+        return {"name": name, "ref": f"fig:{name}", "width": info["width"], "height": info["height"],
+                "size": info["size"]}
+
+    @app.get("/api/manuscripts/{mid}/figures/{name}")
+    def get_figure(mid: int, name: str, ctx: RequestCtx = Ctx):
+        need_manuscript(ctx, mid)
+        if not figures.NAME_RE.fullmatch(name):
+            raise HTTPException(404, "그림을 찾을 수 없어요")
+        try:
+            data = ctx.storage.get(ctx.storage.figure_key(mid, name))
+        except (NotFound, StorageKeyError):
+            raise HTTPException(404, "그림을 찾을 수 없어요") from None
+        kind = figures.sniff(data)
+        if kind is None:  # 올릴 때 검사했지만 내려줄 때도 그림 형식만 (다른 형식으로 해석되지 않게)
+            raise HTTPException(404, "그림을 찾을 수 없어요")
+        return Response(data, media_type=figures.CONTENT_TYPES[kind],
+                        headers={"Content-Disposition": "inline", "Cache-Control": "private, no-store"})
 
     @app.post("/api/citekeys")
     def lookup_citekeys(data: dict = Body(...), ctx: RequestCtx = Ctx):
@@ -2733,6 +2928,20 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 except doc_formats.FormatError as e:
                     raise HTTPException(400, str(e)) from e
         warnings: list[str] = []
+        if fmt != "md" and any(isinstance(b, dict) and b.get("type") == "figure" for b in blocks):
+            # 그림 바이트는 화면이 보내지 않는다 — 이 사용자의 그 원고 그림 폴더에서만 읽는다
+            mid = data.get("manuscript_id")
+            fig_mid = mid if isinstance(mid, int) and jobs.valid_id(mid) and ctx.lib.get_manuscript(mid) else None
+
+            def load_figure(name: str) -> bytes | None:
+                if fig_mid is None:
+                    return None
+                try:
+                    return ctx.storage.get(ctx.storage.figure_key(fig_mid, name))
+                except (NotFound, StorageKeyError):
+                    return None
+
+            blocks = figures.attach_images(blocks, load_figure)
         try:
             if fmt == "docx":
                 body = writer.to_docx(blocks, data.get("meta") or {}, fmt_data, cover, warnings)

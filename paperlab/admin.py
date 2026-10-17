@@ -50,7 +50,7 @@ from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from .config import (DEFAULT_ENV_FILE, R2_VARS, ConfigError, db_user, decode_encryption_key, is_app_role_user,
                      load_env_file, parse_allowed_emails, redact)
 from .crypto import DecryptError, SecretBox, key_id
-from .storage import _RAG_KEY_RE, _TR_KEY_RE, Storage, backup_key, create_storage
+from .storage import _RAG_KEY_RE, _SOURCE_KEY_RE, _TR_KEY_RE, Storage, backup_key, create_storage
 
 log = logging.getLogger("paperlab.admin")
 
@@ -242,7 +242,9 @@ def find_orphans(conninfo: str, storage: Storage, delete: bool = False, now: dat
         known = {r[0] for r in conn.execute("select pdf_key from paperlab.papers where pdf_key <> ''")}
         known_rag = {r[0] for r in conn.execute("select rag_key from paperlab.papers where rag_key <> ''")}
         known_tr = {r[0] for r in conn.execute("select tr_key from paperlab.translations")}
-        db_total = conn.execute("select coalesce(sum(pdf_size), 0) from paperlab.papers where pdf_key <> ''").fetchone()[0]
+        known_src = {r[0] for r in conn.execute("select source_key from paperlab.papers where source_key <> ''")}
+        db_total = conn.execute("select coalesce(sum(coalesce(pdf_size, 0) + coalesce(source_size, 0)), 0) "
+                                "from paperlab.papers where pdf_key <> ''").fetchone()[0]
     cutoff = (now or datetime.now(timezone.utc)) - ORPHAN_MIN_AGE
 
     def old(k: str) -> bool:
@@ -252,6 +254,8 @@ def find_orphans(conninfo: str, storage: Storage, delete: bool = False, now: dat
     orphans = [(k, s) for k, s in objects if _PAPER_KEY_RE.fullmatch(k) and k not in known and old(k)]
     rag_orphans = [(k, s) for k, s in objects if _RAG_KEY_RE.fullmatch(k) and k not in known_rag and old(k)]
     tr_orphans = [(k, s) for k, s in objects if _TR_KEY_RE.fullmatch(k) and k not in known_tr and old(k)]
+    # 문서 원본(users/*/sources/*.bin)도 DB 행이 없으면 고아 — 개수 · 크기는 PDF 고아에 합쳐 보고한다
+    orphans += [(k, s) for k, s in objects if _SOURCE_KEY_RE.fullmatch(k) and k not in known_src and old(k)]
     if delete:
         for k, _ in orphans + rag_orphans + tr_orphans:
             storage.delete(k)

@@ -102,7 +102,7 @@ def test_collections_tags_annotations(lib_for, users, sample):
         assert db.list_tags() == []  # 연결 없고 색 없는 태그 자동 삭제
         db.trash_papers([pid], "web")
         assert db.list_papers(q="scaled")["total"] == 0  # 휴지통 논문은 검색에 안 나옴
-        assert db.purge_paper(pid) == {"pdf_key": "", "rag_key": "", "tr_key": ""}
+        assert db.purge_paper(pid) == {"pdf_key": "", "source_key": "", "rag_key": "", "tr_key": ""}
         with db.trash_tx():
             assert db.list_papers(q="scaled")["total"] == 0
 
