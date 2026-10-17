@@ -1433,6 +1433,69 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .cs-item .cs-peek { flex: none; align-self: center; height: 20px; margin-left: 2px; padding: 0 7px; font-size: 11px; }
 @media (hover: hover) { .cs-item:not(.active):not(:hover) .cs-peek { visibility: hidden; } }
 
+/* ---------------- 논문 쓰기 AI 결과 패널 (2026-10-17 — AI 결과를 보면서 글쓰기) ---------------- */
+/* 모달이 아니라 .writer-body 오른쪽 끝(참고 패널 다음) 칸. 열림 = section.writer[data-ai-pane="open"]
+   (보기 전환이 className을 통째로 바꾸므로 속성). 폭은 범위 고정(--ai-w), 칸이 모자라면 개요 → 미리보기 순으로 숨겨 편집기를 남김 */
+.writer { --ai-w: clamp(300px, 26vw, 380px); }
+.ai-pane { display: none; border-left: 0; box-shadow: -1px 0 0 var(--border); }
+.writer[data-ai-pane="open"] .ai-pane { display: flex; }
+.writer[data-ai-pane="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) var(--ai-w); }
+.writer[data-ai-pane="open"].view-split .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+.writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+.writer[data-ai-pane="open"][data-ref="open"].view-split .writer-preview { display: none; }
+@media (max-width: 1500px) {
+  .writer[data-ai-pane="open"].view-split .writer-side,
+  .writer[data-ai-pane="open"][data-ref="open"] .writer-side { display: none; }
+  .writer[data-ai-pane="open"].view-split .writer-body,
+  .writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+}
+@media (max-width: 1100px) {
+  .writer[data-ai-pane="open"] .writer-body,
+  .writer[data-ai-pane="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) var(--ai-w); }
+  .writer[data-ai-pane="open"].view-split .writer-preview { display: none; }
+  .writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+}
+@media (max-width: 760px) {
+  .writer[data-ai-pane="open"] .writer-body,
+  .writer[data-ai-pane="open"].view-split .writer-body,
+  .writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr); }
+  .ai-pane { box-shadow: none; border-top: 1px solid var(--border); }
+}
+
+/* 패널 틀: 머리줄(제목 · 결과 고르기 · 닫기) → 내용(메타 · 원래 글 · 결과 · 확인 · 동작). 좁은 칸에서도 글 · 단추가 잘리지 않게 줄바꿈 */
+.ai-pane-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.ai-pane-title { margin: 0; flex: none; font-size: 13.5px; font-weight: 700; white-space: nowrap; }
+.ai-pane-head .ai-pick { flex: 1; width: 0; min-width: 0; height: 30px; text-overflow: ellipsis; }
+.ai-pane-head .btn { flex: none; white-space: nowrap; }
+.ai-pane .panel-body { padding: 12px 14px 24px; display: flex; flex-direction: column; gap: 12px; }
+.ai-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.ai-mode { font-size: 14px; }
+.chip.ai-st[data-st="running"], .chip.ai-st[data-st="ready"] { background: var(--accent-soft); color: var(--accent-text); border-color: transparent; }
+.chip.ai-st[data-st="applied"] { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.chip.ai-st[data-st="failed"], .chip.ai-st[data-st="cancelled"], .chip.ai-st[data-st="expired"] { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.ai-sec { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ai-sec-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; }
+.ai-sec-h { font-size: 12px; font-weight: 650; color: var(--text-2); }
+.ai-orig {
+  display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; width: 100%; text-align: left; cursor: pointer;
+  border: 1px dashed var(--border-strong); border-radius: 8px; background: var(--surface-2); color: var(--text-2); padding: 7px 10px;
+  font: inherit; font-size: 12.5px; line-height: 1.6; word-break: keep-all; overflow-wrap: anywhere;
+}
+.ai-orig:hover, .ai-orig:focus-visible { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+.ai-orig:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.ai-pane .ai-out, .ai-pane .ai-diff { max-height: none; overflow: visible; font-size: 13.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+.ai-pane .ai-out.prose { white-space: normal; }
+.ai-pane .ai-tabs button { padding: 3px 10px; font-size: 12px; white-space: nowrap; }
+.ai-pane .status-line .grow { min-width: 0; overflow-wrap: anywhere; }
+.ai-pane .ai-diff-legend { margin: 0; }
+.ai-confirm .ai-diff { margin-top: 8px; max-height: 40vh; overflow-y: auto; background: var(--surface); font-size: 13px; }
+.ai-confirm .ai-diff-legend { margin-top: 4px; }
+.ai-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.ai-actions .btn { white-space: nowrap; }
+.ai-foot, .ai-empty p { margin: 0; }
+.ai-empty { display: flex; flex-direction: column; gap: 8px; padding: 12px 2px; line-height: 1.6; }
+.writer-tools [data-ai-results][aria-pressed="true"]:not(.primary) { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-text); }
+
 /* ---------------- 2단계 작업 큐 · PC 연결 (docs/design/phase2-worker-electron-ui.md) ---------------- */
 /* 목록 카드 — 연결된 PC(S4) · 작업 목록(S6) · 앱 "이 PC 상태"의 엔진(E4) 공용 */
 .item-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 8px; }
