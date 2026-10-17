@@ -328,7 +328,10 @@ describe("코드 검사", () => {
   });
   test("CSS: 대화 칸은 패널 안 격자(겹쳐 뜨지 않음)", () => {
     const css = readFileSync(join(JS, "..", "css", "app.css"), "utf8");
-    const part = css.slice(css.indexOf("원고 AI 대화 · 장 · 절 일괄 처리"));
+    // 대화 구역만 (다음 "/* ----------------" 구역 머리 — 예: 그림 만들기 패널 — 앞까지)
+    const from = css.indexOf("원고 AI 대화 · 장 · 절 일괄 처리");
+    const next = css.indexOf("/* ----------------", from);
+    const part = css.slice(from, next === -1 ? undefined : next);
     assert.ok(part.length > 100);
     assert.doesNotMatch(part, /position: (fixed|absolute)/);
     assert.match(part, /\.mc-log \{ flex: 1; min-height: 0; overflow-y: auto;/);
