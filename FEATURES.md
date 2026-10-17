@@ -781,6 +781,8 @@ AI 기능은 **설정 → AI 엔진**에 **본인의 API 키**(Anthropic · Open
 | 영어로 번역 · 한국어로 번역 | 학술 문체 번역 |
 | 이어 쓰기 | 커서 앞 글에 이어지는 문단 |
 | **논문을 골라 초안 쓰기** | 쓸 절과 요청 사항을 적고 근거 논문을 고르면, 그 논문들의 **초록·AI 요약·내 메모·하이라이트만 근거로** 초안을 쓰고 인용 `[@키]`도 그 논문에만 답니다 |
+| **영문 초록 만들기** · **국문 초록 만들기** (2026-10-17) | 국문 초록 — `**국문초록**` 굵은 줄(국내 학술지 양식) 또는 `## 국문 초록` 제목 아래 글, 또는 고른 글 — 로 학술 문체 영문 초록 한 문단 + 핵심어 5개를 만들어 **영문 초록 자리**에 넣습니다: 영문 초록 표지가 없으면 국문 초록 묶음(`**주제어**` 줄까지) 바로 뒤에 원고와 같은 모양으로(`**Abstract**` + `**Keywords**:` 줄 — `##` 장으로 만들지 않아 쪽 번호가 그대로), 표지만 있으면 그 아래, 이미 글이 있으면 그 끝에 덧붙임. 국문 초록은 반대로 `**Abstract**`(IMRaD 양식의 `**Abstract** — 글`도) → `**국문초록**` + `**주제어**:`. 넣기는 다른 결과처럼 AI 결과 패널에서 |
+| **맞춤법 · 띄어쓰기 점검…** (`Alt+P`) | 아래 *맞춤법 · 띄어쓰기 점검* 패널을 엽니다 |
 
 `[@인용키]` 표시는 AI가 바꾸거나 지우지 않으며, 근거가 부족한 부분은 `[확인 필요]`로 표시합니다.
 
@@ -821,6 +823,14 @@ AI 기능은 **설정 → AI 엔진**에 **본인의 API 키**(Anthropic · Open
 
 - 고치기 단추(번호 다시 매기기 · 모두 고치기)는 편집 한 번으로 들어가 **Ctrl+Z**로 되돌릴 수 있습니다. 같은 문제가 20곳을 넘으면 "같은 문제가 N곳 더 있어요"로 줄여 보여 줍니다.
 - 참고문헌은 인용한 문헌으로만 만들어지므로 "인용하지 않은 참고문헌"은 생기지 않아 점검하지 않습니다. 목차는 워드 · 한글의 차례 기능으로 넣으므로 점검하지 않습니다.
+- 목록 아래에 **AI 맞춤법 점검** 한 줄(*아직 안 했어요* · *점검 중* · *고칠 곳 N건*)과 [맞춤법 점검 열기]가 있습니다 — 마지막 점검 결과만 보여 주고 AI를 부르지 않습니다.
+
+### 맞춤법 · 띄어쓰기 점검 (✦ AI 도우미 → 맞춤법 · 띄어쓰기 점검 · `Alt+P` — 2026-10-17, [명세](docs/specs/writing-proofread.md))
+- 점검표처럼 편집기 위에 겹쳐 뜨는 패널(입력을 막지 않음)에서 **범위**(고른 글 · 이 문단 · 이 절 · 이 장 · 전체)를 고르고 **[점검]**. 4,000자 안쪽 조각으로 나눠 조각마다 AI 작업을 만듭니다(한 번에 8조각 = 약 3만 자 — 남으면 **[이어서 점검]**). 다른 AI 작업처럼 내 PC의 CLI 또는 내 API 키로 실행(엔진 순서는 *글쓰기 도우미* 설정)되고, 패널을 닫아도 계속되며 결과는 7일 동안 남습니다.
+- 결과는 *맞춤법 · 띄어쓰기 · 문법 · 표현* 꼬리표와 `틀린 글 → 고친 글` · 이유. 줄마다 **[이동]**(편집기에서 그 자리를 고름) · **[고치기]**(그 한 곳만) · **[무시]**, 위에 **[모두 고치기 (N)]**.
+- **안전하게 고치기**: 고칠 때마다 지금 원고에서 그 자리 글과 앞뒤 글이 AI가 본 글과 같은지 다시 확인하고(자리가 밀렸으면 앞뒤 글로 한 곳만 찾음 — 같은 글자열의 다른 곳은 고치지 않음), 못 찾으면 고치지 않고 *원고에서 찾지 못했어요*로 표시합니다. [모두 고치기]는 고치기 전 원고를 **버전 기록**에 남기고 편집 한 번으로 바꿔 `Ctrl+Z` 한 번으로 되돌립니다.
+- AI가 고치지 않는 곳: `[@인용키]` · `[^각주]` · 그림 줄 · 표 줄 · `표:` 캡션 · 제목 번호(`제N장` · `제N절` · `1.2.`) · 주소 · DOI · 코드 · 수식 · `@fig:` 참조 — AI가 보내도 서버가 버립니다. 원문에 없는 글을 고치라고 한 항목, 마크다운 기호를 늘리거나 줄이는 항목도 버립니다.
+- 무시 · 고침 표시는 이 브라우저에 원고마다 기억합니다(새로 점검하면 비움).
 
 ### 내보내기
 
@@ -1111,6 +1121,7 @@ PC 앱 설치 파일은 서버의 `/downloads/`에서 로그인 없이 받습니
 | 원고 · `[@` 자동완성 | `Ctrl+Enter` | 고른 논문을 참고 패널에서 보기(넣지 않음) |
 | 원고 화면 | `Alt+R` | 참고 패널 열기 · 열린 패널로 이동 · (패널 안에서) 닫고 원고로 |
 | 원고 화면 | `Alt+H` | 버전 기록 창 (비교 · 되돌리기 · 지금 버전 저장) |
+| 원고 화면 | `Alt+P` | 맞춤법 · 띄어쓰기 점검 패널 열기 · 닫기 (패널 안에서 `Esc` — 닫기) |
 | 버전 기록 목록 | `↑` `↓` · `Home` · `End` | 버전 고르기 |
 | 참고 패널 | `←` `→` · `Home` · `End` · `Esc` | 탭 이동 · 원고로 돌아가기 |
 | 탭 줄(어디서나) | `←` `→` · `Home` · `End` | 옆 탭으로(누른 것처럼 열림) |
@@ -1353,7 +1364,7 @@ python -m paperlab              # http://127.0.0.1:8765/  (--port, --env-file)
 | 폴더 동기화 워커 API (6단계 — 기기 토큰) | `POST /api/worker/sync/` 아래 `start` · `status` · `device-check` · `snapshot` · `changes` · `lookup` · `upload-slots` · `download` · `files/add` · `files/{id}/content` · `ops`. 앱(0.3.0 이상)만 부르며 JWT는 받지 않음. PDF 바이트는 서버가 발급한 R2 서명 주소로 직접 오감. 계약: `docs/specs/phase6-folder-sync.md` 14.1절 |
 | 컬렉션·태그 | `GET·POST /api/collections` `PATCH·DELETE /api/collections/{id}` `GET /api/tags` `PATCH·DELETE /api/tags/{id}` |
 | 인용 | `GET /api/papers/{id}/cite` `POST /api/cite-preview` `POST /api/csl` `POST /api/citekeys` `GET·POST /api/styles` `GET·DELETE /api/styles/{id}` `POST /api/export` `POST /api/import` |
-| AI | `GET·POST /api/papers/{id}/summary` `GET·POST·DELETE /api/papers/{id}/chat` `POST /api/ai/write` |
+| AI | `GET·POST /api/papers/{id}/summary` `GET·POST·DELETE /api/papers/{id}/chat` `POST /api/ai/write` `POST /api/ai/proofread`(맞춤법 점검 한 조각 → 202 {job}) |
 | AI 질문 · 찾기 · 검증 (3단계) | `GET·DELETE /api/ask?scope=library\|c{id}\|f{id}`(범위 대화 + 색인 상태 — 부를 때 색인 작업 보장 · 벡터 미리 불러오기) `POST /api/ask`(SSE — `{"scope","question"}`, 이벤트는 대화와 같음) `POST /api/find`(202 `{job}` — 결과는 작업 `result`, 24시간) `GET·POST /api/manuscripts/{id}/verify` |
 | 원고 | `GET /api/manuscript-templates` `GET·POST /api/manuscripts` `GET·PATCH·DELETE /api/manuscripts/{id}` `POST /api/export-document` |
 | 논문 양식 | `GET·POST /api/doc-formats` `GET·PATCH·DELETE /api/doc-formats/{id}` `POST /api/doc-formats/import` |
@@ -1423,6 +1434,7 @@ pytest
 - CI(자동 테스트 서버)는 지금 두지 않습니다.
 
 ### 변경 기록
+- 2026-10-17 맞춤법 · 띄어쓰기 점검(작업 종류 `proofread`, 패널 · `Alt+P`, 점검표 한 줄) · 영문/국문 초록 만들기(글쓰기 모드 `abstract_en` · `abstract_ko`): 8장 · 13장 · 16장 API. 명세 [`docs/specs/writing-proofread.md`](docs/specs/writing-proofread.md).
 - 2026-10-17 내보내기 목차 · 그림 목차 · 표 목차 · 각주: 9장 *쪽 번호와 목차*(표지 있는 양식 — 워드 TOC 필드 · 한글 목록, 표지 정보 *넣을 쪽*에서 켜고 끔), 8장 *각주*(`[^1]` · `[^1]: 내용`, [각주] 버튼 · Ctrl+Alt+F), 14 · 15장. 명세 [`docs/specs/export-lists-footnotes.md`](docs/specs/export-lists-footnotes.md).
 - 2026-10-16 서재에 문서 · 사진 넣기: 4장 *문서 · 사진 넣기* 신설(워드 · 한글 · PPT · 엑셀 · 사진 → 서버가 PDF 변환본, 원본은 [원본 받기]), 화면 이름 *PDF 첨부 · 바꾸기 · 추가* → *파일 첨부 · 바꾸기 · 추가*, 유형 *문서*, `source-url` API. 명세 [`docs/specs/library-documents.md`](docs/specs/library-documents.md), 서버 PC 17절.
 - 2026-10-14 전체 오류 점검 반영(기획팀): 16장 구조에 2~6단계 모듈(`jobs` · `worker_api` · `api_runner` · `downloads` · `rag` · `find` · `verify` · `explain` · `translate` · `sync` · `desktop/` · `tools/`) 추가, 서버 동작 변경 절 신설, 2장 *키보드 · 화면 읽기 프로그램* · 5장 읽기 위 막대 560px 두 줄 · 3장 그래프 휴지통 안내 · 4장 태그 색 · 읽기 상태 · 6장 AI 답 링크 새 탭 · 12장 · 13장 단축키 표 반영.

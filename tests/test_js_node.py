@@ -16,6 +16,7 @@
 - syncmode.test.mjs: 선택 동기화 배지 · 폴더/파일 메뉴 · 켜고 끄기 확인 창 문구 · 로컬 항목 읽기/AI 안내 (docs/specs/selective-sync.md 10장 — AC-S61 · S62)
 - writehist.test.mjs: 원고 버전 기록 — 줄 비교 · 접기 · 낱말 차이 · 목록 문구 · 코드 검사 (docs/specs/manuscript-history.md)
 - writecheck.test.mjs: 논문 쓰기 제출 전 점검표 — 양식 · 번호 · 인용 · 글 다듬기 점검 규칙 · 분량 추정 (docs/specs/writing-checklist.md)
+- writeproof.test.mjs: 맞춤법 · 띄어쓰기 점검(범위 · 조각 · 자리 다시 찾기 · 고치기) · 영문/국문 초록 만들기 (docs/specs/writing-proofread.md)
 - Node가 없거나 너무 오래되면(20.10 미만) 건너뛴다(skip) — AC-8.
 - 경로에 한글 · 공백이 있어도 되게 셸을 거치지 않고 리스트 인자로 부른다.
 """
@@ -38,6 +39,7 @@ MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8, "e
             "writeedit": 17,  # writeedit: 논문 쓰기 목록 · 표 · 그림 · 캡션 · 단축키 도움말 · 코드 블록 · JPEG 머리글
             "writeai": 30,  # writeai: AI 글쓰기 결과 넣기(원고가 바뀌었으면 묻기) · 글쓰기 도우미 = 작업(2026-10-16) · 결과 패널(2026-10-17)
             "writenotes": 8,  # writenotes: 각주 [^1] · "[^1]: 내용" 읽기 · [각주] 넣기 (export-lists-footnotes.md)
+            "writeproof": 16,  # writeproof: 맞춤법 점검 범위 · 조각 · 자리 다시 찾기 · 모두 고치기 · 초록 만들기 (writing-proofread.md)
             "syncmode": 30,  # syncmode: 선택 동기화(폴더 · 파일별 PC에만 두기) 화면 결정 함수 · 문구 (AC-S61)
             "writehist": 7,  # writehist: 원고 버전 기록 — 줄 비교 · 접기 · 목록 문구 · 코드 검사 (manuscript-history.md)
             "writecheck": 17}  # writecheck: 논문 쓰기 제출 전 점검표 규칙 · 분량 추정 · 코드 검사 (2026-10-17)

@@ -8,6 +8,7 @@ import { $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, copyText, el, errorToast, esc,
 export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" };
 const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증",
   explain: "쉬운 설명", translate: "선택 번역", translate_paper: "전체 번역" }; // 4단계 (시안 7.3절)
+KIND_LABEL.proofread = "맞춤법 점검"; // 원고 맞춤법 · 띄어쓰기 점검 (docs/specs/writing-proofread.md)
 const XT_VIEW = { explain: "history", translate: "history", translate_paper: "paper" };
 // 아직 끝나지 않은 작업인지 (요약 · 대화 · 설명 · 찾기 화면이 함께 씀)
 export const isActive = (j) => !!j && (j.status === "queued" || j.status === "running");
@@ -447,6 +448,7 @@ export function kindLabel(j) {
 export function jobTitle(j) {
   if (j.kind === "write") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "글쓰기 도우미";
   if (j.kind === "verify") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "인용 검증 (원고가 지워졌어요)";
+  if (j.kind === "proofread") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "맞춤법 점검 (원고가 지워졌어요)";
   if (j.kind === "index") return "서재 색인";
   if (j.kind === "find") return j.question ? `“${j.question.length > 40 ? `${j.question.slice(0, 40)}…` : j.question}”` : "AI로 찾기 (결과가 지워졌어요)";
   if (j.kind === "chat" && !j.paper_id && j.scope) return SCOPE_LABEL[j.scope.type] || "서재 질문";
@@ -456,6 +458,7 @@ export function jobHref(j) {
   if (j.kind === "index") return "#/ask";
   if (j.kind === "find") return `#/ask/find/j${j.id}`;
   if (j.kind === "verify") return j.manuscript_id ? `#/write/${j.manuscript_id}` : "";
+  if (j.kind === "proofread") return j.manuscript_id && j.manuscript_title != null ? `#/write/${Number(j.manuscript_id)}` : "";
   if (j.kind === "chat" && !j.paper_id && j.scope) return j.scope.type === "library" ? "#/ask" : `#/ask/${j.scope.type[0]}${j.scope.id}`;
   // 글쓰기 결과: 그 원고를 열고 결과 창을 띄움 (#/write/원고/j작업 — 2026-10-16 백그라운드 AI)
   if (j.kind === "write") return j.manuscript_id && j.manuscript_title != null ? `#/write/${Number(j.manuscript_id)}/j${Number(j.id)}` : "";

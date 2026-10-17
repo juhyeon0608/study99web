@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 from psycopg.types.json import Jsonb
 
-from . import ai, explain, find, rag, translate, verify
+from . import ai, explain, find, proofread, rag, translate, verify
 from .config import ENGINES, JOB_KINDS, UserSettings, redact
 from .convert import IMAGE_EXTS
 from .db import LOCAL_ONLY_CANCELLED, LOCAL_TEXT_EXTS, PAPER_TRASHED, REP_SHA, REP_SIZE, Library, iso, now_dt
@@ -41,6 +41,11 @@ ROUTE_KIND = {"translate_paper": "translate"}
 EXPLAIN_KINDS = explain.KINDS
 # 전체 번역은 다시 대기 · 잡기 때도 진행(쪽 수)을 남긴다 — 화면이 counts로 번역 보기를 새로 받음 (4단계 6.3절 6번)
 _KEEP_PROGRESS = "progress = case when kind = 'translate_paper' then progress else '{}'::jsonb end"
+# 맞춤법 · 띄어쓰기 점검 (2026-10-17 — proofread.py · docs/specs/writing-proofread.md): 원고 작업, 엔진 순서는 글쓰기 설정을 씀
+ALL_KINDS += ("proofread",)
+ROUTE_KIND["proofread"] = "write"
+DEADLINE_S["proofread"], TIMEOUT_S["proofread"] = 24 * 3600, 600
+MANUSCRIPT_KINDS = ("write", "verify", "proofread")  # 원고 작업 — 작업 보기에 원고 제목 · 번호
 FIND_KEEP_HOURS = 24                 # AI로 찾기 질문 · 결과는 24시간 뒤 비움 (K-11)
 ABS_GRACE_S = 300       # 서버 쪽 절대 기한 = 이번 잡기 + 시간 제한 + 5분 (11.5절)
 MAX_ACTIVE_JOBS = 30
@@ -468,7 +473,7 @@ select j.*, p.title as paper_title, d.name as device_name, m.title as manuscript
   from paperlab.jobs j
   left join paperlab.papers p on p.id = j.paper_id and p.user_id = j.user_id
   left join paperlab.devices d on d.id = j.device_id and d.user_id = j.user_id
-  left join paperlab.manuscripts m on j.kind in ('write', 'verify') and m.user_id = j.user_id
+  left join paperlab.manuscripts m on j.kind in ('write', 'verify', 'proofread') and m.user_id = j.user_id
        and m.id = case when j.params ->> 'manuscript_id' ~ '^[0-9]{1,15}$' then (j.params ->> 'manuscript_id')::bigint end
  where j.user_id = %(uid)s
 """
@@ -527,8 +532,8 @@ def job_view(r: dict, devices: list[dict], free: dict, detail: bool = False) -> 
         "id": r["id"], "kind": r["kind"], "status": r["status"], "runner": r["runner"], "engine": r["engine"],
         "route": r["route"], "route_index": r["route_index"],
         "paper_id": r["paper_id"], "paper_title": r.get("paper_title"),
-        "manuscript_title": r.get("manuscript_title") if r["kind"] in ("write", "verify") else None,
-        "manuscript_id": params.get("manuscript_id") if r["kind"] in ("write", "verify") else None,
+        "manuscript_title": r.get("manuscript_title") if r["kind"] in MANUSCRIPT_KINDS else None,
+        "manuscript_id": params.get("manuscript_id") if r["kind"] in MANUSCRIPT_KINDS else None,
         "scope": params.get("scope") if r["kind"] == "chat" else None,
         "device": {"id": r["device_id"], "name": r["device_name"]} if r.get("device_id") and r.get("device_name") else None,
         "waiting_reason": waiting_reason(r, devices, free),
@@ -543,6 +548,7 @@ def job_view(r: dict, devices: list[dict], free: dict, detail: bool = False) -> 
         "source_text": (params.get("text") or "")[:200] if r["kind"] in EXPLAIN_KINDS else None,
         "page": params.get("page") if r["kind"] in EXPLAIN_KINDS else None,
         "write": write_view(params, r["result"], detail) if r["kind"] == "write" else None,
+        "proof": proofread.view(params) if r["kind"] == "proofread" else None,  # 맞춤법 점검 묶음 · 조각 (점검 패널)
         "result": r["result"],
         "created_at": iso(r["created_at"]), "started_at": iso(r["started_at"]), "finished_at": iso(r["finished_at"]),
     }
@@ -588,7 +594,7 @@ def list_jobs(lib: Library, free: dict, status: str = "active", paper_id: int | 
     if manuscript_id is not None:
         if not valid_id(manuscript_id):
             raise JobError(400, "조건이 올바르지 않아요", "bad_request")
-        cond += " and j.kind in ('write', 'verify') and j.params ->> 'manuscript_id' = %(mid)s"
+        cond += " and j.kind in ('write', 'verify', 'proofread') and j.params ->> 'manuscript_id' = %(mid)s"
     rows = lib._all(_JOB_SELECT + cond + " order by j.created_at desc, j.id desc limit %(limit)s", params)
     total = lib._one("select count(*)::int as n from paperlab.jobs j where j.user_id = %(uid)s" + cond, params)["n"]
     devices = device_rows(lib)
@@ -652,7 +658,7 @@ def sweep(lib: Library) -> None:
     """요청당 최대 10분에 한 번(호출하는 쪽이 정함): 오래된 행 지우기 · 글쓰기 결과 비우기"""
     lib._x("delete from paperlab.jobs where user_id = %s and status in ('succeeded', 'failed', 'cancelled') "
            "and coalesce(finished_at, updated_at) < now() - make_interval(days => %s)", (lib.uid, KEEP_DONE_DAYS))
-    lib._x("update paperlab.jobs set result = null where user_id = %s and kind = 'write' and result is not null "
+    lib._x("update paperlab.jobs set result = null where user_id = %s and kind in ('write', 'proofread') and result is not null "
            "and finished_at < now() - make_interval(hours => %s)", (lib.uid, WRITE_RESULT_HOURS))
     lib._x("update paperlab.jobs set params = '{}'::jsonb, result = null where user_id = %s and kind = 'find' "
            "and (params <> '{}'::jsonb or result is not null) and finished_at < now() - make_interval(hours => %s)",
@@ -808,6 +814,8 @@ def _apply(lib: Library, job: dict, parsed: dict, model: str):
         return verify.apply_results(lib, job, parsed["results"])
     if kind in EXPLAIN_KINDS:
         return {"explanation_id": explain.save(lib, job, parsed["result"], model)}
+    if kind == "proofread":  # 고칠 곳 목록 — 원고는 바꾸지 않음(화면에서 사용자가 고침)
+        return proofread.apply_result(params, parsed)
     text = parsed["text"]
     if len(text.encode("utf-8")) > RESULT_TEXT_MAX:
         raise ValueError("too large")
@@ -951,6 +959,8 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
         return find.summary_request(params.get("question") or "", params.get("candidates") or [])
     if job["kind"] in EXPLAIN_KINDS:  # 4단계: 쪽 문맥은 지금 page_texts에서
         return explain.build_request(lib, job["paper_id"], params)[:2]
+    if job["kind"] == "proofread":
+        return proofread.build_request(params)
     src = paper_source(lib, job["paper_id"])
     if not src:
         raise LookupError("paper gone")
@@ -1001,6 +1011,8 @@ def cli_task(lib: Library, job: dict) -> dict | None:
                 schema = find.QUERY_SCHEMA
             elif job["kind"] == "explain":
                 schema = explain.EXPLAIN_SCHEMA
+            elif job["kind"] == "proofread":
+                schema = proofread.SCHEMA
     except ai.AIError as e:
         _end(lib, job, "failed", "input_too_large" if e.code == "input_too_large" else "bad_input", str(e))
         return None
@@ -1050,6 +1062,8 @@ def parse_result(job: dict, text: str, structured=None) -> dict:
         return {"results": verify.parse_results(text, structured)}
     if job["kind"] in EXPLAIN_KINDS:
         return explain.parse(job["kind"], text, structured)
+    if job["kind"] == "proofread":
+        return proofread.parse(text, structured, params)
     return ai.parse_text_result(job["kind"], text, structured)
 
 

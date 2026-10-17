@@ -41,6 +41,7 @@ from .api_runner import ApiRunner
 from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
 from . import extsources
 from . import figures
+from . import proofread  # 맞춤법 · 띄어쓰기 점검 작업 (2026-10-17)
 from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
@@ -2477,6 +2478,17 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                   "context": str(data.get("context") or "")[:6000], "keys": keys, "manuscript_id": mid,
                   **write_anchor(data)}
         view, _ = new_job(ctx, "write", params, None)
+        return JSONResponse({"job": view}, status_code=202)
+
+    @app.post("/api/ai/proofread")
+    def ai_proofread(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """맞춤법 · 띄어쓰기 점검 한 조각 = 백그라운드 작업 202 {job} (2026-10-17 — proofread.py · writing-proofread.md).
+        화면이 범위를 4000자 안쪽 조각으로 나눠 조각마다 부르고, 결과(고칠 곳 목록)는 원고에 넣지 않고 점검 패널이 보여 준다"""
+        try:
+            params = proofread.clean_params(data)
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        view, _ = new_job(ctx, "proofread", params, None)
         return JSONResponse({"job": view}, status_code=202)
 
     def write_anchor(data: dict) -> dict:

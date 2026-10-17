@@ -23,7 +23,7 @@ from typing import Callable
 
 from psycopg.types.json import Jsonb
 
-from . import explain, find, jobs, rag, translate, verify
+from . import explain, find, jobs, proofread, rag, translate, verify
 from .ai import AIError, PaperContext
 from .db import Database, DBUnavailable, actor_claims
 from .storage import NotFound, UserStorage
@@ -256,6 +256,10 @@ class ApiRunner:
             elif job["kind"] in jobs.EXPLAIN_KINDS:  # 결과가 틀리면 bad_output(폴백 없음)
                 parsed = _collect(ai.complete(request[0], request[1], engine=engine, schema=request[2],
                                               schema_name="explanation"), progress)
+                parsed = jobs.parse_result(job, parsed["text"])
+            elif job["kind"] == "proofread":  # 맞춤법 점검: 고칠 곳 JSON (원문에 없는 · 고치면 안 되는 자리는 버림)
+                parsed = _collect(ai.complete(*proofread.build_request(params), engine=engine, schema=proofread.SCHEMA,
+                                              schema_name="proofread"), progress)
                 parsed = jobs.parse_result(job, parsed["text"])
             elif job["kind"] == "find":
                 parsed = self._find(ai, engine, uid, job, settings, progress)
