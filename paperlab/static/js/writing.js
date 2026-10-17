@@ -25,6 +25,7 @@ import {
 import {
   applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
 } from "./writetools.js";
+import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles,
   popupMenu, purifyMd, store, toast,
@@ -411,6 +412,7 @@ export async function openManuscript(main, id) {
         title="참고 패널 (Alt+R)">${ICON_REF}참고</button>
       <button type="button" class="btn sm" data-verify title="${VERIFY_TITLE}">${ICON_VERIFY}<span>인용 검증</span></button>
       <span class="spacer"></span>
+      <button type="button" class="btn sm" data-history aria-haspopup="dialog" aria-keyshortcuts="Alt+H" title="버전 기록 — 지난 버전과 비교 · 되돌리기 · 지금 버전 저장 (Alt+H)">기록</button>
       <!-- '?'만으로는 단축키 도움말인 줄 몰라서(2026-10-17 사용자 지적) 글자로 보이게 -->
       <button type="button" class="btn sm" data-shortcuts title="단축키 · 서식 도움말 (${MAC ? "⌘" : "Ctrl"}+/)" aria-keyshortcuts="Control+/">⌨ 단축키</button>
       <div class="seg" data-view><button data-v="edit">편집</button><button data-v="split">나란히</button><button data-v="preview">미리보기</button></div>
@@ -633,6 +635,7 @@ export async function openManuscript(main, id) {
   // AI 글쓰기 결과 (2026-10-16 백그라운드 AI): 진행 중 · 넣지 않은 결과 단추 + 알림 [열기]로 온 주소(#/write/원고/j작업)
   W.ai = aiResultsBar(view, ta, m);
   openAiJobFromHash(m, ta);
+  historyTools(view, { mid: m.id, ta, flush: flushWriter }); // [기록] · Alt+H (docs/specs/manuscript-history.md)
 }
 
 // ------------------------------------------------------------------ 논문 양식 · 표지 정보
@@ -1446,6 +1449,7 @@ async function applyAiResult(job, text, ta) {
       return applyAiResult(job, text, ta);
     }
   }
+  if (W.m) saveVersion(W.m.id, ta.value); // 넣기 전 원고를 버전 기록에 ('AI 넣기 전')
   ta.focus();
   ta.setSelectionRange(plan.from, plan.to);
   insertText(ta, next);
@@ -1485,6 +1489,7 @@ function aiLostDialog(text, ta, insert) {
     $("[data-copy]", foot).onclick = () => { copyText(text); m.close(); };
     $("[data-cursor]", foot).onclick = () => {
       const at = ta.selectionEnd; // 고른 글을 덮어쓰지 않게 커서 뒤에
+      if (W.m) saveVersion(W.m.id, ta.value); // 넣기 전 원고를 버전 기록에 ('AI 넣기 전')
       ta.focus();
       ta.setSelectionRange(at, at);
       insertText(ta, insertionText(ta.value, at, text, true));

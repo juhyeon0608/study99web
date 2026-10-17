@@ -12,6 +12,7 @@
 - writeedit.test.mjs: 논문 쓰기 목록(Enter · Tab) · 표 · 그림 · 캡션 번호 · 상호 참조 · 단축키 도움말 (docs/specs/writing-figures-tables.md)
 - writeai.test.mjs: AI 글쓰기 결과 넣기 — 원고 지문 · 넣을 자리 다시 찾기 · 바뀌는 부분 (2026-10-16 백그라운드 AI)
 - syncmode.test.mjs: 선택 동기화 배지 · 폴더/파일 메뉴 · 켜고 끄기 확인 창 문구 · 로컬 항목 읽기/AI 안내 (docs/specs/selective-sync.md 10장 — AC-S61 · S62)
+- writehist.test.mjs: 원고 버전 기록 — 줄 비교 · 접기 · 낱말 차이 · 목록 문구 · 코드 검사 (docs/specs/manuscript-history.md)
 - Node가 없거나 너무 오래되면(20.10 미만) 건너뛴다(skip) — AC-8.
 - 경로에 한글 · 공백이 있어도 되게 셸을 거치지 않고 리스트 인자로 부른다.
 """
@@ -33,7 +34,8 @@ MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8, "e
             "filetypes": 5,  # filetypes: 서재에 문서 · 이미지 넣기(받는 형식 · 형식 배지)
             "writeedit": 17,  # writeedit: 논문 쓰기 목록 · 표 · 그림 · 캡션 · 단축키 도움말 · 코드 블록 · JPEG 머리글
             "writeai": 14,  # writeai: AI 글쓰기 결과 넣기(원고가 바뀌었으면 묻기) · 글쓰기 도우미 = 작업(2026-10-16)
-            "syncmode": 30}  # syncmode: 선택 동기화(폴더 · 파일별 PC에만 두기) 화면 결정 함수 · 문구 (AC-S61)
+            "syncmode": 30,  # syncmode: 선택 동기화(폴더 · 파일별 PC에만 두기) 화면 결정 함수 · 문구 (AC-S61)
+            "writehist": 7}  # writehist: 원고 버전 기록 — 줄 비교 · 접기 · 목록 문구 · 코드 검사 (manuscript-history.md)
 
 
 def _node_version(node: str) -> tuple[int, ...] | None:
