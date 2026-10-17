@@ -164,11 +164,12 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
     count.fig = 0;
     count.tbl = 0;
   };
+  const order = { fig: 0, tbl: 0, eq: 0 }; // 원고 안 순서(0부터) — 미리보기 클릭 → 편집기 자리 찾기용. 번호(2-1)와 따로
   const numbered = (kind, label, body) => {
     const n = chapterNumbers && chap.cur ? `${chap.cur}-${++count[kind]}` : ++count[kind];
     if (label && !labels.has(label)) labels.set(label, { kind, n });
     const head = { text: captionLabel(kind, n, ko), b: true };
-    return { n, caption: body.length ? [head, { text: " " }, ...body] : [head] };
+    return { n, index: order[kind]++, caption: body.length ? [head, { text: " " }, ...body] : [head] };
   };
   const capRuns = (s) => inline(window.marked.Lexer.lexInline(s));
   const nextIsTable = (tokens, k) => (tokens.slice(k + 1).find((x) => x.type !== "space") || {}).type === "table";
@@ -178,8 +179,8 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
     if (depth) return false;
     const fig = figureInfo(t.text);
     if (fig) {
-      const { n, caption } = numbered("fig", fig.label, capRuns(fig.alt));
-      blocks.push({ type: "figure", src: fig.src, alt: fig.alt, number: n, caption });
+      const { n, index, caption } = numbered("fig", fig.label, capRuns(fig.alt));
+      blocks.push({ type: "figure", src: fig.src, alt: fig.alt, number: n, index, caption });
       return true;
     }
     const cap = captionInfo(t.text);
@@ -224,8 +225,8 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
       } else if (t.type === "table") {
         const cap = pendingCap;
         pendingCap = null;
-        const { n, caption } = numbered("tbl", cap ? cap.label : "", cap ? capRuns(cap.text) : []);
-        const block = { type: "table", header: true, align: t.align || [], number: n, caption,
+        const { n, index, caption } = numbered("tbl", cap ? cap.label : "", cap ? capRuns(cap.text) : []);
+        const block = { type: "table", header: true, align: t.align || [], number: n, index, caption,
           rows: [t.header.map((c) => inline(c.tokens)), ...t.rows.map((r) => r.map((c) => inline(c.tokens)))] };
         if (cap) captioned.add(block);
         blocks.push(block);
@@ -293,9 +294,9 @@ function blocksToHtml(blocks) {
       case "heading": return `<h${b.level + 1} data-h="${headingIndex++}">${r()}</h${b.level + 1}>`;
       case "list_item": return `<p class="doc-li" style="padding-left:${1.4 + b.depth * 1.2}em;text-indent:-1em">${b.ordered ? `${Number(b.number)}.` : ["•", "◦", "▪"][b.depth % 3]} ${r()}</p>`;
       // 그림: 아래 캡션 · 표: 위 캡션 (누르면 편집기에서 그 그림 줄 · 표 고치기 창)
-      case "figure": return `<figure class="doc-fig" data-fig-i="${Number(b.number) - 1}" role="button" tabindex="0" title="눌러서 편집기에서 보기">`
+      case "figure": return `<figure class="doc-fig" data-fig-i="${Number(b.index)}" role="button" tabindex="0" title="눌러서 편집기에서 보기">`
         + `<img data-fig="${esc(b.src)}" alt="${esc(b.alt || "")}"><figcaption>${runsHtml(b.caption || [], notes)}</figcaption></figure>`;
-      case "table": return `<div class="doc-tbl" data-tbl-i="${Number(b.number) - 1}" role="button" tabindex="0" title="눌러서 표 고치기">`
+      case "table": return `<div class="doc-tbl" data-tbl-i="${Number(b.index)}" role="button" tabindex="0" title="눌러서 표 고치기">`
         + `<p class="doc-cap">${runsHtml(b.caption || [], notes)}</p><table>${b.rows.map((row, ri) => `<tr>${row.map((cell, ci) => {
           const tag = ri === 0 ? "th" : "td";
           return `<${tag} style="text-align:${esc(b.align[ci] || "left")}">${runsHtml(cell, notes)}</${tag}>`;
