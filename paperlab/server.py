@@ -34,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__, citations, compose, convert, csl_style, doc_formats, downloads, explain, find, format_import, jobs, \
-    pdf, rag, sync, translate, verify, worker_api, writer
+    pdf, rag, sync, translate, verify, versions, worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, WRITE_MODES, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
@@ -3052,7 +3052,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.patch("/api/manuscripts/{mid}")
     def patch_manuscript(mid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
-        if not ctx.lib.get_manuscript(mid):
+        m = ctx.lib.get_manuscript(mid)
+        if not m:
             raise HTTPException(404, "원고를 찾을 수 없어요")
         if "content" in data and "title" not in data:
             data["title"] = _md_title(data["content"] or "") or None
@@ -3063,6 +3064,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 data["cover"] = doc_formats.validate_cover(data["cover"])
             except doc_formats.FormatError as e:
                 raise HTTPException(400, str(e)) from e
+        if "content" in data:  # 버전 기록: 10분마다 덮어쓰기 전 글 (docs/specs/manuscript-history.md)
+            versions.on_patch(ctx.lib, m, data["content"], lambda: db_room(ctx))
         ctx.lib.update_manuscript(mid, data)
         return {"ok": True, "updated_at": ctx.lib.get_manuscript(mid)["updated_at"]}
 
@@ -3078,6 +3081,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         for k in keys:
             ctx.after_commit.append(lambda k=k: ctx.storage.delete_quietly(k))
         return {"ok": True}
+
+    # 원고 버전 기록 /api/manuscripts/{mid}/versions… (docs/specs/manuscript-history.md)
+    def db_room(ctx: RequestCtx) -> bool:
+        return system_sizes(ctx)["size"] < int(config.db_limit_bytes * DB_LEVEL)
+
+    versions.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, db_room=db_room, md_title=_md_title))
 
     # -------------------------------------------------------- 원고 그림 (docs/specs/writing-figures-tables.md)
     @app.post("/api/manuscripts/{mid}/figures")
