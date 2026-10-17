@@ -1754,3 +1754,34 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .panel .tabs button[data-local-off] { color: var(--text-3); }
 .ask-local-note { margin: 6px 0 0; }
 .detail-sync { display: flex; flex-wrap: wrap; gap: 4px; margin: 2px 0 6px; }
+
+/* ---------------- 논문 쓰기 제출 전 점검표 (docs/specs/writing-checklist.md) ---------------- */
+/* 편집기 위에 겹쳐 뜨는 패널(입력을 막지 않음 — 모달 아님). 위치 --ck-top = 편집 칸 위 끝 (writecheckui.js) */
+.ck-badge { display: inline-block; min-width: 18px; height: 18px; margin-left: 5px; padding: 0 5px; border-radius: 9px; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.ck-badge[hidden] { display: none; }
+.ck-badge[data-tone="must"] { background: var(--danger-soft); color: var(--danger); }
+.ck-badge[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); }
+.check-pane {
+  position: fixed; z-index: 90; right: 16px; top: var(--ck-top, 120px); width: 380px; max-width: calc(100vw - 32px);
+  max-height: calc(100vh - var(--ck-top, 120px) - 48px); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-lg);
+}
+.check-pane[hidden] { display: none; }
+.check-pane:focus { outline: none; }
+.check-pane:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.check-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px 4px 14px; }
+.check-sum { flex: none; padding: 0 14px 8px; border-bottom: 1px solid var(--border); }
+.check-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 12px 12px; }
+.check-ok { padding: 18px 4px; color: var(--success); font-weight: 600; }
+.check-sev { display: flex; align-items: center; gap: 6px; margin: 10px 0 4px; font-size: 13px; font-weight: 700; }
+.check-sec[data-sev="must"] .check-sev { color: var(--danger); }
+.check-sec[data-sev="warn"] .check-sev { color: var(--warn); }
+.check-n { font-size: 11px; padding: 0 6px; border-radius: 8px; background: var(--surface-3); color: var(--text-2); }
+.check-list { list-style: none; margin: 0; padding: 0; }
+.check-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; padding: 6px 2px; border-top: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; }
+.check-item:first-child { border-top: 0; }
+.check-tag { flex: none; font-size: 10.5px; padding: 0 5px; border-radius: 4px; background: var(--surface-3); color: var(--text-2); }
+.check-msg { flex: 1 1 200px; min-width: 0; overflow-wrap: anywhere; }
+.check-acts { display: inline-flex; gap: 4px; margin-left: auto; }
+.check-acts .btn { padding: 1px 8px; }
+.check-note { margin: 12px 2px 0; line-height: 1.5; }
+@media (max-width: 760px) { .check-pane { right: 8px; left: 8px; width: auto; max-width: none; } }
