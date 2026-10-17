@@ -425,8 +425,12 @@ COVER_DEFAULTS: dict[str, Any] = {
     "degree": "master", "degree_field": "", "title_ko": "", "title_en": "", "subtitle": "",
     "graduation": "", "approval": "", "school": "인하대학교 제조혁신전문대학원", "department": "",
     "name": "", "spaced_name": True, "advisors": [], "committee": [],
-    "include": {"front": True, "inner": True, "approval": True},
+    # 넣을 쪽: 표지 · 속표지 · 인정서 + 목차 · 그림 목차 · 표 목차(toc · lof · lot), 목차에 항(####)까지(toc_h4)
+    # — 목록은 doc_lists (docs/specs/export-lists-footnotes.md)
+    "include": {"front": True, "inner": True, "approval": True, "toc": True, "lof": True, "lot": True,
+                "toc_h4": False},
 }
+INCLUDE_KEYS = ("front", "inner", "approval", "toc", "lof", "lot", "toc_h4")
 _COVER_TEXT_KEYS = ("degree_field", "title_ko", "title_en", "subtitle", "school", "department", "name")
 _YM = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -459,7 +463,7 @@ def validate_cover(cover: Any) -> dict:
         elif key == "include":
             if not isinstance(value, dict):
                 raise FormatError(path, "객체여야 해요")
-            out[key] = {k: _bool(value[k], f"{path}.{k}") for k in ("front", "inner", "approval") if k in value}
+            out[key] = {k: _bool(value[k], f"{path}.{k}") for k in INCLUDE_KEYS if k in value}
     if len(out.get("advisors", [])) > 2:
         raise FormatError("cover.advisors", "지도교수는 1명 또는 2명(공동지도)이에요")
     limit = 5 if out.get("degree", "master") == "doctor" else 3

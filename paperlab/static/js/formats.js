@@ -942,8 +942,18 @@ export function formatManagerDialog({ selected = "default" } = {}) {
 const COVER_DEFAULTS = {
   degree: "master", degree_field: "", title_ko: "", title_en: "", subtitle: "", graduation: "", approval: "",
   school: DEFAULT_SCHOOL, department: "", name: "", spaced_name: true, advisors: [], committee: [],
-  include: { front: true, inner: true, approval: true },
+  // 목차 · 그림 목차 · 표 목차(toc · lof · lot)와 목차에 항(####)까지(toc_h4) — 서버 doc_lists (docs/specs/export-lists-footnotes.md)
+  include: { front: true, inner: true, approval: true, toc: true, lof: true, lot: true, toc_h4: false },
 };
+
+// 표지 양식으로 워드 · 한글을 내보낸 뒤 토스트에 붙이는 목차 안내
+export function listsNotice(format, cover) {
+  const inc = coverWithDefaults(cover).include;
+  if (!inc.toc && !inc.lof && !inc.lot) return "목차는 워드(참조 → 목차) · 한글(도구 → 차례/색인)로 넣어 주세요";
+  return format === "docx"
+    ? "워드에서 열 때 필드를 업데이트할지 물으면 [예]를 눌러 목차 쪽 번호를 맞춰 주세요"
+    : "목차 쪽 번호는 어림값이에요. 한글에서 쪽을 확인해 주세요";
+}
 
 export function coverWithDefaults(cover) {
   const out = clone(COVER_DEFAULTS);
@@ -1138,7 +1148,12 @@ export function coverDialog({ manuscriptId, cover, format, titleFallback = "" })
             <label class="check"><input type="checkbox" name="include_front" ${c.include.front ? "checked" : ""}> ${pageNames.front}</label>
             <label class="check"><input type="checkbox" name="include_inner" ${c.include.inner ? "checked" : ""}> ${pageNames.inner}</label>
             <label class="check"><input type="checkbox" name="include_approval" ${c.include.approval ? "checked" : ""}> ${pageNames.approval}</label>
+            <label class="check"><input type="checkbox" name="include_toc" ${c.include.toc ? "checked" : ""}> 목차</label>
+            <label class="check"><input type="checkbox" name="include_lof" ${c.include.lof ? "checked" : ""}> 그림 목차</label>
+            <label class="check"><input type="checkbox" name="include_lot" ${c.include.lot ? "checked" : ""}> 표 목차</label>
+            <label class="check" title="목차에 #### 항 제목까지 넣어요 (끄면 장 · 절까지)"><input type="checkbox" name="include_toc_h4" ${c.include.toc_h4 ? "checked" : ""}> 목차에 항까지</label>
           </div>
+          <div class="hint">목차 · 그림 목차 · 표 목차는 ${pageNames.approval} 뒤, 본문 앞에 들어가요. 그림 · 표가 없으면 그 목차는 빠져요.</div>
         </fieldset>
       </div>
       <aside class="cover-preview" aria-label="문구 미리보기">
@@ -1218,7 +1233,8 @@ export function coverDialog({ manuscriptId, cover, format, titleFallback = "" })
         spaced_name: q("spaced_name").checked,
         advisors: co ? [a1, a2].filter(Boolean) : a1 ? [a1] : [],
         committee: Array.from({ length: memberCount() }, (_, i) => String(members[i] || "").trim()),
-        include: { front: q("include_front").checked, inner: q("include_inner").checked, approval: q("include_approval").checked },
+        include: { front: q("include_front").checked, inner: q("include_inner").checked, approval: q("include_approval").checked,
+          toc: q("include_toc").checked, lof: q("include_lof").checked, lot: q("include_lot").checked, toc_h4: q("include_toc_h4").checked },
       };
       return strict ? { cover: out, error } : out;
     }
