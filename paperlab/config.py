@@ -12,14 +12,24 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-ENGINES = ("claude", "codex", "gemini")
+ENGINES = ("claude", "codex", "gemini", "agy")
+# API 키로도 실행할 수 있는 엔진 (ai.ENGINE_KEYS). agy(Google Antigravity CLI)는 사용자 PC의 CLI 워커로만 — API 칸 없음
+API_ENGINES = ("claude", "codex", "gemini")
+# 화면 · 오류 문구의 엔진 이름 (id는 그대로 — DB · 워커 계약)
+ENGINE_LABELS = {"claude": "claude", "codex": "codex", "gemini": "gemini", "agy": "Antigravity"}
+# agy 모델은 사용자 PC가 'agy models'로 알려 준 목록에서 고른다(서버 고정 목록 없음 — 모양만 검사).
+# "default" = PaperLab 기본(AGY_DEFAULT_MODEL — 그 PC 목록에 없으면 워커가 --model 없이 agy 기본 모델로)
+AGY_DEFAULT_MODEL = "gemini-3.8-flash-medium"
+AGY_MODEL_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
+# PC CLI 생각 깊이 (agy --effort). "default" = 플래그 없음(agy 기본)
+CLI_EFFORT_CHOICES = {"agy": ("default", "low", "medium", "high", "xhigh", "max")}
 # 작업별 엔진 설정 (3단계: AI로 찾기 · 인용 검증 — K-15, 4단계: 쉬운 설명 · 번역(선택 · 전체 공용) — K-10)
 JOB_KINDS = ("summary", "chat", "write", "find", "verify", "explain", "translate")
 # 번역 대상 언어 (4단계 K-9 — translate.LANGS). 쉬운 설명은 summary_language
 TRANSLATE_LANGS = {"ko": "한국어", "en": "English", "ja": "日本語", "zh": "简体中文"}
 # 2단계 엔진 라우팅 (명세 9.4, 확정 U1: 기본은 모두 claude). ai_engine은 더 이상 쓰지 않는다(읽지도 저장하지도 않음 — AC-31)
 DEFAULT_ROUTING = {k: ["claude"] for k in JOB_KINDS}
-CLI_MODEL_CHOICES = {"claude": ("default", "opus", "sonnet", "haiku"), "codex": ("default",), "gemini": ("default",)}
+CLI_MODEL_CHOICES = {"claude": ("default", "opus", "sonnet", "haiku"), "codex": ("default",), "gemini": ("default",)}  # agy: 위 AGY_MODEL_RE
 AI_KEY_NAMES = ("anthropic_api_key", "openai_api_key", "google_api_key")
 LAST_ERROR_KEYS = tuple(f"{k}_last_error" for k in AI_KEY_NAMES)  # 서버만 씀 (PUT으로 못 바꿈 — 7.3절)
 _MODEL_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")
@@ -27,6 +37,7 @@ _MODEL_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")
 DEFAULT_SETTINGS: dict = {
     "ai_routing": DEFAULT_ROUTING,
     "cli_models": {e: "default" for e in ENGINES},
+    "cli_efforts": {e: "default" for e in CLI_EFFORT_CHOICES},
     "api_models": {},  # {"codex": "<OpenAI 모델 id>", "gemini": "<Gemini 모델 id>"} — 비면 ai.API_MODEL_DEFAULTS
     **{k: None for k in LAST_ERROR_KEYS},
     "anthropic_api_key": "",
@@ -316,7 +327,7 @@ class UserSettings:
                 self._values[k] = v
         # 저장 형식이 틀린 값(옛 버전 · 손으로 고친 값)은 기본값으로 읽는다
         for k, check in (("ai_routing", normalize_routing), ("cli_models", normalize_cli_models),
-                         ("api_models", normalize_api_models)):
+                         ("cli_efforts", normalize_cli_efforts), ("api_models", normalize_api_models)):
             try:
                 self._values[k] = check(self._values[k])
             except ValueError:
@@ -361,18 +372,33 @@ def normalize_routing(value) -> dict:
         order = value.get(kind, DEFAULT_ROUTING[kind])
         if (not isinstance(order, list) or not 1 <= len(order) <= 3 or any(e not in ENGINES for e in order)
                 or len(set(order)) != len(order)):
-            raise ValueError("작업별 엔진은 claude · codex · gemini 중 1~3개를 겹치지 않게 골라 주세요")
+            raise ValueError("작업별 엔진은 claude · codex · gemini · Antigravity 중 1~3개를 겹치지 않게 골라 주세요")
         out[kind] = list(order)
     return out
 
 
 def normalize_cli_models(value) -> dict:
+    """PC CLI 모델. claude · codex · gemini는 고정 목록, agy는 'default' 또는 PC가 알려 준 모양의 id(영소문자 · 숫자 · . _ -)"""
     if not isinstance(value, dict) or any(k not in ENGINES for k in value):
         raise ValueError("PC 모델 설정이 올바르지 않아요")
     out = {e: str(value.get(e) or "default") for e in ENGINES}
     for e, v in out.items():
-        if v not in CLI_MODEL_CHOICES[e]:
+        if e == "agy":
+            if v != "default" and not AGY_MODEL_RE.fullmatch(v):
+                raise ValueError("PC의 Antigravity 모델 이름이 올바르지 않아요")
+        elif v not in CLI_MODEL_CHOICES[e]:
             raise ValueError(f"PC의 {e} 모델은 {' · '.join(CLI_MODEL_CHOICES[e])} 중에서 골라 주세요")
+    return out
+
+
+def normalize_cli_efforts(value) -> dict:
+    """PC CLI 생각 깊이 (지금은 agy만 — --effort)"""
+    if not isinstance(value, dict) or any(k not in CLI_EFFORT_CHOICES for k in value):
+        raise ValueError("PC 생각 깊이 설정이 올바르지 않아요")
+    out = {e: str(value.get(e) or "default") for e in CLI_EFFORT_CHOICES}
+    for e, v in out.items():
+        if v not in CLI_EFFORT_CHOICES[e]:
+            raise ValueError(f"PC의 {ENGINE_LABELS[e]} 생각 깊이는 {' · '.join(CLI_EFFORT_CHOICES[e])} 중에서 골라 주세요")
     return out
 
 
@@ -411,6 +437,8 @@ def split_settings_changes(changes: dict) -> tuple[dict, dict]:
                 value = normalize_routing(value)
             elif key == "cli_models":
                 value = normalize_cli_models(value)
+            elif key == "cli_efforts":
+                value = normalize_cli_efforts(value)
             elif key == "api_models":
                 value = normalize_api_models(value)
             elif key == "translate_language" and value not in TRANSLATE_LANGS:

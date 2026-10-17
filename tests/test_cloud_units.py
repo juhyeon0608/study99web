@@ -173,7 +173,7 @@ def test_ai_routes_only_user_keys_and_user_pcs(monkeypatch):
 
 
 def test_server_never_spawns_ai_cli():
-    """2026-10-16 AI 경로: 서버 코드(paperlab/*.py)는 claude · codex · gemini CLI를 실행하지 않는다.
+    """2026-10-16 AI 경로: 서버 코드(paperlab/*.py)는 claude · codex · gemini · agy(Antigravity) CLI를 실행하지 않는다.
     프로세스를 여는 곳은 정해진 도구뿐(pg_dump · LibreOffice 변환 · icacls)"""
     spawners = set()
     for f in PKG.glob("*.py"):
@@ -181,8 +181,8 @@ def test_server_never_spawns_ai_cli():
         if re.search(r"\bsubprocess\.(run|Popen|call|check_output|check_call)\b|\bos\.(system|popen|spawn\w*|exec\w*)\(", text):
             spawners.add(f.name)
         for m in re.finditer(r"subprocess\.(?:run|Popen|call|check_output|check_call)\(([^\n]*)", text):
-            assert not re.search(r"claude|codex|gemini", m.group(1), re.I), (f.name, m.group(0))
-        assert not re.search(r"""which\(\s*["'](?:claude|codex|gemini)""", text), f.name
+            assert not re.search(r"claude|codex|gemini|\bagy\b|antigravity", m.group(1), re.I), (f.name, m.group(0))
+        assert not re.search(r"""which\(\s*["'](?:claude|codex|gemini|agy|antigravity)""", text, re.I), f.name
     assert spawners <= {"admin.py", "convert.py", "serve.py"}, spawners
 
 

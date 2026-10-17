@@ -8,7 +8,7 @@
 // - 로컬 항목 AI(선택 동기화 7.4 · 9.4절): 잡기 본문 caps: ["local_text"]. 작업에 local 이 있으면 main 에 로컬 본문을 청하고(localText 주입 —
 //   entry.js 가 main 메시지로, 120초) 프롬프트의 표지를 바꾼 뒤에만 CLI 를 실행. 본문은 로그에 남기지 않음(작업 id · 결과 코드만).
 
-const { ENGINES, DEFAULT_SLOTS, DEFAULT_TOTAL } = require('./engines');
+const { ENGINES, LABELS, DEFAULT_SLOTS, DEFAULT_TOTAL } = require('./engines');
 const { redact } = require('../lib/redact');
 const { nullLogger } = require('../lib/log');
 const LT = require('./local-text');
@@ -83,8 +83,9 @@ class Worker {
       engines: ENGINES.map((n) => {
         const p = this.probed[n] || {};
         const s = this.settings.engines[n];
-        return { name: n, enabled: s.enabled, slots: s.slots, installed: !!p.installed, version: p.version || '', logged_in: !!p.logged_in,
-          outdated: !!p.outdated, path: p.path || '', source: s.path ? 'custom' : 'auto', reason: p.reason || '' };
+        return { name: n, label: LABELS[n] || n, enabled: s.enabled, slots: s.slots, installed: !!p.installed, version: p.version || '', logged_in: !!p.logged_in,
+          outdated: !!p.outdated, path: p.path || '', source: s.path ? 'custom' : 'auto', reason: p.reason || '',
+          models: Array.isArray(p.models) ? p.models.length : 0 };
       }),
       running: [...this.running.values()].map((e) => ({ id: e.id, kind: e.kind, engine: e.engine, startedAt: e.startedAt })),
       lastProbeAt: Number.isFinite(this.lastProbe) ? this.lastProbe : null,
@@ -101,11 +102,16 @@ class Worker {
     return this.settings.engines[name].enabled && p && p.installed && p.logged_in && !p.outdated;
   }
 
-  /** hello 로 광고할 엔진 — 켠 · 설치된 엔진만. 버전이 낮으면 로그인 안 됨으로 광고해 작업이 오지 않게 */
+  /**
+   * hello 로 광고할 엔진 — 켠 · 설치된 엔진만. 버전이 낮으면 로그인 안 됨으로 광고해 작업이 오지 않게.
+   * agy 는 'agy models' 로 받은 모델 목록(id · 표시 이름)도 — 웹 설정의 모델 고르기에 쓴다
+   */
   advertised() {
     return ENGINES.filter((n) => this.settings.engines[n].enabled && this.probed[n] && this.probed[n].installed).map((n) => {
       const p = this.probed[n];
-      return { name: n, version: p.version || '', logged_in: !!p.logged_in && !p.outdated, slots: this.settings.engines[n].slots };
+      const out = { name: n, version: p.version || '', logged_in: !!p.logged_in && !p.outdated, slots: this.settings.engines[n].slots };
+      if (n === 'agy') out.models = Array.isArray(p.models) ? p.models.map((m) => ({ id: m.id, label: m.label })) : [];
+      return out;
     });
   }
 
@@ -334,7 +340,7 @@ class Worker {
     if (!res) {
       try {
         res = await this.runTask(task, { resolved: p.resolved, version: p.version, signal: e.ac.signal, workRoot: this.workRoot,
-          env: this.env, onPartial: (t) => { e.partial = t; } });
+          env: this.env, models: p.models, log: this.log, onPartial: (t) => { e.partial = t; } });
       } catch (err) {
         this.log.error('실행 오류', { job: e.id, error: err && err.message });
         res = { outcome: 'failed', error_code: 'cli_exit', error: 'PC 앱이 CLI를 실행하지 못했어요', stats: {} };
@@ -390,7 +396,7 @@ class Worker {
       try {
         const r = await this.api.post(`/api/worker/jobs/${e.id}/result`, body, { timeout: 120000 });
         this.log.info('작업 결과', { job: e.id, outcome: body.outcome, error_code: body.error_code, status: r && r.status,
-          ms: body.stats.duration_ms, exit: body.stats.exit_code });
+          ms: body.stats.duration_ms, exit: body.stats.exit_code, ...(body.stats.usage ? { tokens: body.stats.usage.total_tokens } : {}) });
         if (RELOCATE.has(body.error_code)) { this.needProbe = true; this.needHello = true; }
         this.emit({ type: 'job-finished', id: e.id, kind: e.kind, engine: e.engine, outcome: body.outcome, error_code: body.error_code, status: r && r.status });
         return;
@@ -421,7 +427,7 @@ class Worker {
     const entries = [...this.running.values()].filter((e) => !e.lost);
     if (!entries.length || this.stopped) { this.hbMs = 0; return; }
     const items = entries.slice(0, 16).map((e) => ({ id: e.id, lease_token: e.task.lease_token,
-      progress: { message: `${e.engine} 실행 중`, ...(e.partial ? { partial_text: e.partial } : {}) } }));
+      progress: { message: `${LABELS[e.engine] || e.engine} 실행 중`, ...(e.partial ? { partial_text: e.partial } : {}) } }));
     try {
       const r = await this.api.post('/api/worker/heartbeat', { jobs: items });
       this.online();

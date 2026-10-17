@@ -105,6 +105,7 @@ function execOnce(resolved, args, { cwd, env, stdin = '', timeoutMs, signal, onL
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      if (onLine) { const rest = lineBuf + decoder.end(); lineBuf = ''; if (rest.trim() && !out.overflow) onLine(rest); } // 줄바꿈 없는 마지막 줄
       if (signal) signal.removeEventListener('abort', onAbort);
       if (killing) await killing;
       out.code = code;
@@ -128,14 +129,29 @@ async function rmrf(p) {
   try { await fsp.rm(p, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch { /* 다음 작업이 다시 지움 */ }
 }
 
+/**
+ * agy: 'agy models' 로 로그인 확인 + 모델 목록 → {logged: true | false | null(모름), models: [{id, label}]}.
+ * 종료 코드가 0 이 아니거나 모델 줄이 하나도 없으면 로그인 안 됨(로그인 필요). 출력 원문은 남기지 않는다
+ */
+async function agyModels(resolved, env) {
+  const r = await execOnce(resolved, E.loginCommand('agy'), { env: childEnv(env), timeoutMs: PROBE_TIMEOUT_MS });
+  if (r.spawnError || r.timedOut || r.overflow) return { logged: null, models: [] };
+  const models = r.code === 0 ? E.parseAgyModels(r.stdout) : [];
+  return { logged: models.length > 0, models };
+}
+
 /** 로그인 확인 → true(됨) · false(안 됨) · null(모름) */
 async function checkLogin(engine, resolved, env) {
+  if (engine === 'agy') return (await agyModels(resolved, env)).logged;
   const cmd = E.loginCommand(engine);
   if (!cmd) return E.geminiLoggedIn(env || process.env);
   const r = await execOnce(resolved, cmd, { env: childEnv(env), timeoutMs: PROBE_TIMEOUT_MS });
   if (r.spawnError || r.timedOut) return null;
   return r.code === 0;
 }
+
+const label = (engine) => E.LABELS[engine] || engine;
+const AGY_BLOCKED = 'agy_blocked'; // agy 가 도구 허락 · 사용자 질문을 청함 → 끄고 실패 (자동 승인 없음)
 
 /** 실패 판정 (11.8) */
 async function classifyFailure(engine, r, parsed, resolved, env) {
@@ -145,9 +161,9 @@ async function classifyFailure(engine, r, parsed, resolved, env) {
   if (E.USAGE_RE.test(raw)) return { error_code: 'cli_usage_limit', error: clip(message || r.stderr, 500) };
   const logged = await checkLogin(engine, resolved, env);
   if (logged === false || (engine === 'gemini' && E.AUTH_RE.test(raw))) {
-    return { error_code: 'cli_not_logged_in', error: `이 PC의 ${engine}가 로그인돼 있지 않아요` };
+    return { error_code: 'cli_not_logged_in', error: `이 PC의 ${label(engine)}가 로그인돼 있지 않아요` };
   }
-  return { error_code: 'cli_exit', error: clip(message || r.stderr || `${engine} 종료 코드 ${r.code}`, 500) };
+  return { error_code: 'cli_exit', error: clip(message || r.stderr || `${label(engine)} 종료 코드 ${r.code}`, 500) };
 }
 
 /**
@@ -164,7 +180,9 @@ function workDir(workRoot, task) {
 
 /**
  * 작업 하나 실행 (11장). → {outcome: succeeded|failed|cancelled|lost, text, structured, error_code, error, stats}
- * opts: resolved(실행 파일), workRoot, signal(이유 'cancelled' | 'lost' | 'stop'), onPartial(text), timeoutMs(시험 주입), env
+ * opts: resolved(실행 파일), workRoot, signal(이유 'cancelled' | 'lost' | 'stop'), onPartial(text), timeoutMs(시험 주입), env,
+ *       models(agy 탐지 때 받은 모델 목록 — 고른 모델이 여기 없으면 --model 없이), log(agy 의 모르는 · 막힌 이벤트 이름만 남김)
+ * agy: 빈 작업 폴더(cwd)에서 --sandbox --mode plan --disable-slash-commands 로만. 허락 · 질문 이벤트가 오면 바로 끄고 실패
  */
 async function runTask(task, opts) {
   const started = Date.now();
@@ -173,7 +191,8 @@ async function runTask(task, opts) {
   const done = (o) => ({ text: '', structured: null, error_code: '', error: '', ...o, stats: { ...stats, duration_ms: Date.now() - started } });
   if (!E.ENGINES.includes(engine)) return done({ outcome: 'failed', error_code: 'cli_exit', error: '알 수 없는 엔진' });
   const resolved = opts.resolved;
-  if (!resolved || !resolved.ok) return done({ outcome: 'failed', error_code: 'cli_not_found', error: `이 PC에서 ${engine} 실행 파일을 찾지 못했어요` });
+  if (!resolved || !resolved.ok) return done({ outcome: 'failed', error_code: 'cli_not_found', error: `이 PC에서 ${label(engine)} 실행 파일을 찾지 못했어요` });
+  const log = opts.log || null;
 
   const cwd = workDir(opts.workRoot, task);
   if (!cwd) return done({ outcome: 'failed', error_code: 'cli_exit', error: '작업 정보가 올바르지 않아 실행하지 않았어요' });
@@ -188,26 +207,63 @@ async function runTask(task, opts) {
   const timeoutMs = opts.timeoutMs || (Number.isFinite(ts) && ts > 0 ? Math.min(ts, 7200) : 600) * 1000;
 
   const once = async (model) => {
-    const cmd = E.buildCommand(task, { files, model, schemaArg: resolved.via !== 'shell' });
+    // agy --print-timeout 은 우리 시간 제한보다 1분 길게 — 먼저 끝나는 쪽이 늘 우리(cli_timeout · 프로세스 트리 종료)
+    const cmd = E.buildCommand(task, { files, model, schemaArg: resolved.via !== 'shell', effort: E.effortArg(engine, task.effort),
+      timeoutS: Math.ceil(timeoutMs / 1000) + 60 });
     if (cmd.writeSystem) await fsp.writeFile(files.system, String(task.system || ''), 'utf8');
     if (cmd.writeSchema) await fsp.writeFile(files.schema, JSON.stringify(task.json_schema), 'utf8');
     await rmrf(files.out);
     let partial = '';
-    const onLine = cmd.stream && opts.onPartial ? (line) => {
+    let signal = opts.signal;
+    let onLine = cmd.stream && opts.onPartial ? (line) => {
       const t = E.partialDelta(line);
       if (t) { partial = (partial + t).slice(-PARTIAL_MAX); opts.onPartial(partial); }
     } : null;
-    const r = await execOnce(resolved, cmd.args, { cwd, env, stdin: cmd.stdin, timeoutMs, signal: opts.signal, onLine });
+    let blocked = '';
+    let unhook = null;
+    if (cmd.ndjson) {
+      // agy NDJSON: 답 조각(text_delta) → 진행 글, 허락 · 질문 이벤트 → 바로 끔. 모르는 이벤트는 이름만 한 번 남김(본문 없음)
+      const ac = new AbortController();
+      const outer = opts.signal;
+      const relay = () => ac.abort(outer.reason || 'cancelled');
+      if (outer) {
+        if (outer.aborted) relay(); else outer.addEventListener('abort', relay, { once: true });
+        unhook = () => outer.removeEventListener('abort', relay);
+      }
+      signal = ac.signal;
+      const seen = new Set();
+      onLine = (line) => {
+        const ev = E.agyLine(line);
+        if (ev.blocked && !blocked) {
+          blocked = ev.blocked;
+          if (log) log.warn('agy 가 허락 · 질문을 청해 실행을 멈춤', { job: task.id, event: ev.blocked });
+          ac.abort(AGY_BLOCKED);
+        } else if (ev.unknown && !seen.has(ev.unknown) && seen.size < 20) {
+          seen.add(ev.unknown);
+          if (log) log.info('agy 의 모르는 이벤트(무시)', { job: task.id, event: ev.unknown });
+        } else if (ev.delta && cmd.stream && opts.onPartial) {
+          partial = (partial + ev.delta).slice(-PARTIAL_MAX);
+          opts.onPartial(partial);
+        }
+      };
+    }
+    const r = await execOnce(resolved, cmd.args, { cwd, env, stdin: cmd.stdin, timeoutMs, signal, onLine });
+    if (unhook) unhook();
     stats.exit_code = r.code;
     if (r.spawnError) {
-      if (r.spawnError.code === 'ENOENT') return { outcome: 'failed', error_code: 'cli_not_found', error: `이 PC에서 ${engine} 실행 파일을 찾지 못했어요` };
+      if (r.spawnError.code === 'ENOENT') return { outcome: 'failed', error_code: 'cli_not_found', error: `이 PC에서 ${label(engine)} 실행 파일을 찾지 못했어요` };
       if (r.spawnError.code === 'UNSAFE_ARGS') return { outcome: 'failed', error_code: 'cli_exit', error: '실행 경로에 쓸 수 없는 글자가 있어 실행하지 않았어요. 이 PC 상태에서 실행 파일 경로를 직접 골라 주세요.' };
-      return { outcome: 'failed', error_code: 'cli_exit', error: clip(`${engine} 실행 오류: ${r.spawnError.code || r.spawnError.message}`, 500) };
+      return { outcome: 'failed', error_code: 'cli_exit', error: clip(`${label(engine)} 실행 오류: ${r.spawnError.code || r.spawnError.message}`, 500) };
+    }
+    if (blocked && !(r.aborted && r.abortReason !== AGY_BLOCKED)) { // 취소 · 리스 잃음이 먼저였으면 그쪽
+      return { outcome: 'failed', error_code: 'cli_exit',
+        error: 'Antigravity가 도구 사용 허락이나 추가 질문을 요청해 실행을 멈췄어요. PaperLab은 자동으로 허락하지 않아요. 다시 시도하거나 다른 엔진을 써 주세요.' };
     }
     if (r.aborted) return { outcome: r.abortReason === 'cancelled' ? 'cancelled' : 'lost' };
     if (r.timedOut) return { outcome: 'failed', error_code: 'cli_timeout', error: `시간 제한(${Math.round(timeoutMs / 1000)}초) 안에 끝나지 않았어요` };
     if (r.overflow) return { outcome: 'failed', error_code: 'output_too_large', error: '결과가 너무 길어요' };
     const parsed = E.parseOutput(engine, { stdout: r.stdout, files, stream: cmd.stream });
+    if (parsed.usage && Object.keys(parsed.usage).length) stats.usage = parsed.usage; // 토큰 수만 (본문 없음)
     if (r.code === 0 && parsed.ok) {
       if (!String(parsed.text || '').trim() && !parsed.structured) return { outcome: 'failed', error_code: 'cli_bad_output', error: 'CLI 결과가 비어 있어요' };
       if (Buffer.byteLength(parsed.text || '', 'utf8') > RESULT_MAX) return { outcome: 'failed', error_code: 'output_too_large', error: '결과가 너무 길어요' };
@@ -218,7 +274,7 @@ async function runTask(task, opts) {
   };
 
   try {
-    const model = E.modelArg(engine, task.model);
+    const model = E.modelArg(engine, task.model, opts.models);
     let res = await once(model);
     // 모델 오류면 --model 없이 한 번 다시 (11.6 · K8 ①)
     if (model && res.error_code === 'cli_model') {
@@ -240,6 +296,14 @@ async function probeEngine(name, { resolveEngine, customPath = '', env = process
   base.path = resolved.display;
   // 끈 엔진은 실행 파일이 있는지만 본다(실행하지 않음) — 화면의 켜기 체크를 쓸 수 있게
   if (!enabled) return { ...base, installed: true, reason: 'off' };
+  if (name === 'agy') {
+    // agy: 'agy models' 가 설치 · 로그인 확인 · 모델 목록을 한 번에. --version 은 있으면 쓰고, 실패해도 설치로 본다(Go flag — 확인 필요)
+    const v = await execOnce(resolved, ['--version'], { env: childEnv(env), timeoutMs: PROBE_TIMEOUT_MS });
+    if (v.spawnError) return { ...base, reason: 'spawn_failed' };
+    const m = v.code === 0 ? /(\d+\.\d+\.\d+)/.exec(`${v.stdout} ${v.stderr}`) : null;
+    const a = await agyModels(resolved, env);
+    return { ...base, installed: true, version: m ? m[1] : '', outdated: false, logged_in: a.logged === true, models: a.models, reason: '' };
+  }
   const v = await execOnce(resolved, ['--version'], { env: childEnv(env), timeoutMs: PROBE_TIMEOUT_MS });
   if (v.spawnError || v.timedOut || v.code !== 0) return { ...base, reason: v.spawnError ? 'spawn_failed' : 'version_failed' };
   const m = /(\d+\.\d+\.\d+)/.exec(`${v.stdout} ${v.stderr}`);

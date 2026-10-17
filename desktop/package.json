@@ -1,9 +1,9 @@
 {
   "name": "paperlab-desktop",
   "productName": "PaperLab",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "private": true,
-  "description": "PaperLab PC 앱 — 클라우드 화면 + 이 PC의 AI 도구(claude · codex · gemini)로 작업 실행",
+  "description": "PaperLab PC 앱 — 클라우드 화면 + 이 PC의 AI 도구(claude · codex · gemini · Antigravity)로 작업 실행",
   "author": "PaperLab",
   "license": "UNLICENSED",
   "main": "main/main.js",

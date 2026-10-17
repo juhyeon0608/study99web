@@ -4,7 +4,7 @@
 import { api, downloadBlob, qs } from "./api.js";
 import { sortVerify, vdName, verifyDoneText, verifyMarks, verifySummary } from "./ask.js";
 import {
-  cancelJob, ensureAiRoute, fmtClock, handledJob, isActive, notifyOffer, retryJob, setStatusLine, statusLineEl, trackJob, watchJob,
+  cancelJob, engineName, ensureAiRoute, fmtClock, handledJob, isActive, notifyOffer, retryJob, setStatusLine, statusLineEl, trackJob, watchJob,
 } from "./jobs.js";
 // AI 글쓰기 결과를 나중에 안전하게 넣기 (2026-10-16 백그라운드 AI)
 import { insertionText, planApply, trimRange, wordDiff, writeAnchor } from "./writeai.js";
@@ -1408,7 +1408,7 @@ function aiJobDialog(first, ta, { fresh = false } = {}) {
       if (partial) out.textContent = partial;
       else if (!out.textContent) out.innerHTML = `<span class="typing"><span></span><span></span><span></span></span>`;
       setStatusLine(line, j, "글을 만드는");
-      if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "내 PC"}에서 글을 만드는 중 (${j.engine})`;
+      if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "내 PC"}에서 글을 만드는 중 (${engineName(j.engine)})`;
     }, detailed ? { first: start } : {});
   };
   follow(first);

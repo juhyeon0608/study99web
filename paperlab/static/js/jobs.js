@@ -5,7 +5,10 @@ import { api, qs } from "./api.js";
 import { state } from "./state.js";
 import { $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, copyText, el, errorToast, esc, josa, store, toast } from "./ui.js";
 
-export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" };
+export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" }; // API 키가 있는 엔진만 (agy는 PC CLI 전용)
+// PC CLI 이름 (화면 문구) — agy = Google Antigravity CLI. 모르는 엔진은 id 그대로
+export const ENGINE_NAME = { claude: "claude", codex: "codex", gemini: "gemini", agy: "Antigravity" };
+export const engineName = (e) => ENGINE_NAME[e] || String(e || "");
 const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증",
   explain: "쉬운 설명", translate: "선택 번역", translate_paper: "전체 번역" }; // 4단계 (시안 7.3절)
 const XT_VIEW = { explain: "history", translate: "history", translate_paper: "paper" };
@@ -24,8 +27,8 @@ const ERROR_LABELS = {
   output_too_large: "결과가 너무 김", bad_input: "읽을 수 있는 본문이 없음",
   index_failed: "색인하지 못함", search_failed: "검색 결과를 받지 못함", // 3단계
 };
-export const errorLabel = (code, engine = "") => (ERROR_LABELS[code] || "실패").replace("{p}", engine);
-export const slotName = (s) => (s.engine === "local" ? "서버에서 실행" : s.runner === "api" ? `${COMPANY[s.engine]} API` : `PC의 ${s.engine}`);
+export const errorLabel = (code, engine = "") => (ERROR_LABELS[code] || "실패").replace("{p}", engineName(engine));
+export const slotName = (s) => (s.engine === "local" ? "서버에서 실행" : s.runner === "api" ? `${COMPANY[s.engine]} API` : `PC의 ${engineName(s.engine)}`);
 
 // ------------------------------------------------------------------ 시간 (1장 — 사용자 PC 시간대)
 const pad = (n) => String(n).padStart(2, "0");
@@ -87,7 +90,7 @@ function waitingText(job, table, fallback) {
   if (r === "holder_offline" && job.pinned_device && job.pinned_device.note) {
     return table === WAITING ? `PC에서 실행 대기 중 — ${job.pinned_device.note}` : `${job.pinned_device.note}. 탭을 닫아도 기다려요.`;
   }
-  return (table[r] || fallback).replace("{p}", job.engine);
+  return (table[r] || fallback).replace("{p}", engineName(job.engine));
 }
 const reassigned = (job) => job.attempts >= 2 && (job.history || []).slice(-1)[0]?.error_code === "lease_expired";
 
@@ -101,9 +104,9 @@ export function jobLine(job, verb = "실행", { elapsed = true } = {}) {
     case "api-queued": return job.engine === "local" ? "서버 차례를 기다리는 중" : `${COMPANY[job.engine]} API 차례를 기다리는 중`;
     case "api-running": return `${job.engine === "local" ? "서버에서" : `${COMPANY[job.engine]} API로`} ${verb}하는 중${p.message ? ` · ${p.message}` : ""}${pct}`;
     case "cli-waiting": return job.waiting_reason ? waitingText(job, WAITING, "PC가 곧 작업을 가져가요") : "PC가 곧 작업을 가져가요";
-    case "cli-running": return `${reassigned(job) ? "PC 연결이 끊겨 다른 PC로 넘겼어요 · " : ""}${dev}에서 실행 중 (${job.engine})${elapsed && job.started_at ? ` · ${elapsedText(job)}` : ""}`;
+    case "cli-running": return `${reassigned(job) ? "PC 연결이 끊겨 다른 PC로 넘겼어요 · " : ""}${dev}에서 실행 중 (${engineName(job.engine)})${elapsed && job.started_at ? ` · ${elapsedText(job)}` : ""}`;
     case "cancelling": return "취소하는 중…";
-    case "succeeded": return job.engine === "local" ? "완료 · 서버에서 실행" : job.runner === "api" ? `완료 · ${COMPANY[job.engine]} API` : `완료 · ${dev}(${job.engine})에서 실행`;
+    case "succeeded": return job.engine === "local" ? "완료 · 서버에서 실행" : job.runner === "api" ? `완료 · ${COMPANY[job.engine]} API` : `완료 · ${dev}(${engineName(job.engine)})에서 실행`;
     case "failed": return `실패: ${job.error || errorLabel(job.error_code, job.engine)}`;
     default: return "취소됨";
   }

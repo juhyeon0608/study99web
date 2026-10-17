@@ -15,7 +15,7 @@
     revoked: ['danger', '이 PC 연결이 해지됐어요.', '다시 쓰려면 새 연결 코드를 넣어 주세요.'],
     update_required: ['danger', '이 앱 버전으로는 작업을 받을 수 없어요.', '새 버전을 받는 중이에요. 준비되면 [지금 다시 시작]을 눌러 주세요.'],
     offline: ['warn', '서버에 연결할 수 없어 작업을 받지 못하고 있어요.', '다시 연결되면 이어서 받아요.'],
-    no_engine: ['warn', '이 PC에서 쓸 수 있는 AI 도구가 없어요.', 'claude · codex · gemini 중 하나를 설치하고 로그인해 주세요.'],
+    no_engine: ['warn', '이 PC에서 쓸 수 있는 AI 도구가 없어요.', 'claude · codex · gemini · Antigravity(agy) 중 하나를 설치하고 로그인해 주세요.'],
     no_safe_storage: ['warn', '이 PC에서는 연결 정보를 안전하게 저장할 수 없어요.', '앱을 다시 켜면 다시 연결해야 해요.'],
   };
   var S = null;
@@ -153,18 +153,21 @@
       engines.forEach(function (e) {
         var st = engineState(e);
         var cfg = S.settings.engines[e.name] || {};
-        var chip = { ready: '<span class="chip success">✓ ' + esc(e.version) + ' · 로그인됨</span>', login: '<span class="chip warn">! 로그인 필요</span>',
+        var name = e.name === 'agy' ? 'Antigravity (agy)' : e.name; // agy = Google Antigravity CLI
+        var ready = '✓ ' + (e.version ? esc(e.version) + ' · ' : '') + '로그인됨' + (e.name === 'agy' && e.models ? ' · 모델 ' + Number(e.models) + '개' : '');
+        var chip = { ready: '<span class="chip success">' + ready + '</span>', login: '<span class="chip warn">! 로그인 필요</span>',
           missing: '<span class="chip">설치되지 않음</span>', off: '<span class="chip">끔</span>', checking: '<span class="chip">확인하는 중…</span>', outdated: '<span class="chip warn">! 업데이트 필요</span>' }[st];
         var slots = '';
         for (var i = 1; i <= 4; i++) slots += '<option value="' + i + '"' + (i === cfg.slots ? ' selected' : '') + '>' + i + '</option>';
         var pathLine = st === 'checking' ? '' : !e.installed && !cfg.path ?'설치했는데 못 찾으면 경로를 직접 골라 주세요. <button type="button" class="btn sm" data-pick>경로 고르기…</button>'
           : (cfg.path ? '경로: 직접 고름 · ' : '경로: 자동으로 찾음 · ') + esc(e.path || cfg.path) +
             ' <button type="button" class="btn sm" data-pick>바꾸기…</button>' + (cfg.path ? ' <button type="button" class="btn sm" data-auto>자동으로</button>' : '');
-        var extra = st === 'login' ? '<p class="item-meta">명령 프롬프트에서 ' + e.name + '를 한 번 실행해 로그인한 뒤 [다시 확인]을 눌러 주세요. 그동안 ' + e.name + ' 작업은 다른 PC가 받아요.</p>'
+        var extra = st === 'login' ? '<p class="item-meta">명령 프롬프트에서 ' + (e.name === 'agy' ? 'agy를 한 번 실행해 로그인하고 agy models로 모델 목록이 나오는지 확인한' : e.name + '를 한 번 실행해 로그인한') +
+            ' 뒤 [다시 확인]을 눌러 주세요. 그동안 ' + name + ' 작업은 다른 PC가 받아요.</p>'
           : st === 'outdated' ? '<p class="item-meta">' + e.name + ' ' + (MIN[e.name] || '') + ' 이상이 필요해요. 명령 프롬프트에서 업데이트해 주세요.</p>' : '';
         var over = cfg.slots > total ? '<p class="hint">전체 수(' + total + ')가 먼저 적용돼요</p>' : '';
         var li = el('<li class="item-card" data-engine="' + e.name + '" data-state="' + st + '"><div class="item-head">' +
-          '<label class="check"><input type="checkbox" data-on' + (e.enabled ? ' checked' : '') + (!e.installed ? ' disabled' : '') + ' /> ' + e.name + '</label>' + chip +
+          '<label class="check"><input type="checkbox" data-on' + (e.enabled ? ' checked' : '') + (!e.installed ? ' disabled' : '') + ' /> ' + esc(name) + '</label>' + chip +
           '<span class="item-actions"><label class="small" for="slots-' + e.name + '">동시</label> <select class="input sm" id="slots-' + e.name + '" data-slots>' + slots + '</select></span></div>' +
           '<p class="item-meta">' + pathLine + '</p>' + extra + over + '</li>');
         $('[data-on]', li).onchange = function (ev) { L.action('engine', { name: e.name, enabled: ev.target.checked }); };

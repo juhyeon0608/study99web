@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from psycopg.types.json import Jsonb
 
 from . import ai, explain, find, rag, translate, verify
-from .config import ENGINES, JOB_KINDS, UserSettings, redact
+from .config import AGY_DEFAULT_MODEL, AGY_MODEL_RE, ENGINE_LABELS, ENGINES, JOB_KINDS, UserSettings, redact
 from .convert import IMAGE_EXTS
 from .db import LOCAL_ONLY_CANCELLED, LOCAL_TEXT_EXTS, PAPER_TRASHED, REP_SHA, REP_SIZE, Library, iso, now_dt
 
@@ -333,8 +333,29 @@ def clean_engines(value) -> list[dict]:
             slots = min(4, max(1, int(e.get("slots") or 1)))
         except (TypeError, ValueError):
             raise JobError(400, "엔진 정보가 올바르지 않아요", "bad_request") from None
-        out.append({"name": e["name"], "version": device_name(e.get("version"))[:40],
-                    "logged_in": e.get("logged_in") is True, "slots": slots})
+        item = {"name": e["name"], "version": device_name(e.get("version"))[:40],
+                "logged_in": e.get("logged_in") is True, "slots": slots}
+        if e["name"] == "agy":  # 'agy models'로 받은 그 PC의 모델 목록 (웹 설정의 모델 고르기 — 모양이 틀린 줄은 버림)
+            item["models"] = clean_agy_models(e.get("models"))
+        out.append(item)
+    return out
+
+
+AGY_MODELS_MAX = 40
+
+
+def clean_agy_models(value) -> list[dict]:
+    """[{id, label}…] — id는 config.AGY_MODEL_RE, label은 제어 문자를 뺀 80자. 최대 40개 · 중복 id 제외"""
+    out, seen = [], set()
+    for m in value if isinstance(value, list) else []:
+        mid = m.get("id") if isinstance(m, dict) else None
+        if not isinstance(mid, str) or not AGY_MODEL_RE.fullmatch(mid) or mid in seen:
+            continue
+        seen.add(mid)
+        label = re.sub(r"[\x00-\x1f\x7f-\x9f  ]", "", str(m.get("label") or "")).strip()[:80]
+        out.append({"id": mid, "label": label or mid})
+        if len(out) >= AGY_MODELS_MAX:
+            break
     return out
 
 
@@ -372,16 +393,27 @@ AI_RUNNERS = ("api", "cli")  # 사용자 AI 작업이 가는 곳은 이 둘뿐 �
 def build_route(kind: str, get, devices: list[dict], cli_only: bool = False) -> list[dict]:
     """작업 종류의 엔진 순서 → [{runner, engine}…]. 키가 있으면 API 칸, 그 엔진을 광고한 기기가 있으면 CLI 칸.
     get = 그 사용자의 설정(UserSettings.get — 내가 넣은 키만, 서버 환경 변수 없음), devices = 그 사용자가 연결한 PC
-    (워커가 그 PC에서 claude · codex · gemini CLI를 실행). 서버 PC의 CLI · 서버 키로 가는 칸은 만들지 않는다.
+    (워커가 그 PC에서 claude · codex · gemini · agy CLI를 실행). 서버 PC의 CLI · 서버 키로 가는 칸은 만들지 않는다.
+    agy(Antigravity)는 API가 없어 늘 CLI 칸만.
     cli_only: 로컬 항목(selective-sync.md 7.4절) — devices에 보관 PC 한 대만 넘기고 API 칸은 모두 뺀다"""
     adv = advertised(devices)
     route = []
     for e in (get("ai_routing") or {}).get(ROUTE_KIND.get(kind, kind)) or ["claude"]:
-        if get(ai.ENGINE_KEYS[e]) and not cli_only:
+        if has_key(get, e) and not cli_only:
             route.append({"runner": "api", "engine": e})
         if e in adv:
             route.append({"runner": "cli", "engine": e})
     return route
+
+
+def has_key(get, engine: str) -> bool:
+    """그 엔진의 내 API 키가 있는지. API가 없는 엔진(agy)은 늘 False"""
+    name = ai.ENGINE_KEYS.get(engine)
+    return bool(name and get(name))
+
+
+def engine_label(engine: str) -> str:
+    return ENGINE_LABELS.get(engine, engine)
 
 
 def online_count(devices: list[dict], engine: str) -> int:
@@ -395,8 +427,9 @@ def ai_status(get, devices: list[dict], has_release: bool) -> dict:
     for kind in JOB_KINDS:
         slots = []
         for e in (get("ai_routing") or {}).get(kind) or ["claude"]:
-            key = bool(get(ai.ENGINE_KEYS[e]))
-            slots.append({"runner": "api", "engine": e, "available": key, "reason": "" if key else "no_key"})
+            if e in ai.ENGINE_KEYS:  # agy는 API 칸이 없음 (PC CLI 전용)
+                key = has_key(get, e)
+                slots.append({"runner": "api", "engine": e, "available": key, "reason": "" if key else "no_key"})
             slots.append({"runner": "cli", "engine": e, "available": e in adv, "reason": "" if e in adv else "no_device"})
         first = next(({"runner": s["runner"], "engine": s["engine"]} for s in slots if s["available"]), None)
         # 경로가 없는 작업은 화면이 시작하기 전에 이 문구를 보여 준다 (설정 → 연결된 PC · API 키 안내)
@@ -407,18 +440,46 @@ def ai_status(get, devices: list[dict], has_release: bool) -> dict:
     elif first["runner"] == "api":
         msg = f"요약은 내 {ai.ENGINE_COMPANY[first['engine']]} API 키로 먼저 실행해요."
     elif online_count(devices, first["engine"]):
-        msg = f"요약은 연결된 내 PC의 {first['engine']}로 실행해요."
+        msg = f"요약은 연결된 내 PC의 {engine_label(first['engine'])}로 실행해요."
     else:
-        msg = f"요약은 연결된 내 PC의 {first['engine']}로 실행해요. 지금은 켜진 PC가 없어 PC가 켜질 때까지 기다려요."
+        msg = (f"요약은 연결된 내 PC의 {engine_label(first['engine'])}로 실행해요. "
+               "지금은 켜진 PC가 없어 PC가 켜질 때까지 기다려요.")
     return {"ready": first is not None, "kinds": kinds, "message": msg}
 
 
 def engines_summary(get, devices: list[dict]) -> dict:
     """GET /api/ai/engines (7.3절)"""
     cli = get("cli_models") or {}
-    return {e: {"api_key": bool(get(ai.ENGINE_KEYS[e])), "devices_online": online_count(devices, e),
-                "devices_total": sum(1 for d in devices if d["revoked_at"] is None and _engine(d, e)),
-                "cli_model": cli.get(e, "default")} for e in ENGINES}
+    out = {e: {"api_key": has_key(get, e), "devices_online": online_count(devices, e),
+               "devices_total": sum(1 for d in devices if d["revoked_at"] is None and _engine(d, e)),
+               "cli_model": cli.get(e, "default")} for e in ENGINES}
+    # agy: 이름 · 생각 깊이 · 연결된 PC들이 알려 준 모델(합집합 — 웹 설정의 고르기)
+    out["agy"].update(label=engine_label("agy"), cli_effort=(get("cli_efforts") or {}).get("agy", "default"),
+                      default_model=AGY_DEFAULT_MODEL, models=agy_models(devices))
+    return out
+
+
+def agy_models(devices: list[dict]) -> list[dict]:
+    """해지 안 된 PC들이 알려 준 agy 모델(id 중복 없이, 먼저 본 표시 이름)"""
+    out, seen = [], set()
+    for d in devices:
+        if d["revoked_at"] is not None:
+            continue
+        for m in (_engine(d, "agy") or {}).get("models") or []:
+            if isinstance(m, dict) and isinstance(m.get("id"), str) and m["id"] not in seen:
+                seen.add(m["id"])
+                out.append({"id": m["id"], "label": str(m.get("label") or m["id"])})
+    return out
+
+
+def cli_options(settings: UserSettings, engine: str) -> tuple[str | None, str | None]:
+    """작업 응답의 (model, effort). agy의 'default' 모델은 PaperLab 기본(AGY_DEFAULT_MODEL) — 그 PC 목록에 없으면 워커가
+    --model 없이(agy 기본). 생각 깊이는 agy만(--effort), 'default'면 None"""
+    model = (settings.get("cli_models") or {}).get(engine, "default")
+    if engine == "agy":
+        effort = (settings.get("cli_efforts") or {}).get("agy", "default")
+        return (AGY_DEFAULT_MODEL if model == "default" else model), (None if effort == "default" else effort)
+    return (None if model == "default" else model), None
 
 
 # ====================================================================== 작업 만들기 · 보기
@@ -429,8 +490,9 @@ def create_job(lib: Library, kind: str, route: list[dict], params: dict, paper_i
     pinned_device_id: 로컬 항목 작업 — 그 보관 PC만 잡는다(selective-sync.md 7.4절, 경로는 CLI 칸뿐)"""
     if kind not in ALL_KINDS or kind == "index" or not route:
         raise JobError(400, NO_ROUTE, "no_route")
-    if any(s.get("runner") not in AI_RUNNERS or s.get("engine") not in ENGINES for s in route):
-        raise JobError(400, NO_ROUTE, "no_route")  # 내 PC · 내 키 말고 다른 실행 칸은 받지 않는다
+    if any(s.get("runner") not in AI_RUNNERS or s.get("engine") not in ENGINES
+           or (s["runner"] == "api" and s["engine"] not in ai.ENGINE_KEYS) for s in route):
+        raise JobError(400, NO_ROUTE, "no_route")  # 내 PC · 내 키 말고 다른 실행 칸은 받지 않는다 (agy는 API 칸 없음)
     if pinned_device_id is not None and any(s["runner"] != "cli" for s in route):
         raise JobError(400, NO_ROUTE, "no_route")  # 로컬 항목은 서버 API 키로 실행하지 않는다 (P-6)
     if len(json.dumps(params, ensure_ascii=False).encode("utf-8")) > PARAMS_MAX:
@@ -701,7 +763,7 @@ def retry_source(lib: Library, job_id: int) -> dict:
 
 def record_key_error(lib: Library, engine: str, code: str) -> None:
     """API 키 오류(api_auth · api_permission)를 설정의 '최근 실패'에 남긴다 (7.3절 — 그 밖 오류는 남기지 않음)"""
-    if code in KEY_ERROR_CODES:
+    if code in KEY_ERROR_CODES and engine in ai.ENGINE_KEYS:
         lib.update_settings({f"{ai.ENGINE_KEYS[engine]}_last_error": {"code": code, "at": iso(now_dt())}})
 
 
@@ -1007,11 +1069,13 @@ def cli_task(lib: Library, job: dict) -> dict | None:
     if len(prompt.encode("utf-8")) > PROMPT_MAX:
         _end(lib, job, "failed", "input_too_large", DEFAULT_ERRORS["input_too_large"])
         return None
-    model = (settings.get("cli_models") or {}).get(job["engine"], "default")
+    model, effort = cli_options(settings, job["engine"])
     task = {"id": job["id"], "lease_token": str(job["lease_token"]), "lease_s": LEASE_S, "heartbeat_s": HEARTBEAT_S,
-            "kind": job["kind"], "engine": job["engine"], "model": None if model == "default" else model,
+            "kind": job["kind"], "engine": job["engine"], "model": model,
             "output": "json" if schema else "text", "json_schema": schema,
             "stream_partial": not schema, "system": system, "prompt": prompt, "timeout_s": TIMEOUT_S[job["kind"]]}
+    if job["engine"] == "agy":  # --effort (워커 0.4.1+, 옛 워커는 이 칸을 모름 — 0.4.0 워커는 agy를 광고하지 않음)
+        task["effort"] = effort
     if local is not None:  # 프롬프트에 ai.LOCAL_TEXT_MARKER가 정확히 한 번 — 워커가 로컬 본문으로 바꿈 (C-4)
         task["local"] = local
     return task

@@ -4,7 +4,8 @@
 
 | 파일 | 무엇 | 출처 |
 |---|---|---|
-| `fake-cli.js` | 가짜 claude · codex · gemini CLI | 2단계 시험 |
+| `fake-cli.js` | 가짜 claude · codex · gemini CLI (`agy`는 `fake-agy.js`로 넘김) | 2단계 시험 |
+| `fake-agy.js` | 가짜 Antigravity CLI(`agy` 1.4.0 흉내 — Go flag 인자 · `agy models` · NDJSON 이벤트, ERROR 결과 · 허락 요청 · 질문 · 모르는 이벤트 · 멈춤) | 팀장 실측(2026-10-17)을 보고 직접 만듦 — `test/agy.test.js` |
 | `fake-sync-api.js` | 가짜 동기화 서버(메모리) — 6단계 v1 + 선택 동기화 v2(`protocol: 2`, 계약 C-1) | 6단계 · 선택 동기화 |
 | `sync-sim.js` · `roundtrip-worker.js` | 여러 PC 시험용 엔진 · 왕복 워커(로컬 개발 서버 전용) | 6단계 |
 | `make-office.js` | `.docx` · `.hwpx` · `.pptx` · `.xlsx` · `.odt` · `.odp` · `.ods` 최소 문서와 거부 시험용 ZIP(머리 값을 속일 수 있음)을 시험이 직접 만듦 | 선택 동기화 9.5.5 |

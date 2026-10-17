@@ -7,7 +7,7 @@ import { listStyles, render, styleOptions } from "./cite.js";
 import { EXT_MARK, bindExtLink, citeDialog, editPaperDialog, issuesBox, settingsDialog, syncCtx, syncModeDialog, uploadPdfs } from "./dialogs.js";
 import { INHA, paperProxyTarget } from "./extlinks.js";
 import {
-  cancelJob, errorLabel, handledJob, isActive, retryJob, setStatusLine, statusLineEl, summaryCard, updateSummaryCard, watchJob,
+  cancelJob, engineName, errorLabel, handledJob, isActive, retryJob, setStatusLine, statusLineEl, summaryCard, updateSummaryCard, watchJob,
 } from "./jobs.js";
 import { BUSY_TIP, explainBusy, explainTab, followPage, resetExplain, startExplain } from "./explain.js";
 import { IMAGE_EXTS, LIB_ACCEPT, formatBadge } from "./filetypes.js";
@@ -986,7 +986,7 @@ async function onSummaryJob(pid, j) {
       R.summary = s;
       // 폴백 · PC로 만들었으면 맨 위에 작은 줄 한 번 (디자인 6장)
       R.summaryNote = j.runner === "cli" && (j.history || []).length
-        ? `PC의 ${j.engine}로 만들었어요 (${errorLabel(j.history[0].error_code, j.history[0].engine)}로 넘김)` : "";
+        ? `PC의 ${engineName(j.engine)}로 만들었어요 (${errorLabel(j.history[0].error_code, j.history[0].engine)}로 넘김)` : "";
     }
     toast("AI 요약이 준비됐어요", "success");
   } else if (j.status === "cancelled") {
@@ -1175,7 +1175,7 @@ async function chatTab(body) {
         jobNodes.delete(j.id);
         busy(false);
         draw();
-        if (j.runner === "cli") log.appendChild(el(`<p class="small muted" style="margin:0">PC의 ${esc(j.engine)}로 답했어요</p>`));
+        if (j.runner === "cli") log.appendChild(el(`<p class="small muted" style="margin:0">PC의 ${esc(engineName(j.engine))}로 답했어요</p>`));
         return;
       }
       if (j.status === "failed") {
@@ -1194,7 +1194,7 @@ async function chatTab(body) {
       const prose = $(".prose", node);
       if (partial) { prose.classList.remove("hidden"); prose.innerHTML = renderMarkdown(partial); }
       setStatusLine(line, j, "답을 만드는");
-      if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "PC"}에서 답을 만드는 중 (${j.engine})`;
+      if (j.status === "running" && j.runner === "cli") $(".grow", line).textContent = `${j.device ? `‘${j.device.name}’` : "PC"}에서 답을 만드는 중 (${engineName(j.engine)})`;
     }, { first: job });
     return node;
   };

@@ -588,7 +588,7 @@ async function localAction(name, arg, sender) {
     case 'pause': return setPaused(!!arg);
     case 'cancel': toWorker({ type: 'cancel', id: Number(arg) }); return true;
     case 'engine': {
-      if (!arg || !['claude', 'codex', 'gemini'].includes(arg.name)) return false;
+      if (!arg || !['claude', 'codex', 'gemini', 'agy'].includes(arg.name)) return false;
       const w = store.get('worker');
       const cur = w.engines[arg.name];
       const next = { ...cur };
@@ -599,8 +599,8 @@ async function localAction(name, arg, sender) {
       return true;
     }
     case 'pick-path': {
-      if (!['claude', 'codex', 'gemini'].includes(arg)) return false;
-      const r = await dialog.showOpenDialog(owner, { title: `${arg} 실행 파일 고르기`, properties: ['openFile'],
+      if (!['claude', 'codex', 'gemini', 'agy'].includes(arg)) return false;
+      const r = await dialog.showOpenDialog(owner, { title: `${arg === 'agy' ? 'Antigravity(agy)' : arg} 실행 파일 고르기`, properties: ['openFile'],
         filters: [{ name: '실행 파일 (*.exe; *.cmd)', extensions: ['exe', 'cmd'] }] });
       if (r.canceled || !r.filePaths[0]) return false;
       const w = store.get('worker');
