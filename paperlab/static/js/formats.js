@@ -1154,6 +1154,12 @@ export function coverDialog({ manuscriptId, cover, format, titleFallback = "" })
             <label class="check" title="목차에 #### 항 제목까지 넣어요 (끄면 장 · 절까지)"><input type="checkbox" name="include_toc_h4" ${c.include.toc_h4 ? "checked" : ""}> 목차에 항까지</label>
           </div>
           <div class="hint">목차 · 그림 목차 · 표 목차는 ${pageNames.approval} 뒤, 본문 앞에 들어가요. 그림 · 표가 없으면 그 목차는 빠져요.</div>
+          <div class="field" style="margin-top:10px"><label for="cv-capnum">그림 · 표 번호</label>
+            <select class="input" id="cv-capnum" name="caption_numbering">
+              <option value="continuous" ${c.caption_numbering !== "chapter" ? "selected" : ""}>처음부터 이어서 (그림 1 · 표 1)</option>
+              <option value="chapter" ${c.caption_numbering === "chapter" ? "selected" : ""}>장마다 새로 (그림 2-1 · 표 3-2)</option>
+            </select>
+            <div class="hint">장마다 새로: 제N장의 N을 앞에 붙이고, 부록은 A-1처럼 매겨요. 국문 초록 등 장 앞 부분은 이어서 매겨요.</div></div>
         </fieldset>
       </div>
       <aside class="cover-preview" aria-label="문구 미리보기">
@@ -1235,6 +1241,7 @@ export function coverDialog({ manuscriptId, cover, format, titleFallback = "" })
         committee: Array.from({ length: memberCount() }, (_, i) => String(members[i] || "").trim()),
         include: { front: q("include_front").checked, inner: q("include_inner").checked, approval: q("include_approval").checked,
           toc: q("include_toc").checked, lof: q("include_lof").checked, lot: q("include_lot").checked, toc_h4: q("include_toc_h4").checked },
+        caption_numbering: q("caption_numbering") && q("caption_numbering").value === "chapter" ? "chapter" : "continuous",
       };
       return strict ? { cover: out, error } : out;
     }

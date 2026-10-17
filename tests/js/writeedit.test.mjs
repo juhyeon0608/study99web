@@ -308,3 +308,8 @@ test("번호 다시 매기기: 코드 블록 안 줄 · '###'와 '##' 구분", (
   const v = "## 제5장 가\n```\n## 제9장 코드\n```\n### 제7절 나\n## 제3장 다";
   assert.equal(we.renumberHeadings(v), "## 제1장 가\n```\n## 제9장 코드\n```\n### 제1절 나\n## 제2장 다");
 });
+
+test("앞부분 제목 판정 (장별 그림 · 표 번호에서 장으로 세지 않음 — 서버 writer.is_front_matter와 같게)", () => {
+  for (const t of ["국문 초록", "ABSTRACT", "감사의 글", "목 차", "<국문 초록>"]) assert.equal(we.isFrontMatter(t), true, t);
+  for (const t of ["제1장 서론", "부록", "참고문헌"]) assert.equal(we.isFrontMatter(t), false, t);
+});

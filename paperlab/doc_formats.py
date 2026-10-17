@@ -429,8 +429,11 @@ COVER_DEFAULTS: dict[str, Any] = {
     # — 목록은 doc_lists (docs/specs/export-lists-footnotes.md)
     "include": {"front": True, "inner": True, "approval": True, "toc": True, "lof": True, "lot": True,
                 "toc_h4": False},
+    # 그림 · 표 번호: continuous = 그림 1 · 2 …, chapter = 장마다 그림 2-1 · 표 3-2 (부록은 A-1) — 화면(writing.js)이 매김
+    "caption_numbering": "continuous",
 }
 INCLUDE_KEYS = ("front", "inner", "approval", "toc", "lof", "lot", "toc_h4")
+CAPTION_NUMBERINGS = ("continuous", "chapter")
 _COVER_TEXT_KEYS = ("degree_field", "title_ko", "title_en", "subtitle", "school", "department", "name")
 _YM = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
@@ -456,6 +459,8 @@ def validate_cover(cover: Any) -> dict:
             out[key] = value
         elif key == "spaced_name":
             out[key] = _bool(value, path)
+        elif key == "caption_numbering":
+            out[key] = _choice(value, path, CAPTION_NUMBERINGS)
         elif key in ("advisors", "committee"):
             if not isinstance(value, list) or not all(isinstance(v, str) and len(v) <= 100 for v in value):
                 raise FormatError(path, "이름 목록으로 입력해 주세요")

@@ -678,6 +678,14 @@ export function outlineText(value, max = 4000) {
   return out.trimEnd();
 }
 
+// 앞부분 제목(국문 초록 · ABSTRACT · 감사의 글 · 머리말 · 목차) — 장별 그림 · 표 번호에서 장으로 세지 않음.
+// 서버 writer.FRONT_MATTER_TITLES(쪽 번호의 '첫 장')와 같은 목록
+const FRONT_MATTER = new Set(["국문초록", "초록", "국문요약", "요약", "요지", "abstract", "감사의글", "감사의말씀", "사사",
+  "머리말", "서문", "preface", "acknowledgements", "acknowledgments", "목차", "차례"]);
+export function isFrontMatter(title) {
+  return FRONT_MATTER.has(String(title || "").replace(/[\s<>〈〉()[\]·.:]+/g, "").toLowerCase());
+}
+
 // ------------------------------------------------------------- 단축키 · 서식 도움말 (논문 쓰기 화면의 ? 버튼 · Ctrl+/)
 export function shortcutHelp(mac = false) {
   const M = mac ? "⌘" : "Ctrl";

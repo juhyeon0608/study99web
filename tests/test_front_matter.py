@@ -20,3 +20,12 @@ def test_thesis_template_has_front_and_back_matter():
         t["content"] for t in TEMPLATES.values() if t["name"] == "학위논문")
     order = [c.index(s) for s in ("## 국문 초록", "주제어:", "## 제1장 서론", "[참고문헌]", "## ABSTRACT", "Keywords:", "## 부록")]
     assert order == sorted(order)
+
+
+def test_cover_caption_numbering_setting():
+    import pytest
+    from paperlab.doc_formats import FormatError, cover_with_defaults, validate_cover
+    assert cover_with_defaults({})["caption_numbering"] == "continuous"
+    assert validate_cover({"caption_numbering": "chapter"}) == {"caption_numbering": "chapter"}
+    with pytest.raises(FormatError):
+        validate_cover({"caption_numbering": "by-section"})

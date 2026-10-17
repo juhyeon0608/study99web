@@ -26,7 +26,7 @@ import { state } from "./state.js";
 // 그림 · 표 · 캡션 · 목록 편집 · 단축키 도움말 (docs/specs/writing-figures-tables.md)
 import {
   applyEditToValue, backspaceEdit, blockInsert, captionInfo, captionLabel, diffEdit, enterEdit, figureInfo, figureMarkdown, findFigures,
-  findTables, headingEdit, indentEdit,
+  findTables, headingEdit, indentEdit, isFrontMatter,
   newTable, resolveXrefs, splitXrefs, tableAt, tableMarkdown, toggleListEdit,
   SCOPE_KINDS, SCOPE_NAMES, aiScope, scopeSummary,
 } from "./writeedit.js";
@@ -78,7 +78,7 @@ function prepare(text) {
 }
 
 // 마크다운 → 문서 블록 (미리보기와 워드·한글 내보내기가 함께 쓴다)
-async function buildDocument(text, { style, locale, koreanFirst } = {}) {
+async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers = false } = {}) {
   const { src: prepared, clusters, bibTitle } = prepare(text);
   // 각주: 본문 [^이름] → 자리표시, 정의 줄([^이름]: …)은 뺀다. 인용 자리표시를 먼저 매겨 인용 순번은 원고 글 순서 그대로
   const { text: src, notes } = extractFootnotes(prepared);
@@ -151,8 +151,21 @@ async function buildDocument(text, { style, locale, koreanFirst } = {}) {
   const labels = new Map();
   const count = { fig: 0, tbl: 0 };
   const captioned = new WeakSet();
+  // 장마다 다시 매기기(표지 정보 → 그림 · 표 번호 "장마다"): 그림 2-1 · 표 3-2, 부록은 A-1. 첫 장 앞(국문 초록 등)은 연속 번호
+  const chap = { cur: "", seq: 0, app: 0 };
+  const onChapter = (raw) => {
+    if (!chapterNumbers) return;
+    const s = String(raw || "").replace(/[*_`]/g, "").replace(/\s+/g, " ").trim();
+    if (isFrontMatter(s) || /^(참고\s*문헌|references|bibliography)$/i.test(s)) return;
+    const app = s.match(/^부록\s*([A-Za-z])?(?=\s|$|[.:·])/);
+    const m = s.match(/제\s*(\d+)\s*장/);
+    if (app) chap.cur = (app[1] || String.fromCharCode(65 + chap.app)).toUpperCase(), chap.app++;
+    else chap.seq = m ? Number(m[1]) : chap.seq + 1, chap.cur = String(chap.seq);
+    count.fig = 0;
+    count.tbl = 0;
+  };
   const numbered = (kind, label, body) => {
-    const n = ++count[kind];
+    const n = chapterNumbers && chap.cur ? `${chap.cur}-${++count[kind]}` : ++count[kind];
     if (label && !labels.has(label)) labels.set(label, { kind, n });
     const head = { text: captionLabel(kind, n, ko), b: true };
     return { n, caption: body.length ? [head, { text: " " }, ...body] : [head] };
@@ -184,7 +197,10 @@ async function buildDocument(text, { style, locale, koreanFirst } = {}) {
     for (const [k, t] of tokens.entries()) {
       if (t.type === "heading") {
         if (t.depth === 1) blocks.push({ type: "title", runs: inline(t.tokens) });
-        else blocks.push({ type: "heading", level: Math.min(t.depth - 1, 3), runs: inline(t.tokens) });
+        else {
+          if (t.depth === 2 && !depth) onChapter(t.text);
+          blocks.push({ type: "heading", level: Math.min(t.depth - 1, 3), runs: inline(t.tokens) });
+        }
       } else if (t.type === "paragraph") {
         if (t.text.trim() === "") blocks.push(...bibBlocks());
         else if (!figureOrCaption(t, tokens, k, depth)) blocks.push({ type: "paragraph", runs: inline(t.tokens) });
@@ -758,6 +774,7 @@ async function openCoverDialog(view, ta) {
   if (saved && W.m === m) {
     m.cover = saved;
     updateCoverBtn(view);
+    renderPreview(view, ta); // 그림 · 표 번호 방식(장마다 · 이어서)이 바뀌었을 수 있음
   }
   return !!saved;
 }
@@ -880,7 +897,8 @@ async function renderPreview(view, ta) {
   const seq = W.seq;
   const token = (W.previewToken = (W.previewToken || 0) + 1);
   try {
-    const built = await buildDocument(ta.value, { style: currentStyle(view), koreanFirst: state.settings.korean_first !== false });
+    const built = await buildDocument(ta.value, { style: currentStyle(view), koreanFirst: state.settings.korean_first !== false,
+      chapterNumbers: !!(W.m && W.m.cover && W.m.cover.caption_numbering === "chapter") });
     if (seq !== W.seq || token !== W.previewToken) return;
     W.built = built;
     doc.innerHTML = blocksToHtml(built.blocks) || `<p class="muted">왼쪽에 글을 쓰면 여기에 서식대로 보여요.</p>`;
@@ -1996,7 +2014,8 @@ async function exportAs(format, view, ta) {
         if (choice !== "go") return;
       }
     }
-    const built = await buildDocument(ta.value, { style: currentStyle(view), koreanFirst: state.settings.korean_first !== false });
+    const built = await buildDocument(ta.value, { style: currentStyle(view), koreanFirst: state.settings.korean_first !== false,
+      chapterNumbers: !!(W.m && W.m.cover && W.m.cover.caption_numbering === "chapter") });
     if (built.missingKeys.length && !(await confirmDialog(
       `서재에 없는 인용 키가 있어요: ${built.missingKeys.join(", ")}\n그대로 표시해서 내보낼까요?`, { ok: "그대로 내보내기" }))) return;
     const title = $("[data-title]", view).textContent.trim() || "원고";
@@ -2098,7 +2117,8 @@ export async function composeDialog(initialFile = null) {
     btn.innerHTML = `<span class="spinner"></span> 만드는 중`;
     try {
       const style = $("[data-style]", result).value;
-      const r = await renderClusters(scan.items, scan.citations, { style, koreanFirst: state.settings.korean_first !== false });
+      const r = await renderClusters(scan.items, scan.citations, { style, koreanFirst: state.settings.korean_first !== false,
+      chapterNumbers: !!(W.m && W.m.cover && W.m.cover.caption_numbering === "chapter") });
       const rendered = scan.citations.map((c, i) => {
         const x = r.clusters[i];
         if (!x || !x.html) return { runs: [{ text: c.raw }] };
