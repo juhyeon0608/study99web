@@ -892,6 +892,8 @@ def _apply(lib: Library, job: dict, parsed: dict, model: str):
         return mschat.apply_result(lib, job, parsed)
     if kind == "proofread":  # 고칠 곳 목록 — 원고는 바꾸지 않음(화면에서 사용자가 고침)
         return proofread.apply_result(params, parsed)
+    if kind == "figure":  # 정화한 SVG · 캡션 (figgen.parse — 원문은 남기지 않음)
+        return figgen.result_of(parsed)
     text = parsed["text"]
     if len(text.encode("utf-8")) > RESULT_TEXT_MAX:
         raise ValueError("too large")
