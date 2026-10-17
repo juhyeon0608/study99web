@@ -328,7 +328,7 @@ def test_revoke_requeues_and_limits(env, project):
     jid = ca.post(f"/api/papers/{paper(ca)}/summary").json()["job"]["id"]
     t = a1.claim()["job"]
     r = ca.delete(f"/api/devices/{a1.id}")
-    assert r.json() == {"ok": True, "requeued_jobs": 1}
+    assert r.json() == {"ok": True, "requeued_jobs": 1, "local_orphaned": 0}  # 로컬 항목 없음(선택 동기화 7.2절)
     for resp in (a1.http.post("/api/worker/claim", json={}),
                  a1.http.post("/api/worker/heartbeat", json={"jobs": []}), a1.result(t, text=SUMMARY_TEXT)):
         assert resp.status_code == 401 and resp.json()["code"] == "device_revoked"

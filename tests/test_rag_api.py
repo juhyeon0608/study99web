@@ -126,7 +126,7 @@ def test_index_then_ask_collection_scope(env, project):
         assert st[pid][0] == rag.RAG_VERSION and st[pid][1] in env.storage.objects  # AC-I01
     assert st[blank] == (rag.RAG_VERSION, "")  # AC-I06: 파일 없이 판만 — 다시 시도하지 않음
     assert out["index"] == {"papers": 4, "with_pdf": 4, "indexed": 3, "no_text": 1, "pending": 0, "embed": True,
-                            "loaded": out["index"]["loaded"]}
+                            "loaded": out["index"]["loaded"], "excluded_local": 0}  # PC에만 둔 편 없음(선택 동기화 7.2절)
     assert out["job"]["kind"] == "index" and out["job"]["engine"] == "local" and out["job"]["status"] == "succeeded"
     # 컬렉션 범위: p1 · p2만
     cid = ca.post("/api/collections", json={"name": "선행연구"}).json()["id"]

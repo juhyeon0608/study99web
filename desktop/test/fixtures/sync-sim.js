@@ -17,8 +17,23 @@ const { SyncEngine } = require('../../sync/engine');
 const { createTransfer } = require('../../sync/transfer');
 const { createApi } = require('../../worker/api-client');
 const { Logger } = require('../../lib/log');
+const { version: APP_VERSION } = require('../../package.json');
 
 const out = (m) => process.stdout.write(`${JSON.stringify(m)}\n`);
+// 실제 앱(sync/entry.js)과 같은 머리글 — 없으면 새 서버가 모든 동기화 요청에 426 update_required(선택 동기화 D-7)
+const SYNC_HEADERS = { 'X-PaperLab-Sync': '2' };
+
+/**
+ * 실패로 끝내기: process.exit() 를 바로 부르지 않고 종료 코드만 정해 이벤트 루프가 비면 끝나게 한다.
+ * Windows 의 Node 24 는 fetch 응답을 받은 바로 그 틱에 process.exit() 하면(재사용 중인 keep-alive 소켓이 남아 있을 때)
+ * libuv 가 "Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), src\win\async.c" 로 죽고, 그 전에 쓴 error 줄도 잃을 수 있음.
+ * 무언가 루프를 붙잡고 있으면 1초 뒤(같은 틱이 아님) 마저 끝냄.
+ */
+function fail(m) {
+  out({ event: 'error', ...m });
+  process.exitCode = 2;
+  setTimeout(() => process.exit(2), 1000).unref();
+}
 
 (async () => {
   const [server, code, root, stateDir] = process.argv.slice(2);
@@ -26,7 +41,7 @@ const out = (m) => process.stdout.write(`${JSON.stringify(m)}\n`);
   fs.mkdirSync(root, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
   const pair = await createApi({ baseUrl: server }).post('/api/worker/pair',
-    { code, name: process.env.SIM_NAME || 'Node 동기화 PC', os: 'Windows test', app_version: '0.3.0', protocol: 1 }, { auth: false });
+    { code, name: process.env.SIM_NAME || 'Node 동기화 PC', os: 'Windows test', app_version: APP_VERSION, protocol: 1 }, { auth: false });
   out({ event: 'paired', device_id: pair.device_id });
   const offset = Number(process.env.SIM_CLOCK_OFFSET_MS) || 0;
   const recycle = path.join(stateDir, 'fake-recycle');
@@ -42,7 +57,7 @@ const out = (m) => process.stdout.write(`${JSON.stringify(m)}\n`);
   let last = '';
   let engine = null;
   engine = new SyncEngine({
-    api: createApi({ baseUrl: server, getToken: () => pair.token }),
+    api: createApi({ baseUrl: server, getToken: () => pair.token, headers: SYNC_HEADERS }),
     transfer: createTransfer({ serverOrigin: new URL(server).origin, dev: true, getUid: () => (engine && engine.who ? engine.who.uid : '') }),
     trash, now: () => Date.now() + offset, journalFile: path.join(stateDir, 'state.json'), installId: 'sim', token: pair.token,
     log: new Logger(path.join(stateDir, 'sync.log')),
@@ -57,10 +72,10 @@ const out = (m) => process.stdout.write(`${JSON.stringify(m)}\n`);
     },
   });
   await engine.probe(path.resolve(root));
-  if (engine.mode !== 'preview') { out({ event: 'error', code: engine.pickError }); process.exit(2); }
+  if (engine.mode !== 'preview') { fail({ code: engine.pickError }); return; }
   out({ event: 'preview', plan: engine.preview.plan, place: engine.preview.place });
   const r = await engine.confirmStart(process.env.SIM_PLACE || engine.preview.place);
-  if (!r.ok) { out({ event: 'error', code: r.code }); process.exit(2); }
+  if (!r.ok) { fail({ code: r.code }); return; }
   const rl = readline.createInterface({ input: process.stdin });
   rl.on('line', async (line) => {
     let c;
@@ -71,4 +86,4 @@ const out = (m) => process.stdout.write(`${JSON.stringify(m)}\n`);
     else if (c.cmd === 'state') { const s = engine.snapshot(); out({ event: 'state', state: s.state, counts: s.counts, problems: s.problems.length, confirm: s.confirm }); }
     else if (c.cmd === 'stop') { engine.stop(); out({ event: 'stopped' }); setTimeout(() => process.exit(0), 50); }
   });
-})().catch((e) => { out({ event: 'error', code: e.code || 'error', status: e.status || 0 }); process.exit(2); });
+})().catch((e) => fail({ code: e.code || 'error', status: e.status || 0 }));
