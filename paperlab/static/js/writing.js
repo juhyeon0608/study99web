@@ -37,6 +37,7 @@ import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
 import { checkPanel } from "./writecheckui.js"; // 제출 전 점검표 (docs/specs/writing-checklist.md)
+import { figPane } from "./writefigui.js"; // 그림 만들기 · 자연어로 고치기 (docs/specs/writing-figure-ai.md)
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, modalOpen,
   pickFiles, popupMenu, purifyMd, store, toast,
@@ -302,6 +303,8 @@ export function closeWriter() {
   W.ai = null;
   if (W.check) W.check.destroy(); // 제출 전 점검 패널 · Alt+K
   W.check = null;
+  if (W.fig) W.fig.destroy(); // 그림 만들기 패널 · Alt+G (그리는 작업은 서버에서 계속)
+  W.fig = null;
   if (W.saver) W.saver.flush();
   W.saver = null;
   W.m = null;
@@ -672,6 +675,7 @@ export async function openManuscript(main, id) {
   ta.focus();
   // AI 글쓰기 결과 (2026-10-16 백그라운드 AI · 2026-10-17 패널): 오른쪽 AI 결과 패널 + 알림 [열기]로 온 주소(#/write/원고/j작업)
   W.ai = aiPane(view, ta, m);
+  W.fig = figPane(view, { ta, m, saveVersion: (c) => saveVersion(m.id, c), say: (t) => sayWriter(view, t), closeAi: () => view.dataset.aiPane === "open" && W.ai && W.ai.toggle() });
   openAiJobFromHash(m, ta);
   historyTools(view, { mid: m.id, ta, flush: flushWriter }); // [기록] · Alt+H (docs/specs/manuscript-history.md)
 }
@@ -1328,6 +1332,7 @@ function aiMenu(anchor, ta) {
   const sc = getScope();
   popupMenu(anchor, [
     ...AI_MODES.map((m) => (m === "-" ? "-" : { label: m[1], action: () => runAi(m[0], ta) })),
+    ...(W.fig ? ["-", ...W.fig.menuItems()] : []), // 그림 만들기 · 이 내용으로 · 커서의 그림 고치기 (writefigui.js)
     "-",
     ...SCOPE_KINDS.map((v) => ({ label: `범위: ${SCOPE_MENU[v]}`, sub: v === sc ? "✓ 사용 중" : "", action: () => setScope(v) })),
     "-",

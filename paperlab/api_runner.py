@@ -24,6 +24,7 @@ from typing import Callable
 from psycopg.types.json import Jsonb
 
 from . import explain, find, jobs, mschat, rag, translate, verify
+from . import figgen  # 그림 만들기 · 고치기 (docs/specs/writing-figure-ai.md)
 from .ai import AIError, PaperContext
 from .db import Database, DBUnavailable, actor_claims
 from .storage import NotFound, UserStorage
@@ -219,6 +220,8 @@ class ApiRunner:
                     request = explain.build_request(lib, job["paper_id"], params)
                 elif job["kind"] == "ms_chat":  # 원고 AI 대화 — 지난 대화 · 내 논문 자료는 지금 DB에서 (mschat.py)
                     request = mschat.build_request(lib, job)
+                elif job["kind"] == "figure":
+                    request = figgen.build_request(params)
             except AIError as e:
                 jobs._end(lib, job, "failed", "bad_input", str(e))
                 return
@@ -263,6 +266,8 @@ class ApiRunner:
                 parsed = _collect(ai.complete(*request, engine=engine), progress, partial=True)
             elif job["kind"] == "find":
                 parsed = self._find(ai, engine, uid, job, settings, progress)
+            elif job["kind"] == "figure":  # 결과 SVG는 정화한 것만 (틀리면 bad_output — 폴백 없음)
+                parsed = figgen.parse(_collect(ai.complete(*request, engine=engine), progress)["text"])
             elif job["kind"] == "summary":
                 if src is None:
                     return

@@ -18,6 +18,7 @@
 - writecheck.test.mjs: 논문 쓰기 제출 전 점검표 — 양식 · 번호 · 인용 · 글 다듬기 점검 규칙 · 분량 추정 (docs/specs/writing-checklist.md)
 - writechat.test.mjs: AI에 보낼 범위(진짜 문단 · 이 절 · 이 장) · 원고 AI 대화 답 읽기 · 제안 넣기 · 장 · 절 일괄 처리 · 코드 검사
   (docs/specs/manuscript-ai-chat.md)
+- writefig.test.mjs: 그림 만들기 · 고치기 — '이 내용으로' 범위 · 넣을 자리 · 그림 넣기 · 바꾸기 · PNG 크기 · 코드 검사 (docs/specs/writing-figure-ai.md)
 - Node가 없거나 너무 오래되면(20.10 미만) 건너뛴다(skip) — AC-8.
 - 경로에 한글 · 공백이 있어도 되게 셸을 거치지 않고 리스트 인자로 부른다.
 """
@@ -43,7 +44,8 @@ MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8, "e
             "syncmode": 30,  # syncmode: 선택 동기화(폴더 · 파일별 PC에만 두기) 화면 결정 함수 · 문구 (AC-S61)
             "writehist": 7,  # writehist: 원고 버전 기록 — 줄 비교 · 접기 · 목록 문구 · 코드 검사 (manuscript-history.md)
             "writecheck": 17,  # writecheck: 논문 쓰기 제출 전 점검표 규칙 · 분량 추정 · 코드 검사 (2026-10-17)
-            "writechat": 22}  # writechat: AI 범위(진짜 문단 · 이 절 · 이 장) · 원고 AI 대화 제안 · 장 · 절 일괄 처리 (manuscript-ai-chat.md)
+            "writechat": 22,  # writechat: AI 범위(진짜 문단 · 이 절 · 이 장) · 원고 AI 대화 제안 · 장 · 절 일괄 처리 (manuscript-ai-chat.md)
+            "writefig": 9}  # writefig: 그림 만들기 · 고치기 — 범위 · 넣기 · 바꾸기 · PNG 크기 · 코드 검사 (writing-figure-ai.md)
 
 
 def _node_version(node: str) -> tuple[int, ...] | None:

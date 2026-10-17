@@ -23,11 +23,18 @@ MAX_SIDE_PX = 20000                       # 이보다 큰 가로 · 세로는 �
 
 CONTENT_TYPES = {"png": "image/png", "jpg": "image/jpeg", "gif": "image/gif"}
 NAME_RE = re.compile(r"^[0-9a-f]{16}\.(png|jpg|gif)$")
+# 그림 만들기(figgen.py)가 PNG 옆에 두는 SVG 원본 — 같은 16진수 이름 + .svg (원고 · 내보내기는 PNG만 쓴다)
+SVG_NAME_RE = re.compile(r"^[0-9a-f]{16}\.svg$")
 DPI = 96  # 픽셀 → mm (화면 그림의 기본 해상도로 본다)
 
 
 class FigureError(ValueError):
     """올린 그림이 규칙에 맞지 않음 (서버는 400)"""
+
+
+def svg_name(name: str) -> str:
+    """그림 이름(…png) → 그 옆 SVG 원본 이름(….svg)"""
+    return name.rsplit(".", 1)[0] + ".svg"
 
 
 def sniff(data: bytes) -> str | None:

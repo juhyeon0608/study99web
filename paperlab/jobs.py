@@ -18,6 +18,7 @@ from psycopg.types.json import Jsonb
 
 from . import ai, explain, find, rag, translate, verify
 from .config import AGY_DEFAULT_MODEL, AGY_MODEL_RE, ENGINE_LABELS, ENGINES, JOB_KINDS, UserSettings, redact
+from . import figgen  # 그림 만들기 · 고치기 작업 'figure' (docs/specs/writing-figure-ai.md)
 from .convert import IMAGE_EXTS
 from .db import LOCAL_ONLY_CANCELLED, LOCAL_TEXT_EXTS, PAPER_TRASHED, REP_SHA, REP_SIZE, Library, iso, now_dt
 
@@ -40,6 +41,9 @@ TIMEOUT_S = {"summary": 1200, "chat": 600, "write": 600, "find": 600, "verify": 
 # ms_chat(원고 AI 대화 — mschat.py)은 글쓰기(write) 엔진 순서를 따른다
 ALL_KINDS = JOB_KINDS + ("index", "translate_paper", "ms_chat")
 ROUTE_KIND = {"translate_paper": "translate", "ms_chat": "write"}
+# 그림 만들기(2026-10-17): 작업별 엔진 설정에는 없음 — 경로는 figgen.route(내 PC의 claude CLI 먼저), params는 고칠 SVG까지 담음
+ALL_KINDS += ("figure",)
+DEADLINE_S["figure"], TIMEOUT_S["figure"] = 24 * 3600, figgen.TIMEOUT_S
 EXPLAIN_KINDS = explain.KINDS
 # 전체 번역은 다시 대기 · 잡기 때도 진행(쪽 수)을 남긴다 — 화면이 counts로 번역 보기를 새로 받음 (4단계 6.3절 6번)
 _KEEP_PROGRESS = "progress = case when kind = 'translate_paper' then progress else '{}'::jsonb end"
@@ -399,6 +403,8 @@ def build_route(kind: str, get, devices: list[dict], cli_only: bool = False) -> 
     agy(Antigravity)는 API가 없어 늘 CLI 칸만.
     cli_only: 로컬 항목(selective-sync.md 7.4절) — devices에 보관 PC 한 대만 넘기고 API 칸은 모두 뺀다"""
     adv = advertised(devices)
+    if kind == "figure" and not cli_only:  # 그림 만들기: 내 PC의 claude CLI → 내 Claude 키 → (claude가 없을 때만) 다른 엔진
+        return figgen.route(lambda e: bool(get(ai.ENGINE_KEYS[e])), adv)
     route = []
     for e in (get("ai_routing") or {}).get(ROUTE_KIND.get(kind, kind)) or ["claude"]:
         if has_key(get, e) and not cli_only:
@@ -497,9 +503,9 @@ def create_job(lib: Library, kind: str, route: list[dict], params: dict, paper_i
         raise JobError(400, NO_ROUTE, "no_route")  # 내 PC · 내 키 말고 다른 실행 칸은 받지 않는다 (agy는 API 칸 없음)
     if pinned_device_id is not None and any(s["runner"] != "cli" for s in route):
         raise JobError(400, NO_ROUTE, "no_route")  # 로컬 항목은 서버 API 키로 실행하지 않는다 (P-6)
-    if len(json.dumps(params, ensure_ascii=False).encode("utf-8")) > PARAMS_MAX:
+    if len(json.dumps(params, ensure_ascii=False).encode("utf-8")) > (figgen.PARAMS_MAX if kind == "figure" else PARAMS_MAX):
         raise JobError(400, "요청이 너무 커요", "too_large")
-    active = lib._one("select count(*)::int as n from paperlab.jobs where user_id = %s and status in ('queued', 'running')",
+    active =lib._one("select count(*)::int as n from paperlab.jobs where user_id = %s and status in ('queued', 'running')",
                       (lib.uid,))["n"]
     if active >= MAX_ACTIVE_JOBS:
         raise JobError(429, "작업이 너무 많아요. 잠시 후 다시 해 주세요", "too_many_jobs")
@@ -609,6 +615,7 @@ def job_view(r: dict, devices: list[dict], free: dict, detail: bool = False) -> 
         "source_text": (params.get("text") or "")[:200] if r["kind"] in EXPLAIN_KINDS else None,
         "page": params.get("page") if r["kind"] in EXPLAIN_KINDS else None,
         "write": write_view(params, r["result"], detail) if r["kind"] == "write" else None,
+        "figure": figgen.view(params) if r["kind"] == "figure" else None,  # 그림 만들기: 원고 · 요청 · 고치기 사슬
         "result": r["result"],
         "created_at": iso(r["created_at"]), "started_at": iso(r["started_at"]), "finished_at": iso(r["finished_at"]),
     }
@@ -1007,6 +1014,8 @@ def write_sources(lib: Library, keys) -> list[dict]:
 def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
     """(시스템, 프롬프트) — CLI 워커 · OpenAI · Google 공용. 프롬프트는 DB에 저장하지 않는다(K16)"""
     params = job["params"] or {}
+    if job["kind"] == "figure":
+        return figgen.build_request(params)
     if job["kind"] == "write":
         return ai.write_request(params.get("mode") or "polish", params.get("text") or "",
                                 instruction=params.get("instruction") or "", context=params.get("context") or "",
@@ -1124,6 +1133,8 @@ def parse_result(job: dict, text: str, structured=None) -> dict:
         return {"results": verify.parse_results(text, structured)}
     if job["kind"] in EXPLAIN_KINDS:
         return explain.parse(job["kind"], text, structured)
+    if job["kind"] == "figure":
+        return figgen.parse(text)
     return ai.parse_text_result(job["kind"], text, structured)
 
 

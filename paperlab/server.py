@@ -42,6 +42,7 @@ from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, be
 from . import extsources
 from . import figures
 from . import mschat
+from . import figgen  # 그림 만들기 · 자연어로 고치기 (docs/specs/writing-figure-ai.md)
 from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
@@ -3091,30 +3092,53 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     # 원고 AI 대화 · 장 · 절 일괄 처리 /api/manuscripts/{mid}/chat · ai-batch (docs/specs/manuscript-ai-chat.md)
     mschat.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, new_job=new_job, maintain=maintain,
                                               free=lambda: ws.free))
+    figgen.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, new_job=new_job))  # POST /api/ai/figure
 
     # -------------------------------------------------------- 원고 그림 (docs/specs/writing-figures-tables.md)
     @app.post("/api/manuscripts/{mid}/figures")
-    def upload_figure(mid: int, file: UploadFile = File(...), ctx: RequestCtx = Ctx):
-        """그림 한 장을 올린다 → {name, ref: "fig:{name}", width, height, size}. 본문에는 화면이 ![캡션](fig:이름)으로 넣는다"""
+    def upload_figure(mid: int, file: UploadFile = File(...), svg: str | None = Form(None), ctx: RequestCtx = Ctx):
+        """그림 한 장을 올린다 → {name, ref: "fig:{name}", width, height, size, svg}. 본문에는 화면이 ![캡션](fig:이름)으로 넣는다.
+        svg(그림 만들기 — 선택): 화면이 PNG로 그린 원래 SVG. 정화해서 같은 이름 .svg로 둔다(나중에 '이 그림 고치기'의 원본 —
+        원고 · 내보내기는 PNG만 씀)"""
         need_manuscript(ctx, mid)
         ensure_space(ctx)  # R2 95% 규칙 (PDF · 원본 올리기와 같게)
         data = file.file.read(figures.MAX_FIGURE_BYTES + 1)
         try:
             info = figures.validate(data)
+            source = figgen.sanitize_svg(svg).encode("utf-8") if svg is not None else b""
         except figures.FigureError as e:
             raise HTTPException(400, str(e)) from e
+        except figgen.SvgError as e:
+            raise HTTPException(400, f"그림 원본(SVG)을 쓸 수 없어요: {e}") from None
         existing = ctx.storage.list_figures(mid)
-        if len(existing) >= figures.MAX_FIGURES_PER_MANUSCRIPT:
+        if sum(1 for k, _ in existing if not k.endswith(".svg")) >= figures.MAX_FIGURES_PER_MANUSCRIPT:
             raise HTTPException(400, f"원고 하나에 그림은 {figures.MAX_FIGURES_PER_MANUSCRIPT}장까지 넣을 수 있어요")
-        if sum(s for _, s in existing) + info["size"] > figures.MAX_FIGURE_BYTES_PER_MANUSCRIPT:
+        if sum(s for _, s in existing) + info["size"] + len(source) > figures.MAX_FIGURE_BYTES_PER_MANUSCRIPT:
             raise HTTPException(400, "이 원고의 그림 용량이 가득 찼어요 (300MB)")
         name = f"{uuid.uuid4().hex[:16]}.{info['ext']}"
         key = ctx.storage.figure_key(mid, name)
         ctx.storage.put(key, data, info["content_type"])
         ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))
-        st.figure_sizes.add(info["size"])
+        if source:
+            skey = ctx.storage.figure_svg_key(mid, figures.svg_name(name))
+            ctx.storage.put(skey, source, "image/svg+xml")
+            ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(skey))
+        st.figure_sizes.add(info["size"] + len(source))
         return {"name": name, "ref": f"fig:{name}", "width": info["width"], "height": info["height"],
-                "size": info["size"]}
+                "size": info["size"], "svg": bool(source)}
+
+    @app.get("/api/manuscripts/{mid}/figures/{name}/source")
+    def get_figure_source(mid: int, name: str, ctx: RequestCtx = Ctx):
+        """그림 만들기로 넣은 그림의 SVG 원본 → {"name", "svg"} (JSON 글로만 — SVG 파일로 내려주지 않음). 없으면 404"""
+        need_manuscript(ctx, mid)
+        if not figures.NAME_RE.fullmatch(name):
+            raise HTTPException(404, "그림 원본을 찾을 수 없어요")
+        try:
+            raw = ctx.storage.get(ctx.storage.figure_svg_key(mid, figures.svg_name(name)))
+            svg = figgen.sanitize_svg(raw.decode("utf-8", "replace"))  # 저장할 때 정화했지만 내려줄 때도 한 번 더
+        except (NotFound, StorageKeyError, figgen.SvgError):
+            raise HTTPException(404, "그림 원본을 찾을 수 없어요") from None
+        return JSONResponse({"name": name, "svg": svg}, headers={"Cache-Control": "private, no-store"})
 
     @app.get("/api/manuscripts/{mid}/figures/{name}")
     def get_figure(mid: int, name: str, ctx: RequestCtx = Ctx):

@@ -1926,3 +1926,47 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .mb-body { display: flex; flex-direction: column; gap: 10px; }
 .mb-sum { display: flex; flex-direction: column; gap: 6px; }
 .mb-title { font-size: 13px; font-weight: 650; overflow-wrap: anywhere; }
+/* ---------------- 논문 쓰기 그림 만들기 패널 (2026-10-17 — docs/specs/writing-figure-ai.md) ---------------- */
+/* AI 결과 패널과 같은 오른쪽 칸 · 같은 폭(--ai-w). 열림 = section.writer[data-fig-pane="open"] — 둘 중 하나만 보임(그림 패널이 열리면 AI 결과 패널은 숨김) */
+.writer:not([data-fig-pane="open"]) .fig-pane { display: none; } /* .ai-pane 열림 규칙보다 뒤 · 같은 무게 */
+.writer[data-fig-pane="open"] .fig-pane { display: flex; }
+.writer[data-fig-pane="open"] .ai-pane:not(.fig-pane) { display: none; }
+.writer[data-fig-pane="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) var(--ai-w); }
+.writer[data-fig-pane="open"].view-split .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+.writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+.writer[data-fig-pane="open"][data-ref="open"].view-split .writer-preview { display: none; }
+@media (max-width: 1500px) {
+  .writer[data-fig-pane="open"].view-split .writer-side,
+  .writer[data-fig-pane="open"][data-ref="open"] .writer-side { display: none; }
+  .writer[data-fig-pane="open"].view-split .writer-body,
+  .writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+}
+@media (max-width: 1100px) {
+  .writer[data-fig-pane="open"] .writer-body,
+  .writer[data-fig-pane="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) var(--ai-w); }
+  .writer[data-fig-pane="open"].view-split .writer-preview { display: none; }
+  .writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+}
+@media (max-width: 760px) {
+  .writer[data-fig-pane="open"] .writer-body,
+  .writer[data-fig-pane="open"].view-split .writer-body,
+  .writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr); }
+}
+.fig-pane .fig-desc { width: 100%; resize: vertical; min-height: 0; font-size: 13px; line-height: 1.5; }
+.fig-pane .fig-scope { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.fig-pane .fig-scope select { width: auto; height: 28px; }
+.fig-pane .fig-hint, .fig-pane .fig-kind { margin: 0; }
+.fig-pane .ai-actions .small { align-self: center; }
+/* 미리보기: 원고 종이처럼 흰 바탕(테마와 상관없이 — 흑백 그림이 그대로 보이게) */
+.fig-preview { display: flex; align-items: center; justify-content: center; min-height: 120px; padding: 10px; border: 1px solid var(--border);
+  border-radius: 8px; background: #fff; }
+.fig-preview img { display: block; max-width: 100%; max-height: 50vh; height: auto; }
+.fig-preview.fig-wait { background: var(--surface-2); }
+.fig-vers { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.fig-vers .btn { min-width: 30px; padding: 2px 8px; }
+.fig-cap { display: flex; flex-direction: column; gap: 4px; margin: 0; }
+.fig-ref { display: flex; align-items: center; gap: 6px; }
+.fig-edit textarea { width: 100%; resize: vertical; font-size: 13px; line-height: 1.5; }
+/* 미리보기의 AI 그림 위 [이 그림 고치기] */
+.doc .doc-fig { position: relative; }
+.doc .doc-fig .fig-edit-btn { position: absolute; top: 6px; right: 6px; font-size: 12px; text-indent: 0; box-shadow: var(--shadow); }
