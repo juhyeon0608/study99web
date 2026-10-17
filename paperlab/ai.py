@@ -147,6 +147,7 @@ SUMMARY_SYSTEM = "당신은 논문을 정확하게 정리하는 연구 조수입
 
 # OpenAI · Google API (2단계 U2 — 텍스트 전용). 기본 모델 = K19 확정(2026-10-08)
 API_MODEL_DEFAULTS = {"codex": "gpt-6.1-sol", "gemini": "gemini-3.8-flash"}
+# API 키가 있는 엔진만 (config.API_ENGINES). agy(Antigravity)는 PC CLI 전용이라 여기 없다 — ENGINE_KEYS.get(e)로 찾을 것
 ENGINE_KEYS = {"claude": "anthropic_api_key", "codex": "openai_api_key", "gemini": "google_api_key"}
 ENGINE_COMPANY = {"claude": "Anthropic", "codex": "OpenAI", "gemini": "Google"}
 OPENAI_URL = "https://api.openai.com/v1/responses"
@@ -375,6 +376,8 @@ class AIService:
         """요약에 기록할 모델 이름"""
         if engine == "claude":
             return self.model
+        if engine not in API_MODEL_DEFAULTS:  # agy 등 PC CLI 전용 엔진 — API 모델이 없으니 엔진 이름을 남긴다
+            return engine
         return (self.get_setting("api_models") or {}).get(engine) or API_MODEL_DEFAULTS[engine]
 
     # ------------------------------------------------------------ Anthropic

@@ -496,12 +496,14 @@ AI 기능은 **설정 → AI 엔진**에 **본인의 API 키**(Anthropic · Open
 | **Claude** (기본) | **Anthropic API** — PDF를 그림·수식까지 통째로 읽고, 답변 근거를 **쪽 번호와 원문 인용**으로 보여 줌 | PC의 `claude` |
 | **Codex** | **OpenAI API** — PDF 그림 · 쪽 인용 없이 **본문 글만** 보냄 (근거는 `[p.N]` 쪽 표시) | PC의 `codex` |
 | **Gemini** | **Google API** — 본문 글만 보냄 | PC의 `gemini` |
+| **Antigravity** (2026-10-17, PC 앱 0.4.1) | 없음 — **PC에서만** 실행 | PC의 `agy` (Google Antigravity CLI) |
 
 - **작업별 엔진 순서**: 요약 · 논문과 대화(서재 질문 포함) · 글쓰기 도우미 · AI로 찾기 · 인용 검증 · **쉬운 설명 · 번역(선택 · 전체 공용)** 마다 1 · 2 · 3순위 엔진을 고릅니다(기본은 모두 Claude). 상자 아래 줄에 실제로 쓰는 경로가 보입니다(예: "Anthropic API → 안 되면 PC의 claude (켜진 PC 1대)").
 - **넘어가기(폴백)**: API 키가 틀림 · 권한 없음 · 사용 한도 · 서버 오류 · 연결 실패면 다음 칸(보통 PC)으로 넘깁니다. AI가 거절했거나 결과가 끊긴 경우는 넘기지 않고 사유를 그대로 보여 줍니다. 키 오류로 넘겼으면 설정의 그 키 아래에 **"최근 실패"** 가 보이고, 키를 다시 저장하면 지워집니다.
 - **PC에서 실행**: 연결된 PC가 꺼져 있으면 작업은 **대기**합니다(요약 · 대화 · 글쓰기 · 찾기 · 설명 · 번역 모두 **24시간**까지 — 창을 닫아도 기다립니다). 그 안에 PC가 켜지면 이어서 실행하고, 지나면 "켜진 PC가 없어서 작업을 끝내지 못했어요"로 실패합니다. PC가 여러 대면 먼저 가져간 PC가 실행하고, 실행 중인 PC가 꺼지면 약 90초 뒤 다른 PC가 이어받습니다.
-- **AI는 두 경로로만 실행합니다 (2026-10-16)**: ① 내가 연결한 PC(PaperLab PC 앱)의 `claude` · `codex` · `gemini` CLI, ② 내가 설정에 넣은 API 키. **서버 PC의 CLI는 실행하지 않고, 서버의 공용 키 · 환경 변수(`ANTHROPIC_*` · `OPENAI_*` · `GEMINI_*` · `GOOGLE_API_KEY` · `CLAUDE_CODE_*` · `CODEX_*`)도 쓰지 않습니다** — 서버는 시작할 때 이 변수들을 지웁니다. 키도 연결된 PC도 없으면 AI를 시작하기 전에 "AI를 실행할 방법이 없어요. 설정 → 연결된 PC에서 PaperLab 앱을 설치한 내 PC를 연결하거나, 설정 → AI 엔진에서 내 API 키를 넣어 주세요."와 **[설정 열기]** 가 보이고, API도 같은 문구로 400(`no_route`)을 돌려줍니다. (PC 앱 설치 파일이 아직 없으면 키 등록만 안내)
+- **AI는 두 경로로만 실행합니다 (2026-10-16)**: ① 내가 연결한 PC(PaperLab PC 앱)의 `claude` · `codex` · `gemini` · `agy`(Antigravity) CLI, ② 내가 설정에 넣은 API 키. **서버 PC의 CLI는 실행하지 않고, 서버의 공용 키 · 환경 변수(`ANTHROPIC_*` · `OPENAI_*` · `GEMINI_*` · `GOOGLE_API_KEY` · `CLAUDE_CODE_*` · `CODEX_*`)도 쓰지 않습니다** — 서버는 시작할 때 이 변수들을 지웁니다. 키도 연결된 PC도 없으면 AI를 시작하기 전에 "AI를 실행할 방법이 없어요. 설정 → 연결된 PC에서 PaperLab 앱을 설치한 내 PC를 연결하거나, 설정 → AI 엔진에서 내 API 키를 넣어 주세요."와 **[설정 열기]** 가 보이고, API도 같은 문구로 400(`no_route`)을 돌려줍니다. (PC 앱 설치 파일이 아직 없으면 키 등록만 안내)
 - OpenAI · Google API의 기본 모델은 서버 기본값(설정의 "모델 · 생각 깊이 (고급)"에서 바꿀 수 있음)입니다. PC의 claude 모델은 계정 기본 모델 · opus · sonnet · haiku 중에서 고릅니다.
+- **Antigravity(agy) 엔진 (2026-10-17)**: 연결된 PC에 Google **Antigravity CLI**(`agy`)를 설치 · 로그인해 두면 작업별 엔진 순서에서 **Antigravity**를 고를 수 있습니다(API 키 경로는 없음 — PC에서만, gemini는 그대로). 설정 → 연결된 PC 칩에 `Antigravity ✓ · 동시 1` · `Antigravity ! 로그인 필요` · `Antigravity 없음`이 보이고, "모델 · 생각 깊이 (고급)"에서 **PC의 Antigravity 모델**(연결된 PC가 `agy models`로 알려 준 목록 — 기본 Gemini 3.8 Flash (Medium), 그 PC에 없는 모델이면 agy 기본 모델)과 **생각 깊이**(agy 기본 · 낮음 · 보통 · 높음 · 매우 높음 · 최대)를 고릅니다. PC 앱은 agy를 **읽기 전용 계획 모드**(`--sandbox --mode plan --disable-slash-commands`)로 매번 새 빈 폴더에서만 실행하고, agy가 도구 허락이나 질문을 요청하면 자동으로 허락하지 않고 그 작업을 멈춰 실패로 알립니다. 설치 · 로그인은 [PC 앱 안내](desktop/README.md) 4절.
 
 - Anthropic API 모델: **Claude Opus 5.5**(기본, 가장 정확) · Claude Sonnet 5.5(빠르고 저렴) · Claude Haiku 4.5(가장 빠름)
 - 생각 깊이(effort): 낮음 · 보통(기본) · 높음 · 매우 높음
@@ -1292,7 +1294,7 @@ study99web/
 ├─ desktop/           (2 · 6단계) Windows 설치형 앱(Electron · NSIS, 현재 0.3.1) — 빌드 없는 JavaScript
 │  ├─ main/           main.js(생명주기 · 단일 실행 · 트레이 · 자동 시작 · 딥 링크 · 로그오프 정지) · window.js(앱 창 · 탐색 제한) · links.js(외부 링크 판정) · config.js · auth-bridge.js(시스템 브라우저 구글 로그인 ↔ `paperlab://`) · updater.js · ipc.js(출처 검사) · store.js(토큰 safeStorage) · sync-host.js(동기화 프로세스 · 휴지통 보내기)
 │  ├─ preload/        preload.js — 서버 출처에는 `paperlabDesktop`(7개 함수), `app://` 화면에는 `paperlabLocal`
-│  ├─ worker/         PC 워커(utilityProcess): entry · worker · api-client · cli-runner · resolve-exe · engines(claude · codex · gemini CLI 실행)
+│  ├─ worker/         PC 워커(utilityProcess): entry · worker · api-client · cli-runner · resolve-exe · engines(claude · codex · gemini · agy CLI 실행)
 │  ├─ sync/           폴더 동기화 엔진(별도 utilityProcess): entry · engine · reconcile · scanner · watcher · journal · transfer · paths · rootcheck · safe-remove
 │  ├─ lib/            log · redact · run · write-atomic (main · worker · sync 공용)
 │  ├─ ui/             앱 자체 화면(`app://`): setup · offline · status(이 PC 상태 · 폴더 동기화) · sync-look(문구) · theme · local.css

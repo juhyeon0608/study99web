@@ -1,5 +1,5 @@
 'use strict';
-// 가짜 CLI (claude · codex · gemini 흉내) — 실제 CLI 는 부르지 않는다.
+// 가짜 CLI (claude · codex · gemini 흉내, agy 는 fake-agy.js) — 실제 CLI 는 부르지 않는다.
 // 사용: node fake-cli.js <엔진> [인자…]  (npm 셸 스크립트 흉내 폴더의 bin/<엔진>.js 가 이 파일을 부름)
 // 동작은 환경 변수로: FAKE_MODE(ok · sleep · login · model · usage · garbage · big · error · slow), FAKE_LOG(기록 파일),
 // FAKE_TEXT(답), FAKE_PIDFILE(sleep 때 손자 프로세스 pid), FAKE_SLEEP_MS, FAKE_LOGGED_OUT=1, FAKE_VERSION
@@ -10,6 +10,7 @@ const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 
 module.exports = function fake(engine, argv = process.argv.slice(2)) {
+  if (engine === 'agy') return require('./fake-agy')(argv); // Go flag · NDJSON 이벤트 흉내 (agy 1.4.0)
   const env = process.env;
   const mode = env.FAKE_MODE || 'ok';
   const version = env.FAKE_VERSION || (engine === 'claude' ? '2.1.300' : '0.200.0');

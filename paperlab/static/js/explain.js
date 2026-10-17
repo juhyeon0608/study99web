@@ -5,7 +5,7 @@
 // addAnnotation(page, rects, text, color, comment) } — 탭 그리기 함수는 export만(1C 참고 패널은 AI를 하지 않음 — 명세 3장).
 
 import { api, streamEvents } from "./api.js";
-import { COMPANY, NO_ROUTE_TEXT, cancelJob, errorLabel, handledJob, isActive, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
+import { COMPANY, NO_ROUTE_TEXT, cancelJob, engineName, errorLabel, handledJob, isActive, setStatusLine, statusLineEl, watchJob } from "./jobs.js";
 import {
   $, $$, ICON_INFO, ICON_WARN, confirmDialog, copyText, el, errorToast, esc, fmtDate, josa, liveSay, modal, popupMenu,
   renderMarkdown, renderSvg, toast,
@@ -705,7 +705,7 @@ async function startDialog(current = "") {
   if (first && first.runner === "api") how = `${COMPANY[first.engine]} API 키 — 쓰는 만큼 키 계정에 요금이 나가요`;
   else if (first) {
     const pc = (devices || []).find((d) => !d.revoked && d.online && (d.engines || []).some((e) => e.name === first.engine));
-    how = `${pc ? `‘${pc.name}’` : "PC"}의 ${first.engine} 구독으로 실행 — 구독 사용 한도를 써요. PC가 꺼져 있으면 24시간까지 기다려요.`;
+    how = `${pc ? `‘${pc.name}’` : "PC"}의 ${engineName(first.engine)} 구독으로 실행 — 구독 사용 한도를 써요. PC가 꺼져 있으면 24시간까지 기다려요.`;
   }
   let lang0 = LANGS[settings.translate_language] ? settings.translate_language : "ko";
   if (lang0 === current) lang0 = Object.keys(LANGS).find((k) => k !== current); // [다른 언어로 번역…]: 지금 언어가 아닌 것부터

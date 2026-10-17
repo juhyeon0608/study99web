@@ -5,11 +5,13 @@
 //   3. npm 셸 스크립트 <이름>.cmd → 안에 적힌 진입 파일을 읽어 .exe 는 그대로, .js 는 node.exe <진입 js> 로
 //   4. 그래도 안 되면 cmd.exe /d /s /c "<경로>" <고정 플래그> — 이때 인자는 미리 정한 안전한 값만 (shellCommandLine)
 // Node 는 .cmd/.bat 를 shell 없이 spawn 하면 EINVAL (CVE-2024-27980) — 그래서 .cmd 를 직접 실행하지 않는다.
+// agy(Google Antigravity CLI): PATH 의 agy.exe, 없으면 설치 폴더 %LOCALAPPDATA%\agy\bin. 이름이 agy 인 파일만 찾는다 —
+//   %LOCALAPPDATA%\Programs\Antigravity\bin\antigravity.cmd 는 IDE 실행기라 쓰지 않음.
 
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ENGINES = ['claude', 'codex', 'gemini'];
+const ENGINES = ['claude', 'codex', 'gemini', 'agy'];
 
 function isFile(p) {
   try { return fs.statSync(p).isFile(); } catch { return false; }
@@ -19,6 +21,7 @@ function searchDirs(name, env) {
   const dirs = String(env.PATH || env.Path || '').split(path.delimiter).map((d) => d.trim().replace(/^"|"$/g, '')).filter(Boolean);
   const extra = [];
   if (name === 'claude' && env.USERPROFILE) extra.push(path.join(env.USERPROFILE, '.local', 'bin'));
+  if (name === 'agy' && env.LOCALAPPDATA) extra.push(path.join(env.LOCALAPPDATA, 'agy', 'bin'));
   if (env.APPDATA) extra.push(path.join(env.APPDATA, 'npm'));
   const seen = new Set();
   return [...dirs, ...extra].filter((d) => {

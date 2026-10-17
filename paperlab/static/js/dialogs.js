@@ -5,7 +5,7 @@ import { forgetStyle, listStyles, render, sentenceCase, styleOptions } from "./c
 import { INHA } from "./extlinks.js";
 import { LANGS } from "./explain.js";
 import { formatManagerDialog, formatOptions, listFormats } from "./formats.js";
-import { COMPANY, fmtAgo, fmtClock } from "./jobs.js";
+import { COMPANY, engineName, fmtAgo, fmtClock } from "./jobs.js";
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, avatarEl, cleanCiteHtml, confirmDialog, copyText, el, errorToast, esc, fmtBytes, josa,
   modal, pickFiles, promptDialog, safeUrl, store, toast,
@@ -306,6 +306,12 @@ export async function settingsDialog({ focus = "" } = {}) {
             .map(([k, v]) => `<option value="${k}" ${k === ((s.cli_models || {}).claude || "default") ? "selected" : ""}>${v}</option>`).join("")}
         </select></div>
         <div class="field"><label for="set-cli-other">PC의 codex · gemini 모델</label><select class="input" id="set-cli-other" disabled><option>계정 기본 모델</option></select></div>
+        <div class="field"><label for="set-cli-agy">PC의 Antigravity 모델</label><select class="input" id="set-cli-agy" name="cli_model_agy" aria-describedby="set-cli-agy-hint">
+          ${agyModelOptions(devices, (s.cli_models || {}).agy || "default").map((o) => `<option value="${esc(o.value)}" ${o.selected ? "selected" : ""}>${esc(o.label)}</option>`).join("")}
+        </select><div class="hint" id="set-cli-agy-hint">연결된 PC의 <code>agy models</code> 목록이에요.</div></div>
+        <div class="field"><label for="set-cli-agy-effort">Antigravity 생각 깊이</label><select class="input" id="set-cli-agy-effort" name="cli_effort_agy">
+          ${AGY_EFFORTS.map(([k, v]) => `<option value="${k}" ${k === ((s.cli_efforts || {}).agy || "default") ? "selected" : ""}>${v}</option>`).join("")}
+        </select></div>
       </div></details>
     <div class="field"><label for="set-lang">AI 답변 언어</label><input class="input" id="set-lang" name="summary_language" value="${esc(s.summary_language)}"></div>
     <div class="field"><label for="set-tr-lang">번역 언어</label><select class="input" id="set-tr-lang" name="translate_language" aria-describedby="set-tr-lang-hint">
@@ -314,7 +320,7 @@ export async function settingsDialog({ focus = "" } = {}) {
     <div class="status-line ${status.ready ? "ok" : "bad"}" id="ai-status">${status.ready ? "✓" : "!"} ${esc(status.message)}</div>
 
     <div class="section-title" id="set-pc-title">연결된 PC</div>
-    <div class="field"><div class="hint">PaperLab 앱을 설치하고 연결한 PC는 그 PC의 claude · codex · gemini 로그인으로 AI 작업을 실행해요. 여러 대가 켜져 있으면 먼저 가져간 PC가 실행해요.</div></div>
+    <div class="field"><div class="hint">PaperLab 앱을 설치하고 연결한 PC는 그 PC의 claude · codex · gemini · Antigravity(agy) 로그인으로 AI 작업을 실행해요. 여러 대가 켜져 있으면 먼저 가져간 PC가 실행해요.</div></div>
     <div data-pc-mismatch-slot></div>
     <ul class="item-list" data-device-list aria-labelledby="set-pc-title"></ul>
     <div class="row" data-pc-actions style="margin-bottom:6px"></div>
@@ -446,7 +452,7 @@ export async function settingsDialog({ focus = "" } = {}) {
   $("[data-no]", foot).onclick = () => m.close();
   $("[data-save]", foot).onclick = async () => {
     const fd = Object.fromEntries(new FormData(body).entries());
-    for (const k of ["api_model_codex", "api_model_gemini", "cli_model_claude"]) delete fd[k];
+    for (const k of ["api_model_codex", "api_model_gemini", "cli_model_claude", "cli_model_agy", "cli_effort_agy"]) delete fd[k];
     Object.assign(fd, ai.values());
     fd.korean_first = !!$("[name=korean_first]", body).checked;
     try {
@@ -467,7 +473,42 @@ const JOB_KINDS = [["summary", "요약"], ["chat", "논문과 대화 · 서재 �
   // 4단계 (docs/design/phase4-explain-translate-ui.md 7.1절)
   ["explain", "쉬운 설명", "읽기 화면에서 고른 글을 쉽게 풀고, 필요하면 개념 그림을 그려요."],
   ["translate", "번역 (선택 · 전체)", "고른 글 번역과 논문 전체 번역이 함께 써요. 전체 번역은 쪽 수만큼 요금이 나가요."]];
-const ENGINE_LABEL = { claude: "Claude", codex: "Codex", gemini: "Gemini" };
+const ENGINE_LABEL = { claude: "Claude", codex: "Codex", gemini: "Gemini", agy: "Antigravity" };
+// 작업별 엔진 순서에 고를 수 있는 엔진 (agy = Google Antigravity CLI — 연결된 PC에서만, API 키 없음)
+export const ROUTE_ENGINES = ["claude", "codex", "gemini", "agy"];
+// 연결된 PC 카드의 엔진 칩 순서 · 이름 (agy는 제품 이름으로)
+const CHIP_ENGINES = [["claude", "claude"], ["codex", "codex"], ["gemini", "gemini"], ["agy", "Antigravity"]];
+const AGY_DEFAULT_MODEL = "gemini-3.8-flash-medium"; // 서버 config.AGY_DEFAULT_MODEL과 같음
+const AGY_EFFORTS = [["default", "agy 기본"], ["low", "낮음 · 빠름"], ["medium", "보통"], ["high", "높음 · 정확"], ["xhigh", "매우 높음"], ["max", "최대"]];
+
+// 연결된 PC 카드의 엔진 칩 (4장): "claude ✓ · 동시 2" · "codex ! 로그인 필요" · "gemini 없음" · "Antigravity ✓ · 동시 1"
+export function engineChips(d) {
+  return CHIP_ENGINES.map(([n, label]) => {
+    const e = (d.engines || []).find((x) => x.name === n);
+    if (!e) return `<span class="chip" data-engine-chip="${n}">${esc(label)} 없음</span>`;
+    const title = esc(`${label} ${e.version || ""}`.trim());
+    return e.logged_in ? `<span class="chip success" data-engine-chip="${n}" title="${title}">${esc(label)} ✓ · 동시 ${Number(e.slots) || 1}</span>`
+      : `<span class="chip warn" data-engine-chip="${n}" title="${title}">${esc(label)} ! 로그인 필요</span>`;
+  }).join("");
+}
+
+// PC의 Antigravity 모델 고르기: 'default'(PaperLab 기본) + 연결된 PC들이 알려 준 모델(합집합, 해지된 PC 제외).
+// 고른 값이 지금 목록에 없으면(PC를 바꿈 · 꺼짐) 그 값도 남겨 둠 — 저장해도 바뀌지 않게
+export function agyModelOptions(devices, current = "default") {
+  const seen = new Map();
+  for (const d of devices || []) {
+    if (d.revoked) continue;
+    const e = (d.engines || []).find((x) => x.name === "agy");
+    for (const m of (e && e.models) || []) {
+      if (m && typeof m.id === "string" && !seen.has(m.id)) seen.set(m.id, String(m.label || m.id));
+    }
+  }
+  const def = seen.get(AGY_DEFAULT_MODEL) || AGY_DEFAULT_MODEL;
+  const out = [{ value: "default", label: `PaperLab 기본 (${def})` }];
+  for (const [id, label] of seen) out.push({ value: id, label: label === id ? id : `${label} · ${id}` });
+  if (current && current !== "default" && !seen.has(current)) out.push({ value: current, label: `${current} (연결된 PC 목록에 없음)` });
+  return out.map((o) => ({ ...o, selected: o.value === (current || "default") }));
+}
 const AI_KEYS = [
   { name: "anthropic_api_key", engine: "claude", company: "Anthropic", label: "Anthropic API 키 (Claude)", ph: "sk-ant-...", url: "https://console.anthropic.com/settings/keys" },
   { name: "openai_api_key", engine: "codex", company: "OpenAI", label: "OpenAI API 키 (Codex)", ph: "sk-...", url: "https://platform.openai.com/api-keys" },
@@ -496,7 +537,12 @@ function aiSection(body, s, getDevices) {
     if (input.value.trim()) return "typed";
     return s[`${k.name}_status`] || "none";
   };
-  const hasKey = (engine) => { const st = keyState(AI_KEYS.find((k) => k.engine === engine)); return st === "set" || st === "typed"; };
+  const hasKey = (engine) => {
+    const k = AI_KEYS.find((x) => x.engine === engine);
+    if (!k) return false; // agy: API 키 없음 (PC CLI 전용)
+    const st = keyState(k);
+    return st === "set" || st === "typed";
+  };
 
   // 엔진 순서: 앞 칸과 겹치면 뒤 칸을 비우고 당김 (PD-1)
   const order = (kind) => $$(`[data-route-kind="${kind}"]`, body).map((x) => x.value).filter(Boolean);
@@ -504,7 +550,7 @@ function aiSection(body, s, getDevices) {
     const sels = $$(`[data-route-kind="${kind}"]`, body);
     sels.forEach((sel, i) => {
       const used = list.slice(0, i);
-      const opts = ["claude", "codex", "gemini"].filter((e) => !used.includes(e));
+      const opts = ROUTE_ENGINES.filter((e) => !used.includes(e));
       const disabled = i > 0 && !list[i - 1];
       sel.innerHTML = (i ? `<option value="">없음</option>` : "") + opts.map((e) => `<option value="${e}">${ENGINE_LABEL[e]}</option>`).join("");
       sel.value = disabled ? "" : (list[i] || "");
@@ -519,14 +565,15 @@ function aiSection(body, s, getDevices) {
       const parts = [];
       for (const e of list) {
         if (hasKey(e)) parts.push(`${COMPANY[e]} API`);
-        if (hasDevice(devices, e)) parts.push(`PC의 ${e}`);
+        if (hasDevice(devices, e)) parts.push(`PC의 ${engineName(e)}`);
       }
       const cliEngines = list.filter((e) => hasDevice(devices, e));
       const on = cliEngines.reduce((n, e) => Math.max(n, onlineFor(devices, e)), 0);
       let text;
       if (!parts.length) {
         const e = list[0];
-        text = `이대로는 ${josa(label, "을/를")} 쓸 수 없어요 — ${COMPANY[e]} API 키를 넣거나, ${e}가 있는 PC를 연결해 주세요.`;
+        text = COMPANY[e] ? `이대로는 ${josa(label, "을/를")} 쓸 수 없어요 — ${COMPANY[e]} API 키를 넣거나, ${e}가 있는 PC를 연결해 주세요.`
+          : `이대로는 ${josa(label, "을/를")} 쓸 수 없어요 — ${engineName(e)}(agy)가 있는 PC를 연결해 주세요. ${engineName(e)}는 API 키 없이 PC에서만 실행돼요.`;
       } else if (!cliEngines.length) text = `${parts.join(" → ")}만 써요`;
       else if (parts.every((p) => p.startsWith("PC의")) && parts.length === 1) text = `${parts[0]}만 써요 (${on ? `켜진 PC ${on}대` : "켜진 PC 없음 — 켜질 때까지 기다려요"})`;
       else text = `${parts[0]} → ${parts.length > 1 ? `${parts.length === 2 ? "안 되면 " : ""}${parts.slice(1).join(" → ")}` : ""} (${on ? `켜진 PC ${on}대` : "켜진 PC 없음"})`;
@@ -586,12 +633,14 @@ function aiSection(body, s, getDevices) {
   // 모델: 기본이 아닌 값이 있으면 접힌 제목에 표시
   const changed = () => {
     const v = out.values();
-    const diff = v.api_models.codex || v.api_models.gemini || v.cli_models.claude !== "default" || ($("#set-effort", body).value !== "medium");
+    const diff = v.api_models.codex || v.api_models.gemini || v.cli_models.claude !== "default" || ($("#set-effort", body).value !== "medium")
+      || v.cli_models.agy !== "default" || v.cli_efforts.agy !== "default";
     $("[data-model-changed]", body).textContent = diff ? " · 바꾼 값 있음" : "";
   };
   out.values = () => ({
     ai_routing: Object.fromEntries(JOB_KINDS.map(([kind]) => [kind, order(kind)])),
-    cli_models: { claude: $("#set-cli-claude", body).value, codex: "default", gemini: "default" },
+    cli_models: { claude: $("#set-cli-claude", body).value, codex: "default", gemini: "default", agy: $("#set-cli-agy", body).value || "default" },
+    cli_efforts: { agy: $("#set-cli-agy-effort", body).value || "default" },
     api_models: { codex: $("#set-api-codex", body).value.trim(), gemini: $("#set-api-gemini", body).value.trim() },
   });
   $$("[data-model-details] select, [data-model-details] input", body).forEach((x) => x.addEventListener("change", changed));
@@ -618,7 +667,7 @@ function pcSection(body, getDevices, setDevices) {
     list.innerHTML = "";
     const active = devices.filter((d) => !d.revoked);
     if (!active.length) {
-      list.appendChild(el(`<li class="item-card" data-state="empty"><p class="item-meta" style="font-size:13px">연결된 PC가 없어요. PC를 연결하면 API 키 없이도 그 PC의 claude · codex · gemini 로그인으로 요약 · 대화 · 글쓰기를 쓸 수 있어요.</p></li>`));
+      list.appendChild(el(`<li class="item-card" data-state="empty"><p class="item-meta" style="font-size:13px">연결된 PC가 없어요. PC를 연결하면 API 키 없이도 그 PC의 claude · codex · gemini · Antigravity 로그인으로 요약 · 대화 · 글쓰기를 쓸 수 있어요.</p></li>`));
     }
     for (const d of devices) list.appendChild(deviceCard(d));
     const here = info && info.paired && active.some((d) => d.id === info.deviceId);
@@ -632,12 +681,7 @@ function pcSection(body, getDevices, setDevices) {
     const state_ = d.revoked ? "revoked" : !d.online ? "offline" : d.paused ? "paused" : "online";
     const chip = { online: `<span class="chip success">● 켜짐</span>`, paused: `<span class="chip warn">❙❙ 일시 중지</span>`, offline: `<span class="chip">○ 꺼짐</span>`,
       revoked: `<span class="chip">해지됨 · ${esc(fmtAgo(d.revoked_at))}</span>` }[state_];
-    const engines = ["claude", "codex", "gemini"].map((n) => {
-      const e = (d.engines || []).find((x) => x.name === n);
-      if (!e) return `<span class="chip">${n} 없음</span>`;
-      return e.logged_in ? `<span class="chip success" title="${esc(`${n} ${e.version || ""}`)}">${n} ✓ · 동시 ${e.slots || 1}</span>`
-        : `<span class="chip warn" title="${esc(`${n} ${e.version || ""}`)}">${n} ! 로그인 필요</span>`;
-    }).join("");
+    const engines = engineChips(d);
     const os = String(d.os || "").split(/\s+/).slice(0, 2).join(" ");
     const lead = state_ === "revoked" ? "이 PC는 작업을 받지 않아요. 30일 뒤 목록에서 사라져요."
       : state_ === "paused" ? "이 PC에서 작업 받기를 멈춰 두었어요" : state_ === "online" && d.running_jobs ? `실행 중 ${d.running_jobs}개` : "";
@@ -821,7 +865,7 @@ export async function pcAppDialog() {
         <li>관리자 권한 없이 설치되고 PaperLab 창이 열려요.</li>
         <li><b>[Google로 계속하기]</b> → 브라우저에서 로그인해요.</li>
         <li>설정 → 연결된 PC → <b>[이 PC 연결]</b>을 눌러요.</li>
-        <li>쓰려는 AI 도구에 한 번 로그인해요. 명령 프롬프트에서 claude · codex · gemini를 실행하면 돼요.</li>
+        <li>쓰려는 AI 도구에 한 번 로그인해요. 명령 프롬프트에서 claude · codex · gemini · agy(Antigravity)를 실행하면 돼요.</li>
       </ol>
       <div class="notice" data-tone="info">${ICON_INFO}<div>“알 수 없는 게시자” 경고가 떠요. PaperLab은 코드 서명 인증서가 없어서 Windows가 처음 보는 프로그램으로 표시해요. 이 화면에서 받은 파일이면 실행해도 돼요. 확실히 하려면 아래에서 파일 지문을 비교해 보세요.</div></div>
       ${r.sha256 ? `<details data-release-hash style="margin-top:10px"><summary>받은 파일 확인하기 (SHA-256)</summary>

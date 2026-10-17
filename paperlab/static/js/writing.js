@@ -4,8 +4,8 @@
 import { api, downloadBlob, qs } from "./api.js";
 import { sortVerify, vdName, verifyDoneText, verifyMarks, verifySummary } from "./ask.js";
 import {
-  cancelJob, ensureAiRoute, fmtClock, handledJob, isActive, notifyOffer, nudgeDesktop, retryJob, setStatusLine, statusLineEl, trackJob,
-  watchJob,
+  cancelJob, engineName, ensureAiRoute, fmtClock, handledJob, isActive, notifyOffer, nudgeDesktop, retryJob, setStatusLine,
+  statusLineEl, trackJob, watchJob,
 } from "./jobs.js";
 // AI 글쓰기 결과를 나중에 안전하게 넣기 (2026-10-16 백그라운드 AI) · 결과 패널 (2026-10-17 — 결과를 보면서 글쓰기)
 import {
