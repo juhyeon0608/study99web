@@ -38,6 +38,9 @@ import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
 import { checkPanel } from "./writecheckui.js"; // 제출 전 점검표 (docs/specs/writing-checklist.md)
 import { figPane } from "./writefigui.js"; // 그림 만들기 · 자연어로 고치기 (docs/specs/writing-figure-ai.md)
+// 맞춤법 · 띄어쓰기 점검 패널 · 영문/국문 초록 만들기 (docs/specs/writing-proofread.md)
+import { ABSTRACT_MODES, withAbstractHeading } from "./writeproof.js";
+import { proofPanel, startAbstract } from "./writeproofui.js";
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, modalOpen,
   pickFiles, popupMenu, purifyMd, store, toast,
@@ -305,6 +308,8 @@ export function closeWriter() {
   W.check = null;
   if (W.fig) W.fig.destroy(); // 그림 만들기 패널 · Alt+G (그리는 작업은 서버에서 계속)
   W.fig = null;
+  if (W.proof) W.proof.destroy(); // 맞춤법 점검 패널 · Alt+P (점검 작업은 서버에서 계속)
+  W.proof = null;
   if (W.saver) W.saver.flush();
   W.saver = null;
   W.m = null;
@@ -665,7 +670,9 @@ export async function openManuscript(main, id) {
   // 제출 전 점검표 (docs/specs/writing-checklist.md): 미리보기가 받아 둔 인용 정보 · 양식 · 표지 · 인용 검증 결과로 점검 (AI 없음)
   W.check = checkPanel(view, { ta, ctx: () => ({ format: W.fmt, coverKind: coverKind(), cover: m.cover, built: W.built, verify: W.vd && W.vd.data }),
     select: (a, b) => selectRange(view, ta, a, b), openCover: () => openCoverDialog(view, ta), verify: () => runVerify(view, ta),
-    rerun: () => renderPreview(view, ta), say: (t) => sayWriter(view, t) });
+    rerun: () => renderPreview(view, ta), say: (t) => sayWriter(view, t), extra: () => W.proof && W.proof.checkLine() });
+  W.proof = proofPanel(view, { ta, mid: m.id, select: (a, b) => selectRange(view, ta, a, b), say: (t) => sayWriter(view, t),
+    changed: () => W.check && W.check.refresh() }); // 맞춤법 · 띄어쓰기 점검 (Alt+P — docs/specs/writing-proofread.md)
   W.fmt = { id: fmtId, entry: null, data: null };
   setFormat(view, fmtId);
   refresh();
@@ -1293,6 +1300,7 @@ export async function citePicker(ta, replaceFrom, { multi = true, onPick = null,
 const AI_MODES = [
   ["polish", "문장 다듬기"], ["academic", "학술 문체로"], ["concise", "간결하게"], ["expand", "자세히 풀어 쓰기"],
   "-", ["to_en", "영어로 번역"], ["to_ko", "한국어로 번역"], "-", ["continue", "이어 쓰기"], ["draft", "논문을 골라 초안 쓰기…"],
+  "-", ["abstract_en", "영문 초록 만들기"], ["abstract_ko", "국문 초록 만들기"], // 초록 → 영문 · 국문 초록 자리 (writing-proofread.md)
 ];
 
 // 문장 끝맺음 (2026-10-17 사용자 지적: '학술 문체로 · 다듬기'가 개조식 '~함 · ~했음'을 '~이다'로 바꿈).
@@ -1335,6 +1343,7 @@ function aiMenu(anchor, ta) {
     ...(W.fig ? ["-", ...W.fig.menuItems()] : []), // 그림 만들기 · 이 내용으로 · 커서의 그림 고치기 (writefigui.js)
     "-",
     ...SCOPE_KINDS.map((v) => ({ label: `범위: ${SCOPE_MENU[v]}`, sub: v === sc ? "✓ 사용 중" : "", action: () => setScope(v) })),
+    { label: "맞춤법 · 띄어쓰기 점검…", sub: "Alt+P", action: () => W.proof && W.proof.open() },
     "-",
     ...ENDINGS.map(([v, label]) => ({ label: `끝맺음: ${label}`, sub: v === cur ? "✓ 사용 중" : "", action: () => setEnding(v) })),
     "-",
@@ -1368,6 +1377,10 @@ const MODE_LABEL = Object.fromEntries(AI_MODES.filter((x) => x !== "-"));
 async function runAi(mode, ta, at = null) {
   // 글쓰기 도우미 경로 기준 (요약 경로 기준인 ready가 아니라 kinds.write — 품질팀 M2). 없으면 연결된 PC · API 키 안내
   if (!(await ensureAiRoute("write"))) return;
+  // 영문 · 국문 초록: 보낼 글(초록 절 · 고른 글)과 넣을 자리(Abstract 제목 아래)를 따로 정함 (writeproof.js abstractPlan)
+  if (ABSTRACT_MODES[mode]) {
+    return startAbstract(mode, ta, { mid: W.m ? W.m.id : null, show: (job) => W.ai && W.ta === ta && W.ai.show(job, { fresh: true }) });
+  }
   const insert = mode === "continue" || mode === "draft";
   // 범위: [다시 실행]은 다시 찾은 원래 글, 이어 쓰기 · 초안은 커서 자리, 나머지는 고른 범위(선택 · 문단 · 이 절 · 이 장)
   const sc = at || insert ? null : aiScope(ta.value, ta.selectionStart, ta.selectionEnd, getScope());
@@ -1482,7 +1495,8 @@ function aiPane(view, ta, m) {
   const cur = () => list().items.find((j) => j.id === S.sel) || null;
   const here = (j) => !!j && Number(j.manuscript_id) === m.id;
   const detailed = (j) => !!(j && j.write && "text" in j.write);
-  const resultText = (j) => (j && j.result && j.result.text) || "";
+  // 초록 만들기 결과는 대상 초록 표지가 원고에 없으면 표지째('**Abstract**' 등) 넣음 (writeproof.js)
+  const resultText = (j) => withAbstractHeading(((j && j.write) || {}).mode, ta.value, (j && j.result && j.result.text) || "");
   const modeName = (j) => MODE_LABEL[(j.write || {}).mode] || "AI 글쓰기";
   const optionText = (j) => `${modeName(j)} · ${fmtClock(j.created_at)} · ${RESULT_STATE_TEXT[resultState(j)]}`;
   const focusEditor = () => { if (ta.offsetParent) ta.focus(); else btn.focus(); };

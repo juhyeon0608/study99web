@@ -7,7 +7,8 @@ import { diffEdit } from "./writeedit.js";
 import { applyEdit } from "./writetools.js";
 import { $, el, esc, modalOpen } from "./ui.js";
 
-// hooks: { ta, ctx() → { format: W.fmt, coverKind, cover, built, verify }, select(a, b), openCover(), verify(), rerun(), say(text) }
+// hooks: { ta, ctx() → { format: W.fmt, coverKind, cover, built, verify }, select(a, b), openCover(), verify(), rerun(), say(text),
+//          extra() → { text, label, run } | null (AI 맞춤법 점검 한 줄 — 선택) }
 export function checkPanel(view, hooks) {
   const ta = hooks.ta;
   const btn = $("[data-check]", view);
@@ -69,6 +70,12 @@ export function checkPanel(view, hooks) {
       }
       body.appendChild(sec);
     }
+    const ex = hooks.extra && hooks.extra(); // 다른 점검의 한 줄 {text, label, run} — AI 맞춤법 점검(writeproofui.js, AI는 부르지 않음)
+    if (ex && ex.text) {
+      const row = el(`<div class="check-extra small"><span class="check-msg"></span><button type="button" class="btn sm ghost" data-ck-extra>${esc(ex.label || "열기")}</button></div>`);
+      $(".check-msg", row).textContent = ex.text;
+      body.appendChild(row);
+    }
     body.appendChild(el(`<p class="check-note small muted">분량은 글자 수와 양식 설정으로 어림한 값이에요. 인용은 미리보기가 받아 둔 서재 정보, 근거는 마지막 인용 검증 결과를 써요 (AI를 부르지 않아요).</p>`));
     body.scrollTop = top;
     const again = key && $(key, body);
@@ -120,6 +127,11 @@ export function checkPanel(view, hooks) {
       refresh();
       if (hooks.rerun) await hooks.rerun(); // 미리보기를 새로 그리면 인용 정보도 새로 받고 다시 점검
       if (hooks.say && S.result) hooks.say(`다시 점검했어요: ${summaryText(S.result)}`);
+      return;
+    }
+    if (e.target.closest("[data-ck-extra]")) {
+      const ex = hooks.extra && hooks.extra();
+      if (ex && ex.run) ex.run();
       return;
     }
     const go = e.target.closest("[data-ck-go]");

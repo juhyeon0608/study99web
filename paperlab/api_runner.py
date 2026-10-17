@@ -23,7 +23,7 @@ from typing import Callable
 
 from psycopg.types.json import Jsonb
 
-from . import explain, find, jobs, mschat, rag, translate, verify
+from . import explain, find, jobs, mschat, proofread, rag, translate, verify
 from . import figgen  # 그림 만들기 · 고치기 (docs/specs/writing-figure-ai.md)
 from .ai import AIError, PaperContext
 from .db import Database, DBUnavailable, actor_claims
@@ -264,6 +264,10 @@ class ApiRunner:
                 parsed = jobs.parse_result(job, parsed["text"])
             elif job["kind"] == "ms_chat":  # 중간 글은 진행(partial_text)으로 — 대화 탭이 폴링으로 보여 줌
                 parsed = _collect(ai.complete(*request, engine=engine), progress, partial=True)
+            elif job["kind"] == "proofread":  # 맞춤법 점검: 고칠 곳 JSON (원문에 없는 · 고치면 안 되는 자리는 버림)
+                parsed = _collect(ai.complete(*proofread.build_request(params), engine=engine, schema=proofread.SCHEMA,
+                                              schema_name="proofread"), progress)
+                parsed = jobs.parse_result(job, parsed["text"])
             elif job["kind"] == "find":
                 parsed = self._find(ai, engine, uid, job, settings, progress)
             elif job["kind"] == "figure":  # 결과 SVG는 정화한 것만 (틀리면 bad_output — 폴백 없음)

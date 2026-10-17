@@ -1970,3 +1970,18 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 /* 미리보기의 AI 그림 위 [이 그림 고치기] */
 .doc .doc-fig { position: relative; }
 .doc .doc-fig .fig-edit-btn { position: absolute; top: 6px; right: 6px; font-size: 12px; text-indent: 0; box-shadow: var(--shadow); }
+.check-extra { display: flex; align-items: baseline; gap: 6px; margin: 12px 2px 0; padding-top: 8px; border-top: 1px solid var(--border); }
+
+/* ---------------- 논문 쓰기 맞춤법 · 띄어쓰기 점검 (docs/specs/writing-proofread.md) — 점검표와 같은 겹쳐 뜨는 패널 ---------------- */
+.proof-pane { z-index: 91; }
+.proof-run { flex: none; display: flex; align-items: center; gap: 6px; padding: 2px 14px 8px; }
+.proof-run select { width: auto; min-width: 0; flex: 1 1 auto; max-width: 150px; }
+.proof-status, .proof-more { display: flex; align-items: center; gap: 6px; margin: 6px 0; }
+.proof-status .grow, .proof-more .grow { flex: 1; min-width: 0; }
+.proof-failed { margin: 6px 0; }
+.proof-all { display: flex; justify-content: flex-end; margin: 6px 0 2px; }
+.proof-diff { white-space: pre-wrap; overflow-wrap: anywhere; }
+.proof-diff del { color: var(--danger); background: var(--danger-soft); text-decoration: line-through; }
+.proof-diff ins { color: var(--success); text-decoration: none; font-weight: 600; }
+.proof-why { margin-left: 2px; }
+.proof-item.lost .proof-diff { opacity: .6; }
