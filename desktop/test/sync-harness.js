@@ -17,7 +17,7 @@ function setup(o = {}) {
   const home = tempHome('pl-sync-');
   const root = path.join(home, '논문 폴더');
   fs.mkdirSync(root, { recursive: true });
-  const api = o.api || new FakeSyncApi({ uid: UID });
+  const api = o.api || new FakeSyncApi({ uid: UID, protocol: o.protocol || 1 }); // protocol 2 = 선택 동기화 서버(C-1)
   const clock = { t: Date.parse('2026-10-13T03:00:00Z') };
   const recycle = path.join(home, 'fake-recycle');
   const trashed = [];
@@ -40,6 +40,7 @@ function setup(o = {}) {
     timing: { stableChecks: 0, deleteWaitMs: 0, ...(o.timing || {}) }, ...extra,
   });
   env.write = (rel, text) => { const p = path.join(root, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, pdf(text)); return p; };
+  env.writeBytes = (rel, buf) => { const p = path.join(root, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, buf); return p; };
   env.read = (rel) => fs.readFileSync(path.join(root, rel));
   env.exists = (rel) => fs.existsSync(path.join(root, rel));
   /** 루트 안 PDF 목록(상대 경로 · 정렬, .paperlab-sync 제외) */

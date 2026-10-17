@@ -273,19 +273,22 @@ test('저널: 원자적 쓰기(임시 → 이름 바꾸기) · 깨지면 null(�
   const dir = tempHome('pl-j-');
   const file = path.join(dir, 'sync', 'state.json');
   const j = journal.fresh({ root: 'C:\\x', user_id: UID });
-  j.files[3] = { rel: 'a.pdf', sha256: 'h', size: 1, mtime_ms: 1, ino: '' };
+  j.files[3] = { rel: 'a.pdf', sha256: 'h', size: 1, mtime_ms: 1, ino: '', kind: 'pdf' };
   journal.save(file, j);
   assert.deepEqual(journal.load(file).files, j.files);
+  assert.equal(journal.load(file).version, 2); // 선택 동기화 8.5 — 저널 v2
   assert.ok(!fs.existsSync(`${file}.tmp`));
   fs.writeFileSync(file, '{"version":1,"files":{"x":{}}');
   assert.equal(journal.load(file), null);
   fs.writeFileSync(file, JSON.stringify({ version: 1, files: { 3: { rel: 1 } }, folders: {} }));
   assert.equal(journal.load(file), null);
+  fs.writeFileSync(file, JSON.stringify({ version: 3, files: {}, folders: {} }));
+  assert.equal(journal.load(file), null, '모르는 버전');
   assert.deepEqual(normalizeSync({ enabled: true, root: '' }), { enabled: false, root: '', installId: '', previousRoot: '', paused: false, notify: true });
   assert.equal(normalizeSync({ enabled: true, root: 'D:\\p', installId: 'abc' }).enabled, true);
 });
 
-test('preload: 클라우드 화면(paperlabDesktop)에 동기화용 새 함수가 없다(15.2)', () => {
+test('preload: 클라우드 화면(paperlabDesktop)에 동기화용 새 함수가 없다(15.2 — 로컬 파일 다리 3개는 id 만 — 선택 동기화 9.1)', () => {
   const src = fs.readFileSync(path.join(ROOT, 'preload', 'preload.js'), 'utf8');
   assert.ok(!/sync/i.test(src));
 });

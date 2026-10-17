@@ -3,16 +3,20 @@
 import { api, downloadBlob, qs, safeFilename } from "./api.js";
 import {
   EXT_MARK, G5_NOTICE, ICON_GRAPH, SCHOLAR_LIBRARY_NOTE, addByIdentifierDialog, addPaper, bibliographyDialog, bindExtLink,
-  citeDialog, copySearchQuery, editPaperDialog, exportPapers, folderIcon, folderPath, importDialog, issuesBox,
-  extMark, moveToFolderDialog, openExternal, uploadPdfs,
+  cancelSyncMode, citeDialog, copySearchQuery, editPaperDialog, exportPapers, folderIcon, folderPath, importDialog, issuesBox,
+  extMark, moveToFolderDialog, openExternal, syncCtx, syncModeDialog, uploadPdfs,
 } from "./dialogs.js";
 import {
   INHA, INHA_OPEN_TITLE, inhaSearchTakesQuery, inhaSearchUrl, normalizeQuery, paperProxyTarget, scholarUrl,
 } from "./extlinks.js";
-import { LIB_ACCEPT, formatBadge } from "./filetypes.js";
+import { LIB_ACCEPT, extOf, formatBadge } from "./filetypes.js";
 import { openGraph } from "./graph.js";
 import { OA_OPEN_TITLE, OC_FAILED_TEXT, licenseLabel, oaOpenLabel, substituteText, viaHtml } from "./sourcemeta.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
+import {
+  ICON_PC, SEARCH_LOCAL_HINT, badgeFor, bulkMenu, canOpenHere, elsewhereLine, folderSwitch, holderGone, isHere, isLocal,
+  localFileText, mismatchBadge, paperMenu, pickMode, readerKind, storageLine,
+} from "./syncmode.js";
 import { restoreFromTrash } from "./trash.js";
 import {
   $, $$, ICON_INFO, ICON_WARN, authorName, authorsShort, confirmDialog, debounce, el, errorToast, esc, fmtBytes, fmtDate, fmtNum,
@@ -24,6 +28,8 @@ let detailTab = "info";
 let relatedKind = "cited_by";
 let noteSaver = null;
 let detailToken = 0;
+// 선택 동기화 화면 ctx (syncmode.js 머리말) — 목록을 받을 때마다 새로. has = 이 PC 보관 로컬 항목의 파일 유무(localHas)
+let sctx = { desktop: null, deviceId: null, bridge: false, syncOn: false, has: null };
 
 // 무료 PDF 찾기 (docs/design/phase5-korean-db-ui.md 4장 · AD-3 · AD-9)
 const OA_FIND_TITLE = "무료 PDF를 찾아요. 라이선스가 확인되면 바로 저장하고, 아니면 직접 받을 링크를 드려요.";
@@ -71,6 +77,7 @@ export function renderLibrary(main) {
   root = el(`<section class="view">
     <div class="toolbar">
       <h1>${esc(filterTitle())}</h1>
+      <span class="folder-switch-slot" data-folder-switch></span>
       <div class="searchbox"><input class="input" placeholder="서재 검색: 제목·저자·초록·본문·메모  ( / )" value="${esc(state.q)}"></div>
       <select class="input" data-sort title="정렬" style="width:auto">${SORTS.map(([k, v]) => `<option value="${k}" ${k === state.sort ? "selected" : ""}>${v}</option>`).join("")}</select>
       <span class="spacer"></span>
@@ -134,9 +141,54 @@ export async function loadPapers() {
     for (const id of [...state.selected]) if (!ids.has(id)) state.selected.delete(id);
     if (state.activeId && !ids.has(state.activeId)) state.activeId = null;
     $(".toolbar h1", root).textContent = filterTitle();
+    sctx = { ...(await syncCtx()), has: sctx.has };
+    if (!root || !root.isConnected) return;
+    drawFolderSwitch();
     renderList();
     renderDetail();
+    checkLocalHas();
   } catch (e) { errorToast(e); }
+}
+
+// 폴더를 고르면 머리 줄에 "서버에도 저장 [● 켬]" 스위치 (선택 동기화 10.3절 — 누르면 확인 창)
+function drawFolderSwitch() {
+  const slot = $("[data-folder-switch]", root);
+  if (!slot) return;
+  const f = state.filter.kind === "folder" ? state.folders.find((x) => x.id === state.filter.id) : null;
+  const sw = folderSwitch(f, sctx);
+  if (!sw) { slot.innerHTML = ""; return; }
+  slot.innerHTML = `<button type="button" class="folder-switch" role="switch" aria-checked="${sw.on}" data-on="${sw.on}" title="${esc(sw.title)}">
+    <span class="folder-switch-label">${esc(sw.label)}</span><span class="switch-track" aria-hidden="true"><span class="switch-dot"></span></span>
+    <span class="folder-switch-state">${esc(sw.state)}</span></button>`;
+  $("button", slot).onclick = () => syncModeDialog({ folder: f, mode: sw.mode, target: { type: "folder", name: f.name } });
+}
+
+// 앱 창: 이 PC가 보관하는 로컬 항목의 파일이 실제로 있는지 (배지 "이 PC에 파일 없음" — 10.2절). 웹 · 옛 앱은 건너뜀
+async function checkLocalHas() {
+  const dk = window.paperlabDesktop;
+  if (!dk || typeof dk.localHas !== "function" || sctx.deviceId == null) return;
+  const ids = state.papers.filter((p) => isLocal(p) && isHere(p.sync, sctx)).map((p) => p.id).slice(0, 500);
+  if (!ids.length) return;
+  let r = null;
+  try { r = await dk.localHas(ids); } catch { return; }
+  if (!r || typeof r !== "object") return;
+  const before = JSON.stringify(sctx.has || {});
+  const has = { ...(sctx.has || {}) };
+  for (const id of ids) if (r[id] === "here" || r[id] === "missing") has[id] = r[id];
+  sctx.has = has;
+  if (JSON.stringify(has) !== before && root && root.isConnected) renderList();
+}
+
+// 목록 · 상세의 동기화 배지 (켬 항목은 없음)
+function syncBadges(p) {
+  return [badgeFor(p, sctx), mismatchBadge(p)].filter(Boolean).map((b) =>
+    `<span class="sync-badge" data-tone="${esc(b.tone)}" title="${esc(b.title)}">${b.tone === "local" ? ICON_PC : ""}${esc(b.text)}</span>`).join("");
+}
+
+// 로컬 항목의 형식 배지 (서버에 파일이 없어 has_pdf · has_source가 거짓 — PC 파일 이름의 확장자로)
+function localFormatBadge(p) {
+  if (!isLocal(p) || !p.file_name) return "";
+  return `<span class="pdf-badge"${extOf(p.file_name) === ".pdf" ? "" : " data-format"}>${esc(extOf(p.file_name) === ".pdf" ? "PDF" : formatBadge(p.file_name))}</span>`;
 }
 
 function renderList() {
@@ -161,7 +213,8 @@ function renderList() {
 }
 
 function emptyState() {
-  if (state.q) return el(`<div class="empty"><div class="big">⌕</div><h3>찾는 논문이 없어요</h3><p>다른 검색어를 써 보거나, ‘논문 찾기’에서 새 논문을 검색해 보세요.</p></div>`);
+  if (state.q) return el(`<div class="empty"><div class="big">⌕</div><h3>찾는 논문이 없어요</h3><p>다른 검색어를 써 보거나, ‘논문 찾기’에서 새 논문을 검색해 보세요.</p>
+    ${state.stats && state.stats.local_only > 0 ? `<p class="small muted" data-search-local>${esc(SEARCH_LOCAL_HINT)}</p>` : ""}</div>`);
   if (state.filter.kind === "folder") return el(`<div class="empty"><div class="big">▤</div><h3>이 폴더에 논문이 없어요</h3><p>논문을 끌어다 놓거나 ‘폴더로 이동…’으로 옮겨 보세요.</p></div>`);
   if (state.filter.kind !== "all") return el(`<div class="empty"><div class="big">▤</div><h3>아직 비어 있어요</h3><p>논문을 이 목록으로 끌어다 놓거나, 여기서 논문을 추가하면 이곳에 들어가요.</p></div>`);
   const e = el(`<div class="empty"><div class="big">📚</div><h3>서재가 비어 있어요</h3>
@@ -191,8 +244,9 @@ function paperRow(p) {
       ${snippet ? `<div class="paper-snippet">…${snippet}…</div>` : ""}
     </div>
     <div class="row-side">
+      ${syncBadges(p)}
       ${p.has_source ? `<span class="pdf-badge" data-format title="${esc(`원본: ${p.source_name || ""} (PDF로 바꿔 읽어요)`)}">${esc(formatBadge(p.source_name))}</span>`
-        : p.has_pdf ? `<span class="pdf-badge">PDF</span>` : ""}
+        : p.has_pdf ? `<span class="pdf-badge">PDF</span>` : localFormatBadge(p)}
       ${p.cited_by_count != null ? `<span title="피인용">인용 ${fmtNum(p.cited_by_count)}</span>` : ""}
     </div></div>`);
   $("input", row).onclick = (e) => {
@@ -247,7 +301,8 @@ function onListKey(e) {
 }
 
 export function openPaper(p) {
-  if (p.has_pdf) location.hash = `#/read/${p.id}`;
+  // 로컬 항목도 읽기 화면으로: 보관 PC 앱은 로컬 파일, 그 밖은 안내 + 노트 · 하이라이트 (선택 동기화 9.3절)
+  if (p.has_pdf || isLocal(p)) location.hash = `#/read/${p.id}`;
   else { setActive(p.id); toast("PDF가 없는 논문이에요. 상세 패널에서 무료 PDF를 찾거나 파일을 첨부해 주세요."); }
 }
 
@@ -289,6 +344,7 @@ function bulkBar() {
     <span class="menu-wrap"><button class="btn sm" data-status>상태 ▾</button></span>
     <button class="btn sm" data-star>★ 즐겨찾기</button>
     <button class="btn sm" data-bib>참고문헌 목록</button>
+    ${bulkMenu(sctx).length ? `<span class="menu-wrap"><button class="btn sm" data-sync>동기화 ▾</button></span>` : ""}
     <button class="btn sm danger" data-del>휴지통으로</button>
     <span class="spacer"></span><button class="btn sm ghost" data-clear>선택 해제</button></div>`);
   // 성공하면 true (실패는 토스트 — 이미 지워진 논문이 섞였으면 404 → 목록을 다시 받음)
@@ -320,9 +376,46 @@ function bulkBar() {
   };
   $("[data-star]", bar).onclick = () => bulk("star", true);
   $("[data-bib]", bar).onclick = () => bibliographyDialog({ ids });
+  const syncBtn = $("[data-sync]", bar);
+  if (syncBtn) syncBtn.onclick = (e) => {
+    e.stopPropagation();
+    popupMenu(e.currentTarget, bulkMenu(sctx).map((it) => ({ label: it.label,
+      action: () => syncModeDialog({ ids, mode: it.mode, target: ids.length === 1 ? { type: "file", name: fileLabel(ids[0]) } : { type: "files", count: ids.length } }) })),
+    { left: true });
+  };
   $("[data-del]", bar).onclick = () => deletePapers(ids);
   $("[data-clear]", bar).onclick = () => { state.selected.clear(); renderList(); };
   return bar;
+}
+
+// 확인 창 제목에 쓸 파일 이름 (PC 파일 이름 → 제목)
+function fileLabel(id, p = state.papers.find((x) => x.id === id)) {
+  return (p && (p.file_name || p.title)) || "이 파일";
+}
+
+// 파일 하나의 켜고 끄기 메뉴 항목 → 동작 ([바꾸기 취소]는 확인 창 없이)
+function runPaperSync(p, it) {
+  if (it.act === "cancel") return cancelSyncMode([p.id], it.mode);
+  return syncModeDialog({ ids: [p.id], mode: it.mode, target: { type: "file", name: fileLabel(p.id, p) } });
+}
+
+// 상세 "저장 위치" 줄 (10.4절)
+function drawStorageLine(box, p) {
+  const line = storageLine(p, sctx);
+  // 폴더 동기화를 켠 PC가 없으면 켬 항목은 줄을 그리지 않음 (지금 화면과 같게) — 로컬 · 대기 항목은 언제나
+  if (!line || (!sctx.syncOn && !isLocal(p) && !p.sync.pending)) { box.remove(); return; }
+  const BTN = { cancel: "취소", pick: "다른 PC 고르기", align: "폴더 설정대로 맞추기", reupload: "파일 다시 올리기" };
+  $("[data-storage-line]", box).innerHTML = `<span class="storage-text">${esc(line.text)}</span>${line.sub ? `<span class="small muted">${esc(line.sub)}</span>` : ""}
+    ${line.actions.length ? `<span class="storage-actions">${line.actions.map((a) => `<button type="button" class="btn sm" data-storage-act="${a}">${esc(BTN[a])}</button>`).join("")}</span>` : ""}`;
+  $("[data-storage-line]", box).dataset.tone = line.tone || "";
+  $$("[data-storage-act]", box).forEach((b) => (b.onclick = () => {
+    const a = b.dataset.storageAct;
+    if (a === "reupload") return attachPdf(p.id, false);
+    if (a === "cancel") return cancelSyncMode([p.id], p.sync.pending === "to_local" ? "cloud" : "local");
+    // [다른 PC 고르기]: 보관 PC 라디오부터, 논문 자기 설정(inherit · local)은 그대로 (12장)
+    if (a === "pick") return syncModeDialog({ ids: [p.id], mode: pickMode(p), repick: true, target: { type: "file", name: fileLabel(p.id, p) } });
+    syncModeDialog({ ids: [p.id], mode: "inherit", target: { type: "file", name: fileLabel(p.id, p) } });
+  }));
 }
 
 // ----------------------------------------------------------- detail panel
@@ -351,6 +444,13 @@ async function renderDetail() {
     ? `<a class="btn" href="${esc(inha)}" target="_blank" rel="noopener noreferrer" data-inha-open title="${esc(INHA_OPEN_TITLE)}">${esc(INHA.buttons.view)}${EXT_MARK}</a>`
     : titleQ ? `<span class="menu-wrap"><button class="btn" data-inha-title-search aria-haspopup="menu" aria-expanded="false">학교 DB에서 제목 검색 ▾</button></span>` : "";
   const venueBits = [p.venue, p.volume && `${p.volume}권`, p.issue && `${p.issue}호`, p.pages && `${p.pages}쪽`].filter(Boolean).join(", ");
+  // 로컬 항목(PC에만): 보관 PC 앱 안 = [읽기] 또는 [기본 앱으로 열기] + [AI 요약], 다른 곳 = 안내 한 줄, 보관 PC 해지 = [파일 다시 올리기]
+  const local = isLocal(p);
+  const localBtns = !local ? "" : canOpenHere(p, sctx)
+    ? `${readerKind(p) === "doc" ? `<button class="btn primary" data-open-local title="이 PC의 워드 · 한글 같은 기본 앱으로 열어요">기본 앱으로 열기</button>`
+      : `<button class="btn primary" data-read>읽기</button>`}${p.sync.local_ai === "unsupported" ? "" : `<button class="btn" data-local-ai>AI 요약</button>`}`
+    : holderGone(p.sync) ? `<button class="btn primary" data-attach title="PDF · 워드 · 한글 · PPT · 엑셀 · 사진">파일 다시 올리기</button>`
+      : `<span class="local-elsewhere" data-local-elsewhere>${ICON_PC}${esc(elsewhereLine(p))}</span>`;
   panel.innerHTML = "";
   const inner = el(`<div class="detail-inner">
     <div class="row" style="align-items:flex-start">
@@ -358,9 +458,10 @@ async function renderDetail() {
       <button class="icon-btn" data-close title="닫기">✕</button>
     </div>
     <div class="authors">${esc((p.authors || []).map(authorName).join(", ") || (p.item_type === "document" ? "내 문서" : "저자 미상"))}</div>
+    ${syncBadges(p) ? `<div class="detail-sync" data-detail-sync>${syncBadges(p)}</div>` : ""}
     <div class="venue-line">${esc([venueBits, p.year].filter(Boolean).join(" · "))}</div>
     <div class="actions">
-      ${p.has_pdf ? `<button class="btn primary" data-read>읽기 · AI 요약</button>` : `${p.doi || p.arxiv_id || p.pdf_url ? `<button class="btn primary" data-fetch title="${esc(OA_FIND_TITLE)}">무료 PDF 찾기</button>` : ""}${inhaBtn}<button class="btn${p.doi || p.arxiv_id || p.pdf_url ? "" : " primary"}" data-attach title="PDF · 워드 · 한글 · PPT · 엑셀 · 사진">파일 첨부</button>`}
+      ${local ? localBtns : p.has_pdf ? `<button class="btn primary" data-read>읽기 · AI 요약</button>` : `${p.doi || p.arxiv_id || p.pdf_url ? `<button class="btn primary" data-fetch title="${esc(OA_FIND_TITLE)}">무료 PDF 찾기</button>` : ""}${inhaBtn}<button class="btn${p.doi || p.arxiv_id || p.pdf_url ? "" : " primary"}" data-attach title="PDF · 워드 · 한글 · PPT · 엑셀 · 사진">파일 첨부</button>`}
       ${p.has_source ? `<button class="btn" data-source title="${esc(`올린 원본 파일(${p.source_name || ""})을 받아요`)}">원본 받기 <span class="pdf-badge">${esc(formatBadge(p.source_name))}</span></button>` : ""}
       <button class="btn" data-cite>인용</button>
       <span class="menu-wrap"><button class="btn" data-more>⋯</button></span>
@@ -382,6 +483,7 @@ async function renderDetail() {
       <input placeholder="태그 입력 후 Enter" list="tag-suggest"><datalist id="tag-suggest">${state.tags.map((t) => `<option value="${esc(t.name)}">`).join("")}</datalist></div>
     <div class="section-title">폴더</div>
     <div class="folder-line" data-folder-line></div>
+    <div data-storage-box><div class="section-title">저장 위치</div><div class="storage-line" data-storage-line></div></div>
     <div class="section-title">컬렉션</div>
     <div class="chips">${p.collections.map((cid) => {
       const c = state.collections.find((x) => x.id === cid);
@@ -395,6 +497,7 @@ async function renderDetail() {
   const save = (req) => req.then(reload, saveError);
   markTabs($(".tabs", inner), "상세 정보");
   drawFolderLine($("[data-folder-line]", inner), p);
+  drawStorageLine($("[data-storage-box]", inner), p);
 
   const ib = issuesBox(p.cite_issues, () => editPaperDialog(p));
   if (ib) {
@@ -444,6 +547,10 @@ async function renderDetail() {
   };
   const attach = $("[data-attach]", inner);
   if (attach) attach.onclick = () => attachPdf(p.id, false);
+  const openLocalBtn = $("[data-open-local]", inner);
+  if (openLocalBtn) openLocalBtn.onclick = () => openLocalFile(p.id);
+  const localAi = $("[data-local-ai]", inner);
+  if (localAi) localAi.onclick = () => { state.readerTab = { pid: p.id, tab: "summary" }; location.hash = `#/read/${p.id}`; };
   const srcBtn = $("[data-source]", inner);
   if (srcBtn) srcBtn.onclick = () => downloadSource(p.id);
   // G-5: 실제로 새 탭을 연 뒤 한 줄 안내 — 패널을 다시 그릴 때까지 (D-1)
@@ -476,6 +583,10 @@ async function renderDetail() {
         ...(p.has_source ? [{ label: "원본 받기", sub: p.source_name || "", action: () => downloadSource(p.id) }] : []),
         ...(inha ? [{ label: INHA.buttons.view, sub: "새 탭", action: () => openExternal(inha, { returnFocus: moreBtn }) }] : [])] : []),
       { label: "하이라이트·노트 내보내기 (.md)", action: () => exportAnnotations(p.id, p.title) },
+      ...(() => { // 선택 동기화 켜고 끄기 (10.4절)
+        const items = paperMenu(p, sctx);
+        return items.length ? ["-", ...items.map((it) => ({ label: it.label, action: () => runPaperSync(p, it) }))] : [];
+      })(),
       "-",
       { label: "휴지통으로 옮기기", danger: true, action: () => deletePapers([p.id]) },
     ]);
@@ -537,7 +648,7 @@ function infoView(p, ids) {
     ${p.keywords && p.keywords.length ? `<div class="section-title">키워드</div><div class="chips">${p.keywords.map((k) => `<span class="chip">${esc(k)}</span>`).join("")}</div>` : ""}
     <dl class="kv">
       ${ids}
-      ${p.has_pdf && p.file_name ? `<dt>파일 이름</dt><dd data-file-name title="PC 폴더 동기화에서 쓰는 이름이에요. 이름은 PC에서 바꿔 주세요.">${esc(p.file_name)}</dd>` : ""}
+      ${(p.has_pdf || isLocal(p)) && p.file_name ? `<dt>파일 이름</dt><dd data-file-name title="PC 폴더 동기화에서 쓰는 이름이에요. 이름은 PC에서 바꿔 주세요.">${esc(p.file_name)}</dd>` : ""}
       ${p.has_source ? `<dt>원본</dt><dd data-source-name>${esc(p.source_name || "")}${p.source_size ? ` · ${esc(fmtBytes(p.source_size))}` : ""} <span class="small muted">(PDF로 바꿔 읽어요)</span></dd>` : ""}
       <dt>유형</dt><dd>${esc(state.meta.item_types[p.item_type] || p.item_type)}</dd>
       ${p.publisher ? `<dt>출판사</dt><dd>${esc(p.publisher)}</dd>` : ""}
@@ -689,6 +800,15 @@ function drawFolderLine(line, p) {
       ? names.map(esc).join(`<span class="sep">›</span>`) : "폴더 없음"}</span>
     <button class="btn sm" data-move-folder>옮기기</button>`;
   $("[data-move-folder]", line).onclick = () => moveToFolderDialog([p.id], p.folder_id ?? null);
+}
+
+// 앱 창: 로컬 항목을 이 PC의 기본 앱으로 (paperlabDesktop.openLocal — 논문 id만 넘김, 경로는 앱이 정함 · C-3)
+export async function openLocalFile(pid) {
+  const dk = window.paperlabDesktop;
+  if (!dk || typeof dk.openLocal !== "function") return toast("PaperLab 앱을 업데이트하면 이 PC의 파일을 열 수 있어요", "error");
+  let r = null;
+  try { r = await dk.openLocal(pid); } catch { r = null; }
+  if (!r || !r.ok) toast(localFileText(r && r.code), "error", { duration: 8000 });
 }
 
 // "PDF 파일 열기": 빈 창을 먼저 열고(팝업 차단 회피) 서명 주소로 보낸다 (명세 6.7)

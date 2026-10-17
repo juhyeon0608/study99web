@@ -4,12 +4,46 @@
 // 짝 맞추기: 파일 ID(ino) → 같은 상대 경로(대소문자 무시) → 크기 · 해시(복사 후 원본 삭제) 순서 (K-5 · 9.3절).
 // 같은 상대 경로에서 ino 만 바뀐 것(안전 저장)은 경로 짝으로 맞춰져 "내용 비교"로 간다.
 //
-// J = {files: {pid: {rel, sha256, size, mtime_ms, ino}}, folders: {fid: {rel, ino}}}
+// J = {files: {pid: {rel, sha256, size, mtime_ms, ino, kind}}, folders: {fid: {rel, ino}}, swapping: {키: {rel, sha256}}, modeFails: {pid: reason}}
 // L = {files: [{rel, key, size, mtime_ms, ino, sha256|null(아직 안정되지 않음)}], dirs: [{rel, key, ino}], excluded: {files, dirs}(제외 · 건너뜀 — 보류)}
-// S = {folders: Map(fid → {id, name, parent_id}), papers: Map(pid → {id, folder_id, file_name, sha256, size}),
-//      trashed: Map(pid → {sha256, label}), gonePapers: Set(pid), goneFolders: Set(fid)}
+// S = {folders: Map(fid → {id, name, parent_id, sync_mode}), papers: Map(pid → {id, folder_id, file_name, sha256, size, kind, storage, holder,
+//      holderGone, pending}), trashed: Map(pid → {sha256, label}), gonePapers: Set(pid), goneFolders: Set(fid)}
+//
+// 선택 동기화(selective-sync.md 8.3절 — 프로토콜 2에서만): 로컬 항목(storage 'local')은 보관 PC(holder)에만 파일이 있다.
+// 보관 PC = 나(opts.me): 받지 않고 내용이 바뀌면 메타데이터만 올림(upload_content local) · 켜기 대기면 promote.
+// 보관 PC = 남: 받지 않고, 저널에 있던 사본은 Windows 휴지통(trash_local moved_local — 대량 검사 · L = J = S 일 때만),
+// 보관 PC가 그 뒤 고친 판이면 이 PC 사본은 두고 문제 목록(elsewhere_old), 여기서 고친 사본은 새 항목.
+// 끄기 대기(cloud + to_local) · 보관 = 나: 파일이 서버와 같으면 mode_ack, 받을 수 없으면 mode_fail(같은 이유 한 번만).
+// 표현 바뀜(서버 이름의 확장자 ≠ 저널 · 해시도 다름 — D-8): swap_rep(원본을 새 이름으로 받고 옛 변환본은 휴지통).
+// PC 새 파일: 그 위치의 실효 모드(effectiveMode)가 끔이면 add_local(올리지 않음), 아니면 upload_new.
 
 const P = require('./paths');
+const { extOf } = require('./filekind');
+
+/** 실효 모드(5.2절): 폴더 설정을 따라 올라가 처음 만나는 inherit 아닌 값, 루트까지 없으면 'cloud'(D-11). 순환은 방문 집합으로 막음 */
+function effectiveMode(S, folderId) {
+  const seen = new Set();
+  let fid = folderId;
+  while (fid != null) {
+    const f = S.folders.get(Number(fid));
+    if (!f || seen.has(f.id)) break;
+    seen.add(f.id);
+    if (f.sync_mode === 'cloud' || f.sync_mode === 'local') return f.sync_mode;
+    fid = f.parent_id;
+  }
+  return 'cloud';
+}
+
+/** rel 이 들어 있는 서재 폴더 id(저널 폴더 중 가장 가까운 조상, 루트면 null) */
+function folderIdFor(J, rel) {
+  let dir = P.parentRel(rel);
+  while (dir) {
+    const k = P.fold(dir);
+    for (const [fid, f] of Object.entries(J.folders || {})) if (P.fold(f.rel) === k) return Number(fid);
+    dir = P.parentRel(dir);
+  }
+  return null;
+}
 
 function folderRel(S, fid, seen = new Set()) {
   if (fid == null) return '';
@@ -27,6 +61,10 @@ function paperRel(S, p) {
 }
 
 const same = (a, b) => P.nfc(a) === P.nfc(b);
+/** 보관 PC 이름(서버 holder_name — normPaper): 확인 창 · 알림의 label('' = 모름 — 화면은 "다른 PC") */
+const holderName = (sp) => (sp && sp.holder_name) || '';
+/** 문제 목록 항목에 붙일 {label} — 이름을 모르면 붙이지 않음 */
+const holderLabel = (sp) => (holderName(sp) ? { label: holderName(sp) } : {});
 
 /** 파일 · 디렉터리 짝 맞추기: ino → 경로 키. → Map(id → L 항목), 남은 L.
  *  confirm(j, l): 다른 경로의 같은 ino 를 이동으로 받아들일지(파일은 해시가 같거나 아직 모를 때만 — K-44, 모르면 이번엔 보류) */
@@ -94,13 +132,29 @@ function planFolders(J, L, S, { root } = {}) {
 
 // ---------------------------------------------------------------------------------------- 파일 (6.4)
 /**
- * opts = {place: 'local' | 'library', root}
+ * opts = {place: 'local' | 'library', root, me, proto, forceCloud}
  * place: PC 새 파일과 서재 논문의 해시가 같고 위치가 다를 때 — 'local' = 서재 논문을 PC 위치로(file.move),
  *        'library' = PC 파일을 서재 위치로(K-13). 평소(첫 연결 뒤)는 'local'(나중에 넣은 쪽 위치 — 10.2절).
+ * me = 이 PC 기기 id, proto = 서버 동기화 프로토콜(1 = 옛 서버 — 선택 동기화 줄을 만들지 않음),
+ * forceCloud = Set(`${접는 경로}\n${해시}`) — 서버가 upload_required 를 준 새 파일(다음 바퀴는 올림 — 8.3절 끝 줄).
  */
-function planFiles(J, L, S, { place = 'local', root } = {}) {
+function planFiles(J, L, S, { place = 'local', root, me = null, proto = 1, forceCloud = new Set() } = {}) {
   const acts = [];
   const problems = [];
+  const v2 = proto >= 2;
+  const isLocal = (sp) => v2 && !!sp && sp.storage === 'local';
+  const mine = (sp) => sp.holder != null && me != null && Number(sp.holder) === Number(me);
+  const pendingLocalMine = (sp) => v2 && !!sp && sp.storage !== 'local' && sp.pending === 'to_local' && mine(sp);
+  const modeFails = J.modeFails || {};
+  const modeFail = (sp, reason) => { if (modeFails[sp.id] !== reason) acts.push({ t: 'mode_fail', pid: sp.id, reason }); };
+  // 표현 바꾸기 중인 옛 파일(J.swapping) — 새 파일로 읽지 않음(엔진이 휴지통으로 보냄)
+  const swapKeys = new Map(Object.values(J.swapping || {}).map((x) => [P.fold(x.rel), x.sha256]));
+  const swappingNow = (l) => swapKeys.has(l.key) && (l.sha256 == null || swapKeys.get(l.key) === l.sha256);
+  /** PC 새 파일: 그 위치가 끔이면 올리지 않는 로컬 항목(서버가 다시 판정 — upload_required 면 다음 바퀴 올림) */
+  const newFileAct = (l) => {
+    const local = v2 && effectiveMode(S, folderIdFor(J, l.rel)) === 'local' && !forceCloud.has(`${l.key}\n${l.sha256}`);
+    return { t: local ? 'add_local' : 'upload_new', rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms };
+  };
   let { match, rest } = matchByIdAndPath(J.files, L.files, (j, l) => l.sha256 == null || l.sha256 === j.sha256);
   // 복사 후 원본 삭제 · 바꿔치기 저장: 짝 없는 J 와 같은 크기 · 해시의 새 파일
   const unmatched = Object.keys(J.files).map(Number).filter((pid) => !match.has(pid));
@@ -130,10 +184,12 @@ function planFiles(J, L, S, { place = 'local', root } = {}) {
     const st = S.trashed.get(pid);
     const gone = S.gonePapers.has(pid);
     live.add(pid);
+    const elsewhere = isLocal(sp) && !mine(sp); // 다른 PC에만 두기로 한 항목
     if (!l) {
       if (excludedNow(j.rel, j.ino)) continue; // 보류 — 서버에도 PC 에도 아무것도 하지 않음
+      if (elsewhere) { acts.push({ t: 'drop', pid }); continue; } // 이 PC 사본이 사라짐 — 서재 항목은 보관 PC 것이라 지우지 않음
       if (st || gone || !sp) acts.push({ t: 'drop', pid });            // 둘 다 없음 · 서버에도 없음
-      else if (sp.sha256 !== j.sha256) { // 사라짐 vs 내용 바뀜 → 받기(바뀐 쪽이 이김)
+      else if (sp.sha256 !== j.sha256 && !isLocal(sp)) { // 사라짐 vs 내용 바뀜 → 받기(바뀐 쪽이 이김). 로컬 항목(보관 = 나)은 받을 곳이 없어 지움 신호
         acts.push({ t: 'drop', pid });
         const rel = paperRel(S, sp);
         if (rel != null) acts.push({ t: 'download', pid, rel, replace: false, sha256: sp.sha256, size: sp.size });
@@ -154,7 +210,24 @@ function planFiles(J, L, S, { place = 'local', root } = {}) {
       acts.push({ t: 'upload_new', rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms, dropPid: pid });
       continue;
     }
+    if (elsewhere) {
+      if (sp.holderGone && !lChanged) { // 보관 PC가 해지됨 · 없어짐 → 같은 파일을 가진 이 PC가 넘겨받음(서버 adopted — D-9)
+        acts.push({ t: 'add_local', rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms });
+      } else if (lChanged) { // 여기서 고친 사본 → 새 항목(그 위치 실효 모드대로) + 알림
+        acts.push({ ...newFileAct(l), dropPid: pid, note: 'local_kept_new' });
+      } else if (sp.sha256 === j.sha256) acts.push({ t: 'trash_local', pid, rel: l.rel, label: holderName(sp), reason: 'moved_local' }); // 대량 검사 · 확인 창은 엔진(D-4 — ‘연구실 PC’)
+      else problems.push({ code: 'elsewhere_old', rel: l.rel, ...holderLabel(sp) }); // 보관 PC가 그 뒤 고침 — 이 PC 사본은 다른 판이라 지우지 않고 그대로(사용자가 정함)
+      continue;
+    }
     const sRel = paperRel(S, sp);
+    // 표현 바뀜(D-8): 옛 변환본(X.pdf) → 원본(X.docx). 내용도 다를 때만(같은 해시면 이름만 바뀐 것 — 옮기기)
+    if (v2 && !isLocal(sp) && sRel != null && extOf(sp.file_name) !== extOf(j.rel) && sp.sha256 !== j.sha256) {
+      if (lChanged) { // 옛 변환본을 여기서 고쳤음 → 고친 파일은 새 항목으로 남기고 새 원본은 따로 받음
+        acts.push({ t: 'upload_new', rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms, dropPid: pid });
+        if (!L.files.some((x) => x.key === P.fold(sRel))) acts.push({ t: 'download', pid, rel: sRel, replace: false, sha256: sp.sha256, size: sp.size });
+      } else acts.push({ t: 'swap_rep', pid, from: l.rel, to: sRel, oldSha: j.sha256, sha256: sp.sha256, size: sp.size });
+      continue;
+    }
     if (sRel == null) problems.push({ code: 'bad_name_server', rel: l.rel });
     const lMoved = l.rel !== j.rel;
     const sMoved = sRel != null && !same(sRel, j.rel);
@@ -162,9 +235,14 @@ function planFiles(J, L, S, { place = 'local', root } = {}) {
     if (lMoved && (sRel == null || !same(sRel, l.rel))) { acts.push({ t: 'srv_move', pid, rel: l.rel }); continue; }
     if (!lMoved && sMoved) { acts.push({ t: 'local_move', pid, from: l.rel, to: sRel }); continue; }
     if (lChanged && l.sha256 === sp.sha256) { acts.push({ t: 'refresh', pid, rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms, ino: l.ino }); continue; }
-    if (lChanged) { acts.push({ t: 'upload_content', pid, rel: l.rel, base: j.sha256, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms }); continue; }
+    if (lChanged || (isLocal(sp) && sChanged)) { // 로컬 항목(보관 = 나)은 업로드 없이 메타데이터만 — 서버가 다른 해시를 알면 이 PC 파일 기준으로 맞춤
+      acts.push({ t: 'upload_content', pid, rel: l.rel, base: j.sha256, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms, ...(isLocal(sp) ? { local: true } : {}) });
+      continue;
+    }
     if (sChanged) { acts.push({ t: 'download', pid, rel: l.rel, replace: true, sha256: sp.sha256, size: sp.size }); continue; }
     if (meta) acts.push({ t: 'refresh', pid, rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms, ino: l.ino });
+    if (isLocal(sp) && sp.pending === 'to_cloud') acts.push({ t: 'promote', pid, rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms }); // 켜기(5.3)
+    else if (pendingLocalMine(sp)) acts.push({ t: 'mode_ack', pid, sha256: sp.sha256 }); // 끄기 확인(D-2) — 같은 해시의 파일을 가졌음
   }
   // 서버 쪽: 같은 해시 논문 중 가장 작은 id 만 PC 파일로 (7.2-4)
   const liveBySha = new Map();
@@ -178,11 +256,17 @@ function planFiles(J, L, S, { place = 'local', root } = {}) {
   const seenNewSha = new Set();
   const placeTaken = new Set(L.files.map((l) => l.key));
   for (const l of rest) {
-    if (l.sha256 == null) continue;
+    if (l.sha256 == null || swappingNow(l)) continue;
     if (seenNewSha.has(l.sha256)) { problems.push({ code: 'duplicate_copy', rel: l.rel }); continue; }
     seenNewSha.add(l.sha256);
     const sp = liveBySha.get(l.sha256);
     if (sp && (live.has(sp.id) || linkedNow.has(sp.id))) { problems.push({ code: 'duplicate_copy', rel: l.rel }); continue; }
+    if (sp && isLocal(sp) && !mine(sp)) { // 다른 PC에만 두기로 한 파일과 같음(D-9) — 보관 PC가 없어졌으면 넘겨받음(서버 adopted)
+      linkedNow.add(sp.id);
+      if (sp.holderGone) acts.push({ t: 'add_local', rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms });
+      else problems.push({ code: 'local_elsewhere', rel: l.rel, ...holderLabel(sp) });
+      continue;
+    }
     if (sp) {
       const sRel = paperRel(S, sp);
       linkedNow.add(sp.id);
@@ -193,13 +277,17 @@ function planFiles(J, L, S, { place = 'local', root } = {}) {
     }
     const tp = trashedBySha.get(l.sha256);
     if (tp != null) { acts.push({ t: 'restore', pid: tp, rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms }); continue; }
-    acts.push({ t: 'upload_new', rel: l.rel, sha256: l.sha256, size: l.size, mtime_ms: l.mtime_ms });
+    acts.push(newFileAct(l));
   }
   for (const sp of liveBySha.values()) {
     if (live.has(sp.id) || linkedNow.has(sp.id)) continue;
     const rel = paperRel(S, sp);
-    if (rel == null) { problems.push({ code: 'bad_name_server', rel: sp.file_name || '' }); continue; }
-    if (root && P.fullLength(root, rel) > P.MAX_PATH) { problems.push({ code: 'too_long_down', rel }); continue; }
+    if (isLocal(sp)) { // 로컬 항목은 받지 않음 — 이 PC가 보관인데 파일이 없으면 문제 목록(받을 곳이 없음)
+      if (mine(sp)) problems.push({ code: 'local_missing', rel: rel == null ? sp.file_name || '' : rel, ...holderLabel(sp) });
+      continue;
+    }
+    if (rel == null) { problems.push({ code: 'bad_name_server', rel: sp.file_name || '' }); if (pendingLocalMine(sp)) modeFail(sp, 'missing'); continue; }
+    if (root && P.fullLength(root, rel) > P.MAX_PATH) { problems.push({ code: 'too_long_down', rel }); if (pendingLocalMine(sp)) modeFail(sp, 'too_long'); continue; }
     if (placeTaken.has(P.fold(rel))) continue; // 그 자리에 다른 파일이 있음 — 그쪽이 먼저 정리된 뒤(K-8 이름 바꿈) 받음
     acts.push({ t: 'download', pid: sp.id, rel, replace: false, sha256: sp.sha256, size: sp.size });
   }
@@ -219,4 +307,4 @@ function planFiles(J, L, S, { place = 'local', root } = {}) {
   return { acts: acts.concat(folderActs), problems };
 }
 
-module.exports = { folderRel, paperRel, planFolders, planFiles, matchByIdAndPath };
+module.exports = { folderRel, paperRel, planFolders, planFiles, matchByIdAndPath, effectiveMode, folderIdFor };

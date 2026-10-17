@@ -78,7 +78,17 @@ const WAITING = {
   no_online_worker: "PC에서 실행 대기 중 — 켜진 PC가 없어요",
   no_engine_on_worker: "PC에서 실행 대기 중 — {p}가 있는 PC가 없어요",
   all_workers_busy: "PC에서 실행 대기 중 — PC가 다른 작업 중이에요",
+  // 로컬 항목(PC에만 둔 파일) 작업: 보관 PC만 잡음 — 서버 pinned_device.note("‘집 PC’가 켜지면 실행돼요")가 있으면 그것 (selective-sync.md 7.4 · 10.6절)
+  holder_offline: "PC에서 실행 대기 중 — 파일을 가진 PC가 꺼져 있어요",
 };
+// 대기 이유 한 줄 — 모르는 이유(새 서버)여도 깨지지 않게
+function waitingText(job, table, fallback) {
+  const r = job.waiting_reason;
+  if (r === "holder_offline" && job.pinned_device && job.pinned_device.note) {
+    return table === WAITING ? `PC에서 실행 대기 중 — ${job.pinned_device.note}` : `${job.pinned_device.note}. 탭을 닫아도 기다려요.`;
+  }
+  return (table[r] || fallback).replace("{p}", job.engine);
+}
 const reassigned = (job) => job.attempts >= 2 && (job.history || []).slice(-1)[0]?.error_code === "lease_expired";
 
 // 한 줄 상태 (대화 · 글쓰기 · 작업 목록 · 요약 카드 메시지 공용)
@@ -90,7 +100,7 @@ export function jobLine(job, verb = "실행", { elapsed = true } = {}) {
   switch (st) {
     case "api-queued": return job.engine === "local" ? "서버 차례를 기다리는 중" : `${COMPANY[job.engine]} API 차례를 기다리는 중`;
     case "api-running": return `${job.engine === "local" ? "서버에서" : `${COMPANY[job.engine]} API로`} ${verb}하는 중${p.message ? ` · ${p.message}` : ""}${pct}`;
-    case "cli-waiting": return job.waiting_reason ? WAITING[job.waiting_reason].replace("{p}", job.engine) : "PC가 곧 작업을 가져가요";
+    case "cli-waiting": return job.waiting_reason ? waitingText(job, WAITING, "PC가 곧 작업을 가져가요") : "PC가 곧 작업을 가져가요";
     case "cli-running": return `${reassigned(job) ? "PC 연결이 끊겨 다른 PC로 넘겼어요 · " : ""}${dev}에서 실행 중 (${job.engine})${elapsed && job.started_at ? ` · ${elapsedText(job)}` : ""}`;
     case "cancelling": return "취소하는 중…";
     case "succeeded": return job.engine === "local" ? "완료 · 서버에서 실행" : job.runner === "api" ? `완료 · ${COMPANY[job.engine]} API` : `완료 · ${dev}(${job.engine})에서 실행`;
@@ -180,6 +190,7 @@ const CARD_MSG = {
   no_online_worker: "PaperLab 앱이 켜진 PC가 생기면 바로 시작해요. 탭을 닫아도 기다려요.",
   no_engine_on_worker: "{p}가 설치 · 로그인된 PC가 연결돼 있지 않아요. 설정에서 PC를 연결하거나 엔진 순서를 바꿔 주세요.",
   all_workers_busy: "PC가 하던 작업을 끝내면 시작해요.",
+  holder_offline: "이 파일을 가진 PC가 켜지면 시작해요. 탭을 닫아도 기다려요.",
 };
 export function summaryCard(job, { onCancel, onRetry }) {
   const card = el(`<div class="graph-progress-card job-card" data-summary-progress>
@@ -204,7 +215,7 @@ export function updateSummaryCard(card, job) {
   const running = st.endsWith("running") || st === "api-queued";
   const title = waiting ? "PC에서 실행 대기 중" : st === "failed" ? "요약을 만들지 못했어요" : st === "cancelling" ? "취소하는 중…" : "논문을 정리하고 있어요";
   const msg = st === "failed" ? job.error || errorLabel(job.error_code, job.engine)
-    : waiting ? (CARD_MSG[job.waiting_reason] || "PC가 곧 작업을 가져가요.").replace("{p}", job.engine) : jobLine(job, "정리", { elapsed: false });
+    : waiting ? waitingText(job, CARD_MSG, "PC가 곧 작업을 가져가요.") : jobLine(job, "정리", { elapsed: false });
   card.dataset.jobId = job.id;
   card.dataset.waiting = job.waiting_reason || "";
   if (card.dataset.jobState !== st) {

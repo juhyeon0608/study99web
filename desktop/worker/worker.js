@@ -5,12 +5,16 @@
 // - 연결 안 됨 · 5xx: 백오프 5초 → 최대 5분 (13.6).
 // - heartbeat 응답 ok:false = 리스 잃음 → 끄고 결과를 올리지 않음, cancel:true → 끄고 cancelled 보고 (6.3 · 6.5).
 // 전기 · 시계 · 실행기 · 탐지는 주입 — 테스트는 가짜 서버 + 가짜 CLI.
+// - 로컬 항목 AI(선택 동기화 7.4 · 9.4절): 잡기 본문 caps: ["local_text"]. 작업에 local 이 있으면 main 에 로컬 본문을 청하고(localText 주입 —
+//   entry.js 가 main 메시지로, 120초) 프롬프트의 표지를 바꾼 뒤에만 CLI 를 실행. 본문은 로그에 남기지 않음(작업 id · 결과 코드만).
 
 const { ENGINES, DEFAULT_SLOTS, DEFAULT_TOTAL } = require('./engines');
 const { redact } = require('../lib/redact');
 const { nullLogger } = require('../lib/log');
+const LT = require('./local-text');
 
 const PROTOCOL = 1;
+const CAPS = ['local_text']; // 이 워커가 할 수 있는 일(0.4.0) — 서버가 로컬 항목 작업(보관 PC 고정)을 이 워커에만 줌
 const HELLO_EVERY_MS = 30 * 60 * 1000; // 8.3
 const PROBE_EVERY_MS = 30 * 60 * 1000; // 11.7
 const IDLE_S = 60;
@@ -32,6 +36,7 @@ class Worker {
     this.api = o.api;
     this.runTask = o.runTask;
     this.probe = o.probe;
+    this.localText = o.localText || null; // async (paper_id, sha256) → {ok, pages, code} (main 의 로컬 파일 다리 — 9.4절)
     this.noDetect = o.noDetect === true; // PAPERLAB_NO_DETECT=1 (개발 · 시험): CLI 를 찾지도 실행하지도 않음
     this.log = o.log || nullLogger;
     this.emit = o.emit || (() => {});
@@ -206,7 +211,7 @@ class Worker {
       if (this.needHello || this.now() - this.lastHello >= HELLO_EVERY_MS) await this.hello();
       if (this.updateRequired) return HELLO_EVERY_MS / 1000;
       const paused = this.settings.paused;
-      const r = await this.api.post('/api/worker/claim', paused ? { free: {}, paused: true } : { free: this.free(), paused: false });
+      const r = await this.api.post('/api/worker/claim', paused ? { free: {}, paused: true, caps: CAPS } : { free: this.free(), paused: false, caps: CAPS });
       this.online();
       if (r && r.job) return this.startJob(r.job) ? 0 : 5;
       const n = Number(r && r.next_poll_s);
@@ -321,12 +326,19 @@ class Worker {
     if (e.prev) await e.prev.catch(() => {});
     const p = this.probed[e.engine] || {};
     let res;
-    try {
-      res = await this.runTask(e.task, { resolved: p.resolved, version: p.version, signal: e.ac.signal, workRoot: this.workRoot,
-        env: this.env, onPartial: (t) => { e.partial = t; } });
-    } catch (err) {
-      this.log.error('실행 오류', { job: e.id, error: err && err.message });
-      res = { outcome: 'failed', error_code: 'cli_exit', error: 'PC 앱이 CLI를 실행하지 못했어요', stats: {} };
+    let task = e.task;
+    if (task.local !== undefined && task.local !== null) { // 로컬 항목 — 본문을 이 PC 파일에서 채움(C-4)
+      const filled = await this.fillLocal(e);
+      if (filled.res) res = filled.res; else task = filled.task;
+    }
+    if (!res) {
+      try {
+        res = await this.runTask(task, { resolved: p.resolved, version: p.version, signal: e.ac.signal, workRoot: this.workRoot,
+          env: this.env, onPartial: (t) => { e.partial = t; } });
+      } catch (err) {
+        this.log.error('실행 오류', { job: e.id, error: err && err.message });
+        res = { outcome: 'failed', error_code: 'cli_exit', error: 'PC 앱이 CLI를 실행하지 못했어요', stats: {} };
+      }
     }
     if (res.stats && res.stats.model_fallback) {
       this.log.info('선택한 CLI 모델을 쓸 수 없어 기본 모델로 다시 실행함', { job: e.id, engine: e.engine, model: e.task.model });
@@ -341,6 +353,34 @@ class Worker {
     if (cur === e) this.running.delete(e.id);
     this.refresh();
     this.wakeUp(); // 빈 자리가 생김 → 바로 잡기
+  }
+
+  /**
+   * 로컬 본문 채우기 → {task}(표지를 바꾼 작업) | {res}(실패 결과 — CLI 를 실행하지 않음).
+   * 실패 코드: local_file · local_unsupported · local_unreadable · local_no_text(9.4) · bad_input · input_too_large(7.4 워커 계약)
+   */
+  async fillLocal(e) {
+    const fail = (code) => ({ res: { outcome: 'failed', error_code: code, error: LT.MESSAGES[code] || '', stats: {} } });
+    const spec = LT.localSpec(e.task);
+    if (!spec) return fail('bad_input');
+    if (!this.localText) return fail('local_file');
+    let r;
+    try { r = await this.localText(spec.paper_id, spec.sha256); } catch { r = { ok: false, code: 'local_unreadable' }; }
+    if (e.ac.signal.aborted) return { res: { outcome: e.lost ? 'lost' : 'cancelled', stats: {} } };
+    if (!r || !r.ok) {
+      const code = r && LT.LOCAL_CODES.has(r.code) ? r.code : 'local_unreadable';
+      this.log.info('로컬 본문 읽기 실패', { job: e.id, code });
+      return fail(code);
+    }
+    try {
+      const prompt = LT.fillPrompt(e.task.prompt, r.pages);
+      this.log.info('로컬 본문 채움', { job: e.id, parts: r.pages.length });
+      return { task: { ...e.task, prompt } };
+    } catch (err) {
+      const code = err instanceof LT.LocalTextError ? err.code : 'bad_input';
+      this.log.info('로컬 본문 채우기 실패', { job: e.id, code });
+      return fail(code);
+    }
   }
 
   async upload(e, res) {
@@ -405,4 +445,4 @@ class Worker {
   }
 }
 
-module.exports = { Worker, normalizeSettings, PROTOCOL };
+module.exports = { Worker, normalizeSettings, PROTOCOL, CAPS };

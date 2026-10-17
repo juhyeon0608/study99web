@@ -123,7 +123,7 @@
       else note = '추천 위치를 쓸 수 없어요. 다른 폴더를 골라 주세요.';
       var prev = s.previousRoot || sy.previousRoot;
       li = el('<li class="item-card sync-card" data-sync-state="off"><div class="item-head"><span class="item-title">동기화 폴더</span>' + chip + '</div>' + line + '</div>' +
-        '<p class="item-meta">PC의 논문 폴더 하나를 서재 폴더와 같은 모양으로 맞춰요. PDF만 맞추고, 지운 파일은 서재 휴지통(30일)과 Windows 휴지통으로 가요. 폴더를 고르고 미리보기에서 [시작]을 눌러야 동기화가 시작돼요.</p>' +
+        '<p class="item-meta">PC의 논문 폴더 하나를 서재 폴더와 같은 모양으로 맞춰요. PDF · 워드 · 한글 · PPT · 엑셀 · 사진을 맞추고, 폴더 · 파일마다 ‘PC에만 두기’를 고를 수 있어요(서재 화면의 폴더 · 파일 메뉴). 지운 파일은 서재 휴지통(30일)과 Windows 휴지통으로 가요. 폴더를 고르고 미리보기에서 [시작]을 눌러야 동기화가 시작돼요.</p>' +
         '<div class="sync-actions">' + btn('data-sync-pick', '폴더 고르기…', 'primary') + (sug.ok && !sug.exists ? btn('data-sync-create-suggested', '이 위치에 새 폴더 만들기') : '') + '</div>' +
         '<p class="item-meta sync-note" data-sync-suggest>' + esc(note) + '</p>' +
         (prev ? '<p class="item-meta sync-note" data-sync-previous>전에 쓰던 폴더: ' + esc(prev) + ' — ' + btn('data-sync-reconnect', '다시 연결…', 'ghost') + '</p>' : '') + '</li>');
@@ -148,7 +148,8 @@
       '<span class="item-actions">' + btn('data-sync-now' + (busy ? ' disabled' : ''), '지금 맞추기') + '</span></div>' +
       '<p class="item-meta sync-root" title="' + esc(sy.root) + '">' + esc(sy.root) + '</p>' + line + '</div>' +
       (sy.state === 'syncing' ? progressBar(false) : '') +
-      '<p class="item-meta" data-sync-counts>맞춘 파일 ' + esc(Look.fmtNum(c.files)) + '개' + (sy.lastSyncAt ? ' · 마지막 동기화 ' + esc(new Date(sy.lastSyncAt).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })) : '') + '</p>' +
+      '<p class="item-meta" data-sync-counts>맞춘 파일 ' + esc(Look.fmtNum(c.files)) + '개' + (Look.modeLine(c) ? ' · ' + esc(Look.modeLine(c)) : '') +
+      (sy.lastSyncAt ? ' · 마지막 동기화 ' + esc(new Date(sy.lastSyncAt).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' })) : '') + '</p>' +
       '<div class="sync-actions">' + (sy.state === 'root_missing' ? '' : btn('data-sync-open', '폴더 열기')) +
       btn('data-sync-pause aria-pressed="' + !!sy.paused + '"', sy.paused ? '다시 시작' : '일시 중지') + btn('data-sync-change', '폴더 바꾸기…') +
       '<span class="grow"></span>' + btn('data-sync-off', '동기화 끄기', 'ghost danger') + '</div></li>');
@@ -228,10 +229,12 @@
       var pathLine = pv.changing ? '지금: ' + pv.oldRoot + ' → 새 폴더: ' + pv.root : '고른 폴더: ' + pv.root + ' ↔ 서재 — 아직 저장하지 않았어요';
       d.innerHTML = '<div class="modal-head"><h3 id="sync-preview-title" tabindex="-1">' + esc(title) + '</h3><button type="button" class="icon-btn" data-x aria-label="취소">✕</button></div>' +
         '<div class="modal-body"><p class="sync-path">' + esc(pathLine) + '</p>' +
-        (p.empty ? '<p>폴더와 서재가 모두 비어 있어요. 시작하면 이제부터 넣는 PDF를 맞춰요.</p>' :
+        (p.empty ? '<p>폴더와 서재가 모두 비어 있어요. 시작하면 이제부터 넣는 파일을 맞춰요.</p>' :
           '<table class="sync-plan">' + row('이미 같은 파일 (연결만)', Look.fmtNum(p.link) + '개', '전송 없음') +
           row('서재로 올리기', Look.fmtNum(p.upload) + '개', p.upload ? esc(Look.fmtBytes(p.uploadBytes)) : '') +
+          (p.localOnly ? row('이 PC에만 둘 파일', Look.fmtNum(p.localOnly) + '개', esc('서버에 올리지 않음 · ' + Look.fmtBytes(p.localOnlyBytes))) : '') +
           row('이 PC로 받기', Look.fmtNum(p.download) + '개', p.download ? esc(Look.fmtBytes(p.downloadBytes)) : '') +
+          (p.elsewhere ? row('다른 PC에만 있는 파일', Look.fmtNum(p.elsewhere) + '개', '받지 않음') : '') +
           row('새로 만들 폴더', 'PC ' + p.foldersPc + ' · 서재 ' + p.foldersLibrary, '') +
           row('맞추지 않을 파일', Look.fmtNum(p.skippedCount) + '개', '') + '</table>') + skipped +
         (p.upload ? '<p class="sync-room">서재가 ' + esc(Look.fmtNum(p.upload)) + '편 늘어요.' + (p.restore ? ' ' + esc(p.restore) + '개는 서재 휴지통에서 되살려요.' : '') + '</p>' : '') +
@@ -295,7 +298,7 @@
         '<div class="notice" data-tone="info">' + ICON_WARN + '<div>' + esc(look.safety) + '</div></div></div>' +
         '<div class="modal-foot"><span class="left">' + btn('data-confirm-off', '동기화 끄기', 'ghost danger') + '</span>' +
         '<button type="button" class="btn" data-confirm-choice="later">나중에</button>' +
-        '<button type="button" class="btn" data-confirm-choice="revert">' + esc(look.revert) + '</button>' +
+        (look.revert ? '<button type="button" class="btn" data-confirm-choice="revert">' + esc(look.revert) + '</button>' : '') + // 다른 PC에만 두기(moved_local)는 되돌릴 것이 없음
         '<button type="button" class="btn" data-confirm-choice="continue">' + esc(look.cont) + '</button></div>';
       $('[data-later-x]', d).onclick = function () { choose('later', c); };
       $('[data-confirm-off]', d).onclick = function () { choose('off', c); };

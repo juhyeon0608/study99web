@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import threading
 import time
@@ -28,6 +29,7 @@ from psycopg.types.json import Jsonb
 
 from .citations import format_issued, make_citekey, parse_issued
 from .config import redact
+from .convert import ACCEPT_EXTS, IMAGE_EXTS
 
 log = logging.getLogger("paperlab.db")
 
@@ -49,7 +51,21 @@ SORTS = {
 }
 # 응답에서 빼는 내부 열
 _HIDDEN_PAPER_COLS = ("user_id", "pdf_key", "source_key", "title_norm", "rag_key", "rag_version", "sync_rev", "sync_xid",
-                      "deleted_by", "deleted_folder_path", "content_device_id")
+                      "deleted_by", "deleted_folder_path", "content_device_id",
+                      # 선택 동기화 내부 열 — 화면에는 sync 객체로만 (selective-sync.md 10.1절)
+                      "sync_mode", "storage", "local_device_id", "mode_pending", "mode_requested_at", "mode_requested_by",
+                      "mode_error", "source_sha256", "holder")
+# 선택 동기화 (selective-sync.md 5장)
+SYNC_MODES = ("inherit", "cloud", "local")
+# 보관 PC의 워커가 로컬 파일에서 글을 뽑을 수 있는 확장자 (7.4절 — desktop/extract/kinds.js와 같음, 계약 시험)
+LOCAL_TEXT_EXTS = (".pdf", ".docx", ".hwpx", ".pptx", ".xlsx", ".odt", ".odp", ".ods", ".hwp", ".doc")
+# 동기화 대상 논문(PC 표현이 있음 — 5.5절): R2에 PDF가 있거나 로컬 항목
+SYNC_TARGET = "(p.pdf_key <> '' or p.storage = 'local')"
+# PC 표현의 해시 · 크기 · 종류 (5.5절 표 — 원본 해시를 아는 행만 원본 표현)
+REP_SHA = "coalesce(nullif(p.source_sha256, ''), p.pdf_sha256)"
+REP_SIZE = "case when p.source_sha256 <> '' then p.source_size else p.pdf_size end"
+REP_KIND = ("case when p.storage = 'local' then 'local' when p.source_key <> '' and p.source_sha256 <> '' then 'source' "
+            "else 'pdf' end")
 SEARCH_LIMIT = 1000
 # PGroonga 연산자는 extensions 스키마에 있다 (search_path에 기대지 않음)
 PGRN_MATCH = "operator(extensions.&@)"
@@ -82,12 +98,22 @@ _BAD_NAME_CHARS = re.compile(r'[/\\:*?"<>|\x00-\x1f\x7f-\x9f  ]')
 FILE_NAME_RE = re.compile(r'[^/\\:*?"<>|\x00-\x1f\x7f-\x9f  ]{5,200}')
 KST = timezone(timedelta(hours=9))
 PAPER_TRASHED = "논문을 휴지통으로 옮겨 작업을 멈췄어요"
+LOCAL_ONLY_CANCELLED = "이 파일을 PC에만 두기로 해서 서버에서 하던 작업을 멈췄어요"
+
+
+def split_ext(name: str) -> tuple[str, str]:
+    """"보고서.v2.DOCX" → ("보고서.v2", ".DOCX") — 확장자가 동기화 목록(convert.ACCEPT_EXTS)에 있을 때만 떼고(대소문자 그대로),
+    아니면 (이름 전체, "")"""
+    stem, ext = os.path.splitext(str(name or ""))
+    return (stem, ext) if stem and ext.lower() in ACCEPT_EXTS else (str(name or ""), "")
 
 
 def file_name_problem(name: str) -> str:
-    """PC 파일 이름을 쓸 수 없으면 이유, 괜찮으면 '' (폴더 이름 규칙 + .pdf로 끝남 + 200자 이하 — 8.2절)"""
-    if not FILE_NAME_RE.fullmatch(name or "") or not name.lower().endswith(".pdf"):
-        return '파일 이름은 200자 이하의 .pdf 이름이고 / \\ : * ? " < > | 와 제어 문자는 쓸 수 없어요'
+    """PC 파일 이름을 쓸 수 없으면 이유, 괜찮으면 '' (폴더 이름 규칙 + 동기화 확장자로 끝남 + 200자 이하 — 6단계 8.2절,
+    선택 동기화 4장: PDF · 워드 · 한글 · PPT · 엑셀 · 사진 = convert.ACCEPT_EXTS)"""
+    if not FILE_NAME_RE.fullmatch(name or "") or not split_ext(name)[1]:
+        return ('파일 이름은 200자 이하의 PDF · 문서 · 사진 이름(.pdf · .docx · .hwp · .jpg 등)이고 '
+                '/ \\ : * ? " < > | 와 제어 문자는 쓸 수 없어요')
     if name.startswith((" ", ".")) or _WINDOWS_RESERVED.fullmatch(name):
         return "이 파일 이름은 쓸 수 없어요 (Windows 예약 이름 · 점이나 공백으로 시작)"
     return ""
@@ -107,38 +133,44 @@ def _not_reserved(name: str) -> str:
     return "_" + name if _WINDOWS_RESERVED.fullmatch(name) else name
 
 
-def clean_file_name(raw: str) -> str:
-    """올린 파일 이름 → PC 파일 이름: 경로 부분 제거 · NFC · 금지 문자는 공백 · .pdf로 끝나게. 못 만들면 ''"""
-    base = re.split(r"[/\\]", str(raw or ""))[-1]
-    stem = _tidy(re.sub(r"\.pdf$", "", base.strip(), flags=re.I))
+def clean_file_name(raw: str, ext: str = "") -> str:
+    """올린 파일 이름 → PC 파일 이름: 경로 부분 제거 · NFC · 금지 문자는 공백 · 확장자를 붙여 끝나게. 못 만들면 ''.
+    ext: PC 표현의 확장자(".pdf" · 원본 ".docx" 등 — selective-sync.md 5.5절). 없으면 올린 이름의 동기화 확장자(소문자),
+    그것도 없으면 .pdf"""
+    base = re.split(r"[/\\]", str(raw or ""))[-1].strip()
+    stem, own = split_ext(base)
+    stem = _tidy(stem)
     if not stem:
         return ""
-    name = _not_reserved(_fit(stem, ".pdf"))
+    name = _not_reserved(_fit(stem, (ext or own or ".pdf").lower()))
     return "" if file_name_problem(name) else name
 
 
-def generated_file_name(paper: dict) -> str:
-    """`{첫 저자 성} {연도} - {제목}.pdf` (전체 120자 안, 비면 paper-{id}.pdf, 예약 이름이면 앞에 _ — 8.2절)"""
+def generated_file_name(paper: dict, ext: str = ".pdf") -> str:
+    """`{첫 저자 성} {연도} - {제목}{ext}` (전체 120자 안, 비면 paper-{id}{ext}, 예약 이름이면 앞에 _ — 8.2절)"""
+    ext = (ext or ".pdf").lower()
     authors = paper.get("authors") if isinstance(paper.get("authors"), list) else []
     first = authors[0] if authors and isinstance(authors[0], dict) else {}
     head = " ".join(x for x in (_tidy(str(first.get("family") or first.get("literal") or "")),
                                 str(paper.get("year") or "")) if x)
     title = _tidy(str(paper.get("title") or ""))
-    stem = _tidy((f"{head} - {title}" if head and title else head or title)[:GEN_NAME_MAX - 4])
-    name = _not_reserved(stem + ".pdf") if stem else ""
-    return name if name and not file_name_problem(name) else f"paper-{paper.get('id')}.pdf"
+    stem = _tidy((f"{head} - {title}" if head and title else head or title)[:GEN_NAME_MAX - len(ext)])
+    name = _not_reserved(stem + ext) if stem else ""
+    return name if name and not file_name_problem(name) else f"paper-{paper.get('id')}{ext}"
 
 
 def numbered_name(name: str, n: int) -> str:
-    """`이름 (n).pdf` — 서버 안 작업(웹 이동 · 되살리기 · 폴더 삭제)의 겹침 (K-8)"""
-    return _fit(name[:-4], f" ({n}){name[-4:]}")
+    """`이름 (n).확장자` — 서버 안 작업(웹 이동 · 되살리기 · 폴더 삭제)의 겹침 (K-8). 확장자는 대소문자 그대로"""
+    stem, ext = split_ext(name)
+    return _fit(stem, f" ({n}){ext}")
 
 
 def copy_name(name: str, device: str, day: str, n: int = 1) -> str:
-    """`{원래 이름} (충돌 사본 {PC 이름} {YYYY-MM-DD}[ n]).pdf` — 200자를 넘으면 원래 이름 부분만 줄임 (10.3절 · K-7)"""
+    """`{원래 이름} (충돌 사본 {PC 이름} {YYYY-MM-DD}[ n]).확장자` — 200자를 넘으면 원래 이름 부분만 줄임 (10.3절 · K-7).
+    확장자는 원래 이름의 것(소문자 — 워드 · 한글 원본도 그대로, 선택 동기화 12장), 없으면 .pdf"""
     dev = _BAD_NAME_CHARS.sub("", unicodedata.normalize("NFC", device or "")).strip()[:COPY_DEVICE_MAX].strip() or "PC"
-    stem = name[:-4] if name.lower().endswith(".pdf") else name
-    return _fit(stem, f" (충돌 사본 {dev} {day}{f' {n}' if n > 1 else ''}).pdf")
+    stem, ext = split_ext(name)
+    return _fit(stem, f" (충돌 사본 {dev} {day}{f' {n}' if n > 1 else ''}){(ext or '.pdf').lower()}")
 
 
 def kst_day(value: datetime | None = None) -> str:
@@ -151,6 +183,59 @@ def deleted_by_label(deleted_by: str, device_name: str | None) -> str:
     if deleted_by in ("", "web"):
         return "웹"
     return device_name or "PC"
+
+
+# ---------------------------------------------------------------- 선택 동기화 (selective-sync.md 5 · 10.1절)
+def effective_of(sync_mode: str, folder_mode: str | None) -> str:
+    """실효 모드(5.2절): 논문 설정이 inherit가 아니면 그것, 아니면 위 폴더의 실효 모드, 끝까지 없으면 cloud(루트 — D-11)"""
+    if sync_mode in ("cloud", "local"):
+        return sync_mode
+    return folder_mode if folder_mode in ("cloud", "local") else "cloud"
+
+
+def folder_modes(rows: Iterable[dict]) -> dict[int, str]:
+    """폴더 행 [{id, parent_id, sync_mode}] → {폴더 id: 실효 모드}. 순환은 6단계 규칙상 없지만 방문 집합으로 막는다"""
+    by_id = {r["id"]: r for r in rows}
+    out: dict[int, str] = {}
+    for fid in by_id:
+        chain, node, mode = [], fid, "cloud"
+        # 위로 올라가며 처음 만나는 inherit 아닌 설정(또는 이미 계산한 폴더)을 찾는다
+        while node is not None and node in by_id and node not in chain:
+            if node in out:
+                mode = out[node]
+                break
+            if by_id[node]["sync_mode"] in ("cloud", "local"):
+                mode = by_id[node]["sync_mode"]
+                out[node] = mode
+                break
+            chain.append(node)
+            node = by_id[node]["parent_id"]
+        for c in chain:  # 지나온 폴더는 모두 inherit — 찾은 값을 물려받음
+            out[c] = mode
+    return out
+
+
+def local_ai_state(file_name: str) -> str:
+    """로컬 항목의 AI 가능 여부 (10.1절 local_ai): 보관 PC 워커가 글을 뽑을 수 있는 확장자면 ok"""
+    return "ok" if os.path.splitext(str(file_name or ""))[1].lower() in LOCAL_TEXT_EXTS else "unsupported"
+
+
+def sync_view(row: dict) -> dict:
+    """논문 행(_PAPER_SELECT — holder · folder_mode 포함) → 화면의 sync 객체 (10.1절)"""
+    storage = row.get("storage") or "cloud"
+    pending = row.get("mode_pending") or ""
+    eff = effective_of(row.get("sync_mode") or "inherit", row.get("folder_mode"))
+    has_file = bool(row.get("pdf_key")) or storage == "local"
+    h = row.get("holder") if isinstance(row.get("holder"), dict) else None
+    holder = None
+    if storage == "local" or pending or row.get("local_device_id") is not None:
+        gone = h is None or bool(h.get("revoked"))
+        holder = {"id": row.get("local_device_id") if h else None, "name": (h or {}).get("name") or "",
+                  "online": bool(h and h.get("online")) and not gone, "gone": gone}
+    return {"mode": row.get("sync_mode") or "inherit", "effective": eff, "storage": storage, "pending": pending,
+            "pending_error": row.get("mode_error") or "", "holder": holder,
+            "mismatch": has_file and not pending and eff != storage, "has_file": has_file,
+            "local_ai": local_ai_state(row.get("file_name") or row.get("source_name") or "") if storage == "local" else None}
 
 
 def actor_claims(uid: str, actor: str) -> dict:
@@ -310,7 +395,16 @@ select p.*,
   coalesce((select jsonb_agg(pc.collection_id order by pc.collection_id)
               from paperlab.paper_collections pc where pc.paper_id = p.id), '[]'::jsonb) as collections,
   exists (select 1 from paperlab.ai_summaries s where s.paper_id = p.id) as has_summary,
-  (select count(*) from paperlab.annotations a where a.paper_id = p.id)::int as annotation_count
+  (select count(*) from paperlab.annotations a where a.paper_id = p.id)::int as annotation_count,
+  (select jsonb_build_object('name', d.name, 'revoked', d.revoked_at is not null,
+                             'online', d.revoked_at is null and d.last_seen_at > now() - interval '180 seconds')
+     from paperlab.devices d where d.id = p.local_device_id and d.user_id = p.user_id) as holder,
+  (with recursive up (id, parent_id, sync_mode, depth) as (
+     select f.id, f.parent_id, f.sync_mode, 0 from paperlab.folders f where f.id = p.folder_id and f.user_id = p.user_id
+     union all
+     select f.id, f.parent_id, f.sync_mode, up.depth + 1 from paperlab.folders f join up on f.id = up.parent_id
+      where f.user_id = p.user_id and up.depth < 100)
+   select up.sync_mode from up where up.sync_mode <> 'inherit' order by up.depth limit 1) as folder_mode
   {detail}
 from paperlab.papers p
 """
@@ -353,6 +447,8 @@ class Library:
         p = _row(row)
         p["has_pdf"] = bool(p.get("pdf_key"))
         p["has_source"] = bool(p.get("source_key"))  # 워드 · 한글 · PPT · 이미지 원본 (PDF는 변환본)
+        p["sync"] = sync_view(row)  # 선택 동기화 배지 · 메뉴 (selective-sync.md 10.1절)
+        p.pop("folder_mode", None)
         for k in _HIDDEN_PAPER_COLS:
             p.pop(k, None)
         p.pop("_total", None)
@@ -397,8 +493,8 @@ class Library:
 
     def find_duplicate(self, doi: str = "", arxiv_id: str = "", title: str = "",
                        exclude_id: int | None = None, include_trash: bool = False, sha256: str = "") -> dict | None:
-        """내 서재 안에서만: 같은 PDF 파일(sha256) → DOI 정규화 일치 → arXiv 일치 → 정규화 제목(12자 이상) 일치.
-        sha256: 올린 PDF 그대로의 해시 — 유형('문서' 포함)과 상관없이 같은 파일이면 같은 항목.
+        """내 서재 안에서만: 같은 파일(sha256) → DOI 정규화 일치 → arXiv 일치 → 정규화 제목(12자 이상) 일치.
+        sha256: 올린 파일 그대로의 해시(PDF · 문서 원본) — 유형('문서' 포함)과 상관없이 같은 파일이면 같은 항목.
         include_trash: 살아 있는 논문에 없으면 휴지통도 본다(가져오기 중복 — 찾으면 "trashed": True, 6단계 팀장 결정 3)"""
         found = self._find_duplicate(doi, arxiv_id, title, exclude_id, sha256)
         if found or not include_trash:
@@ -416,8 +512,8 @@ class Library:
         norm = normalize_title(title)
         base = _PAPER_SELECT.format(detail="") + " where p.user_id = %s and p.id is distinct from %s and "
         row = None
-        if sha256:
-            row = self._one(base + "p.pdf_sha256 = %s and p.pdf_key <> '' order by p.id limit 1",
+        if sha256:  # PC 표현 해시(원본이 있으면 원본) — 로컬 항목도 해시로 짝지어짐 (selective-sync.md 12장)
+            row = self._one(base + f"{REP_SHA} = %s and {SYNC_TARGET} order by p.id limit 1",
                             (self.uid, exclude_id, sha256))
         if not row and doi:
             row = self._one(base + "p.doi = %s order by p.id limit 1", (self.uid, exclude_id, doi))
@@ -548,11 +644,12 @@ class Library:
         self._reindex(paper_id)
         return old["rag_key"] if old else ""
 
-    def set_source(self, paper_id: int, key: str = "", name: str = "", size: int | None = None) -> str:
-        """문서 원본(PDF로 바꾸기 전 파일)을 적거나('' = 없음 — PDF를 바로 올림) → 옛 source_key(커밋 뒤 지울 것)"""
+    def set_source(self, paper_id: int, key: str = "", name: str = "", size: int | None = None, sha256: str = "") -> str:
+        """문서 원본(PDF로 바꾸기 전 파일)을 적거나('' = 없음 — PDF를 바로 올림) → 옛 source_key(커밋 뒤 지울 것).
+        sha256: 원본 바이트의 해시 — PC 표현(원본 파일)의 해시가 된다(selective-sync.md 5.5절). 원본이 없으면 함께 비운다"""
         old = self._one("select source_key from paperlab.papers where id = %s and user_id = %s", (paper_id, self.uid))
-        self._x("update paperlab.papers set source_key = %s, source_name = %s, source_size = %s "
-                "where id = %s and user_id = %s", (key, name[:255], size, paper_id, self.uid))
+        self._x("update paperlab.papers set source_key = %s, source_name = %s, source_size = %s, source_sha256 = %s "
+                "where id = %s and user_id = %s", (key, name[:255], size, sha256 if key else "", paper_id, self.uid))
         return old["source_key"] if old else ""
 
     def page_texts(self, paper_id: int) -> list[str]:
@@ -681,6 +778,8 @@ class Library:
             "count(*) filter (where status = 'done')::int as done, "
             "count(*) filter (where starred)::int as starred, "
             "count(*) filter (where pdf_key <> '')::int as with_pdf, "
+            "count(*) filter (where storage = 'local')::int as local_only, "  # 선택 동기화: PC에만 둔 편수 · 바꾸는 중
+            "count(*) filter (where mode_pending <> '')::int as mode_pending, "
             "count(*) filter (where not exists (select 1 from paperlab.paper_collections pc "
             "  where pc.paper_id = p.id))::int as unfiled "
             "from paperlab.papers p where p.user_id = %s", (self.uid,))
@@ -700,6 +799,11 @@ class Library:
         """살아 있는 내 논문의 PDF(+ 문서 원본) 합계 (휴지통은 RLS로 빠짐 — trash_bytes)"""
         return self._one("select coalesce(sum(coalesce(pdf_size, 0) + coalesce(source_size, 0)), 0)::bigint as n "
                          "from paperlab.papers where user_id = %s and pdf_key <> ''", (self.uid,))["n"]
+
+    def local_bytes(self) -> int:
+        """PC에만 둔 살아 있는 내 논문 파일 크기 합계 (참고용 — R2 · 사용량 합계에는 들어가지 않음, selective-sync.md 7.2절)"""
+        return self._one(f"select coalesce(sum(coalesce({REP_SIZE}, 0)), 0)::bigint as n from paperlab.papers p "
+                         "where p.user_id = %s and p.storage = 'local'", (self.uid,))["n"]
 
     def trash_bytes(self) -> int:
         with self.trash_tx():
@@ -769,10 +873,25 @@ class Library:
 
     # ----------------------------------------------------------------- folders
     def list_folders(self) -> list[dict]:
-        return self._all(
-            "select f.id, f.name, f.parent_id, "
-            "(select count(*) from paperlab.papers p where p.folder_id = f.id)::int as count "
+        """폴더 + 선택 동기화: 설정(sync_mode) · 실효 모드(effective_mode) · 바로 아래 PC에만 둔 논문 수(local_count)"""
+        rows = self._all(
+            "select f.id, f.name, f.parent_id, f.sync_mode, "
+            "(select count(*) from paperlab.papers p where p.folder_id = f.id)::int as count, "
+            "(select count(*) from paperlab.papers p where p.folder_id = f.id and p.storage = 'local')::int as local_count "
             'from paperlab.folders f where f.user_id = %s order by lower(f.name) collate "C", f.id', (self.uid,))
+        modes = folder_modes(rows)
+        for r in rows:
+            r["effective_mode"] = modes.get(r["id"], "cloud")
+        return rows
+
+    def mode_map(self) -> dict[int, str]:
+        """{폴더 id: 실효 모드} — 폴더 전체를 한 질의로 (selective-sync.md 5.2절)"""
+        return folder_modes(self._all("select id, parent_id, sync_mode from paperlab.folders where user_id = %s",
+                                      (self.uid,)))
+
+    def folder_effective(self, folder_id: int | None) -> str:
+        """그 자리(폴더 · 루트)에 새 파일이 생기면 따를 모드 — 루트는 언제나 cloud (D-11)"""
+        return "cloud" if folder_id is None else self.mode_map().get(folder_id, "cloud")
 
     def has_folder(self, fid) -> bool:
         try:
@@ -884,21 +1003,204 @@ class Library:
                 (folder_id, name, paper_id, self.uid))
         return name
 
+    def _rep_ext(self, p: dict) -> str:
+        """PC 표현의 확장자 (5.5절): 원본 해시를 아는 원본 · 로컬 문서는 원본 이름의 확장자, 그 밖은 .pdf"""
+        if p.get("source_sha256"):
+            ext = split_ext(p.get("source_name") or "")[1].lower()
+            if ext:
+                return ext
+        return ".pdf"
+
     def ensure_file_name(self, paper_id: int, hint: str = "") -> str:
-        """이름이 빈 PDF 논문에 이름을 정한다(올린 이름 → 없으면 `{저자} {연도} - {제목}.pdf`) → 지금 이름"""
-        p = self._one("select id, file_name, folder_id, title, authors, year, pdf_key from paperlab.papers "
-                      "where id = %s and user_id = %s", (paper_id, self.uid))
-        if not p or p["file_name"] or not p["pdf_key"]:
+        """이름이 빈 동기화 대상 논문(PDF · 원본 · 로컬 항목)에 이름을 정한다(올린 이름 → 없으면 `{저자} {연도} - {제목}.확장자`).
+        이미 이름이 있는데 확장자가 PC 표현과 다르면(웹에서 원본 ↔ PDF로 바꿈) 확장자만 맞춘다 → 지금 이름"""
+        p = self._one("select id, file_name, folder_id, title, authors, year, pdf_key, storage, source_name, source_sha256 "
+                      "from paperlab.papers where id = %s and user_id = %s", (paper_id, self.uid))
+        if not p or (not p["pdf_key"] and p["storage"] != "local"):
             return (p or {}).get("file_name") or ""
-        return self.place_paper(paper_id, p["folder_id"], clean_file_name(hint) or generated_file_name(p))
+        ext = self._rep_ext(p)
+        if p["file_name"]:
+            stem, own = split_ext(p["file_name"])
+            if own.lower() == ext:
+                return p["file_name"]
+            return self.place_paper(paper_id, p["folder_id"], _not_reserved(_fit(stem, ext)))
+        return self.place_paper(paper_id, p["folder_id"], clean_file_name(hint, ext) or generated_file_name(p, ext))
 
     def name_all_files(self) -> int:
-        """이름이 빈 PDF 논문 전부에 이름을(6단계 전부터 있던 논문 — 첫 스냅숏 때, 8.2절) → 정한 수"""
-        rows = self._all("select id from paperlab.papers where user_id = %s and pdf_key <> '' and file_name = '' "
-                         "order by id", (self.uid,))
+        """이름이 빈 동기화 대상 논문 전부에 이름을(6단계 전부터 있던 논문 — 첫 스냅숏 때, 8.2절 · 로컬 항목 포함) → 정한 수"""
+        rows = self._all(f"select p.id from paperlab.papers p where p.user_id = %s and {SYNC_TARGET} and p.file_name = '' "
+                         "order by p.id", (self.uid,))
         for r in rows:
             self.ensure_file_name(r["id"])
         return len(rows)
+
+    # ------------------------------------------------------- 선택 동기화 (selective-sync.md 5 · 6 · 7장)
+    def holders(self) -> list[dict]:
+        """끌 때 고를 수 있는 PC (7.2절): 해지 안 됨 · 폴더 동기화 켬 · 프로토콜 2 이상(0.4.0 앱)"""
+        return self._all(
+            "select d.id, d.name, d.last_seen_at, "
+            "(d.last_seen_at > now() - interval '180 seconds') as online from paperlab.devices d "
+            "join paperlab.sync_devices s on s.device_id = d.id and s.user_id = d.user_id "
+            "where d.user_id = %s and d.revoked_at is null and s.enabled and s.protocol >= 2 order by d.id", (self.uid,))
+
+    def local_info(self, paper_id: int) -> dict | None:
+        """로컬 항목 판단용(살아 있는 내 논문만 — RLS): 저장 위치 · 보관 PC · 이름 · 보관 PC 상태"""
+        return self._one(
+            "select p.id, p.storage, p.local_device_id, p.mode_pending, p.file_name, p.source_name, p.pdf_key, "
+            f"{REP_SHA} as rep_sha, d.name as holder_name, "
+            "(d.id is null or d.revoked_at is not null) as holder_gone, "
+            "coalesce(d.revoked_at is null and d.last_seen_at > now() - interval '180 seconds', false) as holder_online "
+            "from paperlab.papers p left join paperlab.devices d on d.id = p.local_device_id and d.user_id = p.user_id "
+            "where p.id = %s and p.user_id = %s", (paper_id, self.uid))
+
+    def sync_mode_plan(self, mode: str, ids: list[int] | None = None, folder: int | None = None,
+                       reset_children: bool = False) -> dict:
+        """켜고 끄기를 바꾸면 어떻게 되는지 (DB는 바꾸지 않음 — dry_run · 확인 창 숫자 · 실제 적용 공용, 7.2절).
+        ids(논문 설정) 또는 folder(폴더 설정 — 그 아래 inherit 논문, reset_children이면 아래 설정을 모두 inherit로 먼저).
+        → {"items": [{id, action, bytes, cur_holder}], "blocked": [{id, code}], "folders": [...], "reset": {...}}.
+        action: to_local(새 대기) · to_cloud · cancel(반대 방향 대기 취소) · unchanged · no_file.
+        blocked code: trashed · not_found · needs_originals(원본 해시 없는 옛 문서 행 — sync-originals 전에는 끄지 않음)"""
+        frows = self._all("select id, parent_id, sync_mode from paperlab.folders where user_id = %s", (self.uid,))
+        sim = {r["id"]: dict(r) for r in frows}
+        blocked: list[dict] = []
+        reset = {"folders": [], "papers": []}
+        cols = ("p.id, p.folder_id, p.sync_mode, p.storage, p.pdf_key <> '' as has_pdf, p.mode_pending, "
+                "p.local_device_id, coalesce(p.pdf_size, 0) + coalesce(p.source_size, 0) as bytes, "
+                "(p.source_key <> '' and p.source_sha256 = '') as legacy_source")
+        if folder is not None:
+            if folder not in sim:
+                raise NotFoundError("폴더를 찾을 수 없어요")
+            sub, todo = {folder}, [folder]
+            while todo:  # 아래 폴더 모두 (순환은 없지만 방문 집합으로)
+                node = todo.pop()
+                kids = [r["id"] for r in frows if r["parent_id"] == node and r["id"] not in sub]
+                sub.update(kids)
+                todo += kids
+            rows = self._all(f"select {cols} from paperlab.papers p where p.user_id = %s and p.folder_id = any(%s) "
+                             "order by p.id", (self.uid, list(sub)))
+            if reset_children:
+                reset["folders"] = [f for f in sorted(sub - {folder}) if sim[f]["sync_mode"] != "inherit"]
+                reset["papers"] = [r["id"] for r in rows if r["sync_mode"] != "inherit"]
+                for f in sub - {folder}:
+                    sim[f]["sync_mode"] = "inherit"
+                for r in rows:
+                    r["sync_mode"] = "inherit"
+            sim[folder]["sync_mode"] = mode
+            overrides = sum(1 for f in sub - {folder} if sim[f]["sync_mode"] != "inherit") + \
+                sum(1 for r in rows if r["sync_mode"] != "inherit")
+            rows = [r for r in rows if r["sync_mode"] == "inherit"]
+        else:
+            ids = [int(i) for i in dict.fromkeys(ids or [])]
+            rows = self._all(f"select {cols} from paperlab.papers p where p.user_id = %s and p.id = any(%s) order by p.id",
+                             (self.uid, ids))
+            found = {r["id"] for r in rows}
+            if len(found) < len(ids):
+                trashed = set(self.trashed_ids([i for i in ids if i not in found]))
+                blocked = [{"id": i, "code": "trashed" if i in trashed else "not_found"} for i in ids if i not in found]
+            for r in rows:
+                r["sync_mode"] = mode
+            overrides = 0
+        fmodes = folder_modes(sim.values())
+        items, held = [], set()
+        for r in rows:
+            eff = effective_of(r["sync_mode"], fmodes.get(r["folder_id"]) if r["folder_id"] is not None else None)
+            has_file = r["has_pdf"] or r["storage"] == "local"
+            if not has_file:
+                action = "no_file"
+            elif eff == "local":
+                action = ("cancel" if r["mode_pending"] == "to_cloud" else "unchanged") if r["storage"] == "local" \
+                    else ("holder" if r["mode_pending"] == "to_local" else "to_local")
+            else:
+                action = ("cancel" if r["mode_pending"] == "to_local" else "unchanged") if r["storage"] == "cloud" \
+                    else ("unchanged" if r["mode_pending"] == "to_cloud" else "to_cloud")
+            if action in ("to_local", "holder") and r["legacy_source"]:
+                # 원본 해시를 아직 모르는 옛 문서 행(sync-originals 전): PC에는 PDF 변환본만 있어 끄면 원본(.docx 등)이
+                # 어디에도 남지 않는다 → 끄지 않는다(유일한 사본을 지우지 않음 — 1장 원칙). 논문 설정도 바꾸지 않음
+                blocked.append({"id": r["id"], "code": "needs_originals"})
+                held.add(r["id"])
+                continue
+            items.append({"id": r["id"], "action": action, "bytes": int(r["bytes"] or 0), "cur_holder": r["local_device_id"],
+                          "storage": r["storage"]})
+        return {"items": items, "blocked": blocked, "reset": reset, "overrides": overrides,
+                "paper_ids": [r["id"] for r in rows if r["id"] not in held]}
+
+    def apply_sync_mode(self, plan: dict, mode: str, ids: list[int] | None = None, folder: int | None = None,
+                        holder: int | None = None, by: str = "web") -> None:
+        """sync_mode_plan 결과를 쓴다 — 설정 + 전환 대기만(R2 · 본문은 mode.ack 때 — 5.3절). 같은 트랜잭션"""
+        if folder is not None:
+            if plan["reset"]["folders"]:
+                self._x("update paperlab.folders set sync_mode = 'inherit', updated_at = now() where user_id = %s "
+                        "and id = any(%s)", (self.uid, plan["reset"]["folders"]))
+            if plan["reset"]["papers"]:
+                self._x("update paperlab.papers set sync_mode = 'inherit' where user_id = %s and id = any(%s)",
+                        (self.uid, plan["reset"]["papers"]))
+            self._x("update paperlab.folders set sync_mode = %s, updated_at = now() where id = %s and user_id = %s",
+                    (mode, folder, self.uid))
+        elif plan["paper_ids"]:
+            self._x("update paperlab.papers set sync_mode = %s, updated_at = now() where user_id = %s and id = any(%s)",
+                    (mode, self.uid, plan["paper_ids"]))
+        by_action: dict[str, list[int]] = {}
+        for it in plan["items"]:
+            if it["action"] == "holder" and (holder is None or it["cur_holder"] == holder):
+                continue  # 끄는 중인 것을 다시 끄기 — 보관 PC를 따로 고르지 않았거나 같으면 그대로
+            by_action.setdefault(it["action"], []).append(it["id"])
+        common = "mode_requested_at = now(), mode_requested_by = %(by)s, mode_error = '', updated_at = now()"
+        args = {"u": self.uid, "by": by, "h": holder}
+        if by_action.get("to_local") or by_action.get("holder"):
+            self._x(f"update paperlab.papers set mode_pending = 'to_local', local_device_id = %(h)s, {common} "
+                    "where user_id = %(u)s and id = any(%(ids)s) and storage = 'cloud'",
+                    {**args, "ids": by_action.get("to_local", []) + by_action.get("holder", [])})
+        if by_action.get("to_cloud"):
+            self._x(f"update paperlab.papers set mode_pending = 'to_cloud', {common} "
+                    "where user_id = %(u)s and id = any(%(ids)s) and storage = 'local'", {**args, "ids": by_action["to_cloud"]})
+        if by_action.get("cancel"):
+            self._x("update paperlab.papers set mode_pending = '', mode_error = '', mode_requested_at = null, "
+                    "mode_requested_by = '', local_device_id = case when storage = 'cloud' then null else local_device_id end, "
+                    "updated_at = now() where user_id = %(u)s and id = any(%(ids)s)", {**args, "ids": by_action["cancel"]})
+
+    def demote_to_local(self, paper_id: int) -> dict:
+        """끄기 실행(mode.ack — 5.3절 · 7.1절 demote_paper): R2 키 · 벡터 · 본문을 비우고 storage = 'local'.
+        PC 파일 기술값(pdf_sha256 · pdf_size · source_sha256 · source_size · source_name)은 그대로 둔다(5.5절).
+        그 논문의 대기 중 번역 · 설명 · API 칸 작업과, 서버에 있을 때 만들어 보관 PC에 묶이지 않은 작업(요약 · 대화 CLI 포함 —
+        아무 PC나 잡아 엉뚱한 안내로 실패하지 않게)은 취소(local_only). → 옛 키 {pdf_key, source_key, rag_key}(커밋 뒤 지울 것).
+        번역 행(translate.delete_row)은 호출하는 쪽이 같은 트랜잭션에서 지운다"""
+        old = self._one("select pdf_key, source_key, rag_key from paperlab.papers where id = %s and user_id = %s for update",
+                        (paper_id, self.uid))
+        if not old:
+            raise NotFoundError("논문을 찾을 수 없어요")
+        self._x("update paperlab.papers set storage = 'local', pdf_key = '', source_key = '', rag_key = '', rag_version = '', "
+                "mode_pending = '', mode_error = '', mode_requested_at = null, updated_at = now() "
+                "where id = %s and user_id = %s", (paper_id, self.uid))
+        self._x("delete from paperlab.page_texts where paper_id = %s and user_id = %s", (paper_id, self.uid))
+        self._x("update paperlab.jobs set status = 'cancelled', error_code = 'local_only', error = %s, lease_token = null, "
+                "lease_until = null, progress = '{}'::jsonb, finished_at = now(), updated_at = now() "
+                "where user_id = %s and paper_id = %s and status = 'queued' "
+                "and (kind in ('translate_paper', 'explain', 'translate', 'index') or runner = 'api' "
+                "or pinned_device_id is null)",
+                (LOCAL_ONLY_CANCELLED, self.uid, paper_id))
+        return dict(old)
+
+    def promote_to_cloud(self, paper_id: int, explicit: bool = False) -> None:
+        """켜기(promote — 5.3절) · 해지된 보관 PC의 항목에 웹에서 파일 붙이기(explicit — sync_mode = 'cloud' 명시, 7.2절):
+        저장 위치를 먼저 cloud로(체크 제약 순서) — 키 · 본문 · 색인은 뒤이어 attach_from_incoming이 쓴다"""
+        self._x("update paperlab.papers set storage = 'cloud', local_device_id = null, mode_pending = '', mode_error = '', "
+                "mode_requested_at = null, mode_requested_by = '', "
+                "sync_mode = case when %s then 'cloud' else sync_mode end, updated_at = now() "
+                "where id = %s and user_id = %s", (explicit, paper_id, self.uid))
+
+    def set_local_file(self, paper_id: int, device_id: int, sha256: str, size: int | None, name: str,
+                       content_at: datetime | None = None) -> None:
+        """로컬 항목의 PC 파일 기술값 (files/add storage=local · 보관 PC의 content — 7.1절). R2 · 본문은 없다.
+        PDF면 pdf_*, 문서 · 사진이면 source_* + source_name (5.5절 — 표현 해시 한 식으로 덮음)"""
+        if split_ext(name)[1].lower() == ".pdf":
+            sets = "pdf_sha256 = %(sha)s, pdf_size = %(size)s, source_sha256 = '', source_size = null, source_name = ''"
+        else:
+            sets = "source_sha256 = %(sha)s, source_size = %(size)s, source_name = %(name)s"
+        self._x(f"update paperlab.papers set storage = 'local', local_device_id = %(dev)s, {sets}, "
+                "content_at = coalesce(%(at)s, now()), content_device_id = %(dev)s, updated_at = now() "
+                "where id = %(id)s and user_id = %(u)s",
+                {"sha": sha256, "size": size, "name": name[:255], "dev": device_id, "at": content_at, "id": paper_id,
+                 "u": self.uid})
 
     def folder_path(self, folder_id: int | None) -> str:
         """폴더 경로 "A/B" (휴지통 표시용 — 폴더 이름에는 / 가 없음). 500자 안"""

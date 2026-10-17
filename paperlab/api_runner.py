@@ -196,6 +196,10 @@ class ApiRunner:
             job = jobs.claim_api(lib, job_id, guide)
             if not job or jobs.paper_trashed(lib, job):  # 6단계 K-39: 휴지통 논문 작업은 cancelled
                 return
+            if job["paper_id"] is not None and (lib.local_info(job["paper_id"]) or {}).get("storage") == "local":
+                # 선택 동기화 P-6: PC에만 둔 파일은 서버 API 키로 실행하지 않는다 (경로에 API 칸이 없어 정상이면 오지 않음 — 방어)
+                jobs._end(lib, job, "failed", "local_only", jobs.DEFAULT_ERRORS["local_only"])
+                return
             settings = self.settings_loader(lib, uid)
             lang = settings.get("summary_language") or "한국어"
             params = job["params"] or {}

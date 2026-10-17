@@ -48,7 +48,7 @@ def test_image_upload_keeps_original(cloud, client):
     p = client.get(f"/api/papers/{pid}").json()
     assert p["has_pdf"] and p["has_source"] and p["item_type"] == "document" and p["cite_issues"] == []
     assert p["source_name"] == "칠판 사진.png" and p["source_size"] == len(png) and "source_key" not in p
-    assert p["file_name"] == "칠판 사진.pdf"  # PC 동기화 이름은 변환본(.pdf) 기준
+    assert p["file_name"] == "칠판 사진.png"  # PC 동기화 이름 = 원본 그대로 (선택 동기화 D-8)
     [skey] = source_keys(cloud, uid)
     assert cloud.storage.objects[skey] == png
     assert cloud.storage.objects[f"users/{uid}/papers/{pid}.pdf"].startswith(b"%PDF")
@@ -56,10 +56,12 @@ def test_image_upload_keeps_original(cloud, client):
     r = client.get(f"/api/papers/{pid}/source-url").json()
     assert r["url"].startswith("https://") and r["name"] == "칠판 사진.png" and ("sign_get", skey) in cloud.storage.log
     assert client.get(f"/api/papers/{pid}/pdf-url").status_code == 200  # 읽기 화면은 변환본
-    # 같은 이름의 문서를 또 올려도 다른 문서(문서는 제목으로 중복을 보지 않음)
-    again = cloud.upload(client, png, "칠판 사진.png")
+    # 같은 이름의 다른 문서를 또 올려도 다른 문서(문서는 제목으로 중복을 보지 않음)
+    again = cloud.upload(client, make_png(410, 200), "칠판 사진.png")
     assert again["id"] != pid and not again.get("duplicate")
     assert len(source_keys(cloud, uid)) == 2
+    # 같은 원본 파일(해시)은 중복 — 원본 해시 = PC 표현 해시 (선택 동기화 5.5절)
+    assert cloud.upload(client, png, "다른 이름.png")["duplicate"] is True
 
 
 def test_document_never_title_matches_papers(cloud, client):
@@ -73,7 +75,7 @@ def test_document_never_title_matches_papers(cloud, client):
     # ② PDF 없는 논문이 있어도 같은 이름의 문서가 거기에 붙지 않음
     other = "Identity Mappings in Deep Residual Networks"
     paper = client.post("/api/papers", json={"title": other}).json()["paper"]["id"]
-    doc2 = cloud.upload(client, make_png(), f"{other}.png")
+    doc2 = cloud.upload(client, make_png(401, 200), f"{other}.png")  # 다른 사진(같은 사진이면 해시로 중복 — 5.5절)
     assert doc2["id"] != paper and "note" not in doc2
     assert not client.get(f"/api/papers/{paper}").json()["has_pdf"]
     # ③ 문서는 제목으로 논문 정보를 찾지 않는다(온라인 정보로 채우기 — DOI · arXiv만). 찾으면 덮어씀
@@ -147,7 +149,7 @@ def test_office_upload(cloud, client, name, make, text):
     assert "error" not in res, res
     p = client.get(f"/api/papers/{res['id']}").json()
     assert p["has_source"] and p["item_type"] == "document" and p["source_name"] == name
-    assert p["title"] == name.rsplit(".", 1)[0] and p["file_name"] == name.rsplit(".", 1)[0] + ".pdf"
+    assert p["title"] == name.rsplit(".", 1)[0] and p["file_name"] == name  # PC 파일 = 원본 (선택 동기화 D-8)
     assert client.get("/api/papers", params={"q": text}).json()["total"] == 1  # 변환본 본문으로 검색
 
 
@@ -162,20 +164,24 @@ def test_document_with_doi_gets_paper_metadata(cloud, client):
     assert p["has_source"] and p["item_type"] != "document" and p["source_name"] == "내 메모.docx"
 
 
-def test_sync_downloads_rendition_and_keeps_source(env, project):
-    """PC 폴더 동기화는 PDF만: 변환본을 .pdf 이름으로 받고, PC에서 PDF를 고쳐 올려도 원본은 그대로"""
+def test_sync_downloads_original(env, project):
+    """선택 동기화 D-8 · 7.1절: PC 폴더 동기화는 원본을 원래 이름 · 확장자로 받고(kind source), PC에서 원본을 고쳐 올리면
+    서버가 다시 변환해 원본 · 변환본을 함께 바꾼다(옛 원본은 지움)"""
     pc = PC(env, env.a)
-    pid = env.upload(env.ca, make_png(), "회의 사진.png")["id"]
+    png = make_png()
+    pid = env.upload(env.ca, png, "회의 사진.png")["id"]
     p = env.ca.get(f"/api/papers/{pid}").json()
-    assert p["file_name"] == "회의 사진.pdf"
+    assert p["file_name"] == "회의 사진.png"
     item = pc.post("download", {"ids": [pid]})["items"][0]
-    assert f"/users/{env.a.id}/papers/{pid}.pdf" in item["url"]
+    assert f"/users/{env.a.id}/sources/" in item["url"] and item["kind"] == "source" and item["sha256"] == sha(png)
     [skey] = [k for k in env.storage.objects if k.startswith(f"users/{env.a.id}/sources/")]
-    v2 = make_pdf(title="Annotated On The PC Copy", doi="")
+    v2 = make_png(300, 300)
     r = pc.content(pid, v2, item["sha256"])
-    assert r["result"] == "replaced" and r["paper"]["sha256"] == sha(v2)
-    assert env.ca.get(f"/api/papers/{pid}").json()["has_source"] and skey in env.storage.objects
+    assert r["result"] == "replaced" and r["paper"]["sha256"] == sha(v2) and r["paper"]["kind"] == "source"
+    [skey2] = [k for k in env.storage.objects if k.startswith(f"users/{env.a.id}/sources/")]
+    assert skey2 != skey and env.storage.objects[skey2] == v2
+    assert env.ca.get(f"/api/papers/{pid}").json()["source_size"] == len(v2)
     # PC가 PDF가 아닌 파일을 보내면(이름이 .pdf여도) 예전처럼 거절
-    r = pc.add(make_png(), "사진.pdf", status=400)
+    r = pc.add(make_png(500, 100), "사진.pdf", status=400)
     assert r["code"] == "bad_pdf"
     env.assert_keys_scoped()

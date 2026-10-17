@@ -18,7 +18,8 @@ from psycopg.types.json import Jsonb
 
 from . import ai, explain, find, rag, translate, verify
 from .config import ENGINES, JOB_KINDS, UserSettings, redact
-from .db import PAPER_TRASHED, Library, iso, now_dt
+from .convert import IMAGE_EXTS
+from .db import LOCAL_ONLY_CANCELLED, LOCAL_TEXT_EXTS, PAPER_TRASHED, REP_SHA, REP_SIZE, Library, iso, now_dt
 
 log = logging.getLogger("paperlab.jobs")
 
@@ -67,8 +68,11 @@ TOKEN_RE = re.compile(r"pld1\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[
 FALLBACK_CODES = {"api_auth", "api_permission", "api_rate_limit", "api_overloaded", "api_server", "api_connection",
                   "api_timeout", "api_bad_request", "api_no_key", "cli_usage_limit", "cli_exit"}
 RELOCATE_CODES = {"cli_not_found", "cli_not_logged_in"}   # 이 PC만 빼고 같은 칸에서 다시 대기
-WORKER_CODES = RELOCATE_CODES | {"cli_usage_limit", "cli_model", "cli_timeout", "cli_bad_output", "cli_exit",
-                                 "output_too_large"}
+# 로컬 항목 AI(selective-sync.md 7.4절): 보관 PC 워커가 로컬 파일을 읽지 못함 — 다시 시도 · 다른 칸 넘김 없음
+# (RELOCATE · FALLBACK에 넣지 않음). bad_input · input_too_large: 표지 바꾸기 실패 · 바꾼 프롬프트가 4MB 넘음
+LOCAL_CODES = {"local_file", "local_unsupported", "local_unreadable", "local_no_text"}
+WORKER_CODES = RELOCATE_CODES | LOCAL_CODES | {"cli_usage_limit", "cli_model", "cli_timeout", "cli_bad_output", "cli_exit",
+                                               "output_too_large", "bad_input", "input_too_large"}
 KEY_ERROR_CODES = {"api_auth", "api_permission"}          # 설정 "최근 실패"에 남기는 오류 (7.3절)
 DEFAULT_ERRORS = {
     "cli_not_found": "이 PC에 실행 파일이 없어요",
@@ -87,7 +91,62 @@ DEFAULT_ERRORS = {
     "search_failed": find.SEARCH_FAILED,
     "pdf_changed": translate.PDF_CHANGED,
     "paper_trashed": PAPER_TRASHED,
+    "bad_input": "작업 내용을 만들지 못했어요",
+    # 선택 동기화 (selective-sync.md 10.9절)
+    "local_file": "이 PC에서 파일을 찾지 못했어요(옮겼거나 고치는 중일 수 있어요). 잠시 뒤 다시 해 주세요.",
+    "local_unsupported": "옛 파워포인트(.ppt) · 엑셀(.xls) · RTF 파일은 이 PC에서 내용을 읽지 못해 AI를 쓸 수 없어요. "
+                         "[동기화 켜기]로 서버에도 저장하면 AI를 쓸 수 있어요. (.pptx · .xlsx · .docx로 다시 저장해도 돼요.)",
+    "local_unreadable": "이 파일의 내용을 읽지 못했어요(손상 · 암호 · 배포용 문서이거나 너무 커요). "
+                        "[동기화 켜기]로 서버에 올리면 서버에서 다시 읽어 볼 수 있어요.",
+    "local_no_text": "이 파일에서 글자를 읽지 못했어요(사진 · 스캔본).",
+    "local_only": LOCAL_ONLY_CANCELLED,
 }
+LOCAL_UNSUPPORTED_IMAGE = "사진(이미지)은 글자를 읽지 않아요. AI 요약 · 질문은 쓸 수 없어요."
+LOCAL_AI_KINDS = ("summary", "chat")  # 로컬 항목은 요약 · 논문 대화만 보관 PC CLI로 (D-13)
+LOCAL_ONLY_AI = ("이 PC에만 있는 파일은 선택 설명 · 번역을 쓸 수 없어요. [동기화 켜기]로 서버에 올리면 쓸 수 있어요")
+LOCAL_CAP = "local_text"  # 잡기 요청 caps — 로컬 본문을 채울 수 있는 워커(0.4.0)
+
+
+def local_unsupported_message(file_name: str) -> str:
+    """로컬 항목 AI를 만들기 전에 거절할 때의 문구(확장자별 — 10.9절)"""
+    ext = (file_name or "").rsplit(".", 1)[-1].lower() if "." in (file_name or "") else ""
+    return LOCAL_UNSUPPORTED_IMAGE if f".{ext}" in IMAGE_EXTS else DEFAULT_ERRORS["local_unsupported"]
+
+
+def no_route_local_message(holder_name: str, gone: bool) -> str:
+    if gone:
+        return "연결이 해지된 PC에만 있던 파일이라 AI를 쓸 수 없어요"
+    return (f"이 파일은 ‘{holder_name or 'PC'}’에만 있어서 그 PC의 AI(Claude · Codex · Gemini CLI)로만 요약할 수 있어요. "
+            "그 PC의 PaperLab 앱에서 AI 도구를 연결해 주세요")
+
+
+_DIGIT_JONG = (1, 8, 0, 1, 0, 0, 1, 8, 1, 0)  # 영 일 이 삼 사 오 육 칠 팔 구 → 0 없음, 1 있음, 8 ㄹ
+
+
+def josa(word: str, pair: str) -> str:
+    """조사: josa("‘노트북’", "이/가") → "‘노트북’이" (static/js/ui.js josa와 같은 규칙). 앞 = 받침 있을 때, 뒤 = 없을 때.
+    "으로/로"는 ㄹ 받침도 "로". 끝의 따옴표 · 괄호는 건너뛰고 본다. 모르면 "이(가)"처럼 둘 다"""
+    w = str(word or "")
+    with_j, no_j = pair.split("/")
+    ch = re.sub(r"[\s'\"’”)\]}>」』…·.,!?]+$", "", w)[-1:]
+    jong = None  # 0 없음 · 1 있음 · 8 ㄹ
+    if "가" <= ch <= "힣":
+        j = (ord(ch) - 0xAC00) % 28
+        jong = 0 if j == 0 else 8 if j == 8 else 1
+    elif ch.isascii() and ch.isdigit():
+        jong = _DIGIT_JONG[int(ch)]
+    elif ch.isascii() and ch.isalpha():
+        tail = re.findall(r"[A-Za-z]+", w)[-1]
+        if tail.isupper():  # 약어는 글자 이름(엘 · 엠 · 엔 · 알)
+            jong = (8 if tail[-1] in "LR" else 1) if tail[-1] in "LMNR" else 0
+        else:
+            jong = 1 if re.search(r"(ng|[mnkptbdg])$", tail, re.I) else 8 if tail[-1] in "lL" else 0
+    if jong is None:
+        return f"{w}{with_j}({no_j})"
+    use_no = jong != 1 if with_j == "으로" else jong == 0
+    return w + (no_j if use_no else with_j)
+
+
 # 화면에 붙어 있던(SSE) 작업이 서버 재시작으로 끊김 — 화면을 닫는 것만으로는 멈추지 않는다(2026-10-16 백그라운드 AI)
 INTERRUPTED = "서버가 다시 시작돼 작업이 멈췄어요. 다시 시도해 주세요"
 # 재시작 없이 리스(660초)가 지남 — 응답이 너무 오래 걸림. 둘 다 error_code는 interrupted
@@ -168,8 +227,10 @@ select d.id, d.name, d.engines, d.app_version, d.os, d.paused, d.last_seen_at, d
        (select count(*) from paperlab.jobs j where j.user_id = d.user_id and j.device_id = d.id
          and j.status = 'running')::int as running_jobs,
        (select jsonb_build_object('enabled', s.enabled, 'state', s.state, 'root_label', s.root_label,
-                                  'last_sync_at', s.last_sync_at, 'counts', s.counts)
-          from paperlab.sync_devices s where s.device_id = d.id and s.user_id = d.user_id) as sync
+                                  'last_sync_at', s.last_sync_at, 'counts', s.counts, 'protocol', s.protocol)
+          from paperlab.sync_devices s where s.device_id = d.id and s.user_id = d.user_id) as sync,
+       (select jsonb_build_object('n', count(*), 'bytes', coalesce(sum(coalesce(""" + REP_SIZE + """, 0)), 0))
+          from paperlab.papers p where p.user_id = d.user_id and p.local_device_id = d.id and p.storage = 'local') as local
   from paperlab.devices d where d.user_id = %(uid)s
 """
 
@@ -194,7 +255,10 @@ def device_view(d: dict) -> dict:
             "running_jobs": d["running_jobs"], "update_required": update_required(d["app_version"]),
             "created_at": iso(d["created_at"]),
             # 6단계 SW-3: 폴더 동기화 요약(켠 적 없으면 null)
-            "sync": _sync_view(d.get("sync"))}
+            "sync": _sync_view(d.get("sync")),
+            # 선택 동기화: 이 PC가 보관하는 PC에만 둔 파일 수 · 크기 (selective-sync.md 7.2절)
+            "local_count": int((d.get("local") or {}).get("n") or 0),
+            "local_bytes": int((d.get("local") or {}).get("bytes") or 0)}
 
 
 def _sync_view(s) -> dict | None:
@@ -203,7 +267,8 @@ def _sync_view(s) -> dict | None:
     at = s.get("last_sync_at")
     return {"enabled": bool(s.get("enabled")), "state": s.get("state") or "off", "root_label": s.get("root_label") or "",
             "last_sync_at": iso(datetime.fromisoformat(at)) if isinstance(at, str) else None,
-            "counts": s.get("counts") if isinstance(s.get("counts"), dict) else {}}
+            "counts": s.get("counts") if isinstance(s.get("counts"), dict) else {},
+            "protocol": int(s.get("protocol") or 1)}  # 1 = 0.3.x 앱(PC에만 두기를 고를 수 없음 — 10.7절)
 
 
 def new_pair_code(lib: Library) -> dict:
@@ -304,14 +369,15 @@ def revoke_device(lib: Library, device_id: int) -> int:
 AI_RUNNERS = ("api", "cli")  # 사용자 AI 작업이 가는 곳은 이 둘뿐 — 서버가 CLI를 직접 실행하는 칸은 없다
 
 
-def build_route(kind: str, get, devices: list[dict]) -> list[dict]:
+def build_route(kind: str, get, devices: list[dict], cli_only: bool = False) -> list[dict]:
     """작업 종류의 엔진 순서 → [{runner, engine}…]. 키가 있으면 API 칸, 그 엔진을 광고한 기기가 있으면 CLI 칸.
     get = 그 사용자의 설정(UserSettings.get — 내가 넣은 키만, 서버 환경 변수 없음), devices = 그 사용자가 연결한 PC
-    (워커가 그 PC에서 claude · codex · gemini CLI를 실행). 서버 PC의 CLI · 서버 키로 가는 칸은 만들지 않는다"""
+    (워커가 그 PC에서 claude · codex · gemini CLI를 실행). 서버 PC의 CLI · 서버 키로 가는 칸은 만들지 않는다.
+    cli_only: 로컬 항목(selective-sync.md 7.4절) — devices에 보관 PC 한 대만 넘기고 API 칸은 모두 뺀다"""
     adv = advertised(devices)
     route = []
     for e in (get("ai_routing") or {}).get(ROUTE_KIND.get(kind, kind)) or ["claude"]:
-        if get(ai.ENGINE_KEYS[e]):
+        if get(ai.ENGINE_KEYS[e]) and not cli_only:
             route.append({"runner": "api", "engine": e})
         if e in adv:
             route.append({"runner": "cli", "engine": e})
@@ -357,13 +423,16 @@ def engines_summary(get, devices: list[dict]) -> dict:
 
 # ====================================================================== 작업 만들기 · 보기
 def create_job(lib: Library, kind: str, route: list[dict], params: dict, paper_id: int | None = None,
-               running_api: bool = False) -> tuple[dict, bool]:
+               running_api: bool = False, pinned_device_id: int | None = None) -> tuple[dict, bool]:
     """(행, 새로 만들었는지). 같은 논문 진행 중 요약이 있으면 그 행(7.1절). running_api: 대화 · 글쓰기 API SSE 경로
-    (요청 안에서 바로 실행 — interactive 표시. 실행기 · 복구 스캔은 다시 실행하지 않고, 리스가 지나면 취소로 끝냄)."""
+    (요청 안에서 바로 실행 — interactive 표시. 실행기 · 복구 스캔은 다시 실행하지 않고, 리스가 지나면 취소로 끝냄).
+    pinned_device_id: 로컬 항목 작업 — 그 보관 PC만 잡는다(selective-sync.md 7.4절, 경로는 CLI 칸뿐)"""
     if kind not in ALL_KINDS or kind == "index" or not route:
         raise JobError(400, NO_ROUTE, "no_route")
     if any(s.get("runner") not in AI_RUNNERS or s.get("engine") not in ENGINES for s in route):
         raise JobError(400, NO_ROUTE, "no_route")  # 내 PC · 내 키 말고 다른 실행 칸은 받지 않는다
+    if pinned_device_id is not None and any(s["runner"] != "cli" for s in route):
+        raise JobError(400, NO_ROUTE, "no_route")  # 로컬 항목은 서버 API 키로 실행하지 않는다 (P-6)
     if len(json.dumps(params, ensure_ascii=False).encode("utf-8")) > PARAMS_MAX:
         raise JobError(400, "요청이 너무 커요", "too_large")
     active = lib._one("select count(*)::int as n from paperlab.jobs where user_id = %s and status in ('queued', 'running')",
@@ -374,21 +443,23 @@ def create_job(lib: Library, kind: str, route: list[dict], params: dict, paper_i
     run = running_api and first["runner"] == "api"
     row = lib._one(
         "insert into paperlab.jobs (user_id, kind, status, runner, engine, route, params, paper_id, max_attempts, "
-        " deadline_at, lease_token, lease_until, leased_at, started_at, attempts, interactive) "
+        " deadline_at, lease_token, lease_until, leased_at, started_at, attempts, interactive, pinned_device_id) "
         "values (%(uid)s, %(kind)s, %(status)s, %(runner)s, %(engine)s, %(route)s, %(params)s, %(pid)s, %(max)s, "
         " now() + make_interval(secs => %(deadline)s), "
         " case when %(run)s then gen_random_uuid() end, case when %(run)s then now() + make_interval(secs => %(lease)s) end, "
-        " case when %(run)s then now() end, case when %(run)s then now() end, case when %(run)s then 1 else 0 end, %(run)s) "
+        " case when %(run)s then now() end, case when %(run)s then now() end, case when %(run)s then 1 else 0 end, %(run)s, "
+        " %(pin)s) "
         "on conflict do nothing returning *",  # 진행 중 하나뿐인 종류: summary · translate_paper (부분 유일 색인)
         {"uid": lib.uid, "kind": kind, "status": "running" if run else "queued", "runner": first["runner"],
          "engine": first["engine"], "route": Jsonb(route), "params": Jsonb(params), "pid": paper_id,
-         "max": MAX_ATTEMPTS, "deadline": DEADLINE_S[kind], "run": run, "lease": ai.TEXT_API_TIMEOUT + 60})
+         "max": MAX_ATTEMPTS, "deadline": DEADLINE_S[kind], "run": run, "lease": ai.TEXT_API_TIMEOUT + 60,
+         "pin": pinned_device_id})
     if row:
         return row, True
     existing = lib._one("select * from paperlab.jobs where user_id = %s and paper_id = %s and kind = %s "
                         "and status in ('queued', 'running')", (lib.uid, paper_id, kind))
     if not existing:  # 그 사이 끝났으면 (드묾) 다시 만든다
-        return create_job(lib, kind, route, params, paper_id, running_api)
+        return create_job(lib, kind, route, params, paper_id, running_api, pinned_device_id)
     return existing, False
 
 
@@ -409,6 +480,10 @@ def waiting_reason(job: dict, devices: list[dict], free: dict) -> str | None:
         return None
     eng = job["engine"]
     excluded = set(job.get("excluded_devices") or [])
+    if job.get("pinned_device_id") is not None:  # 로컬 항목: 보관 PC만 (selective-sync.md 7.4절)
+        devices = [d for d in devices if d["id"] == job["pinned_device_id"]]
+        if not any(d["online"] and not d["paused"] for d in devices):
+            return "holder_offline"
     adv = [d for d in devices if d["revoked_at"] is None and _engine(d, eng)]
     if not adv:
         return "no_engine_on_worker"
@@ -419,6 +494,17 @@ def waiting_reason(job: dict, devices: list[dict], free: dict) -> str | None:
     if all((free.get(d["id"]) or {}).get(eng, 1) <= 0 for d in ok):
         return "all_workers_busy"
     return None
+
+
+def _pinned_view(job: dict, devices: list[dict]) -> dict | None:
+    pin = job.get("pinned_device_id")
+    if pin is None:
+        return None
+    d = next((d for d in devices if d["id"] == pin), None)
+    name = d["name"] if d else "PC"
+    online = bool(d and d["online"] and not d["paused"])
+    return {"id": pin, "name": name, "online": online,
+            "note": "" if online or job["status"] != "queued" else f"{josa(f'‘{name}’', '이/가')} 켜지면 실행돼요"}
 
 
 WRITE_HANDLED = ("applied", "dismissed")  # 글쓰기 결과를 원고에 넣었음 · 넣지 않기로 함 (result.handled)
@@ -446,6 +532,8 @@ def job_view(r: dict, devices: list[dict], free: dict, detail: bool = False) -> 
         "scope": params.get("scope") if r["kind"] == "chat" else None,
         "device": {"id": r["device_id"], "name": r["device_name"]} if r.get("device_id") and r.get("device_name") else None,
         "waiting_reason": waiting_reason(r, devices, free),
+        # 로컬 항목 작업은 보관 PC만 — 대기 안내 "‘집 PC’가 켜지면 실행돼요" (selective-sync.md 7.4절)
+        "pinned_device": _pinned_view(r, devices),
         "progress": r["progress"] or {}, "attempts": r["attempts"], "error_code": r["error_code"], "error": r["error"],
         "cancel_requested": r["cancel_requested"], "history": r["history"] or [], "interactive": bool(r.get("interactive")),
         "deadline_at": iso(r["deadline_at"]) if r["status"] == "queued" else None,
@@ -627,14 +715,19 @@ def fail_or_fallback(lib: Library, job: dict, code: str, message: str, *, device
     if job["cancel_requested"]:
         _end(lib, job, "cancelled", entry=entry)
         return "cancelled"
-    if code in RELOCATE_CODES and job["runner"] == "cli" and device_id is not None:
+    if code in RELOCATE_CODES and job.get("pinned_device_id") is not None:
+        force_fallback = True  # 로컬 항목은 보관 PC만 잡을 수 있음 — 이 PC를 빼면 아무도 못 잡으므로 다음 칸(같은 PC의 다른 CLI)
+    elif code in RELOCATE_CODES and job["runner"] == "cli" and device_id is not None:
         excluded = sorted(set(job.get("excluded_devices") or []) | {device_id})
         lib._x("update paperlab.jobs set status = 'queued', device_id = null, lease_token = null, lease_until = null, "
                + _KEEP_PROGRESS + ", excluded_devices = %s, history = %s, updated_at = now() where id = %s and user_id = %s",
                (Jsonb(excluded), _history(job, entry), job["id"], lib.uid))
         return "queued"
     if code in FALLBACK_CODES or force_fallback:
-        adv = advertised(device_rows(lib))
+        devs = device_rows(lib)
+        if job.get("pinned_device_id") is not None:  # 로컬 항목: 보관 PC의 엔진만 (경로에 API 칸은 없음 — AC-S52)
+            devs = [d for d in devs if d["id"] == job["pinned_device_id"]]
+        adv = advertised(devs)
         route = job["route"] or []
         skipped = False
         for i in range(job["route_index"] + 1, len(route)):
@@ -776,19 +869,22 @@ def clean_progress(value) -> dict:
 
 
 # ====================================================================== CLI 잡기 (6.2 · 8.4절)
-def claim_cli(lib: Library, device_id: int, engines: list[str]) -> dict | None:
+def claim_cli(lib: Library, device_id: int, engines: list[str], caps=()) -> dict | None:
+    """caps: 워커가 할 수 있는 일(잡기 요청 본문 — 0.4.0은 ["local_text"]). 로컬 항목 작업(pinned_device_id)은
+    보관 PC이면서 local_text를 하는 워커만 잡는다 — 옛 워커는 고정 작업을 받지 않음 (selective-sync.md 7.4절)"""
     if not engines:
         return None
     return lib._one(
         "with c as (select id from paperlab.jobs where user_id = %(uid)s and runner = 'cli' and status = 'queued' "
         "  and engine = any(%(eng)s) and not (excluded_devices @> to_jsonb(%(dev)s::bigint)) and not_before <= now() "
+        "  and (pinned_device_id is null or (pinned_device_id = %(dev)s and %(local)s)) "
         "  order by created_at, id for update skip locked limit 1) "
         "update paperlab.jobs j set status = 'running', device_id = %(dev)s, lease_token = gen_random_uuid(), "
         "  lease_until = now() + make_interval(secs => %(lease)s), leased_at = now(), attempts = j.attempts + 1, "
         "  started_at = coalesce(j.started_at, now()), progress = case when j.kind = 'translate_paper' then j.progress "
         "  else '{}'::jsonb end, updated_at = now() "
         "from c where j.id = c.id returning j.*",
-        {"uid": lib.uid, "eng": list(engines), "dev": device_id, "lease": LEASE_S})
+        {"uid": lib.uid, "eng": list(engines), "dev": device_id, "lease": LEASE_S, "local": LOCAL_CAP in (caps or ())})
 
 
 def has_active_cli(lib: Library) -> bool:
@@ -801,8 +897,23 @@ def paper_source(lib: Library, paper_id: int) -> dict | None:
     if not p:
         return None
     info = lib.pdf_info(paper_id) or {}
-    return {"title": p["title"], "abstract": p.get("abstract") or "", "page_texts": lib.page_texts(paper_id),
-            "pdf_key": info.get("pdf_key") or "", "pdf_size": info.get("pdf_size") or 0}
+    loc = lib.local_info(paper_id) or {}
+    local = loc.get("storage") == "local"
+    return {"title": p["title"], "abstract": p.get("abstract") or "",
+            "page_texts": [] if local else lib.page_texts(paper_id),
+            "pdf_key": info.get("pdf_key") or "", "pdf_size": info.get("pdf_size") or 0,
+            # 로컬 항목(PC에만 둔 파일 — selective-sync.md 7.4절): 본문은 보관 PC 워커가 로컬 파일에서
+            "local": {"paper_id": paper_id, "sha256": loc.get("rep_sha") or "", "file_name": loc.get("file_name") or "",
+                      "holder": loc.get("local_device_id")} if local else None}
+
+
+def local_task(src: dict) -> dict:
+    """작업 응답의 local 필드 (C-4): 워커가 main에 로컬 본문을 청할 때 쓴다. ext = 소문자 확장자,
+    kind = "pdf" | "image" | "doc"(보관 PC 추출 방법 — 7.4절 · 15.4절 C-4 모두 맞춤)"""
+    name = src["local"]["file_name"]
+    ext = ("." + name.rsplit(".", 1)[-1].lower()) if "." in name else ""
+    kind = "pdf" if ext == ".pdf" else "image" if ext in IMAGE_EXTS else "doc"
+    return {"paper_id": src["local"]["paper_id"], "sha256": src["local"]["sha256"], "ext": ext, "kind": kind}
 
 
 def write_sources(lib: Library, keys) -> list[dict]:
@@ -843,7 +954,9 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
     src = paper_source(lib, job["paper_id"])
     if not src:
         raise LookupError("paper gone")
-    ctx = ai.PaperContext(title=src["title"], pdf_bytes=None, page_texts=src["page_texts"], abstract=src["abstract"])
+    # 로컬 항목: 본문 대신 표지 하나 — 보관 PC 워커가 로컬 파일에서 뽑은 글로 바꾼다 (selective-sync.md 7.4절 · D-6)
+    ctx = ai.PaperContext(title=src["title"], pdf_bytes=None, page_texts=src["page_texts"], abstract=src["abstract"],
+                          local_text=src["local"] is not None)
     if job["kind"] == "summary":
         return ai.summary_request(ctx, lang)
     history = [{"role": m["role"], "content": m["content"]} for m in lib.chat_history(job["paper_id"])]
@@ -858,6 +971,16 @@ def cli_task(lib: Library, job: dict) -> dict | None:
     lang = settings.get("summary_language") or "한국어"
     params = job["params"] or {}
     schema = ai.SUMMARY_SCHEMA if job["kind"] == "summary" else None
+    local = None
+    loc = lib.local_info(job["paper_id"]) if job["paper_id"] is not None else None
+    if loc and loc["storage"] == "local":
+        # 로컬 항목(PC에만 둔 파일): 요약 · 논문 대화만, 보관 PC만 (서버가 막지만 이중 방어 — 7.4절)
+        if job["kind"] not in LOCAL_AI_KINDS or job.get("pinned_device_id") != loc["local_device_id"]:
+            # 요약 · 대화가 보관 PC에 묶이지 않았으면(서버에 있을 때 만든 작업) "선택 설명 · 번역" 안내 대신 멈춘 이유를
+            _end(lib, job, "failed", "local_only", LOCAL_ONLY_CANCELLED if job["kind"] in LOCAL_AI_KINDS else LOCAL_ONLY_AI)
+            return None
+        local = local_task({"local": {"paper_id": job["paper_id"], "sha256": loc["rep_sha"] or "",
+                                      "file_name": loc["file_name"] or "", "holder": loc["local_device_id"]}})
     try:
         if job["kind"] == "find" and params.get("queries") and not params.get("candidates"):
             find_hold(lib, job, params)  # 서버 검색이 아직 — 검색이 끝나면 다시 잡힘
@@ -885,10 +1008,13 @@ def cli_task(lib: Library, job: dict) -> dict | None:
         _end(lib, job, "failed", "input_too_large", DEFAULT_ERRORS["input_too_large"])
         return None
     model = (settings.get("cli_models") or {}).get(job["engine"], "default")
-    return {"id": job["id"], "lease_token": str(job["lease_token"]), "lease_s": LEASE_S, "heartbeat_s": HEARTBEAT_S,
+    task = {"id": job["id"], "lease_token": str(job["lease_token"]), "lease_s": LEASE_S, "heartbeat_s": HEARTBEAT_S,
             "kind": job["kind"], "engine": job["engine"], "model": None if model == "default" else model,
             "output": "json" if schema else "text", "json_schema": schema,
             "stream_partial": not schema, "system": system, "prompt": prompt, "timeout_s": TIMEOUT_S[job["kind"]]}
+    if local is not None:  # 프롬프트에 ai.LOCAL_TEXT_MARKER가 정확히 한 번 — 워커가 로컬 본문으로 바꿈 (C-4)
+        task["local"] = local
+    return task
 
 
 def set_params(lib: Library, job: dict, params: dict) -> None:

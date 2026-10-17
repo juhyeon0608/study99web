@@ -1,12 +1,13 @@
 'use strict';
-// PDF 바이트 전송 (명세 9.7 · 12.4 · K-11): 서버가 발급한 서명 주소로 직접 PUT · GET.
+// 파일 바이트 전송 (명세 9.7 · 12.4 · K-11): 서버가 발급한 서명 주소로 직접 PUT · GET.
 // 요청 전에 주소를 검사한다 — 운영은 https + *.r2.cloudflarestorage.com 만, 개발 실행은 서버 출처의 /_dev_storage/ 만.
-// 사용자 정보(user:pass@) 거부, 3xx 는 따르지 않고 실패. 객체 키는 올리기 incoming/{내 uid}/, 받기 users/{내 uid}/papers/ 로 시작해야 함.
+// 사용자 정보(user:pass@) 거부, 3xx 는 따르지 않고 실패. 객체 키는 올리기 incoming/{내 uid}/, 받기 users/{내 uid}/papers/ 또는
+// users/{내 uid}/sources/(문서 원본 — 선택 동기화 8.4절) 로 시작해야 함.
 // 어긋나면 요청 0회. 주소 · 키는 로그에 쓰지 않는다(12.6).
 
 const fs = require('node:fs');
 const crypto = require('node:crypto');
-const { MAX_PDF_BYTES } = require('./paths');
+const { MAX_FILE_BYTES } = require('./paths');
 
 const R2_SUFFIX = '.r2.cloudflarestorage.com';
 const DEV_PREFIX = '/_dev_storage/';
@@ -31,7 +32,7 @@ function checkUrl(raw, kind, { serverOrigin, dev, uid }) {
   let u;
   try { u = new URL(raw, dev ? serverOrigin : undefined); } catch { throw new TransferError('bad_url'); }
   if (u.username || u.password) throw new TransferError('bad_url');
-  const prefix = kind === 'put' ? `incoming/${uid}/` : `users/${uid}/papers/`;
+  const prefixes = kind === 'put' ? [`incoming/${uid}/`] : [`users/${uid}/papers/`, `users/${uid}/sources/`];
   let keys;
   if (dev) {
     if (u.origin !== new URL(serverOrigin).origin || !u.pathname.startsWith(DEV_PREFIX)) throw new TransferError('bad_url');
@@ -42,7 +43,7 @@ function checkUrl(raw, kind, { serverOrigin, dev, uid }) {
     // 가상 호스트형(버킷이 호스트 앞) · 경로형(버킷이 경로 첫 조각) 둘 다
     keys = k == null ? [null] : [k, k.split('/').slice(1).join('/')];
   }
-  if (!keys.some((k) => k && k.startsWith(prefix) && k.length > prefix.length)) throw new TransferError('bad_url');
+  if (!keys.some((k) => k && prefixes.some((prefix) => k.startsWith(prefix) && k.length > prefix.length))) throw new TransferError('bad_url');
   return u.href;
 }
 
@@ -53,7 +54,7 @@ function createTransfer({ serverOrigin, dev, getUid, fetchImpl = globalThis.fetc
   async function put(upload, abs, expectSha) {
     const url = checkUrl(upload && upload.url, 'put', opts());
     const data = await fs.promises.readFile(abs);
-    if (data.length > MAX_PDF_BYTES) throw new TransferError('too_big');
+    if (data.length > MAX_FILE_BYTES) throw new TransferError('too_big');
     if (crypto.createHash('sha256').update(data).digest('hex') !== expectSha) throw new TransferError('changed');
     const headers = {};
     for (const [k, v] of Object.entries((upload && upload.headers) || {})) if (/^content-type$/i.test(k)) headers['Content-Type'] = String(v);
@@ -78,7 +79,7 @@ function createTransfer({ serverOrigin, dev, getUid, fetchImpl = globalThis.fetc
     try {
       for await (const chunk of res.body) {
         size += chunk.length;
-        if (size > MAX_PDF_BYTES) throw new TransferError('too_big');
+        if (size > MAX_FILE_BYTES) throw new TransferError('too_big');
         h.update(chunk);
         await fh.write(chunk);
       }

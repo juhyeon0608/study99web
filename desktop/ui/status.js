@@ -236,6 +236,7 @@
   $('[data-autostart]').onchange = function (e) { L.action('auto-start', e.target.checked); };
   $('[data-notify]').onchange = function (e) { L.action('notify', e.target.checked); };
   $('[data-logs]').onclick = function () { L.action('open-logs'); };
+  $('[data-notices]').onclick = function () { L.action('open-notices'); }; // 함께 넣은 오픈 소스 라이선스 전문(선택 동기화 9.5.4)
   L.onState(render);
   L.state().then(function (s) {
     render(s);

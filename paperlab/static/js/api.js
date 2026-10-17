@@ -19,11 +19,13 @@ export function setApiHooks(h) {
 }
 
 // status · code(서버 본문의 code) · network(응답을 못 받음) · quiet(알림 띠 · 만료 화면이 이미 알렸으니 토스트 생략)
+// body: 서버 오류 본문(JSON) 그대로 — 409 local_only의 holder_name · 400 holder_required의 choices처럼
+// 호출자가 토스트 대신 화면으로 풀어야 하는 필드 (선택 동기화 C-2). 본문이 JSON이 아니면 null
 export class ApiError extends Error {
-  constructor(message, { status = 0, code = "", network = false, quiet = false } = {}) {
+  constructor(message, { status = 0, code = "", network = false, quiet = false, body = null } = {}) {
     super(message);
     this.name = "ApiError";
-    Object.assign(this, { status, code, network, quiet });
+    Object.assign(this, { status, code, network, quiet, body });
   }
 }
 
@@ -148,7 +150,8 @@ async function request(method, url, body, opts = {}) {
     if (res.status === 409 && opts.allowConflict) return { conflict: true, ...data };
     const detail = data && data.detail ? data.detail : (typeof data === "string" && data) || `오류 (${res.status})`;
     const msg = Array.isArray(detail) ? detail.map((d) => d.msg).join(", ") : String(detail);
-    throw new ApiError(msg, { status: res.status, code: (data && data.code) || "" });
+    const errBody = data && typeof data === "object" && !Array.isArray(data) ? data : null;
+    throw new ApiError(msg, { status: res.status, code: (data && data.code) || "", body: errBody });
   }
   return data;
 }
@@ -184,12 +187,14 @@ export async function streamEvents(url, body, onEvent, signal, { onJob } = {}) {
   if (!res.ok) {
     let msg = `오류 (${res.status})`;
     let code = "";
+    let errBody = null;
     try {
       const b = await res.json();
       msg = b.detail || msg;
       code = b.code || "";
+      errBody = b && typeof b === "object" ? b : null;
     } catch { /* 본문 없음 */ }
-    throw new ApiError(msg, { status: res.status, code });
+    throw new ApiError(msg, { status: res.status, code, body: errBody });
   }
   const jobId = Number(res.headers.get("x-paperlab-job")) || 0;
   if (jobId && onJob) onJob(jobId);

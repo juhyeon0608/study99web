@@ -2,15 +2,25 @@
 // main 쪽 폴더 동기화 (명세 15.1 · 15.3 · 7.1~7.3, 디자인 0.1 IPC 훅): 동기화 utilityProcess 띄우기 · 다시 띄우기, 휴지통 보내기(shell.trashItem —
 // main 에서만 동작, S-3), 폴더 고르기 · 거부 검사, 설치 ID, 로컬 화면 동작(sync-*). 렌더러는 상대 경로 · 정해진 값만 보내고 경로를 조작하지 못한다.
 // 로그에는 경로 · 파일 이름을 쓰지 않는다(12.6).
+//
+// 로컬 파일 다리(선택 동기화 9.1 · 9.2 · 11장 1~4): localFile · openLocal · localHas(클라우드 화면) · localText(워커 — 로컬 AI 본문).
+// 화면은 논문 id 만 보냄 → 동기화 엔진이 저널(J.rel)로 위치를 정함(resolve) → main 이 엔진을 믿지 않고 다시 확인(checkInRoot — 루트
+// realpath 안 · 대상과 모든 상위 조각이 링크/정션 아님 · 일반 파일 · UNC · \\?\ 아님 · 동기화 확장자 · 100MB) → 읽은 바이트의 해시가
+// 저널 해시와 같을 때만 돌려줌(검사와 읽기 사이 바뀜 방지). 읽을 수 있는 것은 이 PC가 보관하는 로컬 항목 파일뿐(localText 는 켬 항목도).
 
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { run } = require('../lib/run');
 const { checkRoot, rootProblem, oneDriveRoots, recycleNuke, linkInChain } = require('../sync/rootcheck');
-const { safeJoin, isInside, SYNC_DIR, MAX_PATH } = require('../sync/paths');
+const { safeJoin, isInside, SYNC_DIR, MAX_PATH, MAX_FILE_BYTES, fold } = require('../sync/paths');
+const { isSyncName, kindOf, extOf, HEAD_BYTES } = require('../sync/filekind');
 const { parseToken } = require('../sync/engine');
 const { createApi } = require('../worker/api-client');
+const { methodOf } = require('../extract/kinds');
+
+const RESOLVE_MS = 10000;
+const BRIDGE = { concurrent: 2, perMinute: 30 }; // localFile · openLocal (9.2-5)
 
 const SUGGESTED_NAME = 'PaperLab 논문';
 const REG_KEY = 'HKCU\\Software\\PaperLab';
@@ -33,18 +43,50 @@ async function readInstallId({ packaged, env = process.env, reg = run }) {
   return add.code === 0 ? id : ''; // 못 쓰면 '' → 저장된 루트가 있어도 켜지지 않음(안전한 쪽)
 }
 
+/**
+ * 루트 안 일반 파일인가(휴지통 보내기 · 로컬 파일 다리 공통): 절대 경로 · \\(UNC · \\?\) 시작 아님 · isInside(root) · 대상 lstat 이 일반 파일 ·
+ * 루트까지 위로 올라가며 어느 조각도 심볼릭 링크 · 정션 아님. → '' | 'missing' | 'path'
+ */
+function pathProblem(abs, root) {
+  const p = String(abs || '');
+  if (!root || p.startsWith('\\\\') || p.startsWith('//') || !path.isAbsolute(p) || !isInside(root, p)) return 'path';
+  let cur = path.resolve(p);
+  const top = path.resolve(root).toLowerCase();
+  let st;
+  try { st = fs.lstatSync(cur); } catch { return 'missing'; }
+  if (!st.isFile()) return 'path';
+  while (cur.toLowerCase() !== top) {
+    try { if (fs.lstatSync(cur).isSymbolicLink()) return 'path'; } catch { return 'path'; }
+    if (path.dirname(cur) === cur) return 'path';
+    cur = path.dirname(cur);
+  }
+  try { if (fs.lstatSync(root).isSymbolicLink()) return 'path'; } catch { return 'path'; }
+  return '';
+}
+
+/**
+ * 로컬 파일 다리 검사(9.2-3 — 엔진을 믿지 않고 main 이 다시): pathProblem + realpath 가 루트 realpath 안 + 동기화 확장자 + 크기 ≤ 100MB.
+ * → {ok: true, size} | {ok: false, code: 'missing' | 'path' | 'too_big'}
+ */
+function checkInRoot(abs, root, { maxBytes = MAX_FILE_BYTES } = {}) {
+  const bad = pathProblem(abs, root);
+  if (bad) return { ok: false, code: bad };
+  if (!isSyncName(abs)) return { ok: false, code: 'path' }; // 실행 파일 · 바로 가기 · 스크립트는 동기화 대상이 아님(11장 4)
+  try {
+    const realRoot = fs.realpathSync.native(root);
+    const real = fs.realpathSync.native(abs);
+    if (!isInside(realRoot, real) || fold(path.basename(real)) !== fold(path.basename(abs))) return { ok: false, code: 'path' };
+  } catch { return { ok: false, code: 'missing' }; }
+  let size;
+  try { size = fs.lstatSync(abs).size; } catch { return { ok: false, code: 'missing' }; }
+  if (size > maxBytes) return { ok: false, code: 'too_big' };
+  return { ok: true, size };
+}
+
 /** main 의 휴지통 보내기: 루트 안 · 링크 아님 · \\?\ 아님을 다시 확인한 뒤 shell.trashItem (K-43) */
 async function trashInRoot(abs, root, shell) {
   const p = String(abs || '');
-  if (!root || p.startsWith('\\\\') || !path.isAbsolute(p) || !isInside(root, p)) return { ok: false, reason: 'parse_failed' };
-  let cur = path.resolve(p);
-  const top = path.resolve(root).toLowerCase();
-  try { if (!fs.lstatSync(cur).isFile()) return { ok: false, reason: 'parse_failed' }; } catch { return { ok: false, reason: 'parse_failed' }; }
-  while (cur.toLowerCase() !== top) {
-    try { if (fs.lstatSync(cur).isSymbolicLink()) return { ok: false, reason: 'parse_failed' }; } catch { return { ok: false, reason: 'parse_failed' }; }
-    if (path.dirname(cur) === cur) return { ok: false, reason: 'parse_failed' };
-    cur = path.dirname(cur);
-  }
+  if (pathProblem(p, root)) return { ok: false, reason: 'parse_failed' };
   try {
     await shell.trashItem(p);
     return { ok: true, reason: p.length > MAX_PATH ? 'long_path' : '' };
@@ -62,7 +104,7 @@ function createSyncHost(d) {
   const env = d.env || process.env;
   const H = {
     child: null, state: { state: 'off', counts: {} }, installId: '', pickError: null, suggestion: null, quitting: false, startWaiters: new Map(), startSeq: 0,
-    oneDrive: [], focus: '',
+    oneDrive: [], focus: '', asks: new Map(), askSeq: 0, bridgeBusy: 0, bridgeTimes: [],
   };
   const to = (m) => { try { if (H.child) H.child.postMessage(m); } catch { /* 다시 시작 중 */ } };
   const settings = () => store.get('sync');
@@ -140,6 +182,118 @@ function createSyncHost(d) {
       if (d.onTokenInvalid) d.onTokenInvalid(String(m.code || ''));
     } else if (m.type === 'update-required') {
       if (d.onUpdateRequired) d.onUpdateRequired();
+    } else if (m.type === 'resolve-result' || m.type === 'local-has-result') {
+      const w = H.asks.get(m.id);
+      if (w) { H.asks.delete(m.id); w(m); }
+    }
+  }
+
+  // ------------------------------------------------------------------ 로컬 파일 다리 (선택 동기화 9.1 · 9.2)
+  /** 동기화 프로세스에 묻기(id 짝, 10초) → 답 | null(시간 초과 · 프로세스 없음) */
+  function ask(type, payload) {
+    if (!H.child) return Promise.resolve(null);
+    const id = ++H.askSeq;
+    return new Promise((resolve) => {
+      const t = setTimeout(() => { H.asks.delete(id); resolve(null); }, RESOLVE_MS);
+      H.asks.set(id, (m) => { clearTimeout(t); resolve(m); });
+      to({ type, id, ...payload });
+    });
+  }
+
+  const syncReady = () => { const s = settings(); return !!(s.enabled && s.root && H.child && !['off', 'root_missing', 'revoked', 'account_mismatch'].includes(H.state.state)); };
+
+  /** 동시 2 · 분당 30(localFile · openLocal) — 넘으면 null */
+  function takeSlot() {
+    const now = Date.now();
+    H.bridgeTimes = H.bridgeTimes.filter((t) => now - t < 60000);
+    if (H.bridgeBusy >= BRIDGE.concurrent || H.bridgeTimes.length >= BRIDGE.perMinute) return false;
+    H.bridgeBusy++;
+    H.bridgeTimes.push(now);
+    return true;
+  }
+
+  /**
+   * 논문 id → {ok, abs, rel, sha256, size, ext, storage, mine} | {ok: false, code}: 엔진 resolve → main 이 다시 checkInRoot.
+   * localOnly = 이 PC가 보관하는 로컬 항목만(화면 다리), 아니면 켬 항목도(로컬 AI — 9.2 localText)
+   */
+  async function locate(pid, { localOnly }) {
+    if (!syncReady()) return { ok: false, code: 'sync_off' };
+    const r = await ask('resolve', { paper_id: pid });
+    if (!r) return { ok: false, code: 'busy' };
+    if (!r.ok) return { ok: false, code: ['sync_off', 'unsupported', 'not_local', 'missing', 'changed', 'path'].includes(r.code) ? r.code : 'missing' };
+    if (localOnly && (r.storage !== 'local' || r.mine !== true)) return { ok: false, code: 'not_local' };
+    const root = settings().root;
+    const c = checkInRoot(r.abs, root);
+    if (!c.ok) return { ok: false, code: c.code };
+    if (c.size !== r.size) return { ok: false, code: 'changed' };
+    return { ok: true, abs: r.abs, rel: r.rel, sha256: r.sha256, size: r.size, ext: extOf(r.rel), storage: r.storage, mine: r.mine === true };
+  }
+
+  /** 읽고 해시를 다시 계산 — 저널 해시와 다르면 changed(검사와 읽기 사이 바뀜) */
+  async function readChecked(loc) {
+    let data;
+    try { data = await fs.promises.readFile(loc.abs); } catch { return { ok: false, code: 'missing' }; }
+    if (data.length > MAX_FILE_BYTES) return { ok: false, code: 'too_big' };
+    if (crypto.createHash('sha256').update(data).digest('hex') !== loc.sha256) return { ok: false, code: 'changed' };
+    return { ok: true, data };
+  }
+
+  /** 9.1 localFile(paperId) → {ok, data: ArrayBuffer, name, ext, sha256, size} | {ok: false, code} */
+  async function localFile(pid) {
+    if (!takeSlot()) return { ok: false, code: 'busy' };
+    try {
+      const loc = await locate(pid, { localOnly: true });
+      if (!loc.ok) { log.info('로컬 파일 읽기 거절', { code: loc.code }); return loc; }
+      const r = await readChecked(loc);
+      if (!r.ok) { log.info('로컬 파일 읽기 거절', { code: r.code }); return r; }
+      const data = r.data.buffer.slice(r.data.byteOffset, r.data.byteOffset + r.data.length);
+      return { ok: true, data, name: path.basename(loc.rel), ext: loc.ext, sha256: loc.sha256, size: loc.size };
+    } finally { H.bridgeBusy--; }
+  }
+
+  /** 9.1 openLocal(paperId) → {ok, code} — PC 기본 앱으로 열기(shell.openPath). 동기화 확장자만(실행 파일 · 바로 가기 원천 차단) */
+  async function openLocal(pid) {
+    if (!takeSlot()) return { ok: false, code: 'busy' };
+    try {
+      const loc = await locate(pid, { localOnly: true });
+      if (!loc.ok) { log.info('로컬 파일 열기 거절', { code: loc.code }); return { ok: false, code: loc.code }; }
+      const err = await shell.openPath(loc.abs);
+      if (err) { log.info('로컬 파일 열기 실패'); return { ok: false, code: 'open_failed' }; }
+      return { ok: true, code: '' };
+    } finally { H.bridgeBusy--; }
+  }
+
+  /** 9.1 localHas(paperIds) → {[id]: 'here' | 'missing'} — 이 PC가 보관하는 로컬 항목만 키로 */
+  async function localHas(ids) {
+    if (!syncReady() || !ids.length) return {};
+    const r = await ask('local-has', { ids: ids.slice(0, 500) });
+    const out = {};
+    for (const [k, v] of Object.entries((r && r.map) || {})) if (/^[1-9][0-9]{0,17}$/.test(k) && (v === 'here' || v === 'missing')) out[k] = v;
+    return out;
+  }
+
+  /**
+   * 9.2 localText(paperId, sha256) — 워커의 로컬 AI 본문(9.4). → {ok, pages} | {ok: false, code}
+   * code: local_file(파일 없음 · 해시 다름 · 루트 문제) · local_unsupported · local_unreadable · local_no_text
+   */
+  async function localText(pid, sha) {
+    if (!/^[0-9a-f]{64}$/.test(String(sha || ''))) return { ok: false, code: 'local_file' };
+    const loc = await locate(pid, { localOnly: false });
+    if (!loc.ok) { log.info('로컬 본문 — 파일 확인 실패', { code: loc.code }); return { ok: false, code: loc.code === 'too_big' ? 'local_unreadable' : 'local_file' }; }
+    if (loc.sha256 !== sha) return { ok: false, code: 'local_file' }; // 파일이 바뀌는 중 — 작업의 해시와 다름
+    const r = await readChecked(loc);
+    if (!r.ok) return { ok: false, code: r.code === 'too_big' ? 'local_unreadable' : 'local_file' };
+    const kind = kindOf(r.data.subarray(0, HEAD_BYTES), loc.rel); // 내용 기준(PDF 는 이름과 관계없이 PDF — 8.1)
+    const method = methodOf(loc.ext);
+    if (!d.extract) return { ok: false, code: 'local_unreadable' };
+    if (kind === 'pdf') return d.extract.extractPdf(r.data);
+    if (method === 'unsupported') return { ok: false, code: 'local_unsupported' };
+    if (kind === 'image' || method === 'image') return { ok: false, code: 'local_no_text' };
+    if (kind !== 'doc' || (method !== 'zip' && method !== 'ole')) return { ok: false, code: 'local_unreadable' };
+    for (let i = 0; ; i++) { // 추출이 밀리면(busy — 한 번에 하나 · 대기 2) 잠시 뒤 다시
+      const x = await d.extract.extractDoc(loc.ext, r.data);
+      if (x.code !== 'busy' || i >= 5) return x.code === 'busy' ? { ok: false, code: 'local_unreadable' } : x;
+      await new Promise((res) => setTimeout(res, 5000));
     }
   }
 
@@ -258,7 +412,7 @@ function createSyncHost(d) {
       }
       case 'sync-reveal': {
         const rel = typeof arg === 'string' ? arg.slice(0, 1000) : '';
-        const abs = rel && s.root ? safeJoin(s.root, rel, { file: /\.pdf$/i.test(rel) }) : null;
+        const abs = rel && s.root ? safeJoin(s.root, rel, { file: isSyncName(rel) }) : null;
         if (abs && fs.existsSync(abs)) shell.showItemInFolder(abs);
         return !!abs;
       }
@@ -282,7 +436,10 @@ function createSyncHost(d) {
   return {
     start, stop, action, localState, state: () => H.state, settings,
     token: (t) => to({ type: 'token', token: t }), nudge: () => to({ type: 'nudge' }), focusOn: (f) => { H.focus = f; },
+    localFile, openLocal, localHas, localText,
+    /** 9.1 info(): 엔진 프로토콜(0 = 모름 · 1 = 옛 서버 · 2) · 동기화가 켜져 맞추는 중인가 */
+    syncInfo: () => ({ syncProtocol: Number(H.state.proto) || 0, syncOn: syncReady() }),
   };
 }
 
-module.exports = { createSyncHost, trashInRoot, readInstallId };
+module.exports = { createSyncHost, trashInRoot, checkInRoot, pathProblem, readInstallId };

@@ -4,7 +4,8 @@
 import { ApiError, api, setApiHooks, setApiLive } from "./api.js";
 import { exchangeCode, googleAuthUrl, hasAuthCode, initAuth, sessionUser, signInWithGoogle, signOut, startSession, takeRedirectError } from "./auth.js";
 import {
-  cancelUploads, folderIcon, folderPickDialog, folderSubtree, maskEmail, settingsDialog, uploadPdfs, uploadsRunning, usageInfo,
+  cancelUploads, checkModeDone, folderIcon, folderPickDialog, folderSubtree, maskEmail, movedToast, settingsDialog, syncModeDialog,
+  uploadPdfs, uploadsRunning, usageInfo,
 } from "./dialogs.js";
 import { closeAsk, renderAsk, scopeFromFilter, scopeHash } from "./ask.js";
 import { resetCiteCache } from "./cite.js";
@@ -14,6 +15,7 @@ import { flushLibrary, loadPapers, renderLibrary } from "./library.js";
 import { closeJobs, renderJobs, startJobBadge, stopJobBadge } from "./jobs.js";
 import { closeTrash, renderTrash } from "./trash.js";
 import { closeReader, flushReader, openReader, stopSummaries } from "./reader.js";
+import { folderMark, folderMenu, sizeText } from "./syncmode.js";
 import { resetRefMemory } from "./refpane.js";
 import { closeWriter, composeDialog, flushWriter, openManuscript, renderWriteList, unsavedDraft } from "./writing.js";
 import { actions, onRefresh, refreshAll, resetState, setUsageLoader, state } from "./state.js";
@@ -548,7 +550,8 @@ function drawMeter() {
   const x = usageInfo(u);
   const w = Math.min(100, x.pct);
   meter.dataset.level = x.level;
-  meter.title = `모든 사용자가 함께 쓰는 저장 공간이에요 · 내 PDF ${x.mine}${x.trash ? ` · 휴지통 ${x.trash}` : ""}`;
+  meter.title = `모든 사용자가 함께 쓰는 저장 공간이에요 · 내 PDF ${x.mine}${x.trash ? ` · 휴지통 ${x.trash}` : ""}${u.local_bytes
+    ? ` · PC에만 둔 파일 ${sizeText(u.local_bytes)}(서버 공간을 쓰지 않음)` : ""}`;
   $("[data-storage-text]", meter).textContent = `${x.used} / ${x.limit}`;
   const bar = $(".usage-bar", meter);
   bar.setAttribute("aria-valuenow", w);
@@ -567,6 +570,7 @@ async function loadSidebar(force = false) {
   if (!authed && !force) return;
   Object.assign(state, { collections, folders, tags, stats });
   renderSidebar();
+  checkModeDone(stats); // 선택 동기화: 끄기 대기가 모두 끝났으면 "…에만 두었어요" 토스트 (10.5절)
 }
 
 function filterKey(f) {
@@ -706,10 +710,12 @@ function renderFolders() {
       const kids = byParent.get(f.id) || [];
       const open = kids.length && !folderCollapsed.has(f.id);
       const isActive = state.view === "library" && state.filter.kind === "folder" && state.filter.id === f.id;
+      const mark = folderMark(f); // 실효 끔(PC에만) 폴더: 이름 뒤 작은 PC 표 (선택 동기화 10.2절)
       const row = el(`<div class="tree-row folder-row">
         ${kids.length ? `<button class="tree-toggle" aria-expanded="${open ? "true" : "false"}" aria-label="‘${esc(f.name)}’ 하위 폴더 ${open ? "접기" : "펼치기"}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>`
           : `<span class="tree-toggle-spacer"></span>`}
-        <button class="nav-item ${isActive ? "active" : ""}" data-fid="${f.id}">${folderIcon()}<span class="label">${esc(f.name)}</span><span class="count">${f.count || ""}</span></button>
+        <button class="nav-item ${isActive ? "active" : ""}" data-fid="${f.id}">${folderIcon()}<span class="label">${esc(f.name)}</span>${mark
+          ? `<span class="folder-pc"${mark.own ? " data-own" : ""} title="${esc(mark.title)}" aria-label="${esc(mark.title)}">${esc(mark.text)}</span>` : ""}<span class="count">${f.count || ""}</span></button>
         <span class="menu-wrap"><button class="icon-btn small row-menu" title="메뉴" aria-label="‘${esc(f.name)}’ 폴더 메뉴">⋯</button></span></div>`);
       const toggle = $(".tree-toggle", row);
       if (toggle) toggle.onclick = () => {
@@ -724,14 +730,18 @@ function renderFolders() {
       btn.onclick = () => setFilter({ kind: "folder", id: f.id });
       dropTarget(btn, async (ids) => {
         await api.post("/api/papers/bulk", { ids, action: "move_folder", value: f.id });
-        toast(`${ids.length}편을 ‘${f.name}’ 폴더로 옮겼어요`);
+        movedToast(ids, f.id); // 저장 위치가 폴더 설정과 달라지면 [폴더 설정대로 맞추기]
       });
       $(".row-menu", row).onclick = (e) => {
         e.stopPropagation();
+        // 선택 동기화 켜고 끄기 (10.3절 — 폴더 동기화를 켠 PC가 하나라도 있을 때만)
+        const sync = folderMenu(f, { syncOn: !!(state.stats && state.stats.sync_on) })
+          .map((it) => ({ label: it.label, action: () => syncModeDialog({ folder: f, mode: it.mode, target: { type: "folder", name: f.name } }) }));
         popupMenu(e.currentTarget, [
           { label: "하위 폴더 만들기", action: () => newFolder(f.id) },
           { label: "이름 바꾸기", action: () => renameFolder(f) },
           { label: "옮기기…", action: () => moveFolder(f) },
+          ...(sync.length ? ["-", ...sync] : []),
           "-",
           { label: "삭제 (논문은 남아요)", danger: true, action: () => deleteFolder(f, kids.length) },
         ], { left: true, focus: e.detail === 0 });
@@ -759,7 +769,7 @@ function renderFolders() {
   btn.onclick = () => setFilter({ kind: "no_folder", id: null });
   dropTarget(btn, async (ids) => {
     await api.post("/api/papers/bulk", { ids, action: "move_folder", value: null });
-    toast(`${ids.length}편을 폴더 밖으로 옮겼어요`);
+    movedToast(ids, null);
   });
   tree.appendChild(row);
 }

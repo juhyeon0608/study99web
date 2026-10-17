@@ -8,6 +8,8 @@ r"""관리 명령 (명세 6.3 · 8.3 · 7.4 · 13.3 · 10.2). 서버가 아니�
     python -m paperlab.admin rotate-key                     user_secrets 재암호화(옛 키는 표준 입력)     reason=encryption key rotation
     python -m paperlab.admin orphans [--delete]             DB에 없는 R2 PDF · 벡터 파일(rag/) · 번역 파일(translations/) 찾기/지우기 reason=orphan scan
     python -m paperlab.admin rag-reindex --all              모든 논문을 색인 대기로(파일은 다음 교체 때 지움) reason=rag reindex
+    python -m paperlab.admin sync-originals [--dry-run]     문서 원본 해시 · PC 파일 이름을 원본 확장자로(선택 동기화 7.3절)
+                                                                                                         reason=sync originals
     python -m paperlab.admin rag-model [--download] [--dir D:\PaperLab\models\embeddinggemma-300m]
                                                             3단계 임베딩 모델 파일 확인(SHA-256) · 받기(Hugging Face 공식, 고정 커밋)
     python -m paperlab.admin backup [--tmp-dir D:\PaperLab\tmp]
@@ -29,6 +31,7 @@ from __future__ import annotations
 import argparse
 import base64
 import getpass
+import hashlib
 import logging
 import logging.handlers
 import os
@@ -274,6 +277,86 @@ def rag_reindex_all(conninfo: str) -> int:
     log.info("admin reason=rag reindex")
     with _connect(conninfo) as conn:
         return conn.execute("update paperlab.papers set rag_version = '' where rag_version <> ''").rowcount
+
+
+def sync_originals(conninfo: str, storage: Storage, dry_run: bool = False) -> dict:
+    """선택 동기화 7.3절(D-8): 원본 해시를 모르는 문서 행(source_key <> '' · source_sha256 = '')마다 R2 원본을 받아 해시를
+    적고, PC 파일 이름을 원본 확장자로 바꾼다(겹치면 ` (2)` — 6단계 K-8). 그 뒤 PC는 피드로 원본을 받고 옛 변환본은 Windows
+    휴지통으로(8.3절 swap_rep). 관리 주소 system_tx로 id만 모으고 사용자별 권한 트랜잭션(actor_claims "admin")에서 쓴다.
+    단, 원본을 적은 뒤 PC가 변환본(.pdf)을 고쳐 올린 행(content_device_id 있음 — 해시 없는 원본을 PDF와 함께 적은 길은 옛 웹
+    업로드뿐이라 content_device_id = null, PC가 PDF만 바꾸는 길은 attach_from_incoming의 옛 문서 분기 · 그 충돌 사본)은 원본이 이제 PC
+    내용보다 옛것이다 → 해시를 채우지 않고 원본을 떼어 낸다(source 비움 · R2 원본은 커밋 뒤 삭제 — PC의 .pdf를 올리면 옛 원본을
+    지우는 새 규칙과 같음). 옛 원본이 PC 표현으로 되돌아와 PC가 고친 PDF를 휴지통으로 보내는 일이 없게.
+    멱등(두 번째 실행은 할 일 0). 출력 · 로그는 개수만(이름 · 경로 · 해시 없음).
+    → {found, users, stale(떼어 낼 행 — dry_run에서도 셈), updated, renamed, detached, skipped}"""
+    from .db import Database, _fit, _not_reserved, actor_claims, split_ext
+    from .storage import NotFound, UserStorage
+
+    log.info("admin reason=sync originals dry_run=%s", dry_run)
+    db = Database(conninfo, min_size=1, max_size=2, timeout=30)
+    out = {"found": 0, "users": 0, "stale": 0, "updated": 0, "renamed": 0, "detached": 0, "skipped": 0}
+    try:
+        with db.system_tx("sync originals scan") as conn:
+            rows = conn.execute("select user_id::text as uid, id, content_device_id is not null as pc_pdf "
+                                "from paperlab.papers where source_key <> '' and source_sha256 = '' "
+                                "order by user_id, id").fetchall()
+        by_user: dict[str, list[int]] = {}
+        for r in rows:
+            by_user.setdefault(r["uid"], []).append(r["id"])
+        out.update(found=len(rows), users=len(by_user), stale=sum(1 for r in rows if r["pc_pdf"]))
+        if dry_run:
+            return out
+        for uid, ids in by_user.items():
+            us = UserStorage(storage, uid)
+            claims = actor_claims(uid, "admin")
+            for pid in ids:
+                with db.user_tx(claims) as lib, lib.trash_tx():
+                    r = lib._one("select source_key, source_name, source_sha256, content_device_id from paperlab.papers "
+                                 "where id = %s and user_id = %s", (pid, uid))
+                if r and r["source_key"] and not r["source_sha256"] and r["content_device_id"] is not None:
+                    # PC가 변환본을 바꾼 행: 원본을 떼어 냄 (잠그고 다시 확인 — 그 사이 바뀌었으면 건너뜀)
+                    old = ""
+                    with db.user_tx(claims) as lib, lib.trash_tx():
+                        cur = lib._one("select source_key, source_sha256, content_device_id from paperlab.papers "
+                                       "where id = %s and user_id = %s for update", (pid, uid))
+                        if (cur and cur["source_key"] == r["source_key"] and not cur["source_sha256"]
+                                and cur["content_device_id"] is not None):
+                            old = lib.set_source(pid)
+                            lib.ensure_file_name(pid)  # PC 표현은 PDF 그대로 — 이름 확장자도 .pdf에 맞춤(이미 맞으면 그대로)
+                    if not old:
+                        out["skipped"] += 1
+                        continue
+                    us.delete_quietly(old)  # 커밋 뒤 (실패하면 고아 — find-orphans가 정리)
+                    out["detached"] += 1
+                    continue
+                ext = split_ext((r or {}).get("source_name") or "")[1].lower()
+                if not r or not r["source_key"] or r["source_sha256"] or not ext:
+                    out["skipped"] += 1  # 그 사이 바뀜 · 원본 이름에 동기화 확장자가 없음
+                    continue
+                try:
+                    data = us.get(us.check(r["source_key"]))  # DB 트랜잭션 밖에서 받기
+                except NotFound:
+                    out["skipped"] += 1
+                    continue
+                digest = hashlib.sha256(data).hexdigest()
+                with db.user_tx(claims) as lib, lib.trash_tx():
+                    cur = lib._one("select source_key, source_sha256, content_device_id, file_name, folder_id "
+                                   "from paperlab.papers where id = %s and user_id = %s for update", (pid, uid))
+                    # 그 사이 PC가 변환본을 바꿨으면(content_device_id가 생김) 해시를 채우지 않음 — 다음 실행이 떼어 냄
+                    if (not cur or cur["source_key"] != r["source_key"] or cur["source_sha256"]
+                            or cur["content_device_id"] is not None):
+                        out["skipped"] += 1
+                        continue
+                    lib._x("update paperlab.papers set source_sha256 = %s where id = %s and user_id = %s",
+                           (digest, pid, uid))
+                    stem, own = split_ext(cur["file_name"])
+                    if cur["file_name"] and own.lower() != ext:
+                        lib.place_paper(pid, cur["folder_id"], _not_reserved(_fit(stem, ext)))
+                        out["renamed"] += 1
+                    out["updated"] += 1
+    finally:
+        db.close()
+    return out
 
 
 def find_pg_dump(env: dict) -> str:
@@ -608,6 +691,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("maintain", help="DB 정리: pgroonga_vacuum() + 전 · 후 DB 크기 (6단계 K-46)")
     p = sub.add_parser("rag-reindex", help="모든 논문을 색인 대기로 (3단계 10.3절)")
     p.add_argument("--all", action="store_true", required=True)
+    p = sub.add_parser("sync-originals", help="문서 원본 해시 · PC 파일 이름을 원본 기준으로 (선택 동기화 7.3절)")
+    p.add_argument("--dry-run", action="store_true", help="바꾸지 않고 해당 행 수만")
     p = sub.add_parser("rag-model", help="3단계 임베딩 모델 파일 확인 · 받기")
     p.add_argument("--dir", default=None, help="모델 폴더 (기본 PAPERLAB_EMBED_MODEL_DIR 또는 D:\\PaperLab\\models\\embeddinggemma-300m)")
     p.add_argument("--download", action="store_true", help="없거나 틀린 파일을 Hugging Face 공식 저장소(고정 커밋)에서 받음")
@@ -711,6 +796,14 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "maintain":
             r = db_maintain(admin_db)
             say(f"DB 정리(pgroonga_vacuum): {r['before_bytes'] / 1048576:.1f}MB → {r['after_bytes'] / 1048576:.1f}MB")
+        elif args.cmd == "sync-originals":
+            r = sync_originals(admin_db, _storage_from_env(env), dry_run=args.dry_run)
+            if args.dry_run:
+                say(f"원본 해시를 채울 문서: {r['found'] - r['stale']}편, PC가 PDF를 고쳐 원본을 떼어 낼 문서: {r['stale']}편 "
+                    f"(사용자 {r['users']}명) — 바꾸지 않았어요(--dry-run)")
+            else:
+                say(f"원본 해시를 채웠어요: {r['updated']}편 (PC 파일 이름 확장자 바꿈 {r['renamed']}편, "
+                    f"PC가 PDF를 고쳐 원본을 떼어 냄 {r['detached']}편, 건너뜀 {r['skipped']}편 / 대상 {r['found']}편)")
         elif args.cmd == "rag-reindex":
             say(f"색인 대기로 바꾼 논문: {rag_reindex_all(admin_db)}편 (사용자가 AI 질문을 열 때 차례로 다시 색인)")
         elif args.cmd == "cache-stats":

@@ -3,11 +3,12 @@
 // rel = 루트 기준 상대 경로('\\' 구분). 비교 키는 NFC + 소문자(Windows처럼 대소문자 무시).
 
 const path = require('node:path').win32;
+const { isSyncName, extOf } = require('./filekind');
 
 const MAX_FOLDER = 100;
 const MAX_FILE = 200;
 const MAX_PATH = 250;
-const MAX_PDF_BYTES = 100 * 1024 * 1024;
+const MAX_FILE_BYTES = 100 * 1024 * 1024; // 동기화 파일 하나 상한(서버 limits.max_file_bytes 와 같음)
 const SYNC_DIR = '.paperlab-sync';
 
 const FORBIDDEN = /[/\\:*?"<>|]/;
@@ -25,14 +26,13 @@ function nameProblem(name, { file = false } = {}) {
   const s = String(name == null ? '' : name);
   if (!s || s === '.' || s === '..') return 'bad_name';
   if (FORBIDDEN.test(s) || CONTROL.test(s) || /[. ]$/.test(s) || RESERVED.test(s)) return 'bad_name';
-  if (file && !/\.pdf$/i.test(s)) return 'bad_name';
-  if (file && RESERVED.test(s.replace(/\.pdf$/i, ''))) return 'bad_name';
+  if (file && !isSyncName(s)) return 'bad_name'; // 동기화 확장자 목록(filekind.SYNC_EXTS — 선택 동기화 8.1절)
+  if (file && RESERVED.test(s.slice(0, s.length - extOf(s).length))) return 'bad_name';
   if (s.length > (file ? MAX_FILE : MAX_FOLDER)) return 'too_long';
   return '';
 }
 
-const isPdfName = (name) => /\.pdf$/i.test(String(name));
-/** 동기화하지 않는 PDF 이름(임시 · 잠금 · 점으로 시작) */
+/** 동기화하지 않는 파일 이름(임시 · 잠금 · 점으로 시작) */
 const isTempName = (name) => TEMP_START.test(name) || TEMP_END.test(name);
 /** 조용히 건너뛰는 디렉터리(표식 · 보관함 · 휴지통 · 점으로 시작) */
 const isSkippedDir = (name) => name.startsWith('.') || SKIP_DIRS.has(String(name).toLowerCase());
@@ -71,7 +71,7 @@ function safeJoin(root, rel, { file = false } = {}) {
 const fullLength = (root, rel) => path.join(root, rel).length;
 
 module.exports = {
-  MAX_FOLDER, MAX_FILE, MAX_PATH, MAX_PDF_BYTES, SYNC_DIR,
-  nfc, fold, nameProblem, isPdfName, isTempName, isSkippedDir, segments, joinRel, parentRel, baseName, depth,
+  MAX_FOLDER, MAX_FILE, MAX_PATH, MAX_FILE_BYTES, SYNC_DIR,
+  nfc, fold, nameProblem, isSyncName, isTempName, isSkippedDir, segments, joinRel, parentRel, baseName, depth,
   isUnder, rebase, isInside, safeJoin, fullLength,
 };

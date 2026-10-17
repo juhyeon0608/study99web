@@ -47,9 +47,9 @@
       case 'root_missing': return { chip: '! 멈춤', chipClass: 'warn', line: '동기화 폴더를 찾을 수 없어요', tone: 'bad' };
       case 'offline': return { chip: '서버 연결 끊김', chipClass: '', line: '서버에 연결할 수 없어 기다리는 중이에요. 바뀐 것은 모아 두었다가 연결되면 맞춰요.', tone: 'bad' };
       case 'storage_full':
-        if (s.reason === 'sync_quota') return { chip: '! 올리기 멈춤', chipClass: 'warn', line: '내 올리기 한도(' + cap + ')에 닿아 PDF 올리기를 멈췄어요. 받기 · 옮기기는 계속해요.', tone: 'bad' };
-        if (s.reason === 'db') return { chip: '! 올리기 멈춤', chipClass: 'warn', line: '서재 데이터베이스 공간이 거의 차서 PDF 올리기를 멈췄어요. 받기 · 옮기기는 계속해요.', tone: 'bad' };
-        return { chip: '! 올리기 멈춤', chipClass: 'warn', line: '서재 저장 공간이 거의 차서 PDF 올리기를 멈췄어요. 받기 · 옮기기는 계속해요.', tone: 'bad' };
+        if (s.reason === 'sync_quota') return { chip: '! 올리기 멈춤', chipClass: 'warn', line: '내 올리기 한도(' + cap + ')에 닿아 파일 올리기를 멈췄어요. 받기 · 옮기기는 계속해요.', tone: 'bad' };
+        if (s.reason === 'db') return { chip: '! 올리기 멈춤', chipClass: 'warn', line: '서재 데이터베이스 공간이 거의 차서 파일 올리기를 멈췄어요. 받기 · 옮기기는 계속해요.', tone: 'bad' };
+        return { chip: '! 올리기 멈춤', chipClass: 'warn', line: '서재 저장 공간이 거의 차서 파일 올리기를 멈췄어요. 받기 · 옮기기는 계속해요.', tone: 'bad' };
       case 'update_required': return { chip: '업데이트 필요', chipClass: 'warn', line: '앱을 업데이트해야 동기화할 수 있어요. 아래 ‘앱’에서 새 버전을 받아 주세요.', tone: 'bad' };
       case 'account_mismatch': return { chip: '! 멈춤', chipClass: 'warn', line: '다른 계정의 동기화 폴더라 멈췄어요', tone: 'bad' };
       case 'revoked': return { chip: '멈춤', chipClass: '', line: '이 PC 연결이 해지돼 동기화를 멈췄어요. 파일은 그대로 있어요.', tone: 'bad' };
@@ -64,6 +64,9 @@
     var root = s.root || '';
     var up = (s.counts && s.counts.pending_up) || 0;
     if (s.state === 'waiting_confirm' && s.confirm) {
+      if (s.confirm.kind === 'moved_local') {
+        return { tone: 'warn', title: heldPc(s.confirm.labels) + '에만 두기로 한 파일 ' + fmtNum(s.confirm.count) + '개가 이 PC에 있어요.', body: '이 PC의 사본을 Windows 휴지통으로 옮길지 정해 주세요. 다른 변경은 계속 맞춰요.' };
+      }
       var what = s.confirm.kind === 'remote_delete' ? '서재에서 논문 ' + fmtNum(s.confirm.count) + '편이 휴지통으로 갔어요' : '이 PC에서 파일 ' + fmtNum(s.confirm.count) + '개를 지웠어요';
       return { tone: 'warn', title: '파일을 한꺼번에 지우려 해서 멈췄어요.', body: what + '. 지울지 정해 주세요.' };
     }
@@ -76,11 +79,20 @@
     }
     if (s.state === 'account_mismatch') return { tone: 'danger', title: '다른 계정의 동기화 폴더라 멈췄어요.', body: '지금 계정의 서재와 섞지 않으려고 멈췄어요. 새 폴더를 골라 다시 시작해 주세요.' };
     if (s.state === 'storage_full') {
-      if (s.reason === 'sync_quota') return { tone: 'warn', title: '내 올리기 한도(' + cap + ')에 닿았어요.', body: '이 PC에서 새로 넣은 PDF ' + fmtNum(up) + '개를 올리지 못하고 기다리는 중이에요. 서재 휴지통을 비우면 한도가 늘어요(휴지통 PDF도 한도에 들어가요). 더 필요하면 관리자에게 한도를 늘려 달라고 해 주세요.' };
-      if (s.reason === 'db') return { tone: 'warn', title: '서재 데이터베이스 공간이 거의 찼어요.', body: '이 PC에서 새로 넣은 PDF ' + fmtNum(up) + '개를 올리지 못하고 기다리는 중이에요. 관리자에게 알려 주세요. 공간이 생기면 이어서 올려요.' };
-      return { tone: 'warn', title: '서재 저장 공간이 거의 찼어요.', body: '이 PC에서 새로 넣은 PDF ' + fmtNum(up) + '개를 올리지 못하고 기다리는 중이에요. 관리자에게 알려 주세요. 공간이 생기면 이어서 올려요.' };
+      if (s.reason === 'sync_quota') return { tone: 'warn', title: '내 올리기 한도(' + cap + ')에 닿았어요.', body: '이 PC에서 새로 넣은 파일 ' + fmtNum(up) + '개를 올리지 못하고 기다리는 중이에요. 서재 휴지통을 비우면 한도가 늘어요(휴지통 파일도 한도에 들어가요). 더 필요하면 관리자에게 한도를 늘려 달라고 해 주세요.' };
+      if (s.reason === 'db') return { tone: 'warn', title: '서재 데이터베이스 공간이 거의 찼어요.', body: '이 PC에서 새로 넣은 파일 ' + fmtNum(up) + '개를 올리지 못하고 기다리는 중이에요. 관리자에게 알려 주세요. 공간이 생기면 이어서 올려요.' };
+      return { tone: 'warn', title: '서재 저장 공간이 거의 찼어요.', body: '이 PC에서 새로 넣은 파일 ' + fmtNum(up) + '개를 올리지 못하고 기다리는 중이에요. 관리자에게 알려 주세요. 공간이 생기면 이어서 올려요.' };
     }
     return null;
+  }
+
+  /** 개수 줄 덧붙임(선택 동기화 10.8): "이 PC에만: n개 · 바꾸는 중: n개" — 없으면 '' */
+  function modeLine(c) {
+    c = c || {};
+    var parts = [];
+    if (c.local) parts.push('이 PC에만: ' + fmtNum(c.local) + '개');
+    if (c.pending_mode) parts.push('바꾸는 중: ' + fmtNum(c.pending_mode) + '개');
+    return parts.join(' · ');
   }
 
   /** 트레이 메뉴 둘째 줄 · 툴팁 둘째 줄(7.2 · 7.3) */
@@ -106,6 +118,12 @@
     return '';
   }
 
+  /** 다른 PC에만 두기(moved_local · elsewhere_old)의 보관 PC: 이름이 하나로 같으면 ‘연구실 PC’, 모르거나 여럿이면 "다른 PC" */
+  function heldPc(labels) {
+    labels = (labels || []).filter(function (l) { return typeof l === 'string' && l; });
+    return labels.length === 1 ? '‘' + labels[0] + '’' : '다른 PC';
+  }
+
   function quote(names, n) {
     names = (names || []).filter(Boolean);
     if (!names.length) return '';
@@ -127,13 +145,16 @@
         : { title: 'PDF가 바뀌어 번역을 지웠어요', content: 'PDF가 바뀌어 번역을 지웠어요: ' + (m.names && m.names[0] ? m.names[0] : '') + ' — 다시 번역하려면 서재에서 [전체 번역 시작…]을 눌러 주세요.' };
       case 'local_delete': return { title: '동기화를 잠깐 멈췄어요', content: '이 PC에서 파일 ' + n + '개를 지웠어요. 서재에서도 지울지 정해 주세요.', always: true };
       case 'remote_delete': return { title: '동기화를 잠깐 멈췄어요', content: '서재에서 논문 ' + n + '편이 휴지통으로 갔어요. 이 PC 파일도 지울지 정해 주세요.', always: true };
+      case 'moved_local': return { title: heldPc(m.label ? [m.label] : []) + '에만 두기로 한 파일 ' + n + '개가 이 PC에 있어요', content: heldPc(m.label ? [m.label] : []) + '에만 두기로 바꿔서 이 PC의 사본은 필요 없어요. 눌러서 Windows 휴지통으로 옮길지 정해 주세요.', always: true };
+      case 'swap_rep': return { title: '문서를 원본 파일로 바꿨어요', content: '문서를 원본 파일로 바꿨어요: ' + quote(m.names, n) + ' — 전에 받은 PDF 변환본은 Windows 휴지통에 있어요.' };
+      case 'local_kept_new': return { title: '고친 파일을 새 항목으로 남겼어요', content: '다른 PC에만 두기로 한 파일을 이 PC에서 고쳐서 새 항목으로 남겼어요: ' + quote(m.names, n) };
       case 'root_anomaly': return { title: '동기화를 멈췄어요', content: '동기화 폴더에서 파일이 한꺼번에 많이 사라졌어요(' + n + '개). 눌러서 확인해 주세요.', always: true };
       case 'root_missing': return { title: '동기화 폴더를 찾을 수 없어요', content: quote([m.name]) + ' 폴더를 찾을 수 없어 동기화를 멈췄어요. 서재와 다른 PC의 파일은 그대로예요.', always: true };
       case 'account_mismatch': return { title: '동기화를 멈췄어요', content: '다른 계정의 동기화 폴더라 맞추지 않았어요. 이 PC 상태에서 새 폴더를 골라 주세요.', always: true };
       case 'storage_full':
-        if (m.reason === 'sync_quota') return { title: 'PDF 올리기를 멈췄어요', content: '내 올리기 한도(' + cap + ')에 닿았어요. 서재 휴지통을 비우거나 관리자에게 한도를 늘려 달라고 해 주세요.', always: true };
-        if (m.reason === 'db') return { title: 'PDF 올리기를 멈췄어요', content: '서재 데이터베이스 공간이 거의 찼어요. 받기 · 옮기기는 계속해요. 관리자에게 알려 주세요.', always: true };
-        return { title: 'PDF 올리기를 멈췄어요', content: '서재 저장 공간이 거의 찼어요. 받기 · 옮기기는 계속해요. 관리자에게 알려 주세요.', always: true };
+        if (m.reason === 'sync_quota') return { title: '파일 올리기를 멈췄어요', content: '내 올리기 한도(' + cap + ')에 닿았어요. 서재 휴지통을 비우거나 관리자에게 한도를 늘려 달라고 해 주세요.', always: true };
+        if (m.reason === 'db') return { title: '파일 올리기를 멈췄어요', content: '서재 데이터베이스 공간이 거의 찼어요. 받기 · 옮기기는 계속해요. 관리자에게 알려 주세요.', always: true };
+        return { title: '파일 올리기를 멈췄어요', content: '서재 저장 공간이 거의 찼어요. 받기 · 옮기기는 계속해요. 관리자에게 알려 주세요.', always: true };
       case 'archived': return { title: '보관함으로 옮겼어요', content: quote(m.names, n) + '을 Windows 휴지통으로 보내지 못해 보관함에 옮겨 두었어요. 이 PC 상태에서 열 수 있어요.' };
       case 'long_path': return { title: 'Windows 휴지통으로 보냈어요', content: quote(m.names, n) + ' — 경로가 길어 휴지통에서 원래 위치로 되살리지 못할 수 있어요. 서재 휴지통에는 30일 남아 있어요.' };
       case 'preview_ready': return { title: '처음 맞추기 미리보기가 준비됐어요', content: '눌러서 올리고 받을 파일을 확인해 주세요.', always: true };
@@ -158,9 +179,17 @@
     ['trash_timeout', 'Windows 휴지통이 2분 안에 답하지 않았어요 — 잠시 뒤 다시 해요.', true],
     ['trash_parse_failed', 'Windows 휴지통이 이 경로를 읽지 못해 보내지 못했어요. 파일은 그대로 있어요. 직접 지우거나 옮겨 주세요.', true],
     ['trash_failed', 'Windows 휴지통으로도, 보관함으로도 옮기지 못했어요. 파일은 그대로 있어요.', true],
+    ['local_missing', '이 PC에만 두기로 한 파일을 찾지 못했어요 — Windows 휴지통에서 되살리거나 같은 파일을 다시 넣어 주세요.', false],
+    ['mode_fail', '‘PC에만 두기’를 마치지 못했어요 — 이 PC에 파일이 없어요. 서재에서 [바꾸기 취소]를 누르거나 파일을 다시 받은 뒤 기다려 주세요.', false],
+    ['local_elsewhere', '다른 PC에만 두기로 한 파일과 같은 파일이라 맞추지 않았어요. 그 PC에서 [동기화 켜기]를 하면 여기에도 내려와요.', true],
+    ['elsewhere_old', '다른 PC에만 두기로 한 파일의 옛 판이라 지우지 않고 그대로 두었어요. 그 PC에서 고친 판과 달라요. 필요 없으면 직접 지워 주세요 — 서재에는 영향이 없어요.', true],
+    ['ext_change', '파일 확장자를 바꾼 것은 서재에 반영하지 않아요. 원래 확장자로 되돌려 주세요. 다른 형식으로 쓰려면 새 파일로 저장해 넣어 주세요.', true],
+    ['no_converter', '서버에 문서 변환기가 없어 이 파일은 올릴 수 없어요 — 폴더를 ‘PC에만 두기’로 바꾸면 맞출 수 있어요.', true],
+    ['convert_failed', '서버가 이 문서를 PDF로 바꾸지 못했어요. 파일이 손상됐거나 암호가 걸려 있을 수 있어요. 파일을 고치면 다시 올려요.', true],
+    ['bad_format', '확장자와 파일 내용이 맞지 않아요 — 올리지 않았어요.', true],
     ['not_pdf', '이름은 .pdf인데 PDF 파일이 아니에요.', true],
     ['empty_file', '빈 파일(0바이트)이에요.', true],
-    ['too_big', '100MB를 넘는 PDF는 서재에 올릴 수 없어요.', true],
+    ['too_big', '100MB를 넘는 파일은 서재에 올릴 수 없어요.', true],
     ['cloud_only', '클라우드 전용 파일이라 건너뛰었어요(내려받지 않음). 이 PC에 내려받은 뒤 맞춰요.', true],
     ['attr_unknown', '파일 속성을 읽지 못해 건너뛰었어요. 잠시 뒤 다시 확인해요.', true],
     ['hidden', '숨김 · 시스템 파일이라 맞추지 않아요.', true],
@@ -177,19 +206,25 @@
   var PROBLEM_TEXT = {};
   var PROBLEM_LOCAL = {};
   PROBLEMS.forEach(function (p) { PROBLEM_TEXT[p[0]] = p[1]; PROBLEM_LOCAL[p[0]] = p[2]; });
-  function problemText(code, at) {
+  function problemText(code, at, label) {
     if (code === 'retrying' && at) return '잠시 실패해 다시 시도하는 중이에요(다음 시도 ' + clock(at) + ').';
+    if (code === 'local_elsewhere' && label) return '‘' + label + '’에만 두기로 한 파일과 같은 파일이라 맞추지 않았어요. 그 PC에서 [동기화 켜기]를 하면 여기에도 내려와요.';
+    if (code === 'elsewhere_old' && label) return '‘' + label + '’에만 두기로 한 파일의 옛 판이라 지우지 않고 그대로 두었어요. 그 PC에서 고친 판과 달라요. 필요 없으면 직접 지워 주세요 — 서재에는 영향이 없어요.';
     return PROBLEM_TEXT[code] || '맞추지 못했어요. 로그 폴더를 관리자에게 보여 주세요.';
   }
-  /** 문제 목록 → 이유별 묶음 [{code, text, files: [{rel, local}], more}] (이유마다 5개 + "외 n개") */
+  // 보관 PC 이름(label)을 문구에 넣는 이유 — 이름이 다르면 따로 묶음
+  var LABELED = { local_elsewhere: true, elsewhere_old: true };
+  /** 문제 목록 → 이유별 묶음 [{code, text, files: [{rel, local}], more}] (이유마다 5개 + "외 n개"). 보관 PC 이름(label)이 다르면 따로 묶음 */
   function groupProblems(list) {
     var by = {};
     var order = [];
     (list || []).forEach(function (p) {
-      if (!by[p.code]) { by[p.code] = { code: p.code, text: problemText(p.code, p.at), files: [] }; order.push(p.code); }
-      by[p.code].files.push({ rel: p.rel, local: PROBLEM_LOCAL[p.code] !== false });
+      var label = LABELED[p.code] && typeof p.label === 'string' ? p.label : '';
+      var k = p.code + '\n' + label;
+      if (!by[k]) { by[k] = { code: p.code, text: problemText(p.code, p.at, label), files: [] }; order.push(k); }
+      by[k].files.push({ rel: p.rel, local: PROBLEM_LOCAL[p.code] !== false });
     });
-    var rank = function (c) { return c in PROBLEM_TEXT ? PROBLEMS.findIndex(function (p) { return p[0] === c; }) : 999; };
+    var rank = function (k) { var c = by[k].code; return c in PROBLEM_TEXT ? PROBLEMS.findIndex(function (p) { return p[0] === c; }) : 999; };
     return order.sort(function (a, b) { return rank(a) - rank(b); }).map(function (c) {
       var g = by[c];
       return { code: g.code, text: g.text, files: g.files.slice(0, 5), more: Math.max(0, g.files.length - 5) };
@@ -229,16 +264,24 @@
   function previewBlock(b) {
     b = b || {};
     if (b.kind === 'disk') return { title: '이 PC 디스크 공간이 모자라요.', body: '받을 파일 ' + fmtBytes(b.need) + '와 여유 1GB가 필요한데 ' + fmtBytes(b.free) + '만 남았어요. 공간을 비운 뒤 [다시 살펴보기]를 누르거나, 다른 드라이브의 폴더를 골라 주세요.' };
-    if (b.kind === 'user') return { title: '내 올리기 한도(' + fmtBytes(b.cap) + ')를 넘어요.', body: '올릴 파일 ' + fmtBytes(b.need) + ' · 남은 한도 ' + fmtBytes(b.left) + '. 올릴 PDF를 줄이거나(동기화 폴더 밖으로 옮김) 관리자에게 한도를 늘려 달라고 해 주세요. ' + (b.trash ? '서재 휴지통(' + fmtBytes(b.trash) + ')을 비워도 한도가 늘어요.' : '서재 휴지통을 비워도 한도가 늘어요.') };
+    if (b.kind === 'user') return { title: '내 올리기 한도(' + fmtBytes(b.cap) + ')를 넘어요.', body: '올릴 파일 ' + fmtBytes(b.need) + ' · 남은 한도 ' + fmtBytes(b.left) + '. 올릴 파일을 줄이거나(동기화 폴더 밖으로 옮김 · 폴더를 ‘PC에만 두기’로) 관리자에게 한도를 늘려 달라고 해 주세요. ' + (b.trash ? '서재 휴지통(' + fmtBytes(b.trash) + ')을 비워도 한도가 늘어요.' : '서재 휴지통을 비워도 한도가 늘어요.') };
     if (b.kind === 'db') return { title: '서재 데이터베이스 공간이 모자라요.', body: '올릴 논문 ' + fmtNum(b.n) + '편 · 예상 ' + fmtBytes(b.need) + ' · 남은 공간 ' + fmtBytes(b.left) + '. 모든 사용자가 함께 쓰는 공간이라 관리자에게 알려 주세요.' };
     return { title: '서재 저장 공간이 모자라요.', body: '올릴 파일 ' + fmtBytes(b.need) + ' · 남은 공간 ' + fmtBytes(b.left) + '. 모든 사용자가 함께 쓰는 공간이라 관리자에게 알려 주세요.' };
   }
 
-  /** 대량 삭제 · 루트 이상 확인 창(5장 · K-31 · K-32) */
+  /** 대량 삭제 · 루트 이상 · 다른 PC에만 두기 확인 창(5장 · K-31 · K-32 · 선택 동기화 10.9). revert 가 '' 면 그 단추를 그리지 않음 */
   function confirmLook(c) {
     c = c || {};
     var n = fmtNum(c.count);
     var pct = c.base ? Math.max(1, Math.round((c.count / c.base) * 100)) : 0;
+    if (c.kind === 'moved_local') {
+      var pc = heldPc(c.labels); // 보관 PC가 둘 이상이면 이름 없이 "다른 PC"
+      return { title: '다른 PC에만 두기로 한 파일 ' + n + '개가 이 PC에 있어요',
+        body: pc + '에만 두기로 바꿔서 이 PC의 사본은 필요 없어요. Windows 휴지통으로 옮길까요?',
+        safety: '서재의 정보 · 노트 · 하이라이트는 그대로예요. 파일은 ' + pc + '에 남아 있고, 이 PC의 사본은 Windows 휴지통에서 되살릴 수 있어요.',
+        cont: '이 PC에서 지우기(Windows 휴지통으로)', revert: '',
+        done: { continue: '이 PC 사본 ' + n + '개를 Windows 휴지통으로 보내는 중이에요' } };
+    }
     if (c.kind === 'remote_delete') {
       return { title: '서재에서 논문 ' + n + '편이 휴지통으로 갔어요',
         body: '이 PC의 파일도 Windows 휴지통으로 보낼까요?' + (c.labels && c.labels.length ? ' 지운 곳: ' + c.labels.join(' · ') + '.' : '') + ' 실수로 여러 편을 지웠을 수 있어 이 PC 파일은 아직 그대로 두었어요.',
@@ -259,7 +302,7 @@
 
   var api = { STATES: STATES, fmtBytes: fmtBytes, fmtNum: fmtNum, syncLook: syncLook, syncBanner: syncBanner, syncTrayLine: syncTrayLine,
     syncTrayIcon: syncTrayIcon, syncBalloon: syncBalloon, problemText: problemText, groupProblems: groupProblems, PROBLEM_TEXT: PROBLEM_TEXT,
-    pickError: pickError, previewBlock: previewBlock, confirmLook: confirmLook };
+    pickError: pickError, previewBlock: previewBlock, confirmLook: confirmLook, modeLine: modeLine };
   if (typeof module === 'object' && module.exports) module.exports = api;
   else root.PaperLabSyncLook = api;
 })(typeof window !== 'undefined' ? window : this);

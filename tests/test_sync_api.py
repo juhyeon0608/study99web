@@ -61,12 +61,14 @@ def env(project, session_db, ab, tmp_path):
 class PC:
     """가짜 PC: 연결 코드 → 기기 토큰으로 sync API"""
 
-    def __init__(self, cloud: Cloud, user, name="A1", app_version="0.3.0"):
+    def __init__(self, cloud: Cloud, user, name="A1", app_version="0.4.0", protocol: int | None = 2):
         code = cloud.client(user).post("/api/devices/pair-codes").json()["code"]
         r = cloud.client().post("/api/worker/pair", json={"code": code, "name": name, "app_version": app_version})
         assert r.status_code == 200, r.text
         self.cloud, self.id, self.token = cloud, r.json()["device_id"], r.json()["token"]
-        self.http = cloud.client(Authorization=f"Bearer {self.token}")
+        # 선택 동기화 D-7: 0.4.0 엔진은 X-PaperLab-Sync: 2 (protocol=None = 0.3.1처럼 머리글 없음)
+        extra = {"X-PaperLab-Sync": str(protocol)} if protocol is not None else {}
+        self.http = cloud.client(Authorization=f"Bearer {self.token}", **extra)
 
     def post(self, path: str, body: dict | None = None, status: int = 200) -> dict:
         r = self.http.post(f"/api/worker/sync/{path}", json=body if body is not None else {})
@@ -276,7 +278,8 @@ def test_snapshot_names_budget_and_isolation(env, project):
     pc = PC(env, a)
     s1 = pc.post("snapshot", {"limit": 1})
     assert s1["more"] and s1["next"]["kind"] == "paper" and set(s1["db"]) == {
-        "size_bytes", "limit_bytes", "budget_bytes", "per_paper_bytes", "first_alloc_bytes"}
+        "size_bytes", "limit_bytes", "budget_bytes", "per_paper_bytes", "first_alloc_bytes",
+        "per_local_bytes"}  # 선택 동기화: 로컬 항목 편당 추정치(8.3절 미리보기)
     assert s1["user_cap_bytes"] == 2 * 1024 ** 3 and s1["trash_bytes"] == 0
     names = dict(sql(project, "select id, file_name from paperlab.papers where id = any(%s)", ([p1, p2],)))
     assert names[p1] == "Snapshot Name Paper One.pdf" and names[p2] == "Kim 2020 - Snapshot Name Paper One.pdf"
@@ -322,7 +325,8 @@ def test_add_lookup_link_restore_idempotent(env, project):
     PC(env, env.b, name="B1").add(bdata, "b.pdf")
     env.ca.delete(f"/api/papers/{pid}")
     found = pc.post("lookup", {"sha256": [sha(data), sha(bdata)]})["found"]
-    assert found == {sha(data): {"id": pid, "folder_id": None, "file_name": "다른.pdf", "trashed": True}}
+    assert found == {sha(data): {"id": pid, "folder_id": None, "file_name": "다른.pdf", "trashed": True,
+                                 "storage": "cloud", "holder": None, "holder_gone": False}}  # 선택 동기화 7.1절
     # 휴지통 논문과 같은 해시 → restored (업로드 0, 하이라이트 그대로)
     env.ca.post(f"/api/papers/{pid}/annotations", json={"page": 1, "text": "hl"})  # 휴지통 논문 — 404
     sql(project, "insert into paperlab.annotations (user_id, paper_id, page, text) values (%s, %s, 1, 'kept')", (a.id, pid))
@@ -352,7 +356,10 @@ def test_versions_revoked_busy_and_quota(env, project):
     """AC-629 · 677(서버) · 678 · 679 db_full"""
     old = PC(env, env.a, name="old", app_version="0.2.9")
     r = old.post("start", {}, status=426)
-    assert r["code"] == "update_required" and r["min_app_version"] == "0.3.0"
+    assert r["code"] == "update_required" and r["min_app_version"] == "0.4.0"  # 선택 동기화 D-7
+    v031 = PC(env, env.a, name="v031", app_version="0.3.1", protocol=None)  # 머리글 없음 = 0.3.1 엔진
+    r = v031.post("start", {}, status=426)
+    assert r["code"] == "update_required" and r["min_sync_protocol"] == 2
     pc = PC(env, env.a)
     assert pc.post("start", {"root_label": "PaperLab 논문", "enabled": True})["limits"]["max_ops"] == 20
     feats = sql(project, "select features from paperlab.devices where id = %s", (pc.id,))[0][0]

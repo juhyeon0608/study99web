@@ -168,19 +168,33 @@ class AIError(Exception):
         self.code = code
 
 
+# 로컬 항목(PC에만 둔 파일 — selective-sync.md 7.4절 · D-6): 서버는 본문 자리에 이 표지 한 번만 넣고, 보관 PC의 워커가
+# 로컬 파일에서 뽑은 글(tagged_text와 같은 모양)로 바꾼다. 본문은 서버를 지나가지 않는다. 표지를 흉내 낼 수 없게 프롬프트의
+# 다른 부분(제목 · 초록 · 대화 · 질문)에서는 U+2063(보이지 않는 구분 문자)을 지운다
+LOCAL_TEXT_MARKER = "⁣PAPERLAB_LOCAL_PAPER_TEXT⁣"
+
+
+def unmark(text) -> str:
+    """표지 문자(U+2063)를 지운다 — 로컬 본문 표지를 사용자 글로 흉내 내지 못하게"""
+    return str(text if text is not None else "").replace("⁣", "")
+
+
 @dataclass
 class PaperContext:
     title: str
     pdf_bytes: bytes | None
     page_texts: list[str]
     abstract: str = ""
+    local_text: bool = False  # 로컬 항목 — 본문 대신 LOCAL_TEXT_MARKER (보관 PC 워커가 채움)
 
     def usable_pdf(self, model: str = "") -> bool:
         limit = 100 if model in SMALL_CONTEXT_MODELS else MAX_PDF_PAGES
-        return bool(self.pdf_bytes) and len(self.pdf_bytes) <= MAX_PDF_BYTES and \
+        return not self.local_text and bool(self.pdf_bytes) and len(self.pdf_bytes) <= MAX_PDF_BYTES and \
             0 < len(self.page_texts) <= limit
 
     def text_pages(self) -> list[str]:
+        if self.local_text:
+            return []
         pages = [t.strip() for t in self.page_texts]
         if any(pages):
             return pages
@@ -188,7 +202,12 @@ class PaperContext:
             return [f"제목: {self.title}\n\n초록: {self.abstract}"]
         return []
 
+    def has_text(self) -> bool:
+        return self.local_text or bool(self.text_pages())
+
     def tagged_text(self) -> str:
+        if self.local_text:
+            return LOCAL_TEXT_MARKER
         return "\n\n".join(f'<page number="{i + 1}">\n{fence(t)}\n</page>' for i, t in enumerate(self.text_pages()))
 
 
@@ -228,18 +247,20 @@ def _extract_json(text: str) -> dict:
 # ---------------------------------------------------------------- 텍스트 요청 (CLI 워커 · OpenAI · Google 공용)
 def summary_request(ctx: "PaperContext", lang: str) -> tuple[str, str]:
     """(시스템, 프롬프트). 본문 텍스트를 쪽 표시와 함께 넣는다"""
-    if not ctx.text_pages():
+    if not ctx.has_text():
         raise AIError("이 논문에는 읽을 수 있는 본문이나 초록이 없어요. PDF를 첨부해 주세요.", "bad_request")
     schema = json.dumps(SUMMARY_SCHEMA, ensure_ascii=False)
-    return SUMMARY_SYSTEM, (f"<paper title=\"{fence_attr(ctx.title)}\">\n{ctx.tagged_text()}\n</paper>\n\n{SUMMARY_PROMPT.format(lang=lang)}\n\n"
+    return SUMMARY_SYSTEM, (f"<paper title=\"{unmark(fence_attr(ctx.title))}\">\n{ctx.tagged_text()}\n</paper>\n\n"
+                            f"{SUMMARY_PROMPT.format(lang=unmark(lang))}\n\n"
                             f"다른 말 없이 아래 JSON 스키마를 따르는 JSON 객체 하나만 출력하세요.\n{schema}")
 
 
 def chat_request(ctx: "PaperContext", history: list[dict], question: str, lang: str) -> tuple[str, str]:
-    convo = "\n\n".join(f"{'사용자' if m['role'] == 'user' else '조수'}: {m['content']}" for m in history)
-    return CHAT_SYSTEM.format(lang=lang) + CLI_CITE_RULE, (
-        f"<paper title=\"{fence_attr(ctx.title)}\">\n{ctx.tagged_text()}\n</paper>\n\n"
-        + (f"<conversation>\n{convo}\n</conversation>\n\n" if convo else "") + f"질문: {question}")
+    # 대화 · 질문은 사용자 글 — 로컬 본문 표지 문자를 지운다(표지가 프롬프트에 정확히 한 번 — 7.4절)
+    convo = "\n\n".join(f"{'사용자' if m['role'] == 'user' else '조수'}: {unmark(m['content'])}" for m in history)
+    return CHAT_SYSTEM.format(lang=unmark(lang)) + CLI_CITE_RULE, (
+        f"<paper title=\"{unmark(fence_attr(ctx.title))}\">\n{ctx.tagged_text()}\n</paper>\n\n"
+        + (f"<conversation>\n{convo}\n</conversation>\n\n" if convo else "") + f"질문: {unmark(question)}")
 
 
 def write_request(mode: str, text: str, *, instruction: str = "", context: str = "",

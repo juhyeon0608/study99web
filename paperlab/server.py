@@ -44,8 +44,9 @@ from . import figures
 from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
-from .db import (PAPER_TRASHED, SYNC_OPS_DAYS, TOMBSTONE_DAYS, TRASH_DAYS, Database, DBUnavailable, Library,
-                 NotFoundError, folder_name_problem)
+from .db import (PAPER_TRASHED, SYNC_MODES, SYNC_OPS_DAYS, TOMBSTONE_DAYS, TRASH_DAYS, Database, DBUnavailable, Library,
+                 NotFoundError, folder_name_problem, iso)
+from .db import local_ai_state as _local_ai_state
 from . import citegraph as cg
 from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, FIELDS_META, WARNINGS as GRAPH_WARNINGS, BadSeed, Flights,
                           GraphBuilder, GraphError, GraphGate, lookup_dois, paper_view, parse_openalex_id, parse_recommend_request,
@@ -105,6 +106,37 @@ class BadPdf(Exception):
 
 BAD_PDF = "PDF를 열 수 없어요. 손상되었거나 암호가 걸린 파일인지 확인해 주세요"
 IMAGE_NO_TEXT = "사진(이미지)은 글자를 읽지 않아요. 본문 검색과 AI 기능은 쓸 수 없어요."
+
+
+class ApiError(Exception):
+    """화면에 {"detail", "code", …추가 필드}로 보낼 오류 (선택 동기화 7.2절 — local_only · holder_required 등)"""
+
+    def __init__(self, status: int, code: str, detail: str, **extra):
+        super().__init__(code)
+        self.status, self.code, self.detail, self.extra = status, code, detail, extra
+
+
+# 선택 동기화 (docs/specs/selective-sync.md 7.2 · 10.9절)
+NO_SYNC_PC = ("폴더 동기화를 켠 PC(0.4.0 이상)가 없어 ‘PC에만’으로 바꿀 수 없어요. "
+              "PC 앱에서 폴더 동기화를 먼저 켜 주세요.")
+HOLDER_REQUIRED = "어느 PC에 둘지 골라 주세요"
+HOLDER_NOT_ELIGIBLE = "고른 PC는 폴더 동기화를 켠 0.4.0 이상의 연결된 PC가 아니에요"
+DB_PER_LOCAL = 8 * 1024  # 로컬 항목 한 편의 DB 증가 추정(가정 — 본문 · PGroonga 색인 없음, 6장)
+
+
+def db_local_ai_state(loc: dict) -> str:
+    """로컬 항목 행(Library.local_info) → "ok" | "unsupported" (확장자가 보관 PC 추출 목록 밖)"""
+    return _local_ai_state(loc.get("file_name") or loc.get("source_name") or "")
+
+
+def local_only_detail(holder_name: str, gone: bool, change: bool = False) -> str:
+    """로컬 항목을 서버에서 열거나 바꿀 수 없을 때 (7.2절 문구)"""
+    if gone:
+        return "연결이 해지된 PC에만 있던 파일이라 열 수 없어요. 파일이 있으면 [파일 다시 올리기]로 올려 주세요"
+    name = holder_name or "PC"
+    if change:
+        return f"이 파일은 ‘{name}’에만 있어요. 바꾸려면 그 PC의 동기화 폴더에서 파일을 바꿔 주세요"
+    return f"이 파일은 ‘{name}’에만 있어요. 그 PC의 PaperLab 앱에서 열 수 있어요"
 
 
 def _md_title(content: str) -> str:
@@ -428,6 +460,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     async def job_error(request: Request, exc: jobs.JobError):
         return JSONResponse({"detail": exc.detail, "code": exc.code}, status_code=exc.status)
 
+    @app.exception_handler(ApiError)
+    async def api_error(request: Request, exc: ApiError):
+        return JSONResponse({"detail": exc.detail, "code": exc.code, **exc.extra}, status_code=exc.status)
+
     @app.exception_handler(StorageKeyError)
     async def bad_key(request: Request, exc: StorageKeyError):
         # 남의 경로 · backups/ · 경로 조작: 존재 여부도 알리지 않는다
@@ -501,9 +537,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     def prepare_upload(ctx: RequestCtx, incoming: str, raw: bytes, name: str) -> tuple[str, bytes, pdf.PdfInfo, dict | None]:
         """올린 파일 → (PDF 임시 키, PDF 내용, 본문, 원본). PDF는 그대로. 워드 · 한글 · PPT · 이미지는 PDF 변환본을 새 임시 키에
-        올리고, 원본은 {"incoming", "name", "size"}로 넘긴다(attach_from_incoming이 sources/로 복사).
+        올리고, 원본은 {"incoming", "name", "size", "sha256"}로 넘긴다(attach_from_incoming이 sources/로 복사).
+        이름이 받는 문서 · 사진 확장자(.docx 등)인데 내용이 PDF면 원본으로 보관한다 — PC에는 원본이 똑같은 바이트로 내려간다
+        (선택 동기화 5.5절 · D-8). .pdf · 확장자 없음 · 모르는 확장자(x.download 등)의 PDF 내용은 그냥 PDF(두 번 저장하지 않음).
         변환 동안 DB 연결을 잡지 않게 ctx.release() 뒤에 부른다. 실패하면 BadPdf · convert.ConvertError"""
-        if raw.startswith(b"%PDF"):
+        ext = convert.ext_of(name)
+        if raw.startswith(b"%PDF") and (ext == ".pdf" or ext not in convert.ACCEPT_EXTS):
             return incoming, raw, extract_pdf(raw), None
         data = convert.to_pdf(raw, name)
         info = extract_pdf(data)
@@ -515,20 +554,31 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             ctx.on_rollback.append(lambda k=k: ctx.storage.delete_quietly(k))
             ctx.after_commit.append(lambda k=k: ctx.storage.delete_quietly(k))
         source_name = re.sub(r"[\x00-\x1f\x7f-\x9f/\\]", "_", re.split(r"[/\\]", name)[-1]).strip()[:255]
-        return pdf_incoming, data, info, {"incoming": incoming, "name": source_name, "size": len(raw)}
+        return pdf_incoming, data, info, {"incoming": incoming, "name": source_name, "size": len(raw),
+                                          "sha256": hashlib.sha256(raw).hexdigest()}
 
     def attach_from_incoming(ctx: RequestCtx, pid: int, incoming: str, data: bytes, info: pdf.PdfInfo, *,
                              name: str = "", device_id: int | None = None, content_at=None,
                              source: dict | None = None) -> bool:
         """임시 파일을 최종 키로 복사하고 DB에 기록. 임시 파일은 커밋 뒤에 지운다. → 전체 번역을 지웠는지(K-28).
-        name: 올린 파일 이름(PC 파일 이름이 비었을 때만 씀), device_id · content_at: 동기화 올리기(10.1절).
-        source: 문서 원본(prepare_upload) — sources/로 복사해 [원본 받기]. 없으면(웹에서 PDF를 바로 붙임) 옛 원본을
-        지운다 — 동기화(device_id)는 원본을 그대로 둔다.
+        name: 올린 파일 이름(PC 파일 이름이 비었을 때만 씀 — 원래 이름 · 확장자 그대로, 선택 동기화 D-8),
+        device_id · content_at: 동기화 올리기(10.1절).
+        source: 문서 원본(prepare_upload) — sources/로 복사해 [원본 받기] · PC 표현. 없으면(PDF를 붙임 — 웹이든 PC의 .pdf
+        파일이든) 옛 원본을 지운다(선택 동기화 7.3절: PC에서 온 내용은 언제나 PC 표현대로). PC 파일 이름의 확장자는 표현에 맞춘다.
+        로컬 항목(PC에만 둔 파일): 보관 PC가 활성이면 409 local_only, 해지됐거나 없어졌으면 붙이면서 켬(storage = 'cloud',
+        sync_mode = 'cloud' 명시 — 7.2절).
         논문 행을 **먼저** 잠그고(없거나 휴지통이면 404 — RLS가 숨김) R2에 복사한다: 그 사이 휴지통으로 간 논문의 PDF를
         덮어쓰지 않게(QA D2 — 휴지통 보내기도 같은 행을 for update로 잠금). 휴지통 논문을 되살리는 동기화는 trash_tx 안에서 부름"""
-        row = ctx.lib._one("select pdf_key from paperlab.papers where id = %s and user_id = %s for update", (pid, ctx.uid))
+        row = ctx.lib._one("select pdf_key, storage, source_key, source_sha256 from paperlab.papers "
+                           "where id = %s and user_id = %s for update", (pid, ctx.uid))
         if not row:
             raise HTTPException(404, "논문을 찾을 수 없어요")
+        if row["storage"] == "local":
+            loc = ctx.lib.local_info(pid) or {}
+            if not loc.get("holder_gone"):
+                raise ApiError(409, "local_only", local_only_detail(loc.get("holder_name") or "", False, change=True),
+                               holder_device_id=loc.get("local_device_id"), holder_name=loc.get("holder_name") or "")
+            ctx.lib.promote_to_cloud(pid, explicit=True)  # 해지된 PC에만 있던 파일을 다시 올림 → 켬
         key = ctx.storage.paper_key(pid)
         ctx.after_commit.append(lambda: ctx.storage.delete_quietly(incoming))  # 복사가 실패하고 커밋돼도 지우게 먼저
         ctx.storage.storage.copy(ctx.storage.check(incoming), ctx.storage.check(key))
@@ -536,19 +586,22 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(key))
         cleared = pdf_changed(ctx, pid, ctx.lib.set_pdf(pid, key, info.page_texts, hashlib.sha256(data).hexdigest(),
                                                         len(data), device_id, content_at))
-        if source:
+        if source:  # PC 파일 = 원본(원래 이름 · 확장자 그대로), 해시 = 원본 해시 (선택 동기화 D-8 · 5.5절)
             skey = ctx.storage.source_key(pid)
             ctx.storage.storage.copy(ctx.storage.check(source["incoming"]), ctx.storage.check(skey))
             ctx.on_rollback.append(lambda: ctx.storage.delete_quietly(skey))
-            old_source = ctx.lib.set_source(pid, skey, source["name"], source["size"])
-            name = re.sub(r"\.[^./\\]*$", "", name) + ".pdf" if name else name  # PC 파일 이름은 변환본 기준(.pdf)
-        elif device_id is None:  # 웹에서 PDF를 바로 붙이거나 바꿈 → 옛 원본은 이제 이 PDF와 다르므로 지운다
+            old_source = ctx.lib.set_source(pid, skey, source["name"], source["size"], source.get("sha256") or "")
+        elif device_id is not None and row["source_key"] and not row["source_sha256"]:
+            # 원본 해시를 모르는 옛 문서 행(sync-originals 전): PC의 .pdf는 원본이 아니라 변환본이다 → 변환본만 바꾸고
+            # 원본(.docx 등)은 그대로 둔다(옛 동작 — 원본을 가진 곳이 서버뿐이라 지우면 잃음).
+            # 표시: 위 set_pdf가 content_device_id = 이 PC로 적는다(해시 없는 원본을 PDF와 함께 적은 길은 옛 웹 업로드뿐 — null).
+            # admin sync-originals는 이 표시가 있는 행의 원본을 PC 표현으로 되돌리지 않고 떼어 낸다(PC가 고친 PDF가 최신)
+            old_source = None
+        else:  # PDF를 붙이거나 바꿈(웹 · PC의 .pdf 파일) → 옛 원본은 이제 이 PDF와 다르므로 지운다
             old_source = ctx.lib.set_source(pid)
-        else:  # PC 동기화로 PDF(변환본)가 바뀜(PC에서 메모 · 저장 등): 사용자가 올린 원본은 그대로 둔다
-            old_source = ""
         if old_source:
             ctx.after_commit.append(lambda: ctx.storage.delete_quietly(old_source))
-        ctx.lib.ensure_file_name(pid, name)
+        ctx.lib.ensure_file_name(pid, name)  # 이름이 없으면 정하고, 있으면 확장자를 PC 표현에 맞춘다
         return cleared
 
     def trash_papers(ctx: RequestCtx, ids: list[int], by: str = "web") -> int:
@@ -580,6 +633,36 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if n:
             log.info(f"papers purged n={n}")
         return n
+
+    def demote_paper(ctx: RequestCtx, pid: int) -> None:
+        """끄기 실행(선택 동기화 7.1절 — mode.ack가 부름, 한 트랜잭션): 행 잠금 → storage = 'local' · 키 · 본문 · 벡터 비움 ·
+        번역 행 삭제 · 대기 중 번역 · 설명 · API 작업 취소. 정보 · 노트 · 하이라이트 · 태그 · 컬렉션 · AI 요약 · 대화 ·
+        설명 기록은 그대로(D-12). 커밋 뒤: R2 PDF · 원본 · 번역 파일 삭제, 벡터 캐시에서 빼기"""
+        old = ctx.lib.demote_to_local(pid)
+        tr_key = translate.delete_row(ctx.lib, pid)
+        for k in (old["pdf_key"], old["source_key"], tr_key):
+            if k:
+                ctx.storage.check(k)  # 남의 경로면 StorageKeyError — 트랜잭션째 실패
+                ctx.after_commit.append(lambda k=k: ctx.storage.delete_quietly(k))
+        ctx.after_commit.append(lambda: rg.forget(ctx.uid, pid, old["rag_key"]))
+        log.info(f"paper demoted to local paper={pid}")
+
+    def need_cloud_file(ctx: RequestCtx, pid: int, change: bool = False) -> None:
+        """로컬 항목이면 409 local_only (7.2절): 열기(pdf-url · source-url)는 언제나, 바꾸기(change — pdf/upload ·
+        pdf/complete · fetch-pdf)는 보관 PC가 활성일 때만(해지됐으면 붙이면서 켬 — attach_from_incoming)"""
+        loc = ctx.lib.local_info(pid)
+        if not loc:
+            raise HTTPException(404, "논문을 찾을 수 없어요")
+        if loc["storage"] == "local" and not (change and loc["holder_gone"]):
+            raise ApiError(409, "local_only", local_only_detail(loc["holder_name"] or "", bool(loc["holder_gone"]), change),
+                           holder_device_id=loc["local_device_id"], holder_name=loc["holder_name"] or "")
+
+    def no_local_ai(ctx: RequestCtx, pid: int) -> None:
+        """선택 설명 · 번역은 로컬 항목에서 쓸 수 없음 (D-13 — 409 local_only)"""
+        loc = ctx.lib.local_info(pid)
+        if loc and loc["storage"] == "local":
+            raise ApiError(409, "local_only", jobs.LOCAL_ONLY_AI, holder_device_id=loc["local_device_id"],
+                           holder_name=loc["holder_name"] or "")
 
     def dup_reply(dup: dict) -> dict:
         """중복 응답. 휴지통에 있는 논문이면 trashed: true + 안내(SW-8 — 화면이 [되살리기])"""
@@ -660,7 +743,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         frac = used / limit if limit else 1.0
         level = "full" if frac >= FULL_LEVEL else "warn" if frac >= WARN_LEVEL else "ok"
         return {"backend": ctx.storage.backend, "used_bytes": used, "limit_bytes": limit,
-                "mine_bytes": int(ctx.lib.mine_pdf_bytes()), "trash_bytes": int(ctx.lib.trash_bytes()), "level": level}
+                "mine_bytes": int(ctx.lib.mine_pdf_bytes()), "trash_bytes": int(ctx.lib.trash_bytes()), "level": level,
+                "local_bytes": int(ctx.lib.local_bytes())}  # PC에만 둔 파일 크기(참고 — 합계에는 안 들어감)
 
     def sync_budget(ctx: RequestCtx) -> dict:
         """6단계 K-30 동기화 올리기 예산 = max(0, min(R2 한도 95% − 서버 측 합계, 사용자 상한 − 내 PDF 총량(휴지통 포함)))"""
@@ -679,6 +763,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         size = sizes["size"]
         first = 0 if sizes["allocated"] else DB_FIRST_ALLOC
         return {"size_bytes": size, "limit_bytes": limit, "per_paper_bytes": DB_PER_PAPER,
+                "per_local_bytes": DB_PER_LOCAL,  # 선택 동기화: 로컬 항목은 본문 · 색인이 없어 편당 수 KB (6장)
                 "first_alloc_bytes": DB_FIRST_ALLOC, "budget_bytes": max(0, int(limit * DB_LEVEL) - size - first)}
 
     def ensure_space(ctx: RequestCtx) -> None:
@@ -813,14 +898,33 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                        (ctx.uid, SYNC_OPS_DAYS))
             ctx.after_commit.append(lambda: ensure_index(ctx.claims))  # 3단계 10.1절 — 놓친 색인을 이어서
 
-    def route_for(ctx: RequestCtx, kind: str) -> list[dict]:
-        route = jobs.build_route(kind, ctx.settings.get, jobs.device_rows(ctx.lib))
+    def route_for(ctx: RequestCtx, kind: str, paper_id: int | None = None) -> list[dict]:
+        return job_route(ctx, kind, paper_id)[0]
+
+    def job_route(ctx: RequestCtx, kind: str, paper_id: int | None = None) -> tuple[list[dict], int | None]:
+        """(경로, 고정 기기). 로컬 항목(PC에만 둔 파일 — 선택 동기화 7.4절)이면 보관 PC 한 대의 CLI 칸만 · 그 PC에 고정:
+        요약 · 논문 대화만(그 밖은 409 local_only), 보관 PC가 읽지 못하는 형식은 작업을 만들기 전에 400 local_unsupported,
+        보관 PC가 해지됐거나 CLI가 없으면 400 no_route_local. 서버 API 키 · 다른 PC는 쓰지 않는다(P-6)"""
+        loc = ctx.lib.local_info(paper_id) if paper_id is not None else None
+        if not loc or loc["storage"] != "local":
+            route = jobs.build_route(kind, ctx.settings.get, jobs.device_rows(ctx.lib))
+            if not route:
+                raise jobs.JobError(400, guide(), "no_route")
+            return route, None
+        if kind not in jobs.LOCAL_AI_KINDS:
+            raise ApiError(409, "local_only", jobs.LOCAL_ONLY_AI, holder_device_id=loc["local_device_id"],
+                           holder_name=loc["holder_name"] or "")
+        if db_local_ai_state(loc) != "ok":
+            raise jobs.JobError(400, jobs.local_unsupported_message(loc["file_name"] or ""), "local_unsupported")
+        holder = [d for d in jobs.device_rows(ctx.lib) if d["id"] == loc["local_device_id"] and d["revoked_at"] is None]
+        route = jobs.build_route(kind, ctx.settings.get, holder, cli_only=True) if holder else []
         if not route:
-            raise jobs.JobError(400, guide(), "no_route")
-        return route
+            raise jobs.JobError(400, jobs.no_route_local_message(loc["holder_name"] or "", not holder), "no_route_local")
+        return route, loc["local_device_id"]
 
     def new_job(ctx: RequestCtx, kind: str, params: dict, paper_id: int | None) -> tuple[dict, bool]:
-        row, created = jobs.create_job(ctx.lib, kind, route_for(ctx, kind), params, paper_id)
+        route, pinned = job_route(ctx, kind, paper_id)
+        row, created = jobs.create_job(ctx.lib, kind, route, params, paper_id, pinned_device_id=pinned)
         if created:
             log.info(f"job created job={row['id']} kind={kind} runner={row['runner']} engine={row['engine']}")
             if row["runner"] == "api":
@@ -923,8 +1027,95 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     def revoke_device(device_id: int, ctx: RequestCtx = Ctx):
         n = jobs.revoke_device(ctx.lib, device_id)
         ws.free.pop(device_id, None)
-        log.info(f"device revoked device_id={device_id} requeued={n}")
-        return {"ok": True, "requeued_jobs": n}
+        # 선택 동기화: 이 해지로 보관 PC가 없어진 PC에만 둔 파일 수(정보 · 노트는 남음 — 10.5절 해지 확인 문구)
+        orphaned = ctx.lib._one("select count(*)::int as n from paperlab.papers where user_id = %s and storage = 'local' "
+                                "and local_device_id = %s", (ctx.uid, device_id))["n"]
+        log.info(f"device revoked device_id={device_id} requeued={n} local_orphaned={orphaned}")
+        return {"ok": True, "requeued_jobs": n, "local_orphaned": orphaned}
+
+    # ------------------------------------------------------------- 선택 동기화 켜고 끄기 (selective-sync.md 7.2절)
+    def sync_holder(ctx: RequestCtx, plan: dict, want) -> dict | None:
+        """끄기에 쓸 보관 PC: 고른 PC가 있으면 그것(자격 없으면 400), 끄기 대상이 있으면 하나뿐일 때 자동 · 없으면
+        no_sync_pc · 여럿이면 holder_required. 끄기 대상이 없으면 None.
+        끄는 중인데 고른 보관 PC가 이제 자격이 없는 항목(해지 · 동기화 끔 — 12장 [다른 PC 고르기])도 끄기 대상으로 본다:
+        PC를 고르지 않으면 그대로 두는 대신 holder_required · no_sync_pc로 고르게 한다"""
+        eligible = ctx.lib.holders()
+        ok_ids = {h["id"] for h in eligible}
+        need = any(it["action"] == "to_local" or (it["action"] == "holder" and it["cur_holder"] not in ok_ids)
+                   for it in plan["items"])
+        if want is not None:
+            if not jobs.valid_id(want):
+                raise ApiError(400, "holder_not_eligible", HOLDER_NOT_ELIGIBLE)
+            found = next((h for h in eligible if h["id"] == want), None)
+            if not found:
+                raise ApiError(400, "holder_not_eligible", HOLDER_NOT_ELIGIBLE)
+            return found
+        if not need:
+            return None
+        if not eligible:
+            raise ApiError(400, "no_sync_pc", NO_SYNC_PC)
+        if len(eligible) > 1:
+            raise ApiError(400, "holder_required", HOLDER_REQUIRED,
+                           choices=[{"id": h["id"], "name": h["name"], "online": bool(h["online"])} for h in eligible])
+        return eligible[0]
+
+    def sync_mode_reply(ctx: RequestCtx, plan: dict, holder: dict | None, dry_run: bool) -> dict:
+        items = plan["items"]
+        hid = holder["id"] if holder else None
+        count = {a: 0 for a in ("to_local", "to_cloud", "cancelled", "unchanged", "no_file")}
+        freed = 0
+        for it in items:
+            a = it["action"]
+            if a == "holder":  # 끄는 중인 것: 다른 PC를 골랐으면 보관 PC를 바꿈(to_local), 아니면 그대로
+                a = "to_local" if hid is not None and it["cur_holder"] != hid else "unchanged"
+            elif a == "cancel":
+                a = "cancelled"
+            count[a] += 1
+            if it["action"] == "to_local":
+                freed += it["bytes"]
+        moving = count["to_local"]
+        other = []
+        if moving:  # 끄면 사본이 Windows 휴지통으로 갈 다른 PC (동기화를 켠 해지 안 된 PC — D-4)
+            other = [{"id": r["id"], "name": r["name"], "files": moving} for r in ctx.lib._all(
+                "select d.id, d.name from paperlab.devices d join paperlab.sync_devices s on s.device_id = d.id "
+                "and s.user_id = d.user_id where d.user_id = %s and d.revoked_at is null and s.enabled "
+                "and d.id is distinct from %s order by d.id", (ctx.uid, hid))]
+        return {"dry_run": dry_run, **count, "freed_bytes": freed,
+                "holder": {"id": holder["id"], "name": holder["name"]} if holder else None,
+                "other_pcs": other, "blocked": plan["blocked"], "overrides": plan["overrides"]}
+
+    def sync_mode_change(ctx: RequestCtx, data: dict, ids=None, folder=None) -> dict:
+        mode = data.get("mode")
+        if not isinstance(mode, str) or mode not in SYNC_MODES:
+            raise ApiError(400, "bad_mode", "mode는 cloud · local · inherit 중 하나예요")
+        dry_run = data.get("dry_run") is True
+        plan = ctx.lib.sync_mode_plan(mode, ids=ids, folder=folder, reset_children=data.get("reset_children") is True)
+        holder = sync_holder(ctx, plan, data.get("holder_device_id"))
+        out = sync_mode_reply(ctx, plan, holder, dry_run)
+        if not dry_run:  # 대기만 쓴다 — R2 · 본문 삭제는 보관 PC의 mode.ack 때 (5.3절)
+            ctx.lib.apply_sync_mode(plan, mode, ids=ids, folder=folder, holder=holder["id"] if holder else None)
+            log.info(f"sync mode set target={'folder' if folder is not None else 'papers'} mode={mode} "
+                     f"to_local={out['to_local']} to_cloud={out['to_cloud']} cancelled={out['cancelled']}")
+        return out
+
+    @app.post("/api/papers/sync-mode")
+    def papers_sync_mode(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 200 or not all(jobs.valid_id(i) for i in ids):
+            raise ApiError(400, "bad_request", "ids는 논문 번호 1~200개예요")
+        return sync_mode_change(ctx, data, ids=ids)
+
+    @app.post("/api/folders/{fid}/sync-mode")
+    def folder_sync_mode(fid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
+        if not jobs.valid_id(fid) or not ctx.lib.has_folder(fid):
+            raise HTTPException(404, "폴더를 찾을 수 없어요")
+        return sync_mode_change(ctx, data, folder=fid)
+
+    @app.get("/api/sync/holders")
+    def sync_holders(ctx: RequestCtx = Ctx):
+        return {"holders": [{"id": h["id"], "name": h["name"], "online": bool(h["online"]),
+                             "last_seen_at": iso(h["last_seen_at"]), "this_device": False}
+                            for h in ctx.lib.holders()]}
 
     # -------------------------------------------------------------- papers
     @app.get("/api/papers")
@@ -1091,17 +1282,21 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if folder_id and not lib.has_folder(folder_id):
             folder_id = None
         # PC 파일 이름 겹침 경합(23505)은 저장점에서 한 번 더, 그래도 겹치면 409 (QA D3)
-        return ctx.retry_names(lambda: save_upload(ctx, name, incoming, raw, info, meta_, matched_by, collection_id,
-                                                   folder_id, source))
+        out = ctx.retry_names(lambda: save_upload(ctx, name, incoming, raw, info, meta_, matched_by, collection_id,
+                                                  folder_id, source))
+        if folder_id and lib.folder_effective(folder_id) == "local":
+            # 선택 동기화 5.4절: 웹 업로드는 언제나 서버에 저장 — 'PC에만' 폴더면 화면이 토스트로 알림 · [PC에만 두기…]
+            out["note_local_folder"] = True
+        return out
 
     def save_upload(ctx: RequestCtx, name: str, incoming: str, raw: bytes, info, meta_: dict, matched_by: str,
                     collection_id: int | None, folder_id: int | None, source: dict | None = None) -> dict:
         lib = ctx.lib
         # 문서(제목 = 파일 이름)는 제목으로 같은 항목을 찾지 않는다 — "초안.docx"가 둘이어도 다른 문서 (DOI · arXiv만)
         dup_title = "" if meta_.get("item_type") == "document" else meta_.get("title", "")
-        # PDF를 그대로 올렸으면 같은 파일(해시)도 중복 — 정보를 못 찾아 '문서'가 된 PDF를 두 번 올려도 하나만 남게.
-        # 문서 · 이미지의 변환본은 변환할 때마다 바이트가 달라 해시로 보지 않는다
-        sha = "" if source else hashlib.sha256(raw).hexdigest()
+        # 같은 파일(해시)도 중복 — 정보를 못 찾아 '문서'가 된 PDF를 두 번 올려도 하나만 남게. 문서 · 이미지는 변환본이 아니라
+        # 원본 해시로 본다(변환할 때마다 바이트가 다름 — 원본 해시는 PC 표현 해시, 선택 동기화 5.5절 · PC에만 둔 파일도 짝지어짐)
+        sha = source["sha256"] if source else hashlib.sha256(raw).hexdigest()
         dup = lib.find_duplicate(meta_.get("doi", ""), meta_.get("arxiv_id", ""), dup_title, include_trash=True,
                                  sha256=sha)
         if dup and dup.get("trashed"):  # 6단계 K-40: 휴지통에 같은 논문 — 새로 만들지 않고 [되살리기] 안내 (SW-8)
@@ -1109,7 +1304,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             return {"file": name, "id": dup["id"], "title": dup["title"], "duplicate": True, "trashed": True,
                     "note": TRASHED_DUP}
         if dup:
-            if not dup["has_pdf"]:
+            if not dup["has_pdf"] and dup["sync"]["storage"] == "cloud":  # PC에만 둔 항목에는 붙이지 않음(D-3 — 중복으로)
                 attach_from_incoming(ctx, dup["id"], incoming, raw, info, name=name, source=source)
                 result = {"file": name, "id": dup["id"], "title": dup["title"], "matched_by": matched_by,
                           "note": "이미 있는 항목에 파일을 붙였어요"}
@@ -1203,6 +1398,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         info = ctx.lib.pdf_info(pid)
         if not info:
             raise HTTPException(404, "논문을 찾을 수 없어요")
+        need_cloud_file(ctx, pid)  # PC에만 둔 파일은 409 local_only (선택 동기화 7.2절)
         if not info["pdf_key"]:
             raise HTTPException(404, "PDF가 없어요")
         signed = ctx.storage.sign_get(info["pdf_key"], filename=info["title"])
@@ -1215,6 +1411,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                            (pid, ctx.uid))
         if not row:
             raise HTTPException(404, "논문을 찾을 수 없어요")
+        need_cloud_file(ctx, pid)  # PC에만 둔 파일은 409 local_only (선택 동기화 7.2절)
         if not row["source_key"]:
             raise HTTPException(404, "원본 파일이 없어요")
         signed = ctx.storage.sign_get(row["source_key"], filename=row["source_name"] or "document")
@@ -1224,12 +1421,19 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     def pdf_upload_slot(pid: int, ctx: RequestCtx = Ctx):
         system_sizes(ctx)  # 사용자 트랜잭션을 열기 전에 (QA D7)
         need_paper(ctx, pid)
+        need_cloud_file(ctx, pid, change=True)  # 보관 PC가 활성인 로컬 항목은 409 (해지됐으면 붙이면서 켬)
         ensure_space(ctx)
         return upload_slot(ctx)
 
     @app.post("/api/papers/{pid}/pdf/complete")
     def pdf_complete(pid: int, data: dict = Body(...), ctx: RequestCtx = Ctx):
         need_paper(ctx, pid)
+        try:
+            need_cloud_file(ctx, pid, change=True)
+        except ApiError:
+            if is_upload_id(str(data.get("upload_id") or "")):  # 올린 임시 파일은 남기지 않는다
+                ctx.storage.delete_quietly(ctx.storage.incoming_key(str(data["upload_id"])))
+            raise
         ctx.release()  # R2 받기 · 추출 동안 DB 연결을 잡지 않는다 (F9)
         name = str(data.get("name") or "")[:255]
         incoming, raw, error = read_incoming(ctx, str(data.get("upload_id") or ""), name)
@@ -1251,6 +1455,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         """5단계 8.3절 순서: 서재 pdf_url(arXiv · OpenAlex 위치 라이선스 · 경계 ①) → arXiv 번호 → DOI(캐시 → OpenAlex) 판정.
         라이선스가 확인된 것만 서버가 받고(U-3), 그 밖은 새 탭 주소를 돌려준다(200). 클라이언트가 보낸 주소는 쓰지 않음(K-11)"""
         p = need_paper(ctx, pid)
+        need_cloud_file(ctx, pid, change=True)  # 선택 동기화: 보관 PC가 활성인 로컬 항목은 409 local_only
         doi = safe_doi(p.get("doi"))
         cached = oa_cached(ctx, doi)
         sources = ctx.sources
@@ -2046,7 +2251,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         (drain), 화면은 작업 목록 · 끝남 알림으로 결과를 다시 연다 (2026-10-16 제품 책임자 결정, 품질팀 H1의 '끊기면 취소'를 바꿈).
         취소는 [취소](POST /api/jobs/{id}/cancel)로만. AI 호출은 별도 스레드가 돌리고, 이 비동기 생성기는 0.05초마다 끊김을
         확인한다 — 한 번에 응답이 오는 OpenAI · Google 경로도 기다리는 동안 끊김을 본다. 가비지 수집에 기대지 않는다."""
-        row, _ = jobs.create_job(ctx.lib, kind, route_for(ctx, kind), params, paper_id, running_api=True)
+        route, pinned = job_route(ctx, kind, paper_id)  # 로컬 항목이면 보관 PC CLI 칸만 → 아래 queued (선택 동기화 7.4절)
+        row, _ = jobs.create_job(ctx.lib, kind, route, params, paper_id, running_api=True, pinned_device_id=pinned)
         job_id, uid, claims, engine = row["id"], ctx.uid, ctx.claims, row["engine"]
         model = ctx.ai.model_name(engine) if kind in jobs.EXPLAIN_KINDS else engine
         log.info(f"job created job={job_id} kind={kind} runner={row['runner']} engine={engine}")
@@ -2287,6 +2493,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     def explain_selection(pid: int, request: Request, data: dict = Body(...), ctx: RequestCtx = Ctx):
         """선택 설명 · 번역(SSE). 같은 (논문, 종류, 언어, 글)이 저장돼 있으면 작업 없이 done 하나(K-4). 글은 본문으로만"""
         need_paper(ctx, pid)
+        no_local_ai(ctx, pid)  # 선택 동기화 D-13: PC에만 둔 파일은 409 local_only
         try:
             req = explain.clean_request(data)
         except ValueError as e:
@@ -2362,6 +2569,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         return JSONResponse({"job": view}, status_code=202 if created else 200)
 
     def tr_continue(ctx: RequestCtx, pid: int, pages, include_refs: bool) -> JSONResponse:
+        no_local_ai(ctx, pid)  # 선택 동기화 D-13 (다시 시도 · 이어서 모두)
         row = translate.row_for(ctx.lib, pid, lock=True)
         if not row:
             raise HTTPException(404, TR_NONE)
@@ -2421,6 +2629,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     def translation_start(pid: int, data: dict = Body(default={}), ctx: RequestCtx = Ctx):
         """전체 번역 시작 (6.3절 1번) → 202 {job}, 진행 중이면 200 {job}, 다른 언어 번역이 있으면 409(replace로 교체)"""
         need_paper(ctx, pid)
+        no_local_ai(ctx, pid)  # 선택 동기화 D-13: 번역 결과 파일은 R2에 저장되므로 PC에만 둔 파일은 409
         maintain(ctx)
         lang = data.get("lang") or ctx.settings.get("translate_language")
         if lang not in translate.LANGS:
@@ -2517,13 +2726,22 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             raise HTTPException(400, "범위를 찾을 수 없어요")
         return stype, sid, row["name"]
 
+    def excluded_local(ctx: RequestCtx, rows: list[dict]) -> int:
+        """범위 안의 PC에만 둔 편수 — 서재 질문 · 본문 검색에서 빠짐(색인 · 본문이 없음, 선택 동기화 7.2절)"""
+        ids = [r["id"] for r in rows if not r["has_pdf"]]
+        if not ids:
+            return 0
+        return ctx.lib._one("select count(*)::int as n from paperlab.papers where user_id = %s and id = any(%s) "
+                            "and storage = 'local'", (ctx.uid, ids))["n"]
+
     def index_status(ctx: RequestCtx, rows: list[dict]) -> dict:
         done = set(rg.done_versions)
         with_pdf = [r for r in rows if r["has_pdf"]]
         no_text = sum(1 for r in with_pdf if r["rag_version"] in done and not r["rag_key"])
         return {"papers": len(rows), "with_pdf": len(with_pdf), "indexed": len(rag.searchable(rows)), "no_text": no_text,
                 "pending": sum(1 for r in with_pdf if r["rag_version"] not in done),
-                "embed": rg.embedder is not None, "loaded": rg.loaded(ctx.uid, rows)}
+                "embed": rg.embedder is not None, "loaded": rg.loaded(ctx.uid, rows),
+                "excluded_local": excluded_local(ctx, rows)}
 
     @app.get("/api/ask")
     def ask_get(scope: str = "library", ctx: RequestCtx = Ctx):
@@ -2559,6 +2777,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         if not rag.searchable(rows):
             raise HTTPException(400, ASK_EMPTY)
         lang = ctx.settings.get("summary_language") or "한국어"
+        n_local = excluded_local(ctx, rows)  # PC에만 둔 편수 — 화면 "이 PC에만 있는 n편은 빠졌어요" (선택 동기화 7.2절)
         ctx.release()  # 범위 행 · 키는 RLS로 읽었음 — R2 로드 · 임베딩 동안 DB 연결을 잡지 않는다 (품질팀 M2)
         try:
             sources = rg.sources_for(user_tx(ctx), ctx.uid, rows, question)
@@ -2568,9 +2787,22 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
         def run(engine: str):
             system, prompt = rag.ask_request(ctx.lib, params, ctx.lib.scope_history(stype, sid), lang)
-            return rag.with_citations(ctx.ai.complete(system, prompt, engine), sources)
+            return with_excluded(rag.with_citations(ctx.ai.complete(system, prompt, engine), sources))
 
-        return stream_job(ctx, request, "chat", params, None, run)
+        def with_excluded(events):
+            try:
+                for ev in events:
+                    if ev.get("type") == "done":
+                        ev = {**ev, "excluded_local": n_local}
+                    yield ev
+            finally:
+                close = getattr(events, "close", None)
+                if close:
+                    close()  # 끊김 · 취소 때 회사 API 스트림도 닫히게 (_done_only와 같음)
+
+        resp = stream_job(ctx, request, "chat", params, None, run)
+        resp.headers["X-PaperLab-Excluded-Local"] = str(n_local)  # CLI(queued) 경로도 화면이 알 수 있게
+        return resp
 
     @app.post("/api/find")
     def find_start(data: dict = Body(...), ctx: RequestCtx = Ctx):
@@ -3051,7 +3283,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         attach_from_incoming=attach_from_incoming, pdf_changed=pdf_changed, metadata_from_pdf=metadata_from_pdf,
         sync_budget=sync_budget, db_budget=db_budget, system_sizes=system_sizes, ensure_index=ensure_index,
         allowlist=allowlist, ws=ws,
-        trash_papers=trash_papers))
+        trash_papers=trash_papers,
+        # 선택 동기화 v2 (selective-sync.md 7.1절): 원본 변환(웹 업로드와 같은 경로) · 끄기 실행
+        prepare_upload=prepare_upload, BadPdf=BadPdf, demote_paper=demote_paper))
 
     # -------------------------------------------------------------- static
     @app.get("/")

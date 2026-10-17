@@ -14,6 +14,10 @@ import { substituteText } from "./sourcemeta.js";
 import { LIB_KINDS_TEXT, isLibFile, isPdfFile } from "./filetypes.js";
 import { actions, refreshAll, refreshUsage, state } from "./state.js";
 import { restoreFromTrash } from "./trash.js";
+import {
+  BACKUP_HELP, NO_SYNC_PC_TEXT, OLD_PROTOCOL_TEXT, childrenLabel, chunkIds, confirmText, customChildFolders, defaultHolder, deviceLocalText, doneToast,
+  folderEffective, holderOption, mergeReplies, moveMismatch, needsOriginalsCount, requestToast, revokeLocalText, uploadLocalFolderText, uploadSource,
+} from "./syncmode.js";
 
 const ICON_ALERT = `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7.5v5.5M12 16.5v.01"/></svg>`;
 const FOLDER_PATH = "M3.5 6.5A1.5 1.5 0 0 1 5 5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3A1.5 1.5 0 0 1 19 19.5H5A1.5 1.5 0 0 1 3.5 18z";
@@ -122,12 +126,16 @@ export function syncWebLine(d) {
   if (!s || d.revoked) return null;
   const c = s.counts || {};
   const last = s.last_sync_at ? `마지막 동기화 ${fmtAgo(s.last_sync_at)}` : "";
-  const tail = c.problems > 0 ? ` · 맞추지 못한 파일 ${c.problems}개` : "";
+  // 선택 동기화 10.7절: 이 PC가 보관하는 로컬 항목 수 · 크기 (켜짐 줄 끝)
+  const local = deviceLocalText(d);
+  const tail = (c.problems > 0 ? ` · 맞추지 못한 파일 ${c.problems}개` : "") + (local ? ` · ${local}` : "");
   if (!s.enabled || s.state === "off") return { text: "꺼짐 — 이 PC에서 동기화 폴더를 고르지 않았어요", tone: "" };
   if (!d.online) return { text: `${last || "마지막 동기화 기록 없음"} (PC 꺼짐)`, tone: "" };
   const warn = (t) => ({ text: t + tail, tone: "warn" });
   const plain = (t) => ({ text: t + tail, tone: "" });
   const join = (...xs) => xs.filter(Boolean).join(" · ");
+  // 프로토콜 1(0.3.x 앱)은 새 서버에 막혀(426) 상태도 못 보냄 — 마지막 상태(대개 idle)가 남아 있어도 멈춤으로 (선택 동기화 D-7 · 10.7절)
+  if (Number(s.protocol) === 1) return warn(OLD_PROTOCOL_TEXT);
   switch (s.state) {
     case "idle": return plain(join("✓ 최신", last, s.root_label ? `‘${s.root_label}’ 폴더` : "", c.files != null ? `파일 ${c.files}개` : ""));
     case "scanning": case "syncing":
@@ -140,7 +148,8 @@ export function syncWebLine(d) {
     case "storage_full":
       return warn(c.reason === "sync_quota" ? "! 올리기 멈춤 — 이 PC의 올리기 한도에 닿았어요"
         : c.reason === "db" ? "! 올리기 멈춤 — 서재 데이터베이스 공간이 모자라요" : "! 올리기 멈춤 — 서재 저장 공간이 모자라요");
-    case "update_required": return warn("! 멈춤 — 앱 업데이트가 필요해요");
+    // 프로토콜 1(0.3.x 앱)이 새 서버에 막힘(426) — 0.4.0이 필요한 까닭까지 (선택 동기화 D-7)
+    case "update_required": return warn(Number(s.protocol) === 1 ? OLD_PROTOCOL_TEXT : "! 멈춤 — 앱 업데이트가 필요해요");
     case "account_mismatch": return warn("! 멈춤 — 다른 계정의 폴더예요");
     default: return null;
   }
@@ -310,6 +319,9 @@ export async function settingsDialog({ focus = "" } = {}) {
     <ul class="item-list" data-device-list aria-labelledby="set-pc-title"></ul>
     <div class="row" data-pc-actions style="margin-bottom:6px"></div>
     <div class="field"><div class="hint">PC를 더 이상 쓰지 않으면 여기서 해지해 주세요. 앱을 지워도 연결은 남아 있어요.</div></div>
+    <details class="sync-help" data-sync-help><summary>PC에만 두기란?</summary>
+      <p class="hint">폴더 동기화를 켠 PC에서는 폴더 · 파일마다 ‘PC에만 두기’를 고를 수 있어요(서재의 폴더 · 파일 메뉴). 파일은 그 PC에만 두고, 서버에는 제목 · 저자 · 노트 · 하이라이트 · 태그 같은 정보만 저장해요. 본문 검색 · 서재 질문 · 선택 설명 · 번역에서는 빠지고, AI 요약 · 질문은 그 PC의 AI(CLI)로만 돼요.</p>
+      <p class="hint is-strong">${esc(BACKUP_HELP)}</p></details>
 
     <div class="section-title">인용</div>
     <div class="grid-2">
@@ -650,11 +662,14 @@ function pcSection(body, getDevices, setDevices) {
         try { await api.patch(`/api/devices/${d.id}`, { name: name.trim() }); toast("이름을 바꿨어요", "success"); reload(); } catch (e) { errorToast(e); }
       };
       $("[data-device-revoke]", card).onclick = async () => {
-        if (!(await confirmDialog("이 PC는 더 이상 작업을 받지 않아요. 실행 중인 작업은 다른 PC로 넘어가요.",
+        // 선택 동기화 10.5절: 이 PC에만 있는 파일이 있으면 한 줄 더 (해지하면 서재에서 열 수 없음)
+        const localLine = revokeLocalText(d);
+        if (!(await confirmDialog(`이 PC는 더 이상 작업을 받지 않아요. 실행 중인 작업은 다른 PC로 넘어가요.${localLine ? ` ${localLine}` : ""}`,
           { title: `‘${d.name}’ 연결을 해지할까요?`, ok: "해지", danger: true }))) return;
         try {
           const r = await api.del(`/api/devices/${d.id}`);
-          toast(`연결을 해지했어요${r.requeued_jobs ? ` · 실행 중이던 작업 ${r.requeued_jobs}개를 다시 대기시켰어요` : ""}`, "success");
+          toast(`연결을 해지했어요${r.requeued_jobs ? ` · 실행 중이던 작업 ${r.requeued_jobs}개를 다시 대기시켰어요` : ""}${r.local_orphaned
+            ? ` · 이 PC에만 있던 파일 ${r.local_orphaned}개는 이제 열 수 없어요(정보 · 노트는 남아요)` : ""}`, "success", r.local_orphaned ? { duration: 8000 } : {});
           reload();
         } catch (e) { errorToast(e); }
       };
@@ -1058,6 +1073,7 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
   const m = modal({ title, body, foot, onClose: () => { closed = true; } });
 
   const items = files.map((file) => ({ file, state: "waiting", pct: 0, msg: "", title: "", warnings: [], retry: false }));
+  const localNoted = []; // 끔(PC에만) 폴더에 웹으로 올린 항목 — 서버에 저장했다고 알림 (선택 동기화 5.4절)
   let active = 0;
   let announced = false;
   let blocked = false;
@@ -1160,6 +1176,7 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
         it.id = r.id;
         it.title = r.title || "";
         it.state = r.duplicate ? "duplicate" : "done";
+        if (r.note_local_folder && r.id && !r.duplicate) localNoted.push({ id: r.id, name: it.file.name });
         if (r.trashed) trashedDuplicate({ id: r.id, title: r.title });
         it.msg = r.duplicate ? `${r.file || it.file.name} · ${r.note || "이미 서재에 있어요"}`
           : `${r.file || it.file.name} · ${r.note || `정보 출처: ${r.matched_by}`}`;
@@ -1261,6 +1278,14 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
     const first = items.find((it) => it.id);
     if (first && !attachTo) state.activeId = first.id;
     if (added || n("duplicate")) { refreshAll(); refreshUsage(); }
+    if (localNoted.length) {
+      const f = state.folders.find((x) => x.id === into.folder_id);
+      const ids = localNoted.map((x) => x.id);
+      const oneName = localNoted[0].name;
+      localNoted.length = 0; // [다시 시도] 뒤에 같은 알림을 또 띄우지 않게
+      toast(uploadLocalFolderText(f && f.name), "", { duration: 12000, action: { label: "PC에만 두기…", onClick: () => syncModeDialog({
+        ids, mode: "inherit", target: ids.length === 1 ? { type: "file", name: oneName } : { type: "files", count: ids.length } }) } });
+    }
     // 창을 닫은 뒤에 끝났으면 토스트로 알린다
     if (closed && (added || failed)) {
       if (attachTo) toast(added ? (replace ? "파일을 바꿨어요" : "파일을 붙였어요") : (replace ? "파일을 바꾸지 못했어요" : "파일을 붙이지 못했어요"), added ? "success" : "error");
@@ -1269,6 +1294,237 @@ export async function uploadPdfs(files, { attachTo = null, replace = false } = {
   }
 
   pump();
+}
+
+// ------------------------------------------------ 선택 동기화: 켜고 끄기 (docs/specs/selective-sync.md 10.3 ~ 10.5절)
+// 웹은 요청만 보내고(대기), 파일을 가진 PC가 동기화 피드로 실행한다(P-8). 문구 · 결정은 syncmode.js(순수 함수)
+let infoCache = null; // {at, info} — 앱 창 info()는 비동기라 잠깐(30초) 기억
+
+// 화면이 쓰는 ctx (syncmode.js 머리말): 앱 창이면 이 PC 기기 id · 다리(localFile) 유무, 폴더 동기화를 켠 PC가 있는지
+export async function syncCtx({ fresh = false } = {}) {
+  const dk = desktop();
+  let info = null;
+  if (dk) {
+    if (!fresh && infoCache && Date.now() - infoCache.at < 30000) info = infoCache.info;
+    else {
+      try { info = await dk.info(); } catch { info = null; }
+      infoCache = { at: Date.now(), info };
+    }
+  }
+  return {
+    desktop: info, deviceId: info && info.paired && info.deviceId != null ? Number(info.deviceId) : null,
+    bridge: !!(dk && typeof dk.localFile === "function"), syncOn: !!(state.stats && state.stats.sync_on), has: null,
+  };
+}
+
+// 끄기를 요청한 뒤 대기가 모두 사라지면(다음 새로 고침의 /api/stats mode_pending = 0) "…에만 두었어요" 토스트 한 번
+let modeWait = null; // {count, holder, bytes}
+export function checkModeDone(stats) {
+  if (!modeWait || !stats || typeof stats.mode_pending !== "number" || stats.mode_pending > 0) return;
+  const w = modeWait;
+  modeWait = null;
+  toast(doneToast(w), "success", { duration: 8000 });
+}
+
+// 끌 때 고를 수 있는 PC (해지 안 됨 · 동기화 켬 · 프로토콜 2 — 7.2절)
+async function loadHolders(choices) {
+  try {
+    const r = await api.get("/api/sync/holders");
+    if (r && Array.isArray(r.holders)) return r.holders;
+  } catch { /* 아래 */ }
+  return (choices || []).map((c) => ({ id: c.id, name: c.name, online: false, last_seen_at: null }));
+}
+
+// 켜고 끄기 요청 하나: ids(논문 여러 편) 또는 folder({id, name, …}), mode = "cloud" | "local" | "inherit".
+// target = {type: "folder" | "file" | "files", name, count} — 확인 창 제목. dry_run 숫자로 확인 창을 띄우고, [확인]이면 실제 요청.
+// 바뀌는 파일이 없으면(대기 취소 · 설정만) 창 없이 바로. 요청을 보냈으면 true.
+// repick = [다른 PC 고르기](끄는 중 보관 PC 해지 — 12장): 보관 PC를 먼저 고르게 하고(라디오 언제나), 창을 건너뛰지 않음
+export async function syncModeDialog({ ids = null, folder = null, mode, target, repick = false }) {
+  const ctx = await syncCtx();
+  const url = folder ? `/api/folders/${folder.id}/sync-mode` : "/api/papers/sync-mode";
+  // PC 앱 창에서 끄면 이 PC가 기본 (D-10) — 이 PC가 동기화를 켰고 새 방식(프로토콜 2)일 때만
+  const info = ctx.desktop;
+  const here = info && ctx.deviceId != null && info.syncOn !== false && (info.syncProtocol == null || info.syncProtocol >= 2) ? ctx.deviceId : null;
+  let holder = mode === "cloud" ? null : here;
+  let holders = null; // 보관 PC 라디오 (서버가 고르라고 할 때 · 앱 창에서 끌 때 둘 이상 · 다시 고르기)
+  let reset = false;
+  // 켜기의 올릴 PC 이름 · 크기 — 서버 응답에는 보관 PC가 없어서 화면이 가진 논문으로 (10.5절)
+  const from = ids ? uploadSource((state.papers || []).filter((x) => ids.includes(x.id))) : { fromName: "", fromBytes: 0, fromCount: 0 };
+  // 논문 요청은 200편씩 나눠 보내고 숫자를 합친다 (서버 한도)
+  const send = async (dry) => {
+    const extra = { mode, ...(holder != null ? { holder_device_id: holder } : {}), dry_run: dry };
+    if (folder) return api.post(url, { ...extra, reset_children: reset });
+    const parts = chunkIds(ids);
+    if (parts.length === 1) return api.post(url, { ids, ...extra });
+    const out = [];
+    for (const part of parts) out.push(await api.post(url, { ids: part, ...extra }));
+    return mergeReplies(out);
+  };
+  if (repick) {
+    // 해지된 PC 대신 둘 PC: 서버는 보관 PC를 보내지 않으면 "그대로"로 셈 — 먼저 목록을 받아 고르게 한다
+    holders = await loadHolders();
+    if (!holders.length) { toast(NO_SYNC_PC_TEXT, "", { duration: 10000 }); return false; }
+    holder = defaultHolder(holders, here);
+  }
+
+  // dry_run: 보관 PC를 골라야 하면 라디오 목록을 받고 기본값(이 PC)으로 다시. 고를 PC가 정해지지 않으면 null(라디오에서 고름)
+  const preview = async () => {
+    for (let i = 0; i < 3; i++) {
+      try { return await send(true); } catch (e) {
+        if (e.code === "holder_not_eligible" && holder === here && here != null && !holders) { holder = null; continue; }
+        if (e.code === "holder_required") {
+          holders = await loadHolders(e.body && e.body.choices);
+          holder = holders.some((h) => Number(h.id) === here) ? here : null;
+          if (holder == null) return null;
+          continue;
+        }
+        throw e;
+      }
+    }
+    return null;
+  };
+  let p;
+  try { p = repick && holder == null ? null : await preview(); } catch (e) {
+    if (e.code === "no_sync_pc") toast(e.message, "", { duration: 10000 }); // 창 대신 안내 (7.2절 문구)
+    else errorToast(e);
+    return false;
+  }
+  // PC 앱 창에서 끄면 이 PC를 미리 골라 보냈음 — 동기화 PC가 둘 이상이면 라디오로 다른 PC도 고를 수 있게 (10.5절)
+  if (!holders && holder != null && holder === here && p && p.to_local > 0) {
+    const list = await loadHolders();
+    if (list.length >= 2 && list.some((h) => Number(h.id) === here)) holders = list;
+  }
+  // 하위 항목 체크 상자: 안에서 따로 정한 폴더 · 논문 수(서버 dry_run overrides — 처음 reset_children=false 때). 옛 응답이면 화면이 아는 폴더만
+  const children = !folder ? 0 : p && typeof p.overrides === "number" ? p.overrides : customChildFolders(folder.id, state.folders);
+  const picked = () => (holders || []).find((h) => Number(h.id) === Number(holder)) || null;
+  // 폴더를 "위 폴더 설정 따르기"로 바꾸면 위 폴더의 실효 모드가 됨 (옮길 파일이 없을 때의 문구)
+  const inheritEffective = folder && mode === "inherit" ? folderEffective(folder.parent_id ?? null, state.folders) : null;
+  const textCtx = () => ({ ...ctx, ...from, target, mode, inheritEffective, holderName: picked() ? picked().name : "" });
+  const apply = async () => {
+    let r;
+    try { r = await send(false); } catch (e) {
+      if (e.code === "no_sync_pc") toast(e.message, "", { duration: 10000 });
+      else errorToast(e);
+      return false;
+    }
+    const name = (picked() && picked().name) || (r.holder && r.holder.name) || "";
+    const held = needsOriginalsCount(r) > 0; // 원본 정리 전이라 막힌 문서 줄이 붙으면 성공색이 아님 · 더 오래
+    toast(requestToast(r, { holderName: name, fromName: from.fromName }), r.to_local > 0 || r.to_cloud > 0 || held ? "" : "success",
+      { duration: held ? 12000 : 8000 });
+    if (r.to_local > 0) {
+      modeWait = { count: (modeWait ? modeWait.count : 0) + r.to_local, holder: name || (modeWait && modeWait.holder) || "",
+        bytes: (modeWait ? modeWait.bytes : 0) + (r.freed_bytes || 0) };
+    }
+    refreshAll();
+    return true;
+  };
+  // 옮길 파일이 없으면 창 없이 (폴더를 끌 때는 앞으로 넣을 파일 때문에 경고를 보이려고 언제나 창,
+  // 안에 따로 정한 항목이 있으면 체크 상자를 보이려고 창, 다시 고르기는 언제나 창,
+  // 원본 정리 전이라 막힌 문서(needs_originals)가 있으면 그 안내를 보이려고 창)
+  if (p && !repick && !holders && !(p.to_local > 0) && !(p.to_cloud > 0) && !(folder && mode !== "cloud") && !children
+    && !needsOriginalsCount(p)) return apply();
+
+  return new Promise((resolve) => {
+    let done = false;
+    const body = el(`<div class="sync-confirm" data-sync-confirm>
+      <p class="sync-lead" data-sync-lead></p>
+      <fieldset class="sync-holders hidden" data-sync-holders><legend>어느 PC에 둘까요?</legend><div data-sync-holder-list></div></fieldset>
+      <ul class="sync-bullets" data-sync-bullets></ul>
+      <div class="notice hidden" data-tone="warn" data-sync-warn>${ICON_WARN}<div><b data-sync-warn-text></b></div></div>
+      <p class="small muted hidden" data-sync-note></p>
+      ${folder && children > 0 ? `<label class="check sync-children"><input type="checkbox" data-sync-children> <span>${esc(childrenLabel(children))}</span></label>` : ""}
+      <div class="status-line hidden" data-sync-busy role="status"><span class="spinner" aria-hidden="true"></span> 바뀌는 파일 수를 세는 중…</div>
+    </div>`);
+    const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn primary" data-yes></button></div>`);
+    const m = modal({ title: confirmText(p || { to_local: 1 }, textCtx()).title, body, foot, onClose: () => resolve(done) });
+    $(".modal", m.el).classList.add("sync-modal");
+    const yes = $("[data-yes]", foot);
+    const draw = () => {
+      const pick = !!holders && holder == null;
+      // PC를 고르기 전에는 숫자가 없음 — 끄기 창 제목 · 경고만 (라디오에서 고르면 dry_run 숫자로 다시 그림)
+      const t = confirmText(pick ? { to_local: 1 } : p, textCtx());
+      $(".modal-head h3", m.el).textContent = t.title;
+      $("[data-sync-lead]", body).textContent = pick ? "파일을 둘 PC를 골라 주세요. 고르면 서버에서 지울 파일 수를 보여 드려요." : t.lead;
+      $("[data-sync-bullets]", body).innerHTML = pick ? "" : t.bullets.map((b) => `<li>${esc(b)}</li>`).join("");
+      // Q-5 경고 문단: 끄기 창이면 언제나 (PC를 고르기 전에도)
+      $("[data-sync-warn]", body).classList.toggle("hidden", !t.warn);
+      $("[data-sync-warn-text]", body).textContent = t.warn;
+      const note = $("[data-sync-note]", body);
+      note.textContent = pick ? "" : t.note;
+      note.classList.toggle("hidden", pick || !t.note);
+      yes.textContent = pick ? "PC에만 두기" : t.ok;
+      yes.disabled = pick || !p;
+      // 모두 원본 정리 전이라 막힘(dir "blocked"): 바꿀 것이 없음 — [확인] 없이 [닫기]만
+      const stop = !pick && t.dir === "blocked";
+      yes.classList.toggle("hidden", stop);
+      $("[data-no]", foot).textContent = stop ? "닫기" : "취소";
+    };
+    const drawHolders = () => {
+      const box = $("[data-sync-holders]", body);
+      box.classList.toggle("hidden", !holders || (holders.length < 2 && !repick)); // 다시 고르기는 하나여도 어느 PC인지 보임
+      if (!holders) return;
+      $("[data-sync-holder-list]", body).innerHTML = holders.map((h) => {
+        const line = holderOption({ ...h, this_device: h.this_device || Number(h.id) === here }, fmtAgo);
+        return `<label class="check sync-holder"><input type="radio" name="sync-holder" value="${Number(h.id)}"
+          ${Number(h.id) === Number(holder) ? "checked" : ""}> <span>${esc(line)}</span></label>`;
+      }).join("");
+      $$("input[name=sync-holder]", body).forEach((r) => (r.onchange = () => { holder = Number(r.value); again(); }));
+    };
+    let seq = 0;
+    const again = async () => {
+      const mine = ++seq;
+      yes.disabled = true;
+      $("[data-sync-busy]", body).classList.remove("hidden");
+      try {
+        const next = await send(true);
+        if (mine !== seq) return;
+        p = next;
+      } catch (e) {
+        if (mine !== seq) return;
+        errorToast(e);
+      } finally {
+        if (mine === seq) $("[data-sync-busy]", body).classList.add("hidden");
+      }
+      draw();
+    };
+    const kids = $("[data-sync-children]", body);
+    if (kids) kids.onchange = () => { reset = kids.checked; again(); };
+    drawHolders();
+    draw();
+    $("[data-no]", foot).onclick = () => m.close();
+    yes.onclick = async () => {
+      if (yes.disabled) return;
+      yes.disabled = true;
+      done = await apply();
+      if (done) m.close();
+      else yes.disabled = false;
+    };
+    // 처음 초점 = [취소] (되돌리기 어려운 변경 — 6단계 K-35)
+    setTimeout(() => $("[data-no]", foot).focus(), 40);
+  });
+}
+
+// [바꾸기 취소]: 반대 방향 요청이 대기를 취소한다(5.3절 — 지우거나 올린 것 없음). 확인 창 없이 바로
+export async function cancelSyncMode(ids, mode) {
+  try {
+    const r = await api.post("/api/papers/sync-mode", { ids, mode });
+    toast(r && r.cancelled > 0 ? requestToast(r) : "바꾸기를 취소했어요", "success");
+    refreshAll();
+    return true;
+  } catch (e) { errorToast(e); return false; }
+}
+
+// 웹에서 옮긴 뒤: 저장 위치가 새 폴더 설정과 달라진 논문이 있으면 [폴더 설정대로 맞추기] (5.4절 — 옮기기는 저장 위치를 바꾸지 않음)
+export function movedToast(ids, fid, papers = state.papers) {
+  const moved = (papers || []).filter((p) => ids.includes(p.id));
+  const odd = state.stats && state.stats.sync_on ? moveMismatch(moved, fid, state.folders) : [];
+  if (!odd.length) return toast(movedText(ids.length, fid));
+  const eff = folderEffective(fid, state.folders);
+  const one = odd.length === 1 ? moved.find((p) => p.id === odd[0]) : null;
+  toast(`${movedText(ids.length, fid)} · ${odd.length}개는 폴더 설정(${eff === "local" ? "PC에만" : "서버에도 저장"})과 달라요`, "", {
+    action: { label: "폴더 설정대로 맞추기", onClick: () => syncModeDialog({ ids: odd, mode: "inherit",
+      target: one ? { type: "file", name: one.file_name || one.title || "이 파일" } : { type: "files", count: odd.length } }) },
+  });
 }
 
 // ------------------------------------------------------------ 폴더 고르기 (D9)
@@ -1398,7 +1654,7 @@ export async function moveToFolderDialog(ids, current = undefined) {
   if (!r) return;
   try {
     await api.post("/api/papers/bulk", { ids, action: "move_folder", value: r.value });
-    toast(movedText(ids.length, r.value));
+    movedToast(ids, r.value);
     refreshAll();
   } catch (e) { errorToast(e); }
 }

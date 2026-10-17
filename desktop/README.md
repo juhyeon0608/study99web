@@ -84,7 +84,7 @@ PC가 작업을 실행하려면 **claude · codex · gemini 중 쓰려는 도구
 
 ## 6. 폴더 동기화 (PC 논문 폴더 ↔ 서재)
 
-이 PC의 논문 폴더 하나를 서재 폴더와 같은 모양으로 맞춰요. **PDF만** 맞추고, 노트 · 하이라이트는 지금처럼 클라우드에만 있어요. 동기화는 **기본으로 꺼져 있고**, 폴더를 직접 골라야 시작돼요.
+이 PC의 논문 폴더 하나를 서재 폴더와 같은 모양으로 맞춰요. **PDF · 워드(.doc · .docx) · 한글(.hwp · .hwpx) · PPT · 엑셀 · ODF 문서 · 사진**을 맞추고(앱 0.4.0부터), 노트 · 하이라이트는 지금처럼 클라우드에만 있어요. 동기화는 **기본으로 꺼져 있고**, 폴더를 직접 골라야 시작돼요.
 
 **시작하기**
 1. 이 PC 상태 → **폴더 동기화** → **[폴더 고르기…]**. 선택 창은 추천 위치 `C:\Users\<이름>\PaperLab 논문`에서 열려요. 그 폴더가 아직 없으면 **[이 위치에 새 폴더 만들기]**로 만든 뒤 골라요.
@@ -102,7 +102,26 @@ PC가 작업을 실행하려면 **claude · codex · gemini 중 쓰려는 도구
 - **보관함**: Windows 휴지통으로 보내지 못한 파일은 동기화 폴더 안 `.paperlab-sync\보관함`으로 옮겨 둬요(Windows가 보내기를 중단한 파일은 옮기지 않고 그 자리에 둔 채 다시 시도해요 — 연 프로그램을 닫아 주세요). 이 PC 상태의 [보관함 열기]에서 보고 직접 정리해 주세요(앱은 지우지 않아요).
 - **PDF를 고치면 전체 번역이 지워져요.** PC에서 PDF를 고쳐 저장하면(Acrobat 주석 포함) 서재의 그 논문도 바뀌고, 전체 번역이 있었으면 "PDF가 바뀌어 번역을 지웠어요" 알림이 와요. 다시 번역하려면 서재에서 [전체 번역 시작…]을 한 번 더 눌러야 해요(자동으로 다시 번역하지 않아요).
 - **올리기 한도**: 한 사람이 동기화로 올릴 수 있는 PDF 양에 한도(기본 2GB)가 있어요. 넘으면 올리기만 멈추고 받기 · 옮기기는 계속해요. 서재 휴지통을 비우면 한도가 늘어요.
-- 동기화하지 않는 파일(이름 규칙에 맞지 않음 · 경로가 250자 넘음 · 열려 있음 · 클라우드 전용 등)은 이 PC 상태의 **맞추지 못한 파일**에 이유와 함께 보여요.
+- 동기화하지 않는 파일(이름 규칙에 맞지 않음 · 경로가 250자 넘음 · 열려 있음 · 클라우드 전용 · 확장자와 내용이 맞지 않음 등)은 이 PC 상태의 **맞추지 못한 파일**에 이유와 함께 보여요.
+
+**문서(워드 · 한글 · PPT · 엑셀 · 사진)**
+- PC에 넣은 문서는 **원본 그대로** 서재에 올라가고, 서버가 읽기용 PDF 변환본을 따로 만들어요(웹에서 올린 것과 같아요). 다른 PC에는 **원래 이름 · 확장자 그대로** 내려가요.
+- 전에 웹에서 올린 문서가 PC에 `원래 이름.pdf`(변환본)로 내려와 있었다면, 서버가 정리한 뒤 **원본 파일로 바꿔 받고 옛 PDF 변환본은 Windows 휴지통**으로 보내요("문서를 원본 파일로 바꿨어요" 알림). 그 변환본을 고쳐 두었다면 지우지 않고 새 항목으로 남겨요.
+- 서버가 문서를 PDF로 바꾸지 못하면(암호 · 손상 · 서버에 변환기 없음) 그 파일은 올리지 않고 맞추지 못한 파일에 이유를 보여요. 파일을 고치면 다시 올려요.
+
+**PC에만 두기 (폴더 · 파일별 동기화 끄기)**
+- 서재 화면(앱 창 · 웹)의 폴더 메뉴 · 파일 ⋯ 메뉴에서 **"동기화 끄기 — PC에만 두기…"** 를 고르면, 그 파일은 **한 PC(보관 PC)에만** 있고 서버에는 **정보만**(제목 · 저자 · 노트 · 하이라이트 · 태그 · 폴더 · 컬렉션) 남아요. 서버 저장 공간을 아끼고 개인 파일을 PC에만 둘 수 있어요.
+- 끄면 보관 PC가 **같은 파일을 가지고 있는지 확인한 뒤에** 서버의 파일을 지워요(보관 PC가 꺼져 있으면 켜질 때). 다른 PC에 있던 사본은 **Windows 휴지통**으로 가요(많으면 "다른 PC에만 두기로 한 파일 n개가 이 PC에 있어요" 확인 창 — [이 PC에서 지우기(Windows 휴지통으로)] · [나중에]).
+- 끈 폴더에 새로 넣은 파일은 올리지 않고 처음부터 이 PC에만 둬요. 이 PC 상태의 동기화 구역에 "이 PC에만: n개 · 바꾸는 중: n개"가 보여요.
+- 보관 PC의 앱 창에서는 PC에만 둔 PDF · 사진을 **읽기 화면에서 이 PC 파일로** 열고(하이라이트도 그대로 저장돼요), 문서는 **PC 기본 앱**(Word · 한글 등)으로 열어요. 다른 PC · 웹에서는 "이 PC에만 있음(보관 PC 이름)"으로 보이고 정보 · 노트만 볼 수 있어요.
+- **"동기화 켜기 — 서버에도 저장…"** 을 고르면 보관 PC가 파일을 다시 올리고, 다른 PC에도 내려가요.
+- ⚠ **PC에만 둔 파일은 그 PC에만 있어요. PC가 고장 나면 서재에서 되살릴 수 없으니 따로 백업해 주세요.** (서재에는 정보 · 노트 · 하이라이트만 남아요.)
+- 같은 파일을 다른 PC의 동기화 폴더에 넣으면 연결하지 않고 "다른 PC에만 두기로 한 파일과 같아요"로 보여요. 보관 PC의 연결을 해지했다면 그 파일을 넣은 PC가 넘겨받아요.
+
+**PC에만 둔 파일의 AI**
+- AI 요약 · 논문 대화는 **보관 PC의 AI 도구(claude · codex · gemini)** 로만 돌아요. 앱이 이 PC 파일에서 글을 읽어(PDF · .docx · .hwpx · .pptx · .xlsx · .odt · .odp · .ods · .hwp · .doc) 그 PC의 도구에만 넘겨요 — 본문이 서버를 지나가지 않아요. 보관 PC가 꺼져 있으면 켜질 때 실행돼요.
+- 옛 파워포인트(.ppt) · 엑셀(.xls) · RTF · 아주 옛 한글(HWP 3.0 이하) · 사진은 이 PC에서 내용을 읽지 못해 AI를 쓸 수 없어요 — [동기화 켜기]로 서버에도 저장하거나 새 형식으로 다시 저장해 주세요. 배포용 · 암호 문서도 읽지 못해요.
+- 선택 설명 · 번역 · 서재 질문 · 본문 검색에서는 PC에만 둔 파일이 빠져요(제목 · 노트로는 찾아요).
 
 **앱을 다시 설치하면** 동기화는 **꺼짐으로 시작**해요(자동으로 켜지지 않아요). 이 PC 상태에 "전에 쓰던 폴더: … — [다시 연결…]"이 보이면 그 버튼으로 폴더를 다시 고르고 미리보기에서 **[시작]**을 눌러 주세요. 파일 내용이 같으면 다시 올리거나 받지 않고 연결만 해요. 이 PC 연결을 해지했다가 다시 연결했을 때도 같아요. 자동 업데이트로는 꺼지지 않아요.
 
@@ -125,7 +144,10 @@ PC가 작업을 실행하려면 **claude · codex · gemini 중 쓰려는 도구
 | 작업이 계속 "대기 중 — 켜진 PC 없음" | 이 PC 앱이 켜져 있고(트레이에 아이콘), 연결되어 있고, 일시 중지가 아니고, 해당 도구가 `로그인됨`인지 보세요. |
 | 어떤 작업이 다른 PC로 넘어갔어요 | 이 PC의 그 도구가 로그인되지 않았거나 없어서예요. 위 "로그인 필요" 항목을 보세요. |
 | 폴더 동기화가 "폴더를 찾을 수 없어요"로 멈춤 | 동기화 폴더를 옮기거나 이름을 바꿨는지 보세요. 원래대로 되돌리면 이어서 맞추고, 새 위치를 쓰려면 [새 위치 고르기…]로 다시 골라 미리보기에서 [시작]을 눌러 주세요. 서재와 다른 PC의 파일은 그대로예요. |
-| 폴더 동기화가 "! 멈춤 — 확인 필요" | 파일을 한꺼번에 지워서 멈춘 거예요. 이 PC 상태의 [확인하기]에서 지울지, 되돌릴지 정해 주세요. |
+| 폴더 동기화가 "! 멈춤 — 확인 필요" | 파일을 한꺼번에 지웠거나, 다른 PC에만 두기로 한 파일이 이 PC에 많이 있어 멈춘 거예요. 이 PC 상태의 [확인하기]에서 정해 주세요. |
+| 폴더 동기화가 "업데이트 필요"로 멈춤 | 서버가 새 동기화(0.4.0 이상)를 요구해요. 트레이 → **업데이트 확인**으로 앱을 올리면 이어서 맞춰요. 그동안 파일은 그대로예요. |
+| "이 PC에만 두기로 한 파일을 찾지 못했어요" | 보관 PC에서 그 파일을 옮기거나 지웠어요. Windows 휴지통에서 되살리거나 같은 파일을 동기화 폴더에 다시 넣으면 연결돼요. |
+| PC에만 둔 파일의 AI 요약이 실패 | 결과의 이유를 보세요. "파일을 찾지 못했어요"는 고치는 중이거나 옮긴 경우라 잠시 뒤 다시, 옛 형식 · 배포용 · 암호 문서는 [동기화 켜기]로 서버에 올리면 써요. |
 | 그래도 안 돼요 | 트레이 → **로그 폴더 열기**(`%APPDATA%\PaperLab\logs`의 `main.log` · `worker.log` · `sync.log`)를 관리자에게 보여 주세요. 로그에는 논문 내용 · 연결 정보가 들어 있지 않아요. |
 
 **제거와 연결 해지**
@@ -142,8 +164,8 @@ PC가 작업을 실행하려면 **claude · codex · gemini 중 쓰려는 도구
 ```powershell
 cd desktop
 npm ci          # package-lock.json대로 설치
-npm test        # node --test "test/*.test.js" — 가짜 서버 · 가짜 CLI로 워커 · 외부 링크 규칙 · main 단위 시험
-npm start       # 개발 실행 (데이터는 %APPDATA%\PaperLab-dev — 설치본과 섞이지 않음, 자동 시작 · 업데이트 확인 안 함)
+npm test        # 라이선스 검사(scripts/check-licenses.js) → node --test "test/!(worker).test.js" → node --test test/worker.test.js(따로) — 가짜 서버 · 가짜 CLI로 워커 · 동기화 · 추출 · main 단위 시험
+npm start       # 개발 실행 (app.css · PDF.js 사본 복사 후, 데이터는 %APPDATA%\PaperLab-dev — 설치본과 섞이지 않음, 자동 시작 · 업데이트 확인 안 함)
 npm run pack    # 설치 파일 없이 폴더로만 만들어 보기
 npm run dist    # NSIS 설치 파일 → desktop\dist\PaperLab-Setup-<버전>.exe · .blockmap · latest.yml
 ```
@@ -165,6 +187,25 @@ npm run dist    # NSIS 설치 파일 → desktop\dist\PaperLab-Setup-<버전>.ex
 - **폴더 동기화(6단계)**: 엔진은 `sync/`(워커와 다른 utilityProcess — `sync/entry.js`), main 쪽은 `main/sync-host.js`, 화면은 `ui/status-sync.js` · `ui/sync-look.js`. 저널은 `%APPDATA%\PaperLab(-dev)\sync\state.json`, 로그는 `logs\sync.log`(파일 이름 · 경로 · 해시를 쓰지 않음). Windows 휴지통 보내기는 main의 `shell.trashItem`만(utilityProcess에서는 동작하지 않음). 시험(`test/sync-*.test.js`)은 임시 폴더 · 가짜 API · 가짜 휴지통만 쓰고, 여러 PC 시험용 엔진은 `test/fixtures/sync-sim.js`(로컬 개발 서버 전용).
 - **`paperlab://` 등록**(앱 창 구글 로그인 콜백 — AC-72): electron-builder NSIS는 `protocols`를 등록하지 않아서, 배포본이 **시작할 때마다** `app.setAsDefaultProtocolClient`로 `HKCU\Software\Classes\paperlab`에 `"…\PaperLab.exe" -- "%1"`을 써요(`main/auth-bridge.js` `registerProtocol`). `--` 뒤라 주소에 스위치를 끼워 넣어도 Chromium 스위치로 읽히지 않고, 앱도 `paperlab://` 인자가 꼭 하나일 때만 받고 그 뒤의 스위치(`--hidden` 등)는 무시해요. 제거할 때(업데이트 아님) `build/installer.nsh`가 이 키를 지워요. **개발 실행(`npm start`)은 등록하지 않아요**(이 PC 레지스트리를 바꾸지 않음) — 그래서 개발 실행의 앱 창에서는 구글 로그인이 앱으로 돌아오지 않아요. 로그인 흐름은 설치본으로 확인하세요.
 - **설치 ID**(재설치 때 동기화 자동 켜짐 막기): 배포본은 `HKCU\Software\PaperLab\InstallId`(앱이 처음 실행 때 만듦), 제거할 때 `build/installer.nsh`가 지워요(자동 업데이트 설치에서는 남김). 개발 실행은 레지스트리를 쓰지 않고 `PAPERLAB_INSTALL_ID`(없으면 `dev`).
+- **`test/worker.test.js`는 따로 돌려요**: 가짜 CLI 프로세스를 띄우고 시간을 재는 시험(AC-53 취소 1초 · AC-58 동시 2개 · 리스 잃음 · 해지)이라, 다른 시험 파일과 함께 돌면 바쁜 PC에서 가끔 실패했어요(0.3.1 원본에서도 같음 — 품질팀 재현). 고친 것: ① 리스 잃음 · 해지 시험은 가짜 CLI가 pid 파일을 쓴 뒤에만 서버가 끊음(그 전에 꺼져 pid 파일이 없던 ENOENT), ② AC-58은 "한 실행과 겹친 실행 수" 대신 같은 순간에 도는 개수를 셈(길어진 실행 하나가 앞뒤 둘과 따로 겹쳐 3으로 잘못 세던 것), ③ AC-53은 1초 + 시험 부하 여유 0.5초(`PL_TEST_SLACK_MS`로 바꿈 — 1초를 넘으면 시험 출력에 한 줄). 예전 `--test-force-exit`(그 파일 시험 프로세스가 끝나지 않던 일)는 이 고침 뒤 이 PC에서 다시 나지 않아 뺐어요(따로 · 함께 각각 여러 번 확인). 다시 멈추면 이 줄을 보고 알려 주세요.
+
+### 선택 동기화 · 문서 · 로컬 AI (0.4.0 — [명세](../docs/specs/selective-sync.md) 8 · 9장)
+
+- **동기화 프로토콜(D-7)**: 엔진은 모든 동기화 요청에 `X-PaperLab-Sync: 2`를 보내요(새 서버는 이 머리글이 없으면 426 — 0.3.1은 업데이트까지 안전하게 멈춤). `sync/start` 응답에 `protocol: 2`가 없으면(옛 서버) **v1 모드**: `.pdf`만 · 새 동작 없음(0.3.1과 같음). 프로토콜은 시작 · 전체 다시 맞추기(6시간 · 필요할 때)마다 다시 정하고, 바뀌면 전체 다시 맞춰요. 배포 순서는 [서버 PC 안내서](../deploy/server-pc/README.md)(서버 먼저 — 그 사이 0.3.1은 426으로 멈춤 → 곧바로 0.4.0 빌드).
+- **파일 종류** `sync/filekind.js`: 동기화 확장자(`SYNC_EXTS` = 서버 `convert.ACCEPT_EXTS` — 계약 시험이 맞춰 봄)와 첫 바이트 판정(`kindOf` = 서버 `convert.kind`). 확장자와 내용이 맞지 않으면 `bad_format`(올리지 않음).
+- **엔진 새 동작**(`sync/reconcile.js` 머리 주석): `add_local`(끈 폴더의 새 파일 — 업로드 없음) · `mode_ack`/`mode_fail`(끄기 확인) · `promote`(켜기) · 로컬 항목 `upload_content`(메타데이터만) · `trash_local` `moved_local`(다른 PC에만 두기로 바뀐 사본 — 대량 확인 창, PC · 저널 · 서버 해시가 같을 때만 — 보관 PC가 그 뒤 고쳤으면 지우지 않고 `elsewhere_old` 문제) · `swap_rep`(변환본 → 원본, `J.swapping`으로 중간에 죽어도 안전). 저널은 v2(`kind` · `swapping` · `modeFails`), v1 저널은 읽을 때 올리고 전체 다시 맞춤.
+- **로컬 파일 다리**(9.1 · 9.2 · 11장): 클라우드 화면 `window.paperlabDesktop.localFile(id)` · `openLocal(id)` · `localHas(ids)` — **논문 id만** 보내요. main(`main/sync-host.js`)이 엔진에 위치를 묻고(`resolve`), 엔진을 믿지 않고 `checkInRoot`(루트 realpath 안 · 링크/정션 아님 · 일반 파일 · UNC 아님 · 동기화 확장자 · 100MB)로 다시 확인한 뒤 읽은 바이트의 해시가 저널과 같을 때만 돌려줘요. 동시 2 · 분당 30. 이 PC가 보관하는 로컬 항목만(켬 항목은 웹 경로로 읽음).
+- **로컬 AI 본문**(9.4 · 9.5): 워커는 잡기에 `caps: ["local_text"]`를 보내고, `local`이 있는 작업은 main에 `local-text`를 청해 프롬프트의 표지를 바꾼 뒤에만 CLI를 실행해요(`worker/local-text.js` — `fence` · `taggedText`는 Python과 같은 결과, 공유 벡터 `tests/fixtures/fence_vectors.json`). PDF는 숨은 샌드박스 창(`ui/extract.html` · 별도 메모리 세션 `paperlab-extract` — `app:` 밖 요청 전부 취소 · 권한 거부)의 PDF.js, 문서는 **별도 utilityProcess**(`extract/entry.js` — 바이트만 받음, 작업마다 새 `worker_threads` Worker: 메모리 512MB · 30초 · 한 번에 하나 · 대기 2). ZIP · XML은 직접 읽기(`extract/zip.js` · `xmltext.js` — ZIP64 · 암호 · 낯선 압축 · 항목 5,000개 · 64MB · 비율 200배 · 합계 256MB · DTD 거부), 옛 `.hwp`는 `hwp.js@0.0.3`(`extract/hwp.js` 어댑터), 옛 `.doc`는 `word-extractor@1.0.4`(`extract/doc.js`). 두 패키지는 `extract/` 안에서만 `require`해요(코드 검사 시험).
+- **Node 권한 모델(스파이크 SX-1)**: 추출 프로세스를 `--permission --allow-fs-read=<앱 폴더> --allow-worker`로 먼저 띄워 보고(파일 쓰기 · 자식 프로세스 · 네트워크 막힘), 그 플래그로 시작하지 못하면 플래그 없이 띄워요(`main.log`에 "추출 프로세스 시작" · `permission: yes/no` 한 줄). Node 24 단독 실측은 통과(시험 `SX-1`)했지만, **Electron 44.7.0 utilityProcess는 이 플래그를 받아도 `process.permission`이 켜지지 않아요**(개발 PC 실측). 그래서 Electron 44 설치본에서는 `permission: no`가 정상이고, 방어는 명세가 받아들인 위험대로 플래그 없는 상한 — 바이트만 받음(파일 경로를 주지 않음) · 작업마다 새 Worker · 30초 · 메모리 512MB — 이에요. 나중 Electron이 켜 주면 같은 코드가 `permission: yes`로 시작해요.
+- **빌드**: `scripts/copy-vendor.js`가 서버 `paperlab/static/vendor/pdfjs`의 `pdf.min.mjs` · `pdf.worker.min.mjs`를 `ui/vendor/`로 복사해요(생성물 — `.gitignore`). `window.uiFile`은 이 두 경로만 더 받아요. 추출 코드와 파서 패키지는 `asarUnpack`(실제 파일에서 Worker가 읽게).
+- **라이선스**: `scripts/check-licenses.js`가 `npm test` 앞에 정확한 버전 · 허용 라이선스(MIT · ISC · Apache-2.0 · Zlib · BSD — 0.3.x부터 있던 electron-updater 의존성의 Python-2.0 · BlueOak-1.0.0 포함) · 고지 파일을 검사해요. 의존성을 바꾸면 `node scripts/check-licenses.js --write`로 `build/THIRD_PARTY_NOTICES.txt`를 다시 만들어 커밋하세요(설치본 `resources\THIRD_PARTY_NOTICES.txt` — 이 PC 상태 아래 [오픈 소스 고지]). 배포 전 `npm audit --omit=dev`.
+- **시험 견본**: `test/fixtures/README.md`(시험이 만드는 ZIP 문서 · 스크립트로 만든 `sample.hwp` · Word로 저장한 `sample.doc`).
+
+### 실기기에서 확인할 것 (선택 동기화 — 설치본)
+
+- 추출 창이 네트워크 요청 0(개발자 도구 네트워크 — AC-S44), 로컬 PDF 요약이 되는지(가짜가 아닌 PDF.js 실제 실행), `main.log`에 "추출 프로세스 시작" 한 줄이 남는지(Electron 44에서는 `permission: no`가 정상 — SX-1 실측 결과, 위 "Node 권한 모델" 참고).
+- 한컴오피스로 저장한 실제 `.hwp`(배포용 · 암호 포함)로 로컬 요약 · `local_unreadable` 판정.
+- 보관 PC 앱 창에서 로컬 PDF 읽기 · 하이라이트 저장 · 다시 열기, 사진 보기, 문서 [기본 앱으로 열기](AC-S63).
 
 ### 실기기에서 확인할 것 (설치본)
 

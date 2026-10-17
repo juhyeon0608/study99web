@@ -9,7 +9,8 @@ const { app, Tray, Menu, nativeImage, session, shell, dialog, utilityProcess, po
 const { Logger } = require('../lib/log');
 const { Store } = require('./store');
 const { serverOrigin } = require('./config');
-const { registerAppScheme, prepareSession, createAppWindow, createStatusWindow, PARTITION } = require('./window');
+const { registerAppScheme, prepareSession, prepareExtractSession, createAppWindow, createStatusWindow, createExtractWindow, PARTITION, EXTRACT_PARTITION } = require('./window');
+const { createExtractHost } = require('./extract-host');
 const { createOpenLimiter, originOf } = require('./links');
 const { isAuthorizeUrl, parseCallback, findDeepLink, launchSwitches, registerProtocol, LOGIN_WAIT_MS } = require('./auth-bridge');
 const { createUpdater } = require('./updater');
@@ -44,6 +45,7 @@ let log;
 let store;
 let updater;
 let sync; // 폴더 동기화(6단계) — main/sync-host.js
+let extract; // 로컬 AI 본문 추출(선택 동기화 9.4 · 9.5) — main/extract-host.js
 const limiter = createOpenLimiter();
 
 if (!app.requestSingleInstanceLock()) {
@@ -81,18 +83,20 @@ async function boot() {
     app.quit();
     return;
   }
-  prepareSession(session.fromPartition(PARTITION));
-  prepareSession(session.defaultSession);
+  prepareSession(session.fromPartition(PARTITION), S.server);
+  prepareSession(session.defaultSession, S.server);
   S.noSafeStorage = !store.canEncrypt();
   ipc.register(controller, { serverOrigin: S.server, log });
   try { if (registerProtocol(app) === false && app.isPackaged) log.warn('paperlab:// 등록 실패'); } catch (e) { log.warn('paperlab:// 등록 실패', { code: e.name }); }
   powerMonitor.on('shutdown', onSessionEnd);
   createTray();
   startWorker();
+  const extractSession = prepareExtractSession(session.fromPartition(EXTRACT_PARTITION));
+  extract = createExtractHost({ utilityProcess, log, openPdfWindow: () => createExtractWindow({ session: extractSession }) });
   sync = createSyncHost({
     utilityProcess, dialog, shell, store, log, serverUrl: S.server, userData, appVersion: app.getVersion(), isPackaged: app.isPackaged,
     readToken: () => store.readToken(), onChange: () => refreshUi(), balloon, onUpdateRequired: () => updater && updater.check(),
-    onTokenInvalid: (code) => tokenInvalid(code),
+    onTokenInvalid: (code) => tokenInvalid(code), extract,
   });
   sync.start().catch((e) => log.error('동기화 시작 실패', { code: e.code || e.name }));
   updater = createUpdater({ isPackaged: app.isPackaged, log, onChange: onUpdate });
@@ -111,7 +115,7 @@ function onSessionEnd() {
   if (!sessionEnding) {
     S.quitting = true;
     log.info('Windows 세션 끝 — 정지');
-    sessionEnding = Promise.all([stopWorker(), sync ? sync.stop() : null]);
+    sessionEnding = Promise.all([stopWorker(), sync ? sync.stop() : null, extract ? extract.stop() : null]);
   }
   return sessionEnding;
 }
@@ -166,6 +170,11 @@ function onWorkerMessage(m) {
     if (updater) updater.check();
   } else if (m.type === 'job-finished') {
     jobBalloon(m);
+  } else if (m.type === 'local-text') { // 로컬 항목 AI 본문(선택 동기화 9.4) — 글은 워커로만 가고 로그 · 디스크에 남지 않음
+    const pid = Number(m.paper_id);
+    const reply = (r) => toWorker({ type: 'local-text-result', id: m.id, ok: r.ok === true, pages: r.ok ? r.pages : [], code: r.ok ? '' : String(r.code || 'local_unreadable') });
+    if (!sync || !Number.isSafeInteger(pid) || pid <= 0) { reply({ ok: false, code: 'local_file' }); return; }
+    sync.localText(pid, String(m.sha256 || '')).then(reply, () => reply({ ok: false, code: 'local_unreadable' }));
   }
 }
 
@@ -351,6 +360,7 @@ function info() {
     accountHint: store.get('accountHint'),
     workerState: ['idle', 'running', 'paused', 'update_required'].includes(ws) ? ws : 'offline',
     engines: S.worker.engines.map((e) => ({ name: e.name, enabled: e.enabled, installed: e.installed, version: e.version, logged_in: e.logged_in })),
+    ...(sync ? sync.syncInfo() : { syncProtocol: 0, syncOn: false }), // 선택 동기화 9.1(C-3) — 웹 화면의 "이 PC" 판단 · 로컬 다리 쓸 수 있나
   };
 }
 
@@ -374,7 +384,7 @@ async function restartNow(skipConfirm = false) {
     if (r.response !== 1) return;
   }
   S.quitting = true;
-  await Promise.all([stopWorker(), sync ? sync.stop() : null]);
+  await Promise.all([stopWorker(), sync ? sync.stop() : null, extract ? extract.stop() : null]);
   updater.installNow();
 }
 
@@ -471,7 +481,7 @@ function balloon(title, content, { always = false, sync: isSync = false, focus =
   if (!S.tray) return;
   const enabled = isSync ? store.get('sync').notify : store.get('notify');
   if (!always && (!enabled || (S.win && !S.win.isDestroyed() && S.win.isVisible() && !S.win.isMinimized()))) return;
-  S.balloonFocus = isSync ? (['local_delete', 'remote_delete', 'root_anomaly'].includes(focus) ? 'confirm' : focus === 'preview_ready' ? 'preview' : 'sync') : '';
+  S.balloonFocus = isSync ? (['local_delete', 'remote_delete', 'root_anomaly', 'moved_local'].includes(focus) ? 'confirm' : focus === 'preview_ready' ? 'preview' : 'sync') : '';
   try { S.tray.displayBalloon({ title, content, iconType: 'info' }); } catch { /* 알림을 못 띄우는 환경 */ }
 }
 
@@ -483,12 +493,18 @@ async function quitApp() {
     if (r.response !== 0) return;
   }
   S.quitting = true;
-  await Promise.all([stopWorker(), sync ? sync.stop() : null]);
+  await Promise.all([stopWorker(), sync ? sync.stop() : null, extract ? extract.stop() : null]);
   app.quit();
 }
 
 function openLogs() {
   shell.openPath(path.join(userData(), 'logs'));
+}
+
+/** 오픈 소스 고지(선택 동기화 9.5.4): 설치본은 resources\THIRD_PARTY_NOTICES.txt(extraResources), 개발 실행은 build\ */
+function openNotices() {
+  shell.openPath(app.isPackaged ? path.join(process.resourcesPath, 'THIRD_PARTY_NOTICES.txt') : path.join(__dirname, '..', 'build', 'THIRD_PARTY_NOTICES.txt'));
+  return true;
 }
 
 function setPaused(on) {
@@ -555,6 +571,7 @@ async function localAction(name, arg, sender) {
     }
     case 'offline': showOffline(String(arg || '').slice(0, 80)); return true;
     case 'open-logs': return openLogs();
+    case 'open-notices': return openNotices();
     case 'pair': return pair(String(arg || '').slice(0, 32));
     case 'unpair': {
       const r = await dialog.showMessageBox(owner, { type: 'warning', title: 'PaperLab', message: '이 PC에서 연결 정보를 지울까요?',
@@ -606,4 +623,10 @@ const controller = {
   info, pair, startGoogleLogin, cancelGoogleLogin, localState, localAction,
   nudge: () => { toWorker({ type: 'nudge' }); if (sync) sync.nudge(); },
   showStatusWindow: () => showStatusWindow(),
+  // 로컬 파일 다리(선택 동기화 9.1 · 9.2) — 인자 검사는 ipc.js, 경로 · 해시 검사는 sync-host
+  localFile: (id) => (sync ? sync.localFile(id) : { ok: false, code: 'sync_off' }),
+  openLocal: (id) => (sync ? sync.openLocal(id) : { ok: false, code: 'sync_off' }),
+  localHas: (ids) => (sync ? sync.localHas(ids) : {}),
+  extractReady: (sender) => { if (extract) extract.onReady(sender); },
+  extractDone: (sender, id, pages, code) => { if (extract) extract.onDone(sender, id, pages, code); },
 };

@@ -8,6 +8,7 @@ import {
   cancelJob, errorLabel, handledJob, isActive, jobLine, jobState, retryJob, setStatusLine, statusLineEl, watchJob,
 } from "./jobs.js";
 import { state } from "./state.js";
+import { excludedLocalText } from "./syncmode.js";
 import {
   $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, confirmDialog, el, errorToast, esc, liveSay, renderMarkdown, toast,
 } from "./ui.js";
@@ -258,6 +259,8 @@ async function loadScope(scope, { quiet = false } = {}) {
   const first = !quiet;
   A.index = data.index;
   A.indexJob = data.job;
+  // 선택 동기화: 범위 안의 PC에만 둔 편수 (서버가 응답 맨 위 또는 index에 줌 — 없으면 0)
+  A.excludedLocal = Number(data.excluded_local ?? (data.index && data.index.excluded_local)) || 0;
   drawStatus();
   if (first) {
     A.messages = data.messages;
@@ -362,6 +365,10 @@ function updateAnswer(node, m) {
     $("button", li).onclick = () => openSource(c);
     list.appendChild(li);
   }
+  // 출처 아래: 이 PC에만 있는 n편은 빠졌어요 (선택 동기화 10.6절 — 색인 · 본문이 서버에 없음)
+  $$("[data-excluded-local]", node).forEach((n) => n.remove());
+  const excluded = m.pending ? "" : excludedLocalText(m.excluded_local);
+  if (excluded) list.after(el(`<p class="small muted ask-local-note" data-excluded-local>${esc(excluded)}</p>`));
   $$("button[data-cite]", prose).forEach((b) => {
     const c = cites.find((x) => String(x.n) === b.dataset.cite);
     if (!c) { b.replaceWith(document.createTextNode(`[${b.dataset.cite}]`)); return; }
@@ -435,7 +442,8 @@ async function send(text) {
       else if (ev.type === "delta") { pending.content += ev.text; updateAnswer(node, pending); }
       else if (ev.type === "done") {
         handledJob(ev.job_id); // 이 화면에서 답을 봤음 — 끝남 토스트 생략 (화면을 떠나도 서버가 끝까지 받아 저장)
-        Object.assign(pending, { content: ev.text, citations: ev.citations || [], pending: false });
+        Object.assign(pending, { content: ev.text, citations: ev.citations || [], pending: false,
+          excluded_local: Number(ev.excluded_local ?? A.excludedLocal) || 0 });
         updateAnswer(node, pending);
       } else if (ev.type === "error") throw new Error(ev.error);
       if (log.scrollHeight - log.scrollTop - log.clientHeight < 140) log.scrollTop = log.scrollHeight;

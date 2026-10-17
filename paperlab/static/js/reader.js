@@ -4,18 +4,21 @@
 
 import { api, streamEvents } from "./api.js";
 import { listStyles, render, styleOptions } from "./cite.js";
-import { EXT_MARK, bindExtLink, citeDialog, editPaperDialog, issuesBox, settingsDialog, uploadPdfs } from "./dialogs.js";
+import { EXT_MARK, bindExtLink, citeDialog, editPaperDialog, issuesBox, settingsDialog, syncCtx, syncModeDialog, uploadPdfs } from "./dialogs.js";
 import { INHA, paperProxyTarget } from "./extlinks.js";
 import {
   cancelJob, errorLabel, handledJob, isActive, retryJob, setStatusLine, statusLineEl, summaryCard, updateSummaryCard, watchJob,
 } from "./jobs.js";
 import { BUSY_TIP, explainBusy, explainTab, followPage, resetExplain, startExplain } from "./explain.js";
-import { LIB_ACCEPT, formatBadge } from "./filetypes.js";
-import { downloadSource, exportAnnotations } from "./library.js";
+import { IMAGE_EXTS, LIB_ACCEPT, formatBadge } from "./filetypes.js";
+import { downloadSource, exportAnnotations, openLocalFile } from "./library.js";
 import { quoteRuleText } from "./refquote.js";
 import { onRefresh, state } from "./state.js";
 import {
-  $, $$, ICON_WARN, authorsShort, cleanCiteHtml, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, markTabs,
+  EXPLAIN_LOCAL_TEXT, ICON_PC, canOpenHere, holderGone, isLocal, localAiNote, localFileText, localNotice, readerKind,
+} from "./syncmode.js";
+import {
+  $, $$, ICON_INFO, ICON_WARN, authorsShort, cleanCiteHtml, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, markTabs,
   modalOpen, pickFiles, renderMarkdown, renderTex, saveError, selectTab, store, toast,
 } from "./ui.js";
 
@@ -62,6 +65,7 @@ function teardown() {
   R.abort && R.abort.abort(); // 질문 스트림만 (요약 스트림은 runs가 따로 가진다)
   R.noteSave && R.noteSave.flush();
   R.doc && R.doc.destroy();
+  if (R.blobUrl) URL.revokeObjectURL(R.blobUrl); // 로컬 사진 (선택 동기화 9.3절)
   document.removeEventListener("keydown", R.onKey);
   document.removeEventListener("selectionchange", R.onSelChange);
   hidePopups();
@@ -90,6 +94,8 @@ export async function openReader(main, pid, startPage = null) {
     return;
   }
   if (seq !== openSeq) return;
+  const sctx = await syncCtx(); // 선택 동기화: 이 PC가 보관하는 로컬 항목인지 (앱 창만)
+  if (seq !== openSeq) return;
   // 작업 목록 [열기]에서 온 4단계 작업: 탭 "설명·번역" + 보기 (주소가 아니라 화면 메모리 — 시안 7.3절)
   const want = state.readerTab && state.readerTab.pid === pid ? state.readerTab : null;
   state.readerTab = null;
@@ -98,6 +104,7 @@ export async function openReader(main, pid, startPage = null) {
   R = {
     pid, paper, annotations: [], pages: [], scale: 1, fit: p0.fit !== false, color: p0.color || "yellow",
     tab: p0.tab || "summary", level: p0.level || "high", chat: null, summary: null, quote: "",
+    sctx, local: isLocal(paper), // 로컬 항목(PC에만): 본문 · 파일이 서버에 없음 — 설명 · 번역 막힘, AI는 보관 PC CLI만
   };
   const me = R;
   main.innerHTML = "";
@@ -107,6 +114,7 @@ export async function openReader(main, pid, startPage = null) {
         <a class="btn ghost sm" href="#/library" title="서재로 (Esc)">← 서재</a>
         <div class="title" title="${esc(paper.title)}">${esc(paper.title)}</div>
         ${paper.has_source ? `<button class="btn sm ghost" data-source title="${esc(`올린 원본 파일(${paper.source_name || ""})을 받아요. 여기서는 PDF로 바꾼 것을 보여 줘요`)}">원본 받기 <span class="pdf-badge">${esc(formatBadge(paper.source_name))}</span></button>` : ""}
+        ${canOpenHere(paper, sctx) ? `<button class="btn sm ghost" data-open-local title="이 PC의 기본 앱으로 열어요">기본 앱으로 열기</button>` : ""}
         <button class="icon-btn" data-panel title="오른쪽 패널 열고 닫기" aria-label="패널 열고 닫기">◧</button>
         <div class="pageno"><input class="input" data-page value="1" aria-label="쪽 번호"> / <span data-total>…</span></div>
         <button class="icon-btn" data-zoom="-1" title="축소" aria-label="축소">−</button>
@@ -129,8 +137,11 @@ export async function openReader(main, pid, startPage = null) {
   R.pagesEl = $(".pdf-pages", view);
 
   $$("[data-tab]", view).forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+  if (R.local) $('[data-tab="explain"]', view).dataset.localOff = ""; // 로컬 항목: 설명·번역은 안내만 (흐리게)
   const srcBtn = $("[data-source]", view);
   if (srcBtn) srcBtn.onclick = () => downloadSource(pid);
+  const openLocalBtn = $("[data-open-local]", view);
+  if (openLocalBtn) openLocalBtn.onclick = () => openLocalFile(pid);
   markTabs($(".panel .tabs", view), "패널");
   wireBar(view);
   $("[data-panel]", view).onclick = () => {
@@ -282,11 +293,13 @@ onRefresh(async () => {
 
 async function loadPdf(startPage) {
   const me = R;
+  if (isLocal(R.paper)) return loadLocal(startPage); // 참고 패널(임베드)도 같은 갈래
   if (!R.paper.has_pdf) return drawPdfMissing();
   R.pagesEl.innerHTML = `<div class="empty"><span class="spinner"></span></div>`;
+  let data;
   try {
-    const lib = await loadPdfjs();
     // 서명 주소(10분)로 파일 전체를 받아 둔다: 주소가 만료돼도 이미 받은 파일로 계속 읽음 (명세 6.7)
+    // 그사이 PC에만 두기로 바뀌었으면 409 local_only — 서버 문구(보관 PC 이름)를 그대로 보임
     const { url } = await api.get(`/api/papers/${R.pid}/pdf-url`);
     if (R !== me) return;
     let res;
@@ -296,7 +309,102 @@ async function loadPdf(startPage) {
       throw new Error("PDF를 받지 못했어요. 인터넷 연결을 확인하고 다시 열어 주세요.");
     }
     if (!res.ok) throw new Error(res.status === 403 ? "PDF 주소가 만료됐어요. 다시 열어 주세요." : `PDF를 받지 못했어요 (HTTP ${res.status})`);
-    const data = new Uint8Array(await res.arrayBuffer());
+    data = new Uint8Array(await res.arrayBuffer());
+  } catch (e) {
+    if (R !== me) return;
+    R.pagesEl.innerHTML = `<div class="empty"><h3>PDF를 열지 못했어요</h3><p>${esc(e.message)}</p></div>`;
+    return;
+  }
+  if (R !== me) return;
+  return showPdf(data, startPage, me);
+}
+
+// ------------------------------------------------- 로컬 항목 (PC에만 — 선택 동기화 9.3 · 10.6절)
+// 보관 PC의 앱 창: paperlabDesktop.localFile(논문 id)로 바이트만 받아(경로는 앱이 정함 — C-3) PDF는 같은 PDF.js,
+// 사진은 <img>(blob:), 워드 · 한글 · PPT · 엑셀은 [기본 앱으로 열기]. 다른 PC · 웹 · 옛 앱은 안내(오른쪽 패널은 그대로)
+const IMAGE_MIME = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".gif": "image/gif", ".bmp": "image/bmp",
+  ".webp": "image/webp", ".tif": "image/tiff", ".tiff": "image/tiff" };
+
+async function loadLocal(startPage) {
+  const me = R;
+  const ctx = R.sctx || await syncCtx();
+  if (R !== me) return;
+  if (!canOpenHere(R.paper, ctx)) return drawLocalElsewhere();
+  const kind = readerKind(R.paper);
+  if (kind === "doc") return drawLocalDoc();
+  R.pagesEl.innerHTML = `<div class="empty"><span class="spinner"></span></div>`;
+  let r = null;
+  try { r = await window.paperlabDesktop.localFile(R.pid); } catch { r = null; }
+  if (R !== me) return;
+  if (!r || !r.ok || !r.data) return drawLocalProblem(r && r.code, startPage);
+  const ext = r.ext ? "." + String(r.ext).replace(/^\./, "").toLowerCase() : "";
+  if (kind === "image" || IMAGE_EXTS.includes(ext)) return drawLocalImage(r, ext);
+  return showPdf(new Uint8Array(r.data), startPage, me);
+}
+
+function localTotal(text) {
+  const t = R.view && $("[data-total]", R.view);
+  if (t) t.textContent = text;
+}
+
+function drawLocalElsewhere() {
+  const n = localNotice(R.paper);
+  localTotal("–");
+  R.pagesEl.innerHTML = `<div class="empty local-file" data-local-elsewhere>
+    <div class="big local-file-ico">${ICON_PC}</div><h3>${esc(n.title)}</h3><p>${esc(n.text)}</p>
+    ${n.reupload ? `<div class="empty-actions"><button type="button" class="btn primary" data-attach>파일 다시 올리기</button></div>` : ""}</div>`;
+  const me = R;
+  const attach = $("[data-attach]", R.pagesEl);
+  if (attach) attach.onclick = async () => {
+    const [file] = await pickFiles({ accept: LIB_ACCEPT });
+    if (!file || R !== me) return;
+    me.awaitingPdf = true; // 올리기가 끝나면(refreshAll) 다시 불러 PDF를 표시
+    uploadPdfs([file], { attachTo: me.pid });
+  };
+}
+
+function drawLocalDoc() {
+  localTotal("–");
+  R.pagesEl.innerHTML = `<div class="empty local-file" data-local-doc>
+    <div class="big local-file-ico">${ICON_PC}</div><h3>이 문서는 PC의 기본 앱으로 열어요</h3>
+    <p>워드 · 한글 · PPT · 엑셀 문서는 이 PC에 설치된 앱으로 열어요. 노트 · 하이라이트 목록 · AI 요약은 오른쪽 패널에서 볼 수 있어요.</p>
+    <div class="empty-actions"><button type="button" class="btn primary" data-open-local>기본 앱으로 열기</button></div></div>`;
+  const pid = R.pid;
+  $("[data-open-local]", R.pagesEl).onclick = () => openLocalFile(pid);
+}
+
+function drawLocalProblem(code, startPage) {
+  localTotal("–");
+  R.pagesEl.innerHTML = `<div class="empty local-file" data-local-problem="${esc(code || "")}">
+    <h3>이 PC에서 파일을 열지 못했어요</h3><p>${esc(localFileText(code))}</p>
+    <div class="empty-actions"><button type="button" class="btn primary" data-again>다시 열기</button>
+      ${code === "missing" || code === "sync_off" ? "" : `<button type="button" class="btn" data-open-local>기본 앱으로 열기</button>`}</div></div>`;
+  const me = R;
+  $("[data-again]", R.pagesEl).onclick = () => { if (R === me) loadLocal(startPage); };
+  const open = $("[data-open-local]", R.pagesEl);
+  if (open) open.onclick = () => openLocalFile(me.pid);
+}
+
+function drawLocalImage(r, ext) {
+  localTotal("1");
+  if (R.blobUrl) URL.revokeObjectURL(R.blobUrl);
+  R.blobUrl = URL.createObjectURL(new Blob([r.data], { type: IMAGE_MIME[ext] || "application/octet-stream" }));
+  R.pagesEl.innerHTML = `<div class="local-image" data-local-image><img alt=""></div>`;
+  const img = $("img", R.pagesEl);
+  img.alt = R.paper.title || "사진";
+  const pid = R.pid;
+  img.onerror = () => { // 앱 안에서 못 그리는 형식(TIFF 등)
+    R.pagesEl.innerHTML = `<div class="empty local-file"><h3>이 사진 형식은 여기서 보이지 않아요</h3><p>PC의 기본 앱으로 열어 주세요.</p>
+      <div class="empty-actions"><button type="button" class="btn primary" data-open-local>기본 앱으로 열기</button></div></div>`;
+    $("[data-open-local]", R.pagesEl).onclick = () => openLocalFile(pid);
+  };
+  img.src = R.blobUrl;
+}
+
+// 받은 PDF 바이트 → PDF.js 쪽들 (서버 · 로컬 공용)
+async function showPdf(data, startPage, me) {
+  try {
+    const lib = await loadPdfjs();
     if (R !== me) return;
     const doc = await lib.getDocument({ data, isEvalSupported: false }).promise;
     if (R !== me) { doc.destroy(); return; }
@@ -593,13 +701,16 @@ const narrow = () => window.matchMedia && window.matchMedia("(max-width: 900px)"
 
 // 상자 버튼 [쉽게 설명] · [번역] — 진행 중이면 aria-disabled + 툴팁 (초점 · 툴팁은 남김)
 function xtButtons() {
+  if (R && R.local) return ""; // 로컬 항목: 서버 본문이 없어 설명 · 번역을 쓸 수 없음 (D-13)
   const busy = explainBusy() ? ` aria-disabled="true" title="${esc(BUSY_TIP)}"` : "";
   return `<button class="btn sm ghost" data-explain${busy}>쉽게 설명</button><button class="btn sm ghost" data-translate${busy}>번역</button>`;
 }
 
 function wireXt(pop, sel) {
   for (const kind of ["explain", "translate"]) {
-    $(`[data-${kind}]`, pop).onclick = () => {
+    const b = $(`[data-${kind}]`, pop);
+    if (!b) continue; // 로컬 항목은 버튼이 없음
+    b.onclick = () => {
       if (explainBusy()) { toast(BUSY_TIP); return; }
       hidePopups();
       if (sel.range) sel.range.removeAllRanges();
@@ -761,8 +872,27 @@ function showTab(tab) {
   const body = $(".panel-body", R.view);
   body.className = "panel-body" + (tab === "chat" ? " chat-body" : "");
   body.innerHTML = "";
-  ({ summary: summaryTab, chat: chatTab, explain: (b) => explainTab(b, explainHost()), highlights: highlightsTab, note: noteTab,
-    cite: citeTab })[tab](body);
+  ({ summary: summaryTab, chat: chatTab, explain: (b) => (R.local ? localExplainTab(b) : explainTab(b, explainHost())), highlights: highlightsTab,
+    note: noteTab, cite: citeTab })[tab](body);
+}
+
+// 로컬 항목의 설명·번역 탭: 비활성 안내 + [동기화 켜기] (10.6절)
+function localExplainTab(body) {
+  const s = R.paper.sync;
+  const canOn = s && !holderGone(s) && !s.pending && R.sctx && R.sctx.syncOn;
+  const v = el(`<div class="ai-cta" data-explain-local><div class="notice" data-tone="info">${ICON_INFO}<div>${esc(EXPLAIN_LOCAL_TEXT)}</div></div>
+    ${canOn ? `<button type="button" class="btn" data-sync-on>동기화 켜기</button>` : ""}</div>`);
+  const on = $("[data-sync-on]", v);
+  const pid = R.pid;
+  const name = R.paper.file_name || R.paper.title || "이 파일";
+  if (on) on.onclick = () => syncModeDialog({ ids: [pid], mode: "cloud", target: { type: "file", name } });
+  body.appendChild(v);
+}
+
+// 로컬 항목 AI 안내 한 줄 (요약 · 질문하기 탭 — 10.6절). 켬 항목은 null
+function localAiBox(id = "") {
+  const n = R && R.local ? localAiNote(R.paper) : null;
+  return n ? { note: n, node: el(`<div class="notice local-ai-note" data-tone="${esc(n.tone)}" data-local-ai${id ? ` id="${id}" tabindex="-1"` : ""}>${n.tone === "warn" ? ICON_WARN : ICON_INFO}<div>${esc(n.text)}</div></div>`) } : null;
 }
 
 function pageLink(n) {
@@ -797,16 +927,22 @@ async function summaryTab(body) {
 }
 
 async function drawSummaryCta(body) {
-  const st = await api.get("/api/ai/status").catch(() => ({ ready: false, message: "" }));
+  // 로컬 항목: 서버 AI 상태 대신 보관 PC CLI 안내 (경로가 없으면 서버가 no_route_local 문구로 거절 — 토스트)
+  const local = localAiBox("local-ai-why");
+  const st = local ? { ready: !local.note.disabled, message: "" } : await api.get("/api/ai/status").catch(() => ({ ready: false, message: "" }));
   if (!R || R.tab !== "summary") return;
   body.innerHTML = "";
   // 쓸 방법이 없으면 버튼은 aria-disabled + 이유 (디자인 6.1 — S10)
   const v = el(`<div class="ai-cta"><div class="big">✦</div><h3>AI로 이 논문 정리하기</h3>
     <p class="small">한 줄 요약, 초등~대학원 수준별 설명, 섹션별 요약, 핵심 수식 풀이, 기여와 한계를 만들어요.</p>
     <button class="btn primary" data-go ${st.ready ? "" : `aria-disabled="true" aria-describedby="ai-off-why"`}>요약 만들기</button>
-    ${st.ready ? "" : `<p class="small" id="ai-off-why" tabindex="-1" style="margin-top:8px">${esc(st.message)} <a href="#" data-set>설정 열기</a></p>`}
+    ${st.ready || local ? "" : `<p class="small" id="ai-off-why" tabindex="-1" style="margin-top:8px">${esc(st.message)} <a href="#" data-set>설정 열기</a></p>`}
   </div>`);
-  $("[data-go]", v).onclick = () => (st.ready ? startSummary() : $("#ai-off-why", v).focus());
+  if (local) {
+    $("[data-go]", v).before(local.node);
+    if (!st.ready) $("[data-go]", v).setAttribute("aria-describedby", "local-ai-why");
+  }
+  $("[data-go]", v).onclick = () => (st.ready ? startSummary() : ($("#ai-off-why", v) || $("#local-ai-why", v)).focus());
   const set = $("[data-set]", v);
   if (set) set.onclick = (e) => { e.preventDefault(); settingsDialog(); };
   body.appendChild(v);
@@ -975,6 +1111,11 @@ async function chatTab(body) {
   body.append(log, quote, input, foot);
   const ta = $("textarea", input);
   const sendBtn = $("[data-send]", input);
+  // 로컬 항목: 보관 PC의 AI(CLI)로만 — 안내 한 줄, 읽을 수 없는 형식이면 보내기 막음 (10.6절)
+  const local = localAiBox();
+  R.aiBlocked = !!(local && local.note.disabled);
+  if (local) body.prepend(local.node);
+  if (R.aiBlocked) { ta.disabled = true; sendBtn.disabled = true; }
 
   const drawQuote = () => {
     quote.classList.toggle("hidden", !R.quote);
@@ -1066,13 +1207,13 @@ async function chatTab(body) {
   };
   const busy = (on) => {
     R.sending = on || jobNodes.size > 0;
-    sendBtn.disabled = R.sending;
+    sendBtn.disabled = R.sending || !!R.aiBlocked;
     ta.placeholder = R.sending ? "답을 기다리는 중이에요…" : "논문에 대해 물어보세요";
   };
 
   const send = async (text) => {
     text = (text || ta.value).trim();
-    if (!text || R.sending) return;
+    if (!text || R.sending || R.aiBlocked) return;
     const question = R.quote ? `다음 부분에 대해:\n> ${R.quote}\n\n${text}` : text;
     R.quote = "";
     drawQuote();

@@ -124,14 +124,20 @@ test('AC-88 (h) electron-builder: publish generic · url = server.json public_ur
   assert.equal(cfg.electronFuses.enableNodeCliInspectArguments, false);
   assert.ok(fs.existsSync(path.join(ROOT, 'ui', 'app.css'))); // PD-5 — 빌드 설정이 app.css 를 복사
   const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
-  assert.deepEqual(Object.keys(pkg.dependencies), ['electron-updater']);
+  // 선택 동기화 9.5.4 — 로컬 문서 본문 추출용 둘만 더함(정확한 버전, 추출 Worker 안에서만 require — AC-S49)
+  assert.deepEqual(pkg.dependencies, { 'electron-updater': '6.8.9', 'hwp.js': '0.0.3', 'word-extractor': '1.0.4' });
+  assert.ok(cfg.files.includes('extract/**/*'));
+  assert.ok(cfg.asarUnpack.includes('extract/**/*') && cfg.asarUnpack.includes('node_modules/hwp.js/**/*') && cfg.asarUnpack.includes('node_modules/word-extractor/**/*'));
+  assert.ok(cfg.extraResources.some((r) => r.from === 'build/THIRD_PARTY_NOTICES.txt'));
+  assert.ok(fs.existsSync(path.join(ROOT, 'ui', 'vendor', 'pdf.min.mjs')) && fs.existsSync(path.join(ROOT, 'ui', 'vendor', 'pdf.worker.min.mjs'))); // copy-vendor
 });
 
 test('AC-74 preload: 클라우드 화면에는 13.3 표의 함수 6개 + 로그인 대기 취소만, 토큰 · Electron API 를 내주지 않음', () => {
   const src = fs.readFileSync(path.join(ROOT, 'preload', 'preload.js'), 'utf8');
   const block = src.slice(src.indexOf("exposeInMainWorld('paperlabDesktop'"));
   const names = [...block.matchAll(/^\s{4}([A-Za-z]+):/gm)].map((m) => m[1]);
-  assert.deepEqual(names, ['info', 'pair', 'nudge', 'startGoogleLogin', 'cancelGoogleLogin', 'onAuthCallback', 'openStatusWindow']);
+  assert.deepEqual(names, ['info', 'pair', 'nudge', 'startGoogleLogin', 'cancelGoogleLogin', 'onAuthCallback', 'openStatusWindow',
+    'localFile', 'openLocal', 'localHas']); // + 선택 동기화 9.1(계약 C-3) — 논문 id 만
   assert.ok(!/:\s*ipcRenderer\b|\(ipcRenderer\)|exposeInMainWorld\('ipcRenderer'|require\('(fs|child_process|node:)/.test(src));
 });
 

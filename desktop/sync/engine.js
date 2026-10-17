@@ -12,6 +12,10 @@
 // 저널 쓰기 순서: 디스크를 먼저 바꾸고 J 를 고침 — 그 사이 앱이 죽어도 다음 비교가 "연결" · "같은 위치로 옮기기"(서버 no-op)로 끝나고
 // 삭제로 읽히지 않는다(J 에서 빠진 항목은 받기 · 연결로만 이어짐). 그래서 저널은 묶어서 쓴다.
 // 로그: id · 결과 코드 · 개수만(파일 이름 · 경로 · 해시 · 주소 없음 — 12.6절).
+//
+// 선택 동기화(docs/specs/selective-sync.md 8장): sync/start 응답의 protocol 이 2 이상이면 v2 — 동기화 확장자 전부(filekind.SYNC_EXTS) ·
+// 로컬 항목(보관 PC) · 끄기/켜기 전환(mode.ack · mode.fail · promote) · 표현 바뀜(swap_rep). 없거나 1이면(옛 서버) v1 — .pdf 만,
+// 새 동작을 만들지 않음(0.3.1과 같음). proto 는 start 마다 다시 정하고, 바뀌면 전체 다시 맞추기. 모든 요청에 X-PaperLab-Sync: 2(entry.js).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -21,6 +25,7 @@ const P = require('./paths');
 const R = require('./reconcile');
 const journal = require('./journal');
 const scanner = require('./scanner');
+const { SYNC_EXTS, extOf, kindOf, isPdfExt } = require('./filekind');
 const { removeTemp, removeEmptyDir } = require('./safe-remove');
 const { watchRoot } = require('./watcher');
 const { nullLogger } = require('../lib/log');
@@ -34,6 +39,10 @@ const TIMING = {
 const MASS = { count: 10, ratio: 0.1, min: 3, anomaly: 0.5 };
 const LIMITS = { ops: 20, slots: 10, download: 20, lookup: 200, upload: 2, get: 3, problems: 500, snapshot: 2000, changes: 500 };
 const DISK_SPARE = 1024 ** 3;
+const PER_LOCAL_BYTES = 8 * 1024; // 로컬 항목 한 편의 DB 추정치(서버가 db.per_local_bytes 를 주면 그 값 — 가정, 8.3절)
+const NO_RETRY_MS = 24 * 3600e3; // 같은 파일이면 같은 결과인 거절(형식 · 변환 실패) — 파일이 바뀌면(해시 키가 달라짐) 바로 다시
+const PDF_ONLY = new Set(['.pdf']);
+const SLOW_MS = 240e3; // files/add · content · promote — 서버 문서 변환(최대 180초 — convert.TIMEOUT) + 여유(8.4절). 나머지는 30초
 const DEEP_ISSUES = new Set(['drive', 'recycle_off']); // 깊은 확인으로만 알 수 있는 루트 문제
 const TOKEN_RE = /^pld1\.([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.([1-9][0-9]{0,17})\./;
 
@@ -127,6 +136,16 @@ class SyncEngine {
     this.notes = [];
     this.archiveBytes = 0;
     this.firstPassPending = false;
+    this.proto = null; // 서버 동기화 프로토콜(start 응답) — null = 아직 모름(미리보기는 스냅숏 모양으로 짐작)
+    this.snapshotProto = null;
+    this.exts = null; // 서버가 준 동기화 확장자(start 응답 exts — SYNC_EXTS 안의 것만)
+    this.forceCloud = new Set(); // upload_required 를 받은 새 파일(접는 경로 \n 해시) — 다음 바퀴는 올림
+  }
+
+  /** 지금 맞추는 확장자: v1(옛 서버) = .pdf 만, v2 = 서버 목록(없으면 SYNC_EXTS) */
+  scanExts(proto = this.proto) {
+    if ((proto || 1) < 2) return PDF_ONLY;
+    return this.exts ? new Set(this.exts) : null;
   }
 
   // ====================================================================== 바깥에서
@@ -179,6 +198,7 @@ class SyncEngine {
     let J = journal.load(this.journalFile);
     if (J && J.root && P.fold(J.root) !== P.fold(this.root)) J = null;
     this.recovering = !J;
+    if (J && J.migrated) this.log.info('저널 v1 → v2 — 전체 다시 맞추기'); // 0.3.x → 0.4.0 첫 실행(8.5절 — 아래 needFull)
     this.J = J || journal.fresh({ root: this.root, user_id: this.who ? this.who.uid : '', device_id: this.who ? this.who.deviceId : null });
     if (this.recovering) this.place = 'library'; // 저널이 깨짐 → 전체 다시 맞추기(삭제를 추론하지 않음, 서재 위치를 따름)
     this.cleanTmp(this.root); // 지난번에 받다 만 파일(15.5)
@@ -210,9 +230,10 @@ class SyncEngine {
     if (choice === 'later') { h.askAt = this.now() + this.t.reaskMs; this.refresh(); return true; }
     if (choice === 'off') { await this.turnOff(); return true; }
     if (choice === 'continue') {
-      for (const pid of h.pids) this.approved[h.kind === 'remote_delete' ? 'remote' : 'local'].add(pid);
+      for (const pid of h.pids) this.approved[h.kind === 'remote_delete' || h.kind === 'moved_local' ? 'remote' : 'local'].add(pid);
       this.held = null;
     } else if (choice === 'revert') {
+      if (h.kind === 'moved_local') return false; // 다른 PC에만 두기로 한 파일 — 되돌릴 것이 없음(서재 정보는 그대로, 파일은 보관 PC에)
       if (h.kind === 'remote_delete') await this.restoreRemote([...h.pids]);
       else {
         // PC 에 되돌리기: J 에서 빼면 서버 논문이 "새 것"으로 보여 다시 받음. 사라진 디렉터리도 J 에서 빼 다시 만들게
@@ -289,26 +310,32 @@ class SyncEngine {
     const ctx = { root, J: journal.fresh(), obs: new Map(), cache: new Map() };
     let L;
     for (let i = 0; ; i++) {
-      L = await this.scanLocal(ctx, { progress: true });
+      L = await this.scanLocal(ctx, { progress: true, exts: this.proto === 1 ? PDF_ONLY : null });
       if (L.nestedMarker) throw fail('overlap');
       if (!L.unstable || i >= this.t.probeStableTries) break;
       await this.delay(this.t.stableMs);
     }
     const S = await this.fetchSnapshot();
     const place = (this.budget.otherDevices || 0) > 0 ? 'library' : 'local';
-    const plan = this.previewPlan(root, L, S, place);
+    // 미리보기는 sync/start 전이라 프로토콜을 모름 — 스냅숏 모양(새 필드)으로 짐작, 빈 서재면 새 서버로 봄. 옛 서버면 .pdf 만 다시 셈
+    const proto = this.proto || this.snapshotProto || 2;
+    if (proto < 2) L = { ...L, files: L.files.filter((f) => isPdfExt(f.rel)) };
+    const plan = this.previewPlan(root, L, S, place, proto);
     return { root, place, defaultPlace: place, otherDevices: this.budget.otherDevices || 0, S, cursor: this.cursor, budget: this.budget, plan, at: this.now() };
   }
 
-  previewPlan(root, L, S, place) {
+  previewPlan(root, L, S, place, proto = this.proto || 2) {
     const J0 = journal.fresh();
     const fp = R.planFolders(J0, L, S, { root });
-    const p = R.planFiles(J0, L, S, { place, root });
+    const p = R.planFiles(J0, L, S, { place, root, me: this.who ? this.who.deviceId : null, proto });
     const sum = (arr) => arr.reduce((a, x) => a + (x.size || 0), 0);
     const by = (t) => p.acts.filter((a) => a.t === t);
     const links = by('link');
     const ups = by('upload_new');
     const downs = by('download');
+    const localNew = by('add_local'); // 이 PC에만 둘 파일(서버에 올리지 않음 — 선택 동기화 8.3절)
+    const me = this.who ? this.who.deviceId : null;
+    const elsewhere = proto >= 2 ? [...S.papers.values()].filter((sp) => sp.storage === 'local' && sp.holder !== me) : []; // 다른 PC에만 있음(받지 않음)
     const moved = links.filter((a) => !R.paperRel(S, S.papers.get(a.pid)) || P.fold(R.paperRel(S, S.papers.get(a.pid))) !== P.fold(a.at))
       .map((a) => ({ local: a.at, library: R.paperRel(S, S.papers.get(a.pid)) || '' }));
     const problems = [...L.problems, ...fp.problems, ...p.problems];
@@ -318,6 +345,7 @@ class SyncEngine {
       foldersLibrary: fp.acts.filter((a) => a.t === 'folder_create').length, moved: moved.slice(0, 200), movedCount: moved.length,
       skipped: problems.slice(0, LIMITS.problems), skippedCount: problems.length,
       empty: !L.files.length && !S.papers.size,
+      localOnly: localNew.length, localOnlyBytes: sum(localNew), elsewhere: elsewhere.length,
     };
     const free = this.statfs(root);
     const b = this.budget || {};
@@ -330,8 +358,9 @@ class SyncEngine {
     }
     const db = b.db;
     if (db && Number.isFinite(db.budget_bytes) && Number.isFinite(db.per_paper_bytes)) {
-      plan.db = { size: db.size_bytes, limit: db.limit_bytes, grow: plan.upload * db.per_paper_bytes, budget: db.budget_bytes };
-      if (plan.db.grow > db.budget_bytes) blocks.push({ kind: 'db', n: plan.upload, need: plan.db.grow, left: db.budget_bytes, size: db.size_bytes, limitBytes: db.limit_bytes });
+      const perLocal = Number.isFinite(db.per_local_bytes) ? db.per_local_bytes : PER_LOCAL_BYTES; // 로컬 항목은 본문 · 색인이 없어 편당 수 KB
+      plan.db = { size: db.size_bytes, limit: db.limit_bytes, grow: plan.upload * db.per_paper_bytes + plan.localOnly * perLocal, budget: db.budget_bytes };
+      if (plan.db.grow > db.budget_bytes) blocks.push({ kind: 'db', n: plan.upload + plan.localOnly, need: plan.db.grow, left: db.budget_bytes, size: db.size_bytes, limitBytes: db.limit_bytes });
     }
     plan.blocks = blocks;
     return plan;
@@ -442,7 +471,21 @@ class SyncEngine {
     const st = r && Date.parse(r.server_time);
     if (Number.isFinite(st)) this.offset = Math.round(st - (t0 + (t1 - t0) / 2));
     if (r && r.poll && Number(r.poll.idle_s) > 0) this.t.pollMs = Number(r.poll.idle_s) * 1000;
+    if (enabled) this.setProtocol(r);
     return r;
+  }
+
+  /** start 응답의 protocol · exts(8.6절). 프로토콜이 바뀌면(서버 배포 · 되돌림) 전체 다시 맞추기 */
+  setProtocol(r) {
+    const proto = r && Number(r.protocol) >= 2 ? 2 : 1;
+    const exts = r && Array.isArray(r.exts) ? r.exts.map((e) => String(e).toLowerCase()).filter((e) => SYNC_EXTS.includes(e)) : null;
+    if (this.proto != null && this.proto !== proto) {
+      this.needFull = true;
+      this.dirty = true;
+      this.log.info('동기화 프로토콜 바뀜', { from: this.proto, to: proto });
+    }
+    this.proto = proto;
+    this.exts = exts && exts.length ? exts : null;
   }
 
   // ====================================================================== 루프
@@ -504,7 +547,8 @@ class SyncEngine {
         if (was) { this.needFull = true; this.dirty = true; this.log.info('동기화 폴더 다시 찾음'); }
       }
       if (!this.watcher && this.watch) this.startWatcher();
-      if (this.offset == null) await this.callStart(this.root, true);
+      // 프로토콜은 start 마다 다시 정함 — 처음 · 전체 다시 맞추기(6시간 · needFull) 때(8.6절)
+      if (this.offset == null || this.proto == null || this.needFull || now - this.lastFullAt >= this.t.fullMs) await this.callStart(this.root, true);
       if (this.needFull || now - this.lastFullAt >= this.t.fullMs) {
         this.S = await this.fetchSnapshot();
         this.needFull = false;
@@ -521,7 +565,7 @@ class SyncEngine {
       if (now - this.lastRescan >= this.t.rescanMs || this.obs.size || this.goneSince.size || this.retries.size) this.dirty = true;
       if (this.held && this.held.askAt && now >= this.held.askAt) {
         this.held.askAt = now + this.t.reaskMs;
-        this.emit({ type: 'notify', kind: this.held.kind, n: this.held.pids.size, always: true });
+        this.emit({ type: 'notify', kind: this.held.kind, n: this.held.pids.size, always: true, ...this.heldLabel() });
       }
       if (this.dirty) {
         this.dirty = false;
@@ -617,11 +661,12 @@ class SyncEngine {
     const S = emptyS();
     let pageAfter = null;
     let first = null;
+    let v2Fields = false;
     for (let guard = 0; guard < 10000; guard++) {
       const r = await this.api.post(`${API}/snapshot`, pageAfter ? { page_after: pageAfter, limit: LIMITS.snapshot } : { limit: LIMITS.snapshot });
       if (!first) first = r;
-      for (const f of r.folders || []) S.folders.set(Number(f.id), { id: Number(f.id), name: String(f.name), parent_id: f.parent_id == null ? null : Number(f.parent_id) });
-      for (const p of r.papers || []) if (p.sha256) S.papers.set(Number(p.id), normPaper(p));
+      for (const f of r.folders || []) { S.folders.set(Number(f.id), normFolder(f)); if ('sync_mode' in f) v2Fields = true; }
+      for (const p of r.papers || []) { if (p.sha256) S.papers.set(Number(p.id), normPaper(p)); if ('storage' in p || 'kind' in p) v2Fields = true; }
       for (const t of r.trashed || []) S.trashed.set(Number(t.id), { sha256: t.sha256 || '', label: t.deleted_by_label || '' });
       for (const t of r.tombstones || []) (t.kind === 'folder' ? S.goneFolders : S.gonePapers).add(Number(t.id));
       if (!r.more || !r.next) break;
@@ -629,6 +674,7 @@ class SyncEngine {
     }
     this.cursor = first ? first.cursor : null;
     this.J && (this.J.cursor = this.cursor);
+    this.snapshotProto = v2Fields ? 2 : S.folders.size || S.papers.size ? 1 : null; // 미리보기용 짐작(빈 서재면 모름)
     this.budget = first ? {
       upload_budget_bytes: first.upload_budget_bytes, upload_budget_limit: first.upload_budget_limit, user_cap_bytes: first.user_cap_bytes,
       trash_bytes: first.trash_bytes, db: first.db || null, otherDevices: Number(first.other_sync_devices) || 0,
@@ -657,9 +703,11 @@ class SyncEngine {
     const d = ch.data || {};
     if (ch.kind === 'folder') {
       if (ch.op === 'delete') { S.folders.delete(id); S.goneFolders.add(id); }
-      else S.folders.set(id, { id, name: String(d.name), parent_id: d.parent_id == null ? null : Number(d.parent_id) });
+      else S.folders.set(id, normFolder({ ...d, id }));
       return;
     }
+    // 서버가 이 논문을 바꿈(취소 뒤 다시 요청 등 — 서버 mode_error 가 비었을 수 있음) → 보낸 mode.fail 기록을 잊어 같은 이유도 다시 알림
+    if (this.J && this.J.modeFails) delete this.J.modeFails[id];
     if (ch.op === 'upsert') {
       S.trashed.delete(id);
       if (d.sha256) S.papers.set(id, normPaper({ ...d, id })); else S.papers.delete(id);
@@ -677,10 +725,10 @@ class SyncEngine {
    * ctx = {root, J, obs, cache} → {files, dirs, problems, unstable, nestedMarker}
    * 해시가 필요한 파일(저널과 크기 · 시각 · ID · 경로 중 하나라도 다름)은 안정된 뒤에만, 속성 확인을 먼저(K-45).
    */
-  async scanLocal(ctx, { progress = false } = {}) {
+  async scanLocal(ctx, { progress = false, exts = this.scanExts() } = {}) {
     const { root, J } = ctx;
     const kept = new Set((J.kept || []).map(P.fold));
-    const tree = await scanner.scanTree(root, { skip: (rel) => kept.has(P.fold(rel)) });
+    const tree = await scanner.scanTree(root, { skip: (rel) => kept.has(P.fold(rel)), exts });
     const now = this.now();
     const problems = [...tree.problems];
     const byKey = new Map();
@@ -722,7 +770,9 @@ class SyncEngine {
       if (progress && this.probing) { this.probing.done++; if (this.probing.done % 20 === 0) this.refresh(); }
       if (!h) { ctx.obs.delete(f.key); unstable++; continue; }
       ctx.obs.delete(f.key);
-      if (!h.pdf) { problems.push({ code: 'not_pdf', rel: f.rel }); f.blocked = true; continue; }
+      // 형식 판정(8.1): 첫 바이트 %PDF 면 이름과 관계없이 PDF, 아니면 확장자 + 매직이 맞아야. v1(옛 서버)은 PDF 만
+      const kind = kindOf(h.head, f.rel);
+      if (!kind || (exts === PDF_ONLY && kind !== 'pdf')) { problems.push({ code: isPdfExt(f.rel) ? 'not_pdf' : 'bad_format', rel: f.rel }); f.blocked = true; continue; }
       f.sha256 = h.sha256;
       ctx.cache.set(f.key, { size: f.size, mtime_ms: f.mtime_ms, ino: f.ino, sha256: h.sha256 });
     }
@@ -741,14 +791,16 @@ class SyncEngine {
     const execProblems = [];
     let L = null;
     let totalDone = 0;
+    this.pruneModeFails();
     for (let iter = 0; iter < 8; iter++) {
       L = await this.scanLocal(ctx);
+      this.pruneLocalRetries(L);
       if (L.nestedMarker) execProblems.push({ code: 'nested_root', rel: '' });
       const fp = R.planFolders(this.J, L, this.S, { root: this.root });
       const fdone = await this.execFolders(fp.acts, L, execProblems);
       if (fdone) { totalDone += fdone; continue; }
-      const p = R.planFiles(this.J, L, this.S, { place: this.place, root: this.root });
-      this.lastPlan = { problems: [...fp.problems, ...p.problems], up: p.acts.filter((a) => /^upload|^restore/.test(a.t)).length, down: p.acts.filter((a) => a.t === 'download').length };
+      const p = R.planFiles(this.J, L, this.S, { place: this.place, root: this.root, me: this.who.deviceId, proto: this.proto || 1, forceCloud: this.forceCloud });
+      this.lastPlan = { problems: [...fp.problems, ...p.problems], up: p.acts.filter((a) => /^upload|^restore|^promote/.test(a.t)).length, down: p.acts.filter((a) => a.t === 'download' || a.t === 'swap_rep').length };
       this.lastPlan.todo = p.acts.length;
       this.progress = { done: 0, total: p.acts.length };
       const done = await this.execFiles(p.acts, L, execProblems);
@@ -756,7 +808,10 @@ class SyncEngine {
       if (!done) break;
     }
     const kept = (this.J.kept || []).map((rel) => ({ code: 'folder_kept', rel }));
-    this.problems = dedupeProblems([...(L ? L.problems : []), ...(this.lastPlan.problems || []), ...execProblems, ...this.retryProblems(), ...kept]);
+    // 끄기를 확인하지 못해 서버에 알린 것(mode.fail) — 대기가 남아 있는 동안 문제 목록에(10.9)
+    const modeFailed = Object.keys(this.J.modeFails || {}).map(Number).filter((pid) => { const sp = this.S.papers.get(pid); return sp && sp.pending === 'to_local'; })
+      .map((pid) => ({ code: 'mode_fail', rel: R.paperRel(this.S, this.S.papers.get(pid)) || this.S.papers.get(pid).file_name }));
+    this.problems = dedupeProblems([...(L ? L.problems : []), ...(this.lastPlan.problems || []), ...execProblems, ...this.retryProblems(), ...kept, ...modeFailed]);
     this.progress = null;
     if (totalDone || !this.lastSyncAt) this.lastSyncAt = this.now();
     if (this.firstPassPending && !this.lastPlan.todo) {
@@ -768,19 +823,44 @@ class SyncEngine {
     this.log.info('맞추기', { done: totalDone, files: Object.keys(this.J.files).length, problems: this.problems.length });
   }
 
+  /** 보낸 mode.fail 기록(J.modeFails)은 서버가 아직 "끄기 대기 · 보관 = 이 PC"일 때만 둠 — 취소 · 끝남 · 넘겨줌이면 지움 */
+  pruneModeFails() {
+    const mf = this.J && this.J.modeFails;
+    if (!mf) return;
+    const me = this.who && this.who.deviceId;
+    for (const k of Object.keys(mf)) {
+      const sp = this.S.papers.get(Number(k));
+      if (!sp || sp.storage === 'local' || sp.pending !== 'to_local' || sp.holder == null || me == null || Number(sp.holder) !== Number(me)) delete mf[k];
+    }
+  }
+
   retryProblems() {
     const out = [];
-    for (const [k, r] of this.retries) if (r.rel != null) out.push({ code: r.code || 'retrying', rel: r.rel, at: r.at, key: k });
+    for (const [k, r] of this.retries) if (r.rel != null) out.push({ code: r.code || 'retrying', rel: r.rel, at: r.at, key: k, ...(r.label ? { label: r.label } : {}) });
     return out;
   }
 
   /** 재시도 대기 중이면 true(이번엔 건너뜀) */
   waiting(key) { const r = this.retries.get(key); return !!r && this.now() < r.at; }
 
-  failLater(key, code, rel, { base = this.t.retryBaseMs } = {}) {
+  /** 재시도 대기. base 는 바닥 — 앞서 짧게 실패한 키도 다시 시도 안 함(24시간) · 한도 대기는 그보다 줄지 않음. label = 문제 목록에 보일 이름(보관 PC 등) */
+  failLater(key, code, rel, { base = this.t.retryBaseMs, label = '', local = null } = {}) {
     const r = this.retries.get(key);
-    const ms = r ? Math.min(this.t.retryMaxMs, r.ms * 2) : base;
-    this.retries.set(key, { at: this.now() + ms, ms, code, rel });
+    const ms = r ? Math.max(base, Math.min(this.t.retryMaxMs, r.ms * 2)) : base;
+    this.retries.set(key, { at: this.now() + ms, ms, code, rel, ...(label ? { label: String(label) } : {}), ...(local ? { local } : {}) });
+  }
+
+  /**
+   * PC 파일 하나에 묶인 긴 대기(local = 해시 또는 true — 서버 거절 · 확장자 바꾸기 · local_elsewhere)는 그 파일이 없어지거나
+   * 내용이 바뀌면 지움 — 고친 뒤에도 옛 이유가 24시간 문제 목록에 남지 않게(바뀐 파일은 키가 달라 바로 다시 시도)
+   */
+  pruneLocalRetries(L) {
+    const byKey = new Map(L.files.map((f) => [f.key, f]));
+    for (const [k, r] of this.retries) {
+      if (!r.local || r.rel == null) continue;
+      const f = byKey.get(P.fold(r.rel));
+      if (!f || (typeof r.local === 'string' && f.sha256 != null && f.sha256 !== r.local)) this.retries.delete(k);
+    }
   }
 
   okNow(key) { this.retries.delete(key); }
@@ -859,7 +939,7 @@ class SyncEngine {
       this.doneOp(key);
       if (res.ok && res.result === 'applied' && res.folder) {
         const f = res.folder;
-        this.S.folders.set(Number(f.id), { id: Number(f.id), name: String(f.name), parent_id: f.parent_id == null ? null : Number(f.parent_id) });
+        this.S.folders.set(Number(f.id), normFolder({ sync_mode: (this.S.folders.get(Number(f.id)) || {}).sync_mode, ...f }));
         this.rebaseJ(this.J.folders[a.fid].rel, a.rel);
         done++;
       } else if (res.result === 'rejected' || res.result === 'gone' || res.code === 'not_found') { delete this.J.folders[a.fid]; this.needFull = true; done++; } else this.failLater(key, 'retrying', a.rel);
@@ -892,7 +972,7 @@ class SyncEngine {
         this.doneOp(key);
         if (res.ok && res.folder) {
           const f = res.folder;
-          this.S.folders.set(Number(f.id), { id: Number(f.id), name: String(f.name), parent_id: f.parent_id == null ? null : Number(f.parent_id) });
+          this.S.folders.set(Number(f.id), normFolder(f));
           if (a.replace != null) delete this.J.folders[a.replace];
           this.J.folders[Number(f.id)] = { rel: a.rel, ino: a.ino || '' };
           done++;
@@ -933,20 +1013,25 @@ class SyncEngine {
     const by = (t) => acts.filter((a) => a.t === t);
     for (const a of [...by('drop'), ...by('refresh'), ...by('link')]) {
       if (a.t === 'drop') delete this.J.files[a.pid];
-      else this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, size: a.size, mtime_ms: a.mtime_ms, ino: a.ino || '' };
+      else this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, size: a.size, mtime_ms: a.mtime_ms, ino: a.ino || '', kind: this.repKind(a.pid) };
       if (a.t === 'link') this.firstCount('link');
       done++;
     }
+    await this.finishSwapping(problems); // 지난번 표현 바꾸기에서 남은 옛 변환본(J.swapping) — 휴지통으로
     for (const a of by('local_move')) { if (await this.localMove(a, problems)) { done++; tick(); } }
     done += await this.serverMoves(by('srv_move'), problems);
-    done += await this.uploads([...by('upload_content'), ...by('upload_new'), ...by('restore')], lByKey, problems, tick);
+    done += await this.modeOps([...by('mode_ack'), ...by('mode_fail')]); // 끄기 확인 · 실패 알림(ops 묶음 — 8.3절 순서)
+    done += await this.uploads([...by('upload_content'), ...by('upload_new'), ...by('restore'), ...by('add_local'), ...by('promote')], lByKey, problems, tick);
     done += await this.downloads(by('download'), problems, tick);
+    done += await this.swaps(by('swap_rep'), problems, tick);
     done += await this.serverDeletes(by('srv_delete'), L);
-    done += await this.localTrash(by('trash_local'), problems);
+    const trashes = by('trash_local');
+    done += await this.localTrash(trashes.filter((a) => a.reason !== 'moved_local'), problems, 'remote_delete');
+    done += await this.localTrash(trashes.filter((a) => a.reason === 'moved_local'), problems, 'moved_local'); // 다른 PC에만 두기로 한 사본(D-4)
     // 사라진 J 파일 중 이번 계획에 없는 것(다시 나타남 등)의 대기 기록 정리
     const goneNow = new Set(by('srv_delete').map((a) => a.pid));
     for (const pid of this.goneSince.keys()) if (!goneNow.has(pid)) this.goneSince.delete(pid);
-    if (this.held && this.held.kind !== 'remote_delete') {
+    if (this.held && this.held.kind !== 'remote_delete' && this.held.kind !== 'moved_local') {
       for (const pid of [...this.held.pids]) if (!goneNow.has(pid)) this.held.pids.delete(pid);
       if (!this.held.pids.size) this.held = null;
     }
@@ -1016,7 +1101,12 @@ class SyncEngine {
         const j = this.J.files[a.pid];
         if (j) j.rel = a.rel; // 서버가 이름을 바꿨으면(K-8) 다음 비교가 PC 이름을 맞춤
         done++;
-      } else if (res.result === 'gone') { this.needFull = true; done++; } else { this.failLater(key, 'retrying', a.rel); problems.push({ code: 'retrying', rel: a.rel }); }
+      } else if (res.result === 'gone') { this.needFull = true; done++; } else if (res.code === 'bad_name') {
+        // 서버가 이름을 받지 않음(C-1) — 확장자 바꾸기(PC 표현은 그대로) 등. 같은 이름이면 같은 결과라 다시 보내지 않음(이름을 바꾸면 키가 달라짐)
+        const sp = this.S.papers.get(a.pid);
+        const extChanged = !!sp && path.extname(sp.file_name).toLowerCase() !== path.extname(a.rel).toLowerCase();
+        this.failLater(key, extChanged ? 'ext_change' : 'bad_name_local', a.rel, { base: NO_RETRY_MS, local: true });
+      } else { this.failLater(key, 'retrying', a.rel); problems.push({ code: 'retrying', rel: a.rel }); }
     }
     return done;
   }
@@ -1034,11 +1124,18 @@ class SyncEngine {
   hold(kind, pids, labels = []) {
     if (!this.held) {
       this.held = { batch_id: this.uuid(), kind, pids: new Set(), labels: new Set(), askAt: this.now() + this.t.reaskMs, base: Object.keys(this.J.files).length };
-      this.emit({ type: 'notify', kind, n: pids.length, always: true });
+      for (const l of labels) if (l) this.held.labels.add(l);
+      this.emit({ type: 'notify', kind, n: pids.length, always: true, ...this.heldLabel() });
       this.log.info('대량 삭제 — 확인 대기', { kind, n: pids.length });
     }
     for (const p of pids) this.held.pids.add(p);
     for (const l of labels) if (l) this.held.labels.add(l);
+  }
+
+  /** 다른 PC에만 두기(moved_local) 알림의 보관 PC 이름 {label} — 보관 PC가 하나로 같을 때만(‘연구실 PC’), 아니면 {} */
+  heldLabel() {
+    const h = this.held;
+    return h && h.kind === 'moved_local' && h.labels.size === 1 ? { label: [...h.labels][0] } : {};
   }
 
   async serverDeletes(acts, L) {
@@ -1081,6 +1178,10 @@ class SyncEngine {
         this.needFull = true;
         this.note('rejected_delete', P.baseName(a.rel));
         done++;
+      } else if (res.result === 'not_holder') { // 다른 PC에만 두기로 한 항목(D-4) — 이 PC 사본이 사라진 것뿐, 서재 항목은 그대로. 서버 상태를 다시 맞춤
+        delete this.J.files[a.pid];
+        this.needFull = true;
+        done++;
       } else this.failLater(key, 'retrying', a.rel);
     }
     this.sent.local.push({ at: now, n: send.length });
@@ -1088,9 +1189,10 @@ class SyncEngine {
     return done;
   }
 
-  async localTrash(acts, problems) {
+  /** 서버 → PC 지우기: kind 'remote_delete'(서재 휴지통) · 'moved_local'(다른 PC에만 두기로 바뀐 사본 — 선택 동기화 D-4). 대량 검사 공통 */
+  async localTrash(acts, problems, kind = 'remote_delete') {
     // 기다리는 서재 → PC 묶음에서 이번에 더는 지울 대상이 아닌 것(다른 곳에서 되살림 등)을 뺌 — 비면 대기 끝
-    if (this.held && this.held.kind === 'remote_delete') {
+    if (this.held && this.held.kind === kind) {
       for (const pid of [...this.held.pids]) if (!acts.some((a) => a.pid === pid)) this.held.pids.delete(pid);
       if (!this.held.pids.size) this.held = null;
     }
@@ -1098,10 +1200,10 @@ class SyncEngine {
     const approved = acts.filter((a) => this.approved.remote.has(a.pid));
     let rest = acts.filter((a) => !this.approved.remote.has(a.pid));
     if (this.held) {
-      if (this.held.kind === 'remote_delete') this.hold('remote_delete', rest.map((a) => a.pid), rest.map((a) => a.label));
+      if (this.held.kind === kind) this.hold(kind, rest.map((a) => a.pid), rest.map((a) => a.label));
       rest = [];
     } else if (rest.length && this.massExceeded(rest.length, 'remote')) {
-      this.hold('remote_delete', rest.map((a) => a.pid), rest.map((a) => a.label));
+      this.hold(kind, rest.map((a) => a.pid), rest.map((a) => a.label));
       rest = [];
     }
     let done = 0;
@@ -1151,6 +1253,7 @@ class SyncEngine {
    */
   async trashFile(abs, rel, problems, attrs = null) {
     const key = `trash:${P.fold(rel)}`;
+    if (!abs) return 'skip';
     if (this.waiting(key)) return 'retry';
     try { if (!fs.lstatSync(abs).isFile()) return 'skip'; } catch { return 'gone'; }
     const a = attrs && attrs.has(abs) ? attrs.get(abs) : (await this.readAttrs([abs])).get(abs);
@@ -1171,7 +1274,8 @@ class SyncEngine {
     let dest = path.join(day, rel);
     try {
       fs.mkdirSync(path.dirname(dest), { recursive: true });
-      for (let i = 2; fs.existsSync(dest); i++) dest = path.join(day, rel.replace(/(\.pdf)$/i, ` (${i})$1`));
+      const ext = /(\.[^.\\]+)$/.exec(rel); // 아무 확장자(문서 · 사진도 — 선택 동기화 8.1)
+      for (let i = 2; fs.existsSync(dest); i++) dest = path.join(day, ext ? `${rel.slice(0, -ext[1].length)} (${i})${ext[1]}` : `${rel} (${i})`);
       fs.renameSync(abs, dest);
     } catch {
       this.failLater(key, 'trash_failed', rel);
@@ -1183,21 +1287,26 @@ class SyncEngine {
     return 'archived';
   }
 
-  // ---------------------------------------------------------------------- 올리기 (K-30 · 10장)
+  // ---------------------------------------------------------------------- 올리기 (K-30 · 10장 · 선택 동기화 8.4)
+  /** 업로드 자리가 필요한 동작인가 — 되살리기 · 로컬 항목(add_local · 로컬 내용 메타데이터)은 바이트를 보내지 않음 */
+  static needsSlot(a) { return a.t !== 'restore' && a.t !== 'add_local' && !(a.t === 'upload_content' && a.local); }
+
   async uploads(acts, lByKey, problems, tick) {
     if (!acts.length) return 0;
     const now = this.now();
-    if (this.uploadBlock && now < this.uploadBlock.until) return 0;
-    this.uploadBlock = null;
+    const blocked = !!this.uploadBlock && now < this.uploadBlock.until; // 저장 공간 · 한도 멈춤 — 바이트를 보내지 않는 동작은 계속
+    if (!blocked) this.uploadBlock = null;
     const todo = [];
     for (const a of acts) {
+      if (blocked && SyncEngine.needsSlot(a)) continue;
       const folderId = this.folderIdOf(P.parentRel(a.rel));
       if (folderId === undefined) continue; // 폴더가 먼저
-      const key = a.t === 'upload_content' ? `content:${a.pid}:${a.sha256}` : `add:${P.fold(a.rel)}:${a.sha256}`;
+      const key = a.t === 'upload_content' ? `content:${a.pid}:${a.sha256}` : a.t === 'promote' ? `promote:${a.pid}:${a.sha256}`
+        : a.t === 'add_local' ? `addl:${P.fold(a.rel)}:${a.sha256}` : `add:${P.fold(a.rel)}:${a.sha256}`;
       if (this.waiting(key)) continue;
       todo.push({ ...a, folderId, key, abs: path.join(this.root, a.rel) });
     }
-    const needSlot = todo.filter((a) => a.t !== 'restore');
+    const needSlot = todo.filter((a) => SyncEngine.needsSlot(a));
     const slots = new Map();
     try {
       for (const part of chunks(needSlot, LIMITS.slots)) {
@@ -1206,16 +1315,16 @@ class SyncEngine {
         part.forEach((a, i) => { if (arr[i] && arr[i].upload_id && arr[i].upload) slots.set(a, arr[i]); else this.failLater(a.key, 'retrying', a.rel); });
       }
     } catch (e) {
-      if (this.quotaError(e)) return 0;
-      throw e;
+      if (!this.quotaError(e)) throw e;
     }
     let done = 0;
     let addLock = Promise.resolve();
     const serial = (fn) => { const p = addLock.then(fn, fn); addLock = p.catch(() => {}); return p; };
     await pool(todo, LIMITS.upload, async (a) => {
-      if (this.uploadBlock) return;
+      const needs = SyncEngine.needsSlot(a);
+      if (this.uploadBlock && needs) return;
       const slot = slots.get(a);
-      if (a.t !== 'restore' && !slot) return;
+      if (needs && !slot) return;
       if (slot) {
         try { await this.transfer.put(slot.upload, a.abs, a.sha256); } catch (e) {
           this.failLater(a.key, e.code === 'bad_url' ? 'bad_url' : 'retrying', a.rel);
@@ -1224,12 +1333,15 @@ class SyncEngine {
         }
       }
       await serial(async () => {
-        if (this.uploadBlock) return;
+        if (this.uploadBlock && needs) return;
         try {
-          if (await this.finishUpload(a, slot, lByKey)) { done++; tick(); this.okNow(a.key); }
+          if (await this.finishUpload(a, slot, lByKey, problems)) { done++; tick(); this.okNow(a.key); }
         } catch (e) {
-          if (this.quotaError(e)) return;
+          if (this.quotaError(e)) { if (!needs) this.failLater(a.key, 'retrying', a.rel, { base: this.t.quotaRetryMs }); return; }
           if (e && e.name === 'ApiError' && (e.network || e.status >= 500 || e.status === 429)) { this.failLater(a.key, 'retrying', a.rel, { base: 5000 }); return; }
+          const rj = this.uploadRejected(a, e);
+          if (rj === 'no_retry') return; // 형식 · 변환 거절 — 이유 · 24시간 대기를 그대로 둠(다시 맞추기 · 재시도로 덮지 않음)
+          if (rj) { done++; return; }
           if (e && e.name === 'ApiError' && e.status === 404 && a.t === 'upload_content') { delete this.J.files[a.pid]; done++; return; } // 영구 삭제된 논문 → 새 파일로
           if (e && e.name === 'ApiError' && e.status === 400) this.needFull = true; // 서버 상태와 어긋남(되살릴 휴지통 논문이 없음 등) → 다시 맞춤
           this.failLater(a.key, 'retrying', a.rel);
@@ -1238,6 +1350,27 @@ class SyncEngine {
       });
     });
     return done;
+  }
+
+  /**
+   * 선택 동기화 오류(7.1절 표) → 처리했으면 true(이번 맞추기에서 상태가 바뀜 — 다시 계획).
+   * upload_required: 그 파일만 다음 바퀴에 올림. 형식 · 변환 거절: 같은 파일이면 같은 결과라 다시 하지 않음(파일이 바뀌면 키가 달라져 다시)
+   * → 'no_retry'(이유 코드 · 24시간 대기를 적어 둠 — 부르는 쪽은 아무것도 더 하지 않음).
+   */
+  uploadRejected(a, e) {
+    if (!e || e.name !== 'ApiError') return false;
+    if (e.status === 409 && e.code === 'upload_required') { this.forceCloud.add(`${P.fold(a.rel)}\n${a.sha256}`); return true; }
+    if (e.status === 409 && e.code === 'changed' && a.t === 'promote') { // 서버 표현이 다름 — 내용을 먼저 맞춘 뒤 다음 바퀴에 다시
+      if (e.body && e.body.paper) this.S.papers.set(Number(e.body.paper.id), normPaper(e.body.paper));
+      return true;
+    }
+    if (e.status === 409 && ['not_pending', 'not_holder', 'local_only'].includes(e.code)) { this.needFull = true; this.failLater(a.key, 'retrying', a.rel); return true; }
+    if (e.status === 400 && ['bad_format', 'convert_failed', 'no_converter', 'bad_pdf'].includes(e.code)) {
+      this.failLater(a.key, e.code === 'bad_pdf' ? 'not_pdf' : e.code, a.rel, { base: NO_RETRY_MS, local: a.sha256 || true });
+      this.log.info('서버가 파일을 받지 않음', { code: e.code });
+      return 'no_retry';
+    }
+    return false;
   }
 
   quotaError(e) {
@@ -1251,28 +1384,46 @@ class SyncEngine {
     return false;
   }
 
-  async finishUpload(a, slot, lByKey) {
+  async finishUpload(a, slot, lByKey, problems = []) {
     const l = lByKey.get(P.fold(a.rel));
     const meta = { size: a.size, mtime_ms: a.mtime_ms, ino: (l && l.ino) || '' };
     if (a.t === 'upload_content') {
-      const r = await this.api.post(`${API}/files/${a.pid}/content`, { op_id: this.opId(a.key), upload_id: slot.upload_id, base_sha256: a.base, sha256: a.sha256,
-        mtime_ms: a.mtime_ms, clock_offset_ms: this.offset });
+      // 로컬 항목(보관 = 나): 업로드 자리 없이 해시 · 크기 · 시각만(8.4절) — 서버는 보관 PC 하나라 충돌 없음
+      const body = { op_id: this.opId(a.key), base_sha256: a.base, sha256: a.sha256, mtime_ms: a.mtime_ms, clock_offset_ms: this.offset };
+      if (a.local) body.size = a.size; else body.upload_id = slot.upload_id;
+      const r = await this.api.post(`${API}/files/${a.pid}/content`, body, { timeout: SLOW_MS });
       this.doneOp(a.key);
       if (r.translation_cleared === true) this.note('translation_cleared', P.baseName(a.rel));
       if (r.result === 'conflict') return this.applyConflict(a, r, meta);
       if (r.paper) this.S.papers.set(Number(r.paper.id), normPaper(r.paper));
       else this.S.papers.set(a.pid, { ...this.S.papers.get(a.pid), sha256: a.sha256, size: a.size });
       this.S.trashed.delete(a.pid);
-      this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, ...meta };
+      this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, ...meta, kind: this.repKind(a.pid) };
       this.firstCount('up');
       return true;
     }
+    if (a.t === 'promote') { // 켜기(5.3): 같은 업로드 자리 흐름, 마지막 호출만 files/{id}/promote — 서버가 웹 업로드처럼 처리
+      const r = await this.api.post(`${API}/files/${a.pid}/promote`, { op_id: this.opId(a.key), upload_id: slot.upload_id, sha256: a.sha256, size: a.size,
+        mtime_ms: a.mtime_ms, clock_offset_ms: this.offset }, { timeout: SLOW_MS });
+      this.doneOp(a.key);
+      if (r && r.paper) this.S.papers.set(Number(r.paper.id), normPaper(r.paper));
+      else this.S.papers.set(a.pid, { ...this.S.papers.get(a.pid), storage: 'cloud', pending: '', holder: null });
+      this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, ...meta, kind: this.repKind(a.pid) };
+      this.log.info('서버에도 저장(켜기) 마침', { id: a.pid });
+      return true;
+    }
     const body = { op_id: this.opId(a.key), sha256: a.sha256, size: a.size, mtime_ms: a.mtime_ms, clock_offset_ms: this.offset, folder_id: a.folderId, file_name: P.nfc(P.baseName(a.rel)) };
+    if ((this.proto || 1) >= 2) body.storage = a.t === 'add_local' ? 'local' : 'cloud';
     if (slot) body.upload_id = slot.upload_id;
-    const r = await this.api.post(`${API}/files/add`, body);
+    const r = await this.api.post(`${API}/files/add`, body, { timeout: SLOW_MS });
     this.doneOp(a.key);
+    if (r && r.result === 'local_elsewhere') { // 다른 활성 PC가 보관하는 로컬 항목과 같은 파일(D-9) — 연결하지 않고 문제 목록, 저널에 넣지 않음
+      this.failLater(a.key, 'local_elsewhere', a.rel, { base: this.t.retryMaxMs, label: typeof r.holder_name === 'string' ? r.holder_name.slice(0, 100) : '', local: a.sha256 || true });
+      return false;
+    }
     if (!r || !r.paper) return false;
     if (a.dropPid != null) delete this.J.files[a.dropPid];
+    if (a.note) this.note(a.note, P.baseName(a.rel));
     this.acceptPaper(r.paper, a.rel, { sha256: a.sha256, ...meta });
     if (r.result === 'created') this.firstCount('up'); else this.firstCount('link');
     return true;
@@ -1284,7 +1435,14 @@ class SyncEngine {
     this.S.papers.set(p.id, p);
     this.S.trashed.delete(p.id);
     this.S.gonePapers.delete(p.id);
-    this.J.files[p.id] = { rel, sha256: meta.sha256, size: meta.size, mtime_ms: meta.mtime_ms, ino: meta.ino || '' };
+    this.J.files[p.id] = { rel, sha256: meta.sha256, size: meta.size, mtime_ms: meta.mtime_ms, ino: meta.ino || '', kind: this.repKind(p.id) };
+  }
+
+  /** 저널 kind(8.5): 서버 표현 — 로컬 항목 'local', 원본 'source', 그 밖 'pdf' */
+  repKind(pid) {
+    const sp = this.S.papers.get(Number(pid));
+    if (!sp) return 'pdf';
+    return sp.storage === 'local' ? 'local' : sp.kind === 'source' ? 'source' : 'pdf';
   }
 
   /** 충돌(U-1): winner incoming → 원래 = 우리 내용, 사본 = 옛 서버 내용(받음). winner server → 우리 파일을 사본 이름으로 바꾸고 원래 이름은 받음 */
@@ -1294,7 +1452,7 @@ class SyncEngine {
     if (paper) this.S.papers.set(paper.id, paper);
     if (copy) this.S.papers.set(copy.id, copy);
     if (r.winner === 'incoming') {
-      this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, ...meta };
+      this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, ...meta, kind: this.repKind(a.pid) };
     } else if (copy) {
       const dir = P.parentRel(a.rel);
       const to = P.joinRel(dir, copy.file_name);
@@ -1302,11 +1460,132 @@ class SyncEngine {
       const dest = P.safeJoin(this.root, to, { file: true });
       delete this.J.files[a.pid]; // 원래 이름에는 서버 내용을 받음
       if (from && dest && !fs.existsSync(dest)) {
-        try { fs.renameSync(from, dest); this.J.files[copy.id] = { rel: to, sha256: a.sha256, ...meta }; } catch { /* 다음 비교가 연결로 처리 */ }
+        try { fs.renameSync(from, dest); this.J.files[copy.id] = { rel: to, sha256: a.sha256, ...meta, kind: this.repKind(copy.id) }; } catch { /* 다음 비교가 연결로 처리 */ }
       }
     }
     this.note('conflict', P.baseName(a.rel));
     return true;
+  }
+
+  // ---------------------------------------------------------------------- 끄기 확인 · 실패 (선택 동기화 5.3 · 8.4)
+  /** mode_ack · mode_fail → ops 묶음(최대 20). applied = 서버가 R2 · 본문을 지우고 로컬 항목이 됨 */
+  async modeOps(acts) {
+    const list = [];
+    for (const a of acts) {
+      const key = `mode:${a.t}:${a.pid}`;
+      if (this.waiting(key)) continue;
+      const op = a.t === 'mode_ack' ? { op_id: this.opId(key), type: 'mode.ack', id: a.pid, sha256: a.sha256 }
+        : { op_id: this.opId(key), type: 'mode.fail', id: a.pid, reason: a.reason };
+      list.push({ a, key, op });
+    }
+    if (!list.length) return 0;
+    let done = 0;
+    for (const { a, key, res } of await this.ops(list)) {
+      this.doneOp(key);
+      if (a.t === 'mode_fail') {
+        if (res.ok !== false) { this.J.modeFails[a.pid] = a.reason; done++; } else this.failLater(key, 'retrying', null);
+        continue;
+      }
+      if (res.ok !== false && res.result === 'applied') {
+        const cur = this.S.papers.get(a.pid) || {};
+        this.S.papers.set(a.pid, res.paper ? normPaper({ ...cur, ...res.paper }) : { ...cur, storage: 'local', pending: '', holder: this.who.deviceId });
+        if (this.J.files[a.pid]) this.J.files[a.pid].kind = 'local';
+        delete this.J.modeFails[a.pid];
+        this.log.info('PC에만 두기 마침', { id: a.pid });
+        done++;
+      } else if (res.result === 'changed') { // 그 사이 다른 PC가 내용을 바꿈 — 받기로 맞춘 뒤 다시 확인
+        if (res.paper) this.S.papers.set(Number(res.paper.id), normPaper(res.paper));
+        done++;
+      } else if (res.result === 'not_pending') { this.needFull = true; done++; } else this.failLater(key, 'retrying', null);
+    }
+    return done;
+  }
+
+  // ---------------------------------------------------------------------- 표현 바뀜 (D-8 · 8.3절 swap_rep)
+  /**
+   * 원본을 새 이름으로 받기(임시 → 해시 확인 → 넣기) → 저널 → 옛 변환본은 Windows 휴지통(대량 검사 대상 아님 — 내용이 새 파일로 대체됨).
+   * 넣기 전에 J.swapping 에 옛 파일을 적어 두므로 중간에 죽어도 옛 파일이 새 파일(올리기)로 읽히지 않고, 삭제로도 읽히지 않음(AC-S34).
+   */
+  async swaps(acts, problems, tick) {
+    const todo = [];
+    for (const a of acts) {
+      const key = `swap:${a.pid}:${a.sha256}`;
+      if (this.waiting(key)) continue;
+      const to = P.safeJoin(this.root, a.to, { file: true });
+      if (!to) { problems.push({ code: 'bad_name_server', rel: a.to }); continue; }
+      if (to.length > P.MAX_PATH) { problems.push({ code: 'too_long_down', rel: a.to }); continue; }
+      if (!this.isRealDir(path.dirname(to))) continue;
+      todo.push({ ...a, key, abs: to, fromAbs: P.safeJoin(this.root, a.from, { file: true }) });
+    }
+    if (!todo.length) return 0;
+    let done = 0;
+    const tmpDir = path.join(this.root, P.SYNC_DIR, 'tmp');
+    try { fs.mkdirSync(tmpDir, { recursive: true }); } catch { return 0; }
+    for (const part of chunks(todo, LIMITS.download)) {
+      const need = part.filter((a) => !fs.existsSync(a.abs));
+      const r = need.length ? await this.api.post(`${API}/download`, { ids: need.map((a) => a.pid) }) : [];
+      const all = Array.isArray(r) ? r : (r && (r.items || r.files)) || [];
+      const items = new Map(all.filter((x) => x && x.url).map((x) => [Number(x.id), x]));
+      for (const a of part) {
+        let placed = false;
+        if (fs.existsSync(a.abs)) { // 지난번에 넣고 죽었을 수 있음 — 같은 해시면 이어서, 다른 파일이면 덮어쓰지 않음
+          let h = null;
+          try { h = await scanner.hashFile(a.abs); } catch { h = null; }
+          if (!h || h.sha256 !== a.sha256) { this.failLater(a.key, 'retrying', a.to); continue; }
+          placed = true;
+        }
+        if (!placed) {
+          const it = items.get(a.pid);
+          if (!it) { this.failLater(a.key, 'retrying', a.to); continue; }
+          const tmp = path.join(tmpDir, `${this.uuid()}.part`);
+          let got;
+          try { got = await this.transfer.get(it.url, tmp); } catch (e) {
+            removeTemp(this.root, tmp);
+            this.failLater(a.key, e.code === 'bad_url' ? 'bad_url' : 'retrying', a.to);
+            continue;
+          }
+          if (got.sha256 !== a.sha256) { removeTemp(this.root, tmp); this.failLater(a.key, 'retrying', a.to, { base: 1000 }); continue; }
+          this.J.swapping[P.fold(a.from)] = { rel: a.from, sha256: a.oldSha }; // 넣기 전에 — 디스크 → 저널 순서의 예외(옛 파일 보호)
+          this.flushJournal();
+          if (fs.existsSync(a.abs)) { delete this.J.swapping[P.fold(a.from)]; removeTemp(this.root, tmp); continue; }
+          try { fs.renameSync(tmp, a.abs); } catch (e) {
+            delete this.J.swapping[P.fold(a.from)];
+            removeTemp(this.root, tmp);
+            this.failLater(a.key, e.code === 'EBUSY' || e.code === 'EPERM' ? 'busy' : 'retrying', a.to);
+            continue;
+          }
+        } else this.J.swapping[P.fold(a.from)] = { rel: a.from, sha256: a.oldSha };
+        let st;
+        try { st = fs.lstatSync(a.abs, { bigint: true }); } catch { continue; }
+        this.J.files[a.pid] = { rel: a.to, sha256: a.sha256, size: Number(st.size), mtime_ms: Number(st.mtimeNs / 1000000n), ino: st.ino ? `${st.dev}:${st.ino}` : '', kind: this.repKind(a.pid) };
+        this.flushJournal();
+        await this.trashSwapped(P.fold(a.from), problems);
+        this.okNow(a.key);
+        this.note('swap_rep', P.baseName(a.to));
+        this.firstCount('down');
+        done++;
+        tick();
+      }
+    }
+    return done;
+  }
+
+  /** J.swapping 의 옛 파일 하나를 휴지통으로(같은 해시일 때만 — 사용자가 고쳤으면 두고 새 파일로 맞춤) */
+  async trashSwapped(key, problems) {
+    const x = this.J.swapping[key];
+    if (!x) return;
+    const abs = P.safeJoin(this.root, x.rel, { file: true });
+    if (!abs || !fs.existsSync(abs)) { delete this.J.swapping[key]; return; }
+    let h = null;
+    try { h = await scanner.hashFile(abs); } catch { h = null; }
+    if (!h) return; // 쓰는 중 — 다음에
+    if (h.sha256 !== x.sha256) { delete this.J.swapping[key]; return; }
+    const t = await this.trashFile(abs, x.rel, problems);
+    if (t === 'ok' || t === 'archived' || t === 'gone') delete this.J.swapping[key];
+  }
+
+  async finishSwapping(problems) {
+    for (const key of Object.keys(this.J.swapping || {})) await this.trashSwapped(key, problems);
   }
 
   // ---------------------------------------------------------------------- 받기 (9.7)
@@ -1333,10 +1612,13 @@ class SyncEngine {
     for (const part of chunks(todo, LIMITS.download)) {
       const r = await this.api.post(`${API}/download`, { ids: part.map((a) => a.pid) });
       const all = Array.isArray(r) ? r : (r && (r.items || r.files)) || [];
-      if (all.some((x) => x && !x.url)) this.needFull = true; // 404(휴지통 · 없음) — 서버 상태를 다시 받음
+      // 404(휴지통 · 없음) — 서버 상태를 다시 받음. local_only(그 사이 PC에만 두기로 바뀜)는 그 파일만 건너뜀 — 다음 피드가 고침(8.4)
+      if (all.some((x) => x && !x.url && x.code !== 'local_only')) this.needFull = true;
+      const localOnly = new Set(all.filter((x) => x && x.code === 'local_only').map((x) => Number(x.id)));
       const items = new Map(all.filter((x) => x && x.url).map((x) => [Number(x.id), x]));
       await pool(part, LIMITS.get, async (a) => {
         const it = items.get(a.pid);
+        if (!it && localOnly.has(a.pid)) return;
         if (!it) { this.failLater(a.key, 'retrying', a.rel); return; }
         const tmp = path.join(tmpDir, `${this.uuid()}.part`);
         let got;
@@ -1366,7 +1648,7 @@ class SyncEngine {
         }
         let st;
         try { st = fs.lstatSync(a.abs, { bigint: true }); } catch { return; }
-        this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, size: Number(st.size), mtime_ms: Number(st.mtimeNs / 1000000n), ino: st.ino ? `${st.dev}:${st.ino}` : '' };
+        this.J.files[a.pid] = { rel: a.rel, sha256: a.sha256, size: Number(st.size), mtime_ms: Number(st.mtimeNs / 1000000n), ino: st.ino ? `${st.dev}:${st.ino}` : '', kind: this.repKind(a.pid) };
         this.okNow(a.key);
         this.firstCount('down');
         done++;
@@ -1427,8 +1709,9 @@ class SyncEngine {
       progress: this.mode === 'probing' && this.probing ? { done: this.probing.done, total: this.probing.total } : this.progress,
       counts: {
         files: this.J ? Object.keys(this.J.files).length : 0, pending_up: this.lastPlan.up || 0, pending_down: this.lastPlan.down || 0,
-        waiting_confirm: h ? h.pids.size : 0, problems: this.problems.length,
+        waiting_confirm: h ? h.pids.size : 0, problems: this.problems.length, ...this.modeCounts(),
       },
+      proto: this.proto || 0,
       lastSyncAt: this.lastSyncAt,
       problems: this.problems.slice(0, LIMITS.problems),
       archiveBytes: this.archiveBytes,
@@ -1439,7 +1722,61 @@ class SyncEngine {
     };
   }
 
+  /** 이 PC 상태 · sync_devices.counts(10.8절): local = 이 PC가 보관하는 로컬 항목, pending_mode = 이 PC가 마쳐야 할 끄기 · 켜기 대기 */
+  modeCounts() {
+    if ((this.proto || 1) < 2 || !this.who || this.mode !== 'running') return { local: 0, pending_mode: 0 };
+    let local = 0;
+    let pending = 0;
+    for (const sp of this.S.papers.values()) {
+      if (sp.holder !== this.who.deviceId) continue;
+      if (sp.storage === 'local') local++;
+      if (sp.pending) pending++;
+    }
+    return { local, pending_mode: pending };
+  }
+
   refresh() { this.emit({ type: 'state', ...this.snapshot() }); }
+
+  // ====================================================================== 로컬 파일 다리 (선택 동기화 8.4 · 9.2절 — main 이 물음)
+  /**
+   * 논문 id → 이 PC 파일 위치(main 이 다시 검사 · 해시 확인 뒤에만 읽음). 경로는 저널(J.rel)에서만 만든다(렌더러는 id만 보냄).
+   * → {ok, abs, rel, sha256, size, ext, kind, storage, mine} | {ok: false, code}
+   * code: sync_off(꺼짐 · 루트 문제) · unsupported(옛 서버 — v1) · not_local(서재에 없음) · missing(저널 · 파일 없음) · changed(쓰는 중) · path
+   */
+  resolveLocal(pid) {
+    const id = Number(pid);
+    if (this.mode !== 'running' || !this.J || !this.root || this.rootIssue || !this.who) return { ok: false, code: 'sync_off' };
+    if ((this.proto || 1) < 2) return { ok: false, code: 'unsupported' };
+    const sp = this.S.papers.get(id);
+    if (!sp) return { ok: false, code: 'not_local' };
+    const j = this.J.files[id];
+    if (!j) return { ok: false, code: 'missing' };
+    const abs = P.safeJoin(this.root, j.rel, { file: true });
+    if (!abs) return { ok: false, code: 'path' };
+    let st;
+    try { st = fs.lstatSync(abs, { bigint: true }); } catch { return { ok: false, code: 'missing' }; }
+    if (!st.isFile()) return { ok: false, code: 'path' };
+    const ino = st.ino ? `${st.dev}:${st.ino}` : '';
+    if (Number(st.size) !== j.size || Number(st.mtimeNs / 1000000n) !== j.mtime_ms || (j.ino && ino !== j.ino)) return { ok: false, code: 'changed' };
+    return { ok: true, abs, rel: j.rel, sha256: j.sha256, size: j.size, ext: extOf(j.rel), kind: sp.kind, storage: sp.storage, mine: sp.holder === this.who.deviceId };
+  }
+
+  /** 이 PC가 보관하는 로컬 항목만 키로: here(저널 · 파일 있음) | missing (9.1절 localHas — 최대 500개) */
+  localHas(ids) {
+    const out = {};
+    if (this.mode !== 'running' || !this.who || (this.proto || 1) < 2) return out;
+    for (const raw of (ids || []).slice(0, 500)) {
+      const id = Number(raw);
+      const sp = this.S.papers.get(id);
+      if (!sp || sp.storage !== 'local' || sp.holder !== this.who.deviceId) continue;
+      const j = this.J && this.J.files[id];
+      const abs = j && this.root ? P.safeJoin(this.root, j.rel, { file: true }) : null;
+      let here = false;
+      try { here = !!abs && fs.lstatSync(abs).isFile(); } catch { here = false; }
+      out[id] = here ? 'here' : 'missing';
+    }
+    return out;
+  }
 
   async reportStatus() {
     if (this.mode !== 'running' || !this.who || this.flags.revoked) return;
@@ -1463,14 +1800,37 @@ function sameFile(a, b) {
   try { return fs.realpathSync.native(a) === fs.realpathSync.native(b); } catch { return false; }
 }
 
+/**
+ * 서버 논문 항목(스냅숏 · 피드 · 응답) → S.papers 모양. 선택 동기화 필드(kind · storage · holder · holder_name · holder_gone · pending)가 없으면(옛 서버 — v1)
+ * 지금과 같은 켬 항목으로 본다(8.2절)
+ */
 function normPaper(p) {
-  return { id: Number(p.id), folder_id: p.folder_id == null ? null : Number(p.folder_id), file_name: String(p.file_name || ''), sha256: String(p.sha256 || ''), size: Number(p.size) || 0 };
+  return {
+    id: Number(p.id), folder_id: p.folder_id == null ? null : Number(p.folder_id), file_name: String(p.file_name || ''), sha256: String(p.sha256 || ''), size: Number(p.size) || 0,
+    kind: ['pdf', 'source', 'local'].includes(p.kind) ? p.kind : 'pdf',
+    storage: p.storage === 'local' ? 'local' : 'cloud',
+    holder: p.holder == null || p.holder === '' ? null : Number(p.holder),
+    holderGone: p.holder_gone === true || p.holderGone === true,
+    // 보관 PC 이름 — D-4 확인 창 · 알림 · 문제 목록의 ‘연구실 PC’(10.9절). 옛 서버 · 없음이면 ''
+    holder_name: typeof p.holder_name === 'string' ? p.holder_name.slice(0, 100) : '',
+    pending: p.pending === 'to_local' || p.pending === 'to_cloud' ? p.pending : '',
+  };
 }
 
+function normFolder(f) {
+  return { id: Number(f.id), name: String(f.name), parent_id: f.parent_id == null ? null : Number(f.parent_id),
+    sync_mode: f.sync_mode === 'cloud' || f.sync_mode === 'local' ? f.sync_mode : 'inherit' };
+}
+
+/** 같은 이유 · 경로는 하나만. 뒤엣것에만 이름(label — 보관 PC 등)이 있으면 그 이름을 붙임 */
 function dedupeProblems(list) {
-  const seen = new Set();
+  const seen = new Map();
   const out = [];
-  for (const p of list) { const k = `${p.code}\n${p.rel}`; if (!seen.has(k)) { seen.add(k); out.push(p); } }
+  for (const p of list) {
+    const k = `${p.code}\n${p.rel}`;
+    const had = seen.get(k);
+    if (!had) { const q = { ...p }; seen.set(k, q); out.push(q); } else if (p.label && !had.label) had.label = p.label;
+  }
   return out;
 }
 

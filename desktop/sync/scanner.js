@@ -8,14 +8,17 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const P = require('./paths');
+const { extOf, isSyncName, HEAD_BYTES } = require('./filekind');
 
 const ATTR = { READONLY: 0x1, HIDDEN: 0x2, SYSTEM: 0x4, REPARSE: 0x400, OFFLINE: 0x1000, RECALL_ON_OPEN: 0x40000, RECALL_ON_DATA: 0x400000 };
 
 /**
  * → {files: [{rel, key, size, mtime_ms, ino}], dirs: [{rel, key, ino}], problems: [{code, rel}], excluded: {files, dirs}, nestedMarker}
  * 읽기만 한다(AC-673a). skip(rel) 이 참인 디렉터리는 들어가지 않음.
+ * exts: 맞출 확장자(Set, 소문자 · 점 포함) — 없으면 동기화 확장자 전부(filekind.SYNC_EXTS), 옛 서버(v1 — 선택 동기화 8.6절)는 '.pdf' 만.
  */
-async function scanTree(root, { skip = () => false } = {}) {
+async function scanTree(root, { skip = () => false, exts = null } = {}) {
+  const wanted = (name) => (exts ? exts.has(extOf(name)) : isSyncName(name));
   // excluded: 있지만 맞추지 않는 것(제외 · 건너뜀). 저널에 있던 파일이 여기로 바뀌면 "사라짐"이 아니라 보류(12.1-3 — 삭제는 명시적 신호로만)
   const out = { files: [], dirs: [], problems: [], excluded: { files: [], dirs: [] }, nestedMarker: false };
   const fileKeys = new Set();
@@ -32,7 +35,7 @@ async function scanTree(root, { skip = () => false } = {}) {
       const name = e.name;
       const rel = P.joinRel(relDir, name);
       if (e.isSymbolicLink()) { // 심볼릭 링크 · 정션(Node 는 정션도 링크로 보임 — 스파이크 t8)
-        if (!P.isSkippedDir(name) && (P.isPdfName(name) || !e.isFile())) await exclude(P.isPdfName(name) ? 'files' : 'dirs', 'link', rel, '');
+        if (!P.isSkippedDir(name) && (wanted(name) || !e.isFile())) await exclude(wanted(name) ? 'files' : 'dirs', 'link', rel, '');
         continue;
       }
       if (e.isDirectory()) {
@@ -49,7 +52,7 @@ async function scanTree(root, { skip = () => false } = {}) {
         await walk(rel);
         continue;
       }
-      if (!e.isFile() || !P.isPdfName(name)) continue; // PDF 가 아니면 읽지도 옮기지도 지우지도 않음 (K-20)
+      if (!e.isFile() || !wanted(name)) continue; // 동기화 확장자가 아니면 읽지도 옮기지도 지우지도 않음 (K-20 · 선택 동기화 8.1)
       if (P.isTempName(name)) { await exclude('files', 'temp_name', rel); continue; }
       const bad = P.nameProblem(name, { file: true });
       if (bad) { await exclude('files', bad === 'too_long' ? 'file_name_too_long' : 'bad_name_local', rel); continue; }
@@ -57,7 +60,7 @@ async function scanTree(root, { skip = () => false } = {}) {
       try { st = await fs.promises.lstat(path.join(root, rel), { bigint: true }); } catch { continue; }
       const size = Number(st.size);
       if (size === 0) { await exclude('files', 'empty_file', rel, inoOf(st)); continue; }
-      if (size > P.MAX_PDF_BYTES) { await exclude('files', 'too_big', rel, inoOf(st)); continue; }
+      if (size > P.MAX_FILE_BYTES) { await exclude('files', 'too_big', rel, inoOf(st)); continue; }
       const key = P.fold(rel);
       if (fileKeys.has(key)) { await exclude('files', 'case_conflict', rel, inoOf(st)); continue; }
       fileKeys.add(key);
@@ -73,20 +76,20 @@ function inoOf(st) {
   return ino === '0' ? '' : `${st.dev.toString()}:${ino}`;
 }
 
-/** SHA-256 + 첫 바이트가 %PDF 인지. 해시 전후 크기 · 수정 시각이 다르면 null(쓰는 중 — 버리고 다시 대기) */
+/** SHA-256 + 첫 바이트(head — filekind.kindOf 판정용). 해시 전후 크기 · 수정 시각이 다르면 null(쓰는 중 — 버리고 다시 대기) */
 async function hashFile(abs) {
   const before = await fs.promises.lstat(abs, { bigint: true });
   const h = crypto.createHash('sha256');
   let head = Buffer.alloc(0);
   await new Promise((resolve, reject) => {
     const s = fs.createReadStream(abs);
-    s.on('data', (c) => { if (head.length < 5) head = Buffer.concat([head, c.subarray(0, 5)]); h.update(c); });
+    s.on('data', (c) => { if (head.length < HEAD_BYTES) head = Buffer.concat([head, c.subarray(0, HEAD_BYTES - head.length)]); h.update(c); });
     s.on('error', reject);
     s.on('end', resolve);
   });
   const after = await fs.promises.lstat(abs, { bigint: true });
   if (after.size !== before.size || after.mtimeNs !== before.mtimeNs) return null;
-  return { sha256: h.digest('hex'), pdf: head.subarray(0, 4).toString('latin1') === '%PDF' };
+  return { sha256: h.digest('hex'), head };
 }
 
 /** 읽기로 열 수 있나(다른 프로그램이 쓰기 잠금 중이면 false) */
