@@ -620,7 +620,7 @@ function renderSidebar() {
       const row = el(`<div class="tree-row">
         <button class="nav-item ${isActive ? "active" : ""}" data-cid="${c.id}">
           <i class="ico toggle">${kids.length ? (collapsed.has(c.id) ? "▸" : "▾") : "▫"}</i>
-          <span class="label">${esc(c.name)}</span><span class="count">${c.count || ""}</span></button>
+          <span class="label" title="${esc(c.name)}">${esc(c.name)}</span><span class="count">${c.count || ""}</span></button>
         <span class="menu-wrap"><button class="icon-btn small row-menu" title="메뉴" aria-label="‘${esc(c.name)}’ 컬렉션 메뉴">⋯</button></span></div>`);
       const btn = $(".nav-item", row);
       btn.onclick = (e) => {
@@ -668,7 +668,7 @@ function renderSidebar() {
   for (const t of state.tags) {
     const isActive = state.view === "library" && state.filter.kind === "tag" && state.filter.id === t.id;
     const row = el(`<div class="tree-row"><button class="nav-item ${isActive ? "active" : ""}">
-      <span class="tag-dot"${t.name === "충돌 사본" && !t.color ? ' data-tag-kind="conflict"' : ""} style="${t.color ? `background:${esc(t.color)}` : ""}"></span><span class="label">${esc(t.name)}</span><span class="count">${t.count || ""}</span></button>
+      <span class="tag-dot"${t.name === "충돌 사본" && !t.color ? ' data-tag-kind="conflict"' : ""} style="${t.color ? `background:${esc(t.color)}` : ""}"></span><span class="label" title="${esc(t.name)}">${esc(t.name)}</span><span class="count">${t.count || ""}</span></button>
       <span class="menu-wrap"><button class="icon-btn small row-menu" title="메뉴" aria-label="‘${esc(t.name)}’ 태그 메뉴">⋯</button></span></div>`);
     $(".nav-item", row).onclick = () => setFilter({ kind: "tag", id: t.id });
     $(".row-menu", row).onclick = (e) => {
@@ -714,7 +714,7 @@ function renderFolders() {
       const row = el(`<div class="tree-row folder-row">
         ${kids.length ? `<button class="tree-toggle" aria-expanded="${open ? "true" : "false"}" aria-label="‘${esc(f.name)}’ 하위 폴더 ${open ? "접기" : "펼치기"}"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>`
           : `<span class="tree-toggle-spacer"></span>`}
-        <button class="nav-item ${isActive ? "active" : ""}" data-fid="${f.id}">${folderIcon()}<span class="label">${esc(f.name)}</span>${mark
+        <button class="nav-item ${isActive ? "active" : ""}" data-fid="${f.id}">${folderIcon()}<span class="label" title="${esc(f.name)}">${esc(f.name)}</span>${mark
           ? `<span class="folder-pc"${mark.own ? " data-own" : ""} title="${esc(mark.title)}" aria-label="${esc(mark.title)}">${esc(mark.text)}</span>` : ""}<span class="count">${f.count || ""}</span></button>
         <span class="menu-wrap"><button class="icon-btn small row-menu" title="메뉴" aria-label="‘${esc(f.name)}’ 폴더 메뉴">⋯</button></span></div>`);
       const toggle = $(".tree-toggle", row);

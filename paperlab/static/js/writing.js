@@ -903,7 +903,9 @@ function drawOutline(view, ta) {
     if (m) heads.push({ level: m[1].length, text: m[2], pos });
     pos += line.length + 1;
   });
-  $("[data-title]", view).textContent = (heads.find((h) => h.level === 1) || {}).text || "제목 없는 원고";
+  const titleEl = $("[data-title]", view);
+  titleEl.textContent = (heads.find((h) => h.level === 1) || {}).text || "제목 없는 원고";
+  titleEl.title = titleEl.textContent; // 긴 제목은 말줄임 — 마우스를 올리면 전체
   box.innerHTML = heads.length ? "" : `<div class="small muted">## 로 장 제목을 쓰면 여기에 보여요</div>`;
   heads.forEach((h, i) => {
     // 긴 제목은 말줄임으로 잘리므로 마우스를 올리면 전체 제목이 보이게

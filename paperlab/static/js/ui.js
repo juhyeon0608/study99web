@@ -243,7 +243,14 @@ export function popupMenu(anchor, items, { left = false, head = null, className 
   if (getComputedStyle(wrap).position === "static") wrap.style.position = "relative";
   wrap.appendChild(menu);
   const r = menu.getBoundingClientRect();
-  if (r.bottom > window.innerHeight - 8) { menu.style.top = "auto"; menu.style.bottom = "calc(100% + 4px)"; }
+  // 위 · 아래 중 넓은 쪽으로 펼치고, 그 공간보다 긴 메뉴(예: AI 도우미 20여 개)는 그 높이 안에서 스크롤 —
+  // 위로 펼친 긴 메뉴의 윗부분이 화면 밖으로 잘리던 문제 (2026-10-17 화면 점검)
+  const ar = anchor.getBoundingClientRect();
+  const below = window.innerHeight - ar.bottom - 12;
+  const above = ar.top - 12;
+  if (r.bottom > window.innerHeight - 8 && above > below) { menu.style.top = "auto"; menu.style.bottom = "calc(100% + 4px)"; }
+  const room = Math.max(below, above);
+  if (r.height > room) Object.assign(menu.style, { maxHeight: `${Math.max(160, room)}px`, overflowY: "auto" });
   if (r.right > window.innerWidth - 8) { menu.style.right = "0"; menu.style.left = "auto"; }
   if (r.left < 8) { menu.style.left = "0"; menu.style.right = "auto"; }
   // 스크롤 영역(왼쪽 사이드바 등) 안의 메뉴가 그 영역 밖으로 나가 잘리면 화면 기준(fixed)으로 띄운다.
@@ -256,7 +263,7 @@ export function popupMenu(anchor, items, { left = false, head = null, className 
     Object.assign(menu.style, { position: "fixed", right: "auto", bottom: "auto", left: "0px", top: "0px" });
     const w = menu.offsetWidth, h = menu.offsetHeight;
     const x = left ? a.left : a.right - w;
-    const y = a.bottom + 4 + h > window.innerHeight - 8 ? a.top - 4 - h : a.bottom + 4;
+    const y = a.bottom + 4 + h > window.innerHeight - 8 && a.top - 4 - h >= 8 ? a.top - 4 - h : a.bottom + 4;
     menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - w - 8))}px`;
     menu.style.top = `${Math.max(8, y)}px`;
     clip.addEventListener("scroll", closeMenus, { once: true });

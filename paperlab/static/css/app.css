@@ -607,6 +607,8 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 /* 원고 상단 막대: 양식 선택 · 표지 정보 버튼 */
 .writer-bar .fmt-select { width: auto; max-width: 220px; }
 .cover-btn { position: relative; }
+/* 원고 머리줄: 긴 제목이 줄어들고 단추 · 고르기는 줄지 않게 ("표지 정보"가 4px 잘리던 문제 — 2026-10-17 화면 점검) */
+.writer-bar > .btn, .writer-bar > .menu-wrap, .writer-bar > button { flex: none; white-space: nowrap; }
 .cover-btn[data-incomplete]::after {
   content: ""; position: absolute; top: -4px; right: -4px; width: 10px; height: 10px; border-radius: 50%;
   background: var(--warn); border: 2px solid var(--surface);
