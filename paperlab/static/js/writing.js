@@ -19,7 +19,7 @@ import { state } from "./state.js";
 // 그림 · 표 · 캡션 · 목록 편집 · 단축키 도움말 (docs/specs/writing-figures-tables.md)
 import {
   applyEditToValue, backspaceEdit, blockInsert, captionInfo, captionLabel, diffEdit, enterEdit, figureInfo, figureMarkdown, findFigures,
-  findTables, indentEdit,
+  findTables, headingEdit, indentEdit,
   newTable, resolveXrefs, splitXrefs, tableAt, tableMarkdown, toggleListEdit,
 } from "./writeedit.js";
 import {
@@ -396,8 +396,8 @@ export async function openManuscript(main, id) {
     <div class="writer-tools">
       <button class="icon-btn" data-md="bold" title="굵게 (Ctrl+B)"><b>B</b></button>
       <button class="icon-btn" data-md="italic" title="기울임 (Ctrl+I)"><i>I</i></button>
-      <button class="btn sm ghost" data-md="h2" title="장 제목 (##)">장</button>
-      <button class="btn sm ghost" data-md="h3" title="절 제목 (###)">절</button>
+      <button class="btn sm ghost" data-md="h2" title="장 제목 — '제N장' 번호가 자동으로 붙고 뒤 번호도 이어져요 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+2)" aria-keyshortcuts="Control+Alt+2">장</button>
+      <button class="btn sm ghost" data-md="h3" title="절 제목 — '제N절' 번호가 장마다 1부터 붙어요 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+3)" aria-keyshortcuts="Control+Alt+3">절</button>
       <button class="btn sm ghost" data-md="list" title="글머리 목록 켜기 · 끄기 (${MAC ? "⌘" : "Ctrl"}+Shift+8 · 줄 앞에 - 와 띄어쓰기)" aria-keyshortcuts="Control+Shift+8">• 글머리</button>
       <button class="btn sm ghost" data-md="olist" title="번호 목록 켜기 · 끄기 (${MAC ? "⌘" : "Ctrl"}+Shift+7 · 줄 앞에 1. 과 띄어쓰기)" aria-keyshortcuts="Control+Shift+7">1. 번호</button>
       <button class="btn sm ghost" data-md="quote" title="인용문 블록">❝</button>
@@ -470,7 +470,11 @@ export async function openManuscript(main, id) {
       e.preventDefault();
       applyEdit(ta, toggleListEdit(ta.value, ta.selectionStart, ta.selectionEnd, e.code === "Digit7"));
     } else if (mod && e.altKey && e.code === "KeyT") { e.preventDefault(); editTable(ta); }
-    else if (e.isComposing || e.keyCode === 229 || mod || e.altKey) return; // 한글 조합 중 Enter 등은 브라우저에 맡김
+    // 장 · 절 제목 (번호 '제N장' · '제N절' 자동): Ctrl+Alt+2 · 3
+    else if (mod && e.altKey && !e.shiftKey && (e.code === "Digit2" || e.code === "Digit3")) {
+      e.preventDefault();
+      applyEdit(ta, headingEdit(ta.value, ta.selectionStart, e.code === "Digit2" ? 2 : 3));
+    } else if (e.isComposing || e.keyCode === 229 || mod || e.altKey) return; // 한글 조합 중 Enter 등은 브라우저에 맡김
     else if (e.key === "Enter" && !e.shiftKey) {
       const edit = enterEdit(ta.value, ta.selectionStart, ta.selectionEnd);
       if (edit) { e.preventDefault(); applyEdit(ta, edit); }
@@ -565,8 +569,7 @@ export async function openManuscript(main, id) {
     const k = b.dataset.md;
     if (k === "bold") wrap(ta, "**", "**");
     else if (k === "italic") wrap(ta, "*", "*");
-    else if (k === "h2") linePrefix(ta, "## ");
-    else if (k === "h3") linePrefix(ta, "### ");
+    else if (k === "h2" || k === "h3") applyEdit(ta, headingEdit(ta.value, ta.selectionStart, k === "h2" ? 2 : 3));
     else if (k === "list" || k === "olist") applyEdit(ta, toggleListEdit(ta.value, ta.selectionStart, ta.selectionEnd, k === "olist"));
     else if (k === "quote") linePrefix(ta, "> ");
   }));

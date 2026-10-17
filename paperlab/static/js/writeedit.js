@@ -437,6 +437,51 @@ export function blockInsert(value, start, end, text, select = null) {
   return { from: start, to: end, text: pre + text + post, selStart: base + s, selEnd: base + e };
 }
 
+// ------------------------------------------------------------- 장 · 절 번호
+// 장 · 절 버튼이 '## 제4장 ' · '### 제2절 '처럼 다음 번호를 붙이고, 그 뒤 번호를 다시 매긴다 (2026-10-17 사용자 요청).
+// '## 제N장 …' · '### 제N절 …' 꼴의 제목만 센다 — '## 국문초록' 같은 번호 없는 제목은 그대로. 절은 장(## 제목)마다 1부터.
+// 코드 블록(``` · ~~~) 안의 줄은 제목이 아니다
+const CH_NUM_RE = /^##\s+제\s*\d+\s*장(?=\s|$)/;
+const SEC_NUM_RE = /^###\s+제\s*\d+\s*절(?=\s|$)/;
+
+export function renumberHeadings(value) {
+  const lines = value.split("\n");
+  let ch = 0;
+  let sec = 0;
+  let fence = false;
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (/^\s*(```|~~~)/.test(l)) { fence = !fence; continue; }
+    if (fence) continue;
+    if (/^##\s/.test(l)) {
+      sec = 0;
+      if (CH_NUM_RE.test(l)) lines[i] = l.replace(CH_NUM_RE, `## 제${++ch}장`);
+    } else if (SEC_NUM_RE.test(l)) {
+      lines[i] = l.replace(SEC_NUM_RE, `### 제${++sec}절`);
+    }
+  }
+  return lines.join("\n");
+}
+
+// 장(level 2) · 절(level 3) 버튼: 커서 줄을 번호 붙은 제목으로(이미 그 단계 제목이면 제목 끄기) → 번호 다시 매기기 → 편집 한 덩어리
+export function headingEdit(value, start, level) {
+  const ls = lineStartAt(value, start);
+  const le = lineEndAt(value, ls);
+  const line = value.slice(ls, le);
+  const hashes = level === 2 ? "##" : "###";
+  const word = level === 2 ? "장" : "절";
+  const own = new RegExp(`^${hashes}(?:\\s+제\\s*\\d+\\s*${word})?(?:\\s+|$)`);
+  const on = line.startsWith(hashes + " ") || line === hashes;
+  const body = on ? line.replace(own, "")
+    : line.replace(/^(?:#{1,6}\s+(?:제\s*\d+\s*[장절](?:\s+|$))?|[-*+]\s+|\d+[.)]\s+|>\s?)/, "");
+  const next = on ? body : `${hashes} 제0${word} ${body}`; // 번호(0)는 다시 매기기가 채움
+  const after = renumberHeadings(value.slice(0, ls) + next + value.slice(le));
+  const row = value.slice(0, ls).split("\n").length - 1; // 앞 줄 번호가 바뀌어도 같은 줄을 찾게 줄 번호로
+  const nls = after.split("\n").slice(0, row).reduce((n, l) => n + l.length + 1, 0);
+  const caret = lineEndAt(after, nls);
+  return diffEdit(value, after, caret, caret) || { from: caret, to: caret, text: "", selStart: caret, selEnd: caret };
+}
+
 // ------------------------------------------------------------- 단축키 · 서식 도움말 (논문 쓰기 화면의 ? 버튼 · Ctrl+/)
 export function shortcutHelp(mac = false) {
   const M = mac ? "⌘" : "Ctrl";
@@ -444,6 +489,7 @@ export function shortcutHelp(mac = false) {
   return {
     keys: [
       ["저장", `${M}+S`], ["굵게", `${M}+B`], ["기울임", `${M}+I`],
+      ["장 제목 (제N장 번호 자동)", `장 버튼 · ${M}+${A}+2`], ["절 제목 (제N절 번호 자동)", `절 버튼 · ${M}+${A}+3`],
       ["글머리 목록 켜기 · 끄기", `${M}+Shift+8`], ["번호 목록 켜기 · 끄기", `${M}+Shift+7`],
       ["목록 다음 항목 (빈 항목에서 누르면 목록 끝)", "Enter"], ["목록 들여쓰기 · 내어쓰기", "Tab · Shift+Tab"],
       ["목록 기호 지우기 (내용 맨 앞에서)", "Backspace"],
@@ -453,7 +499,8 @@ export function shortcutHelp(mac = false) {
       ["이 도움말", `${M}+/`],
     ],
     syntax: [
-      ["# 제목", "논문 제목"], ["## 1. 서론", "장 제목"], ["### 1.1 배경", "절 제목"], ["#### 가. 세부", "항 제목"],
+      ["# 제목", "논문 제목"], ["## 제1장 서론", "장 제목 — 장 버튼을 누르면 '제N장' 번호가 자동으로 붙고 뒤 번호도 이어져요"],
+      ["### 제1절 배경", "절 제목 — 절 버튼을 누르면 '제N절' 번호가 장마다 1부터 붙어요"], ["#### 1. 세부", "항 제목"],
       ["**굵게** · *기울임*", "굵게 · 기울임"],
       ["- 항목 (줄 앞에 - 와 띄어쓰기)", "글머리 목록"], ["1. 항목 (숫자 . 띄어쓰기)", "번호 목록 — 번호는 자동으로 이어져요"],
       ["  - 하위 항목 (Tab)", "하위 목록"], ["> 인용문", "들여쓴 인용 블록"], ["---", "쪽 나눔"],

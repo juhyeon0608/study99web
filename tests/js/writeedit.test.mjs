@@ -274,3 +274,37 @@ test("워드가 못 읽는 JPEG 머리글 알아보기 (XMP · APP14 · DQT로 �
   // 화면은 JPEG면 머리글을 보고 다시 저장한다
   assert.match(src("writetools.js"), /jpegNeedsReencode\(head\) \? reencode\(file, "image\/jpeg"/);
 });
+
+// ------------------------------------------------------------- 장 · 절 번호 (2026-10-17)
+test("장 · 절 버튼: 다음 번호 '제N장' · '제N절'(장마다 1부터)을 붙이고 커서는 줄 끝", () => {
+  const v = "# 제목\n\n## 국문초록\n\n## 제1장 서론\n\n### 제1절 배경\n\n### 제2절 목적\n\n새 절";
+  const e = we.headingEdit(v, v.length, 3);
+  const out = we.applyEditToValue(v, e);
+  assert.ok(out.endsWith("### 제3절 새 절"));
+  assert.equal(e.selStart, out.length);
+  const v2 = out + "\n\n둘째 장";
+  const out2 = we.applyEditToValue(v2, we.headingEdit(v2, v2.length, 2));
+  assert.ok(out2.endsWith("## 제2장 둘째 장"));
+  assert.ok(out2.includes("## 국문초록"), "번호 없는 장 제목은 그대로");
+});
+
+test("장 · 절 버튼: 중간에 끼워 넣으면 뒤 번호가 밀리고, 장이 바뀌면 절은 1부터", () => {
+  const v = "## 제1장 서론\n\n### 제1절 배경\n\n끼울 절\n\n### 제2절 목적\n\n## 제2장 이론\n\n### 제1절 PLM";
+  const pos = v.indexOf("끼울 절");
+  const out = we.applyEditToValue(v, we.headingEdit(v, pos, 3));
+  assert.equal(out, "## 제1장 서론\n\n### 제1절 배경\n\n### 제2절 끼울 절\n\n### 제3절 목적\n\n## 제2장 이론\n\n### 제1절 PLM");
+});
+
+test("장 · 절 버튼: 이미 그 단계 제목이면 제목과 번호를 떼고 뒤 번호를 당김 · 다른 단계 · 목록 기호는 바꿈", () => {
+  const v = "## 제1장 서론\n\n## 제2장 이론\n\n## 제3장 방법";
+  const off = we.applyEditToValue(v, we.headingEdit(v, v.indexOf("이론"), 2));
+  assert.equal(off, "## 제1장 서론\n\n이론\n\n## 제2장 방법");
+  const v2 = "## 제1장 서론\n\n### 제1절 배경\n\n- 목록 줄";
+  assert.ok(we.applyEditToValue(v2, we.headingEdit(v2, v2.indexOf("배경"), 2)).includes("## 제2장 배경"));
+  assert.ok(we.applyEditToValue(v2, we.headingEdit(v2, v2.length, 3)).endsWith("### 제2절 목록 줄"));
+});
+
+test("번호 다시 매기기: 코드 블록 안 줄 · '###'와 '##' 구분", () => {
+  const v = "## 제5장 가\n```\n## 제9장 코드\n```\n### 제7절 나\n## 제3장 다";
+  assert.equal(we.renumberHeadings(v), "## 제1장 가\n```\n## 제9장 코드\n```\n### 제1절 나\n## 제2장 다");
+});
