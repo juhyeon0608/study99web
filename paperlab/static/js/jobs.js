@@ -7,7 +7,8 @@ import { $, $$, ICON_CLOCK, ICON_INFO, ICON_WARN, copyText, el, errorToast, esc,
 
 export const COMPANY = { claude: "Anthropic", codex: "OpenAI", gemini: "Google" };
 const KIND_LABEL = { summary: "요약", chat: "대화", write: "글쓰기", index: "색인", find: "AI로 찾기", verify: "인용 검증",
-  explain: "쉬운 설명", translate: "선택 번역", translate_paper: "전체 번역" }; // 4단계 (시안 7.3절)
+  explain: "쉬운 설명", translate: "선택 번역", translate_paper: "전체 번역", // 4단계 (시안 7.3절)
+  ms_chat: "원고 대화" }; // 원고 AI 대화 (docs/specs/manuscript-ai-chat.md)
 const XT_VIEW = { explain: "history", translate: "history", translate_paper: "paper" };
 // 아직 끝나지 않은 작업인지 (요약 · 대화 · 설명 · 찾기 화면이 함께 씀)
 export const isActive = (j) => !!j && (j.status === "queued" || j.status === "running");
@@ -270,16 +271,17 @@ export function stopJobBadge() {
   Object.assign(N, { on: false, timer: null, since: "", fast: 0 });
   N.seen.clear();
   N.handled.clear();
+  N.batches.clear();
   setJobBadge(0);
 }
 
 // ------------------------------------------------------------------ 끝남 알림 (2026-10-16 백그라운드 AI)
 // AI 작업은 서버(내 API 키) · 내 PC(CLI)에서 끝까지 돌고, 화면은 어디에 있든 끝나면 알린다: 앱 안 토스트 + [열기],
 // 브라우저 알림(허락했을 때 · 화면을 보고 있지 않을 때). 그 화면이 이미 결과를 보여 줬으면(handledJob) 토스트는 생략.
-const NOTIFY_KINDS = new Set(["summary", "chat", "write", "find", "verify", "explain", "translate", "translate_paper"]);
+const NOTIFY_KINDS = new Set(["summary", "chat", "write", "find", "verify", "explain", "translate", "translate_paper", "ms_chat"]);
 const SEEN_AT_KEY = "paperlab.jobsSeenAt"; // 마지막으로 확인한 서버 시각 — 앱을 닫은 동안 끝난 작업 세기
 const ASKED_KEY = "paperlab.notifyAsked"; // 브라우저 알림 허락을 한 번 물어봤는지
-const N = { on: false, timer: null, since: "", fast: 0, seen: new Set(), handled: new Set() };
+const N = { on: false, timer: null, since: "", fast: 0, seen: new Set(), handled: new Set(), batches: new Set() };
 
 // 이 화면이 결과를 직접 보여 줬음 (대화 답이 SSE로 옴 · 글쓰기 창에서 결과를 봄) — 토스트를 띄우지 않음
 export function handledJob(id) {
@@ -335,7 +337,9 @@ async function catchUp(now) {
 export function finishedText(j) {
   const title = jobTitle(j);
   if (j.status === "failed") return `${kindLabel(j)} 실패 — ${j.error || errorLabel(j.error_code, j.engine)} (${title})`;
+  if (j.kind === "write" && j.write && j.write.batch) return `AI 일괄 처리 결과가 나오고 있어요 — ${title}`;
   if (j.kind === "write") return `AI 글쓰기 결과가 준비됐어요 — ${title}`;
+  if (j.kind === "ms_chat") return `AI 대화 답이 왔어요 — ${title}`;
   return `${josa(kindLabel(j), "이/가")} 끝났어요 — ${title}`;
 }
 
@@ -345,6 +349,10 @@ function announce(j, { force = false } = {}) {
   if (!NOTIFY_KINDS.has(j.kind) || j.status === "cancelled") return;
   // 그 화면이 이미 결과를 보여 줬으면(handledJob) 토스트도 브라우저 알림도 띄우지 않는다 — 같은 결과를 두 번 알리지 않음
   if (N.handled.has(j.id)) return;
+  // 장 · 절 일괄 처리(문단마다 작업): 묶음마다 한 번만 알림 (문단 30개가 30번 알리지 않게)
+  const bid = j.kind === "write" && j.write && j.write.batch && j.write.batch.id;
+  if (bid && N.batches.has(bid)) return;
+  if (bid) N.batches.add(bid);
   const text = finishedText(j);
   osNotify(j, text);
   toast(text, j.status === "failed" ? "error" : "success",
@@ -446,6 +454,7 @@ export function kindLabel(j) {
 }
 export function jobTitle(j) {
   if (j.kind === "write") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "글쓰기 도우미";
+  if (j.kind === "ms_chat") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "원고 대화 (원고가 지워졌어요)";
   if (j.kind === "verify") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "인용 검증 (원고가 지워졌어요)";
   if (j.kind === "index") return "서재 색인";
   if (j.kind === "find") return j.question ? `“${j.question.length > 40 ? `${j.question.slice(0, 40)}…` : j.question}”` : "AI로 찾기 (결과가 지워졌어요)";
@@ -459,6 +468,8 @@ export function jobHref(j) {
   if (j.kind === "chat" && !j.paper_id && j.scope) return j.scope.type === "library" ? "#/ask" : `#/ask/${j.scope.type[0]}${j.scope.id}`;
   // 글쓰기 결과: 그 원고를 열고 결과 창을 띄움 (#/write/원고/j작업 — 2026-10-16 백그라운드 AI)
   if (j.kind === "write") return j.manuscript_id && j.manuscript_title != null ? `#/write/${Number(j.manuscript_id)}/j${Number(j.id)}` : "";
+  // 원고 AI 대화: 그 원고를 열고 AI 패널 '대화'로 (같은 주소 모양 — openAiJobFromHash가 종류를 보고 엶)
+  if (j.kind === "ms_chat") return j.manuscript_id && j.manuscript_title != null ? `#/write/${Number(j.manuscript_id)}/j${Number(j.id)}` : "";
   return j.paper_id ? `#/read/${j.paper_id}` : "";
 }
 

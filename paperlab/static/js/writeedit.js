@@ -482,6 +482,202 @@ export function headingEdit(value, start, level) {
   return diffEdit(value, after, caret, caret) || { from: caret, to: caret, text: "", selStart: caret, selEnd: caret };
 }
 
+// ------------------------------------------------------------- AI에 보낼 범위 (docs/specs/manuscript-ai-chat.md)
+// 2026-10-17 사용자 지적 "ai 보내는 범위가 좀 이상한": 예전에는 빈 줄 사이 글을 통째로 보내 제목 · 표 · 그림 줄이 섞였다.
+// 원고를 덩어리(블록)로 나눠 진짜 문단만 보낸다. 제목(#) · 표(|) · 그림(![…](fig:…)) · 표 캡션(표: …) · 코드 블록 ·
+// 각주 정의([^1]: …) · 가로줄 · [참고문헌] 줄은 문단이 아니고, 목록은 통째로 한 덩어리(빈 줄로 띄운 느슨한 목록도).
+// 절 = 지금 '### ' 제목 다음 줄부터 다음 ###(이하 단계) 제목 전까지, 장 = 지금 '## ' 제목 다음 줄부터 다음 ## 제목 전까지
+const HEAD_RE = /^ {0,3}(#{1,6})(?=\s|$)(.*)$/;
+const FOOTDEF_RE = /^ {0,3}\[\^[^\]\s]+\]:/;
+const BIB_LINE_RE = /^\s*\[(?:참고문헌|References|Bibliography|REFERENCES)\]\s*$/;
+const HR_RE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const fenceOf = (l) => { const m = /^ {0,3}(`{3,}|~{3,})/.exec(l); return m ? m[1] : null; };
+export const PARA_KINDS = new Set(["para", "list", "quote"]); // 문단 모드(다듬기 · 학술 문체 …)로 보낼 수 있는 덩어리
+
+function lineKind(l, next) {
+  if (BLANK_RE.test(l)) return "blank";
+  if (fenceOf(l)) return "code";
+  if (HEAD_RE.test(l)) return "heading";
+  if (BIB_LINE_RE.test(l)) return "bib";
+  if (FOOTDEF_RE.test(l)) return "footnote";
+  if (figureInfo(l)) return "figure";
+  if (captionInfo(l)) return "caption";
+  if (/^ {0,3}\|/.test(l) || (hasPipe(l) && isSepLine(next ?? "", splitRow(l).length))) return "table";
+  if (HR_RE.test(l)) return "hr";
+  if (parseListLine(l)) return "list";
+  if (/^ {0,3}>/.test(l)) return "quote";
+  return "para";
+}
+
+// 원고 → 덩어리 [{ type, from, to, line, level?, title? }] (from~to = 첫 줄 시작 ~ 마지막 줄 끝, 빈 줄은 덩어리가 아님)
+export function textBlocks(value) {
+  const lines = String(value ?? "").split("\n");
+  const n = lines.length;
+  const starts = [];
+  let p = 0;
+  for (const l of lines) { starts.push(p); p += l.length + 1; }
+  const out = [];
+  const push = (type, i, j, extra = {}) => out.push({ type, from: starts[i], to: starts[j] + lines[j].length, line: i, ...extra });
+  let i = 0;
+  while (i < n) {
+    const l = lines[i];
+    const k = lineKind(l, lines[i + 1]);
+    let j = i;
+    if (k === "blank") { i++; continue; }
+    if (k === "code") { // 닫는 울타리까지 (없으면 끝까지)
+      const f = fenceOf(l);
+      j = i + 1;
+      while (j < n) {
+        const g = fenceOf(lines[j]);
+        if (g && g[0] === f[0] && g.length >= f.length && !/\S/.test(lines[j].trim().slice(g.length))) break;
+        j++;
+      }
+      j = Math.min(j, n - 1);
+    } else if (k === "heading") {
+      const m = HEAD_RE.exec(l);
+      push("heading", i, i, { level: m[1].length, title: m[2].replace(/\s+#+\s*$/, "").trim() });
+      i++;
+      continue;
+    } else if (k === "table") {
+      while (j + 1 < n && !endsTable(lines[j + 1]) && !captionInfo(lines[j + 1]) && !figureInfo(lines[j + 1])) j++;
+    } else if (k === "footnote") {
+      while (j + 1 < n && /^(?: {2,}|\t)\S/.test(lines[j + 1])) j++;
+    } else if (k === "list") {
+      for (;;) {
+        const nx = lines[j + 1];
+        if (nx === undefined) break;
+        if (!BLANK_RE.test(nx)) {
+          const nk = lineKind(nx, lines[j + 2]);
+          if (nk === "list" || nk === "para" || /^\s+\S/.test(nx)) { j++; continue; } // 항목 · 들여쓴 줄 · 앞 항목에 이어지는 줄
+          break;
+        }
+        let b = j + 1; // 빈 줄 뒤가 목록 항목 · 들여쓴 줄이면 같은 목록 (느슨한 목록)
+        while (b < n && BLANK_RE.test(lines[b])) b++;
+        if (b < n && (parseListLine(lines[b]) || /^\s{2,}\S/.test(lines[b]))) { j = b; continue; }
+        break;
+      }
+    } else if (k === "quote") {
+      while (j + 1 < n && (/^ {0,3}>/.test(lines[j + 1]) || lineKind(lines[j + 1], lines[j + 2]) === "para")) j++;
+    } else if (k === "para") {
+      while (j + 1 < n && lineKind(lines[j + 1], lines[j + 2]) === "para") j++;
+    } // bib · figure · caption · hr: 한 줄
+    push(k, i, j);
+    i = j + 1;
+  }
+  return out;
+}
+
+// pos가 든 덩어리 (줄 끝 · 첫 글자 앞도 그 덩어리). 빈 줄이면 null
+export function blockAt(blocks, pos) {
+  return blocks.find((b) => pos >= b.from && pos <= b.to) || null;
+}
+
+export const SCOPE_KINDS = ["sel", "para", "section", "chapter"];
+export const SCOPE_NAMES = { sel: "선택", para: "문단", section: "이 절", chapter: "이 장" };
+export const SCOPE_WHY = {
+  blank: "커서가 빈 줄에 있어요. 문단 안에 커서를 두거나 글을 골라 주세요",
+  heading: "제목 줄은 AI로 보내지 않아요. 문단 안에 커서를 두거나 글을 골라 주세요",
+  table: "표는 문단이 아니에요. 표 안의 글을 고르면 그 글만 보내요",
+  figure: "그림 줄은 문단이 아니에요. 캡션 글을 고르면 그 글만 보내요",
+  caption: "캡션 줄은 문단이 아니에요. 캡션 글을 고르면 그 글만 보내요",
+  code: "코드 블록은 보내지 않아요. 글을 골라 주세요",
+  footnote: "각주 정의 줄이에요. 각주 글을 고르면 그 글만 보내요",
+  hr: "쪽 나눔(---) 줄이에요. 문단 안에 커서를 두세요",
+  bib: "[참고문헌] 자리 줄이에요. 문단 안에 커서를 두세요",
+  "no-section": "커서가 절(### 제목) 안에 있지 않아요. 절 안에 커서를 두세요",
+  "no-chapter": "커서가 장(## 제목) 안에 있지 않아요. 장 안에 커서를 두세요",
+  empty: "보낼 글이 없어요",
+};
+
+const clip = (s, n) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
+// 제목의 짧은 이름: '## 제2장 이론적 배경' → '제2장', 번호 없는 제목은 앞 14자
+function headName(h, word) {
+  const m = new RegExp(`^제\\s*(\\d+)\\s*${word}`).exec(h.title || "");
+  return m ? `제${m[1]}${word}` : clip(h.title || "(제목 없음)", 14);
+}
+
+// pos가 든 절(level 3) · 장(level 2)의 제목 → { head, from, to } (제목 줄은 빼고 본문만, 앞뒤 빈 줄 뺌). 없으면 null
+export function sectionAt(value, pos, level = 3, blocks = textBlocks(value)) {
+  const heads = blocks.filter((b) => b.type === "heading");
+  let h = null;
+  for (const x of heads) {
+    if (x.from > pos) break;
+    if (x.level < level) h = null;
+    if (x.level === level) h = x;
+  }
+  if (!h) return null;
+  const next = heads.find((x) => x.from > h.from && x.level <= level);
+  let from = Math.min(String(value).length, h.to + 1);
+  let to = next ? next.from : String(value).length;
+  while (from < to && /\s/.test(value[from])) from++;
+  while (to > from && /\s/.test(value[to - 1])) to--;
+  return { head: h, from, to };
+}
+
+// 커서 자리 이름: "제2장 제1절" · "제2장" · "원고 앞부분"
+export function placeLabel(value, pos, blocks = textBlocks(value)) {
+  const ch = sectionAt(value, pos, 2, blocks);
+  const sec = sectionAt(value, pos, 3, blocks);
+  const parts = [ch && headName(ch.head, "장"), sec && headName(sec.head, "절")].filter(Boolean);
+  return parts.join(" ") || "원고 앞부분";
+}
+
+// AI에 보낼 범위 → { ok, kind, from, to, text, label, paras: [{from, to}], chars, fallback? } | { ok: false, kind, reason, message }
+// kind: sel(고른 글 — 없으면 커서 문단, fallback) · para(커서 문단) · section(이 절) · chapter(이 장).
+// paras = 범위 안 문단 덩어리(장 · 절 일괄 처리 단위 — 제목 · 표 · 그림 · 캡션 · 코드 · 각주 정의는 빠짐)
+export function aiScope(value, start, end, kind = "sel") {
+  const v = String(value ?? "");
+  const blocks = textBlocks(v);
+  const place = placeLabel(v, start, blocks);
+  const fail = (k, reason) => ({ ok: false, kind: k, reason, message: SCOPE_WHY[reason] || SCOPE_WHY.empty });
+  const done = (k, from, to, label, extra = {}) => {
+    while (from < to && /\s/.test(v[from])) from++;
+    while (to > from && /\s/.test(v[to - 1])) to--;
+    if (from >= to) return fail(k, "empty");
+    const paras = blocks.filter((b) => PARA_KINDS.has(b.type) && b.to > from && b.from < to)
+      .map((b) => ({ from: Math.max(b.from, from), to: Math.min(b.to, to) }));
+    return { ok: true, kind: k, from, to, text: v.slice(from, to), label, paras, chars: to - from, ...extra };
+  };
+  if (kind === "sel") {
+    if (start !== end && v.slice(Math.min(start, end), Math.max(start, end)).trim()) {
+      return done("sel", Math.min(start, end), Math.max(start, end), `${place} · 고른 글`);
+    }
+    const p = aiScope(v, start, start, "para");
+    return p.ok ? { ...p, fallback: true } : p;
+  }
+  if (kind === "para") {
+    const b = blockAt(blocks, start);
+    if (!b) return fail("para", "blank");
+    if (!PARA_KINDS.has(b.type)) return fail("para", b.type);
+    return done("para", b.from, b.to, `${place} · ${b.type === "list" ? "목록" : "문단"}`);
+  }
+  const level = kind === "chapter" ? 2 : 3;
+  const s = sectionAt(v, start, level, blocks);
+  if (!s) return fail(kind, kind === "chapter" ? "no-chapter" : "no-section");
+  const ch = kind === "chapter" ? s : sectionAt(v, start, 2, blocks);
+  const label = kind === "chapter" ? headName(s.head, "장") : [ch && headName(ch.head, "장"), headName(s.head, "절")].filter(Boolean).join(" ");
+  return done(kind, s.from, s.to, label);
+}
+
+const comma = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+// 패널 · 확인 창 한 줄: "대상: 제2장 제1절 (문단 4개 · 1,230자)"
+export function scopeSummary(sc) {
+  if (!sc || !sc.ok) return "";
+  return `대상: ${sc.label} (문단 ${sc.paras.length}개 · ${comma(sc.chars)}자)`;
+}
+
+// 원고 목차(제목 줄만) — AI 대화에 원고 구조로 함께 보낸다 (max자까지)
+export function outlineText(value, max = 4000) {
+  let out = "";
+  for (const b of textBlocks(value)) {
+    if (b.type !== "heading") continue;
+    const line = `${"#".repeat(b.level)} ${b.title}\n`;
+    if (out.length + line.length > max) break;
+    out += line;
+  }
+  return out.trimEnd();
+}
+
 // ------------------------------------------------------------- 단축키 · 서식 도움말 (논문 쓰기 화면의 ? 버튼 · Ctrl+/)
 export function shortcutHelp(mac = false) {
   const M = mac ? "⌘" : "Ctrl";
@@ -496,6 +692,7 @@ export function shortcutHelp(mac = false) {
       ["인용 넣기 창", "＋ 인용 넣기"], ["인용 자동완성 열기", "[@ 입력"], ["자동완성 고르기 · 넣기 · 닫기", "↑↓ · Enter/Tab · Esc"],
       ["자동완성에서 참고 패널로 보기", `${M}+Enter`], ["참고 패널 열기 · 닫기", `${A}+R`],
       ["AI 결과 패널 열기 · 닫기 (결과를 보면서 계속 쓰기)", `${A}+A`], ["AI 결과 패널 닫기 (패널 안에서)", "Esc"],
+      ["AI 대화 열기 (원고를 말로 고치기 · 입력 칸으로)", `${A}+C`], ["AI 대화 보내기 · 줄바꿈", "Enter · Shift+Enter"],
       ["그림 넣기", "그림 버튼 · 붙여넣기 · 끌어 놓기"], ["표 넣기 · 고치기", `표 버튼 · ${M}+${A}+T`],
       ["버전 기록 (비교 · 되돌리기 · 지금 버전 저장)", `기록 버튼 · ${A}+H`],
       ["각주 넣기 (커서에 [^N] · 장 · 절 끝에 내용 줄)", `각주 버튼 · ${M}+${A}+F`],

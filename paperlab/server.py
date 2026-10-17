@@ -41,6 +41,7 @@ from .api_runner import ApiRunner
 from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
 from . import extsources
 from . import figures
+from . import mschat
 from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
@@ -3087,6 +3088,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         return system_sizes(ctx)["size"] < int(config.db_limit_bytes * DB_LEVEL)
 
     versions.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, db_room=db_room, md_title=_md_title))
+    # 원고 AI 대화 · 장 · 절 일괄 처리 /api/manuscripts/{mid}/chat · ai-batch (docs/specs/manuscript-ai-chat.md)
+    mschat.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, new_job=new_job, maintain=maintain,
+                                              free=lambda: ws.free))
 
     # -------------------------------------------------------- 원고 그림 (docs/specs/writing-figures-tables.md)
     @app.post("/api/manuscripts/{mid}/figures")

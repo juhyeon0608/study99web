@@ -32,12 +32,14 @@ API_MAX_ATTEMPTS = 2    # 같은 API 칸 다시 실행 한도 (15.2절)
 # 대화 · 글쓰기 · 찾기 · 설명 · 번역도 요약처럼 24시간 — 30분이면 PC를 켜기 전에 조용히 실패했다("30분 켜 놓고 닫으면 사라진다").
 # 실행 중 시간 제한(TIMEOUT_S) · 리스는 그대로
 DEADLINE_S = {k: 24 * 3600 for k in ("summary", "chat", "write", "find", "verify", "explain", "translate",
-                                     "translate_paper")}
+                                     "translate_paper", "ms_chat")}
 TIMEOUT_S = {"summary": 1200, "chat": 600, "write": 600, "find": 600, "verify": 1200,  # CLI 시간 제한 (11.5절)
-             "explain": 600, "translate": 600, "translate_paper": 900}                # 4단계 (전체 번역은 묶음당)
-# index는 서버 안 색인(엔진 local), translate_paper(전체 번역)는 translate 엔진 설정을 씀 — 작업별 엔진 설정에는 없음
-ALL_KINDS = JOB_KINDS + ("index", "translate_paper")
-ROUTE_KIND = {"translate_paper": "translate"}
+             "explain": 600, "translate": 600, "translate_paper": 900,                # 4단계 (전체 번역은 묶음당)
+             "ms_chat": 600}                                                          # 원고 AI 대화 (mschat.py)
+# index는 서버 안 색인(엔진 local), translate_paper(전체 번역)는 translate 엔진 설정을 씀 — 작업별 엔진 설정에는 없음.
+# ms_chat(원고 AI 대화 — mschat.py)은 글쓰기(write) 엔진 순서를 따른다
+ALL_KINDS = JOB_KINDS + ("index", "translate_paper", "ms_chat")
+ROUTE_KIND = {"translate_paper": "translate", "ms_chat": "write"}
 EXPLAIN_KINDS = explain.KINDS
 # 전체 번역은 다시 대기 · 잡기 때도 진행(쪽 수)을 남긴다 — 화면이 counts로 번역 보기를 새로 받음 (4단계 6.3절 6번)
 _KEEP_PROGRESS = "progress = case when kind = 'translate_paper' then progress else '{}'::jsonb end"
@@ -468,7 +470,7 @@ select j.*, p.title as paper_title, d.name as device_name, m.title as manuscript
   from paperlab.jobs j
   left join paperlab.papers p on p.id = j.paper_id and p.user_id = j.user_id
   left join paperlab.devices d on d.id = j.device_id and d.user_id = j.user_id
-  left join paperlab.manuscripts m on j.kind in ('write', 'verify') and m.user_id = j.user_id
+  left join paperlab.manuscripts m on j.kind in ('write', 'verify', 'ms_chat') and m.user_id = j.user_id
        and m.id = case when j.params ->> 'manuscript_id' ~ '^[0-9]{1,15}$' then (j.params ->> 'manuscript_id')::bigint end
  where j.user_id = %(uid)s
 """
@@ -514,7 +516,9 @@ def write_view(params: dict, result, detail: bool) -> dict:
     """글쓰기 작업의 넣기 정보 (2026-10-16 백그라운드 AI): 원고 화면 · 작업 화면이 결과를 나중에 열어 안전하게 넣을 때 쓴다.
     원래 글(text)은 한 작업을 볼 때만(목록에는 넣지 않음 — 크기)"""
     out = {"mode": params.get("mode") or "polish", "insert": bool(params.get("insert")),
-           "handled": (result or {}).get("handled") if isinstance(result, dict) else None}
+           "handled": (result or {}).get("handled") if isinstance(result, dict) else None,
+           # 장 · 절 일괄 처리의 문단 작업이면 묶음 {id, n, mode, label}과 순번 (mschat.py)
+           "batch": params.get("batch"), "batch_i": params.get("batch_i")}
     if detail:
         out.update(text=params.get("text") or "", sel_start=params.get("sel_start"), sel_end=params.get("sel_end"),
                    doc_hash=params.get("doc_hash") or "", before=params.get("before") or "")
@@ -527,8 +531,8 @@ def job_view(r: dict, devices: list[dict], free: dict, detail: bool = False) -> 
         "id": r["id"], "kind": r["kind"], "status": r["status"], "runner": r["runner"], "engine": r["engine"],
         "route": r["route"], "route_index": r["route_index"],
         "paper_id": r["paper_id"], "paper_title": r.get("paper_title"),
-        "manuscript_title": r.get("manuscript_title") if r["kind"] in ("write", "verify") else None,
-        "manuscript_id": params.get("manuscript_id") if r["kind"] in ("write", "verify") else None,
+        "manuscript_title": r.get("manuscript_title") if r["kind"] in ("write", "verify", "ms_chat") else None,
+        "manuscript_id": params.get("manuscript_id") if r["kind"] in ("write", "verify", "ms_chat") else None,
         "scope": params.get("scope") if r["kind"] == "chat" else None,
         "device": {"id": r["device_id"], "name": r["device_name"]} if r.get("device_id") and r.get("device_name") else None,
         "waiting_reason": waiting_reason(r, devices, free),
@@ -808,6 +812,9 @@ def _apply(lib: Library, job: dict, parsed: dict, model: str):
         return verify.apply_results(lib, job, parsed["results"])
     if kind in EXPLAIN_KINDS:
         return {"explanation_id": explain.save(lib, job, parsed["result"], model)}
+    if kind == "ms_chat":  # 원고 AI 대화: 답 메시지(수정 제안 포함)를 남긴다 (mschat.py)
+        from . import mschat
+        return mschat.apply_result(lib, job, parsed)
     text = parsed["text"]
     if len(text.encode("utf-8")) > RESULT_TEXT_MAX:
         raise ValueError("too large")
@@ -942,6 +949,9 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
         return ai.write_request(params.get("mode") or "polish", params.get("text") or "",
                                 instruction=params.get("instruction") or "", context=params.get("context") or "",
                                 sources=write_sources(lib, params.get("keys")))
+    if job["kind"] == "ms_chat":  # 원고 AI 대화 (mschat.py — 순환 가져오기를 피해 여기서)
+        from . import mschat
+        return mschat.build_request(lib, job)
     if job["kind"] == "chat" and job["paper_id"] is None:  # 범위 대화 — 출처는 params.sources로 고정(11.3절)
         scope = params.get("scope") or {}
         return rag.ask_request(lib, params, lib.scope_history(scope.get("type"), scope.get("id")), lang)
