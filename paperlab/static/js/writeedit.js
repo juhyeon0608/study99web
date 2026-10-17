@@ -238,7 +238,7 @@ const LABEL = "[\\p{L}\\p{N}_-]+";
 const FIG_LINE_RE = new RegExp(`^!\\[((?:\\\\.|[^\\]\\\\])*)\\]\\(fig:([0-9a-f]{16}\\.(?:png|jpg|gif))\\)\\s*(?:\\{#(fig:${LABEL})\\})?\\s*$`, "u");
 // 표 캡션: 표 바로 위(또는 아래) 한 줄 "표: 캡션 {#tbl:꼬리표}" (영문 "Table: …")
 const CAPTION_RE = new RegExp(`^(?:표|Table)\\s*[:：]\\s*(.*?)\\s*(?:\\{#(tbl:${LABEL})\\})?\\s*$`, "u");
-export const XREF_RE = new RegExp(`(?<![\\p{L}\\p{N}_@])@((?:fig|tbl):${LABEL})`, "gu");
+export const XREF_RE = new RegExp(`(?<![\\p{L}\\p{N}_@])@((?:fig|tbl|eq):${LABEL})`, "gu");
 
 export function figureInfo(text) {
   const m = FIG_LINE_RE.exec(String(text || "").trim());
@@ -259,7 +259,7 @@ export function captionLabel(kind, n, ko = true) {
   const name = kind === "fig" ? (ko ? "그림" : "Figure") : (ko ? "표" : "Table");
   return `${name} ${n}.`;
 }
-export const xrefText = (kind, n, ko = true) => captionLabel(kind, n, ko).slice(0, -1);
+export const xrefText = (kind, n, ko = true) => (kind === "eq" ? `${ko ? "식" : "Eq."} (${n})` : captionLabel(kind, n, ko).slice(0, -1));
 
 // 글 → [글자 | {xref: "fig:이름"}] (상호 참조 자리를 따로 떼어 둔다)
 export function splitXrefs(text) {
@@ -720,6 +720,8 @@ export function shortcutHelp(mac = false) {
       ["| 칸 | 칸 |", "표 (둘째 줄은 | --- | --- |)"],
       ["{#fig:이름} · {#tbl:이름}", "그림 · 표에 이름 붙이기 (그림 줄 끝 · 표 캡션 끝)"],
       ["@fig:이름 · @tbl:이름", "본문에서 \"그림 1\" · \"표 2\"로 바뀌는 참조"],
+      ["$$ E = mc^2 $$ {#eq:이름}", "줄 수식 — 가운데 수식 · 오른쪽 번호 (1). 수식 버튼으로 넣어요"],
+      ["$x_1 + \\alpha$", "문장 안 수식 (워드 · 한글에는 x₁ + α 처럼 글자로)"], ["@eq:이름", "본문에서 \"식 (1)\"로 바뀌는 참조"],
       ["[@인용키] · [@a; @b] · [@a, p. 12]", "인용 · 여러 편 · 쪽"], ["[참고문헌]", "참고문헌이 들어갈 자리"],
       ["본문[^1] … [^1]: 내용", "각주 — 번호는 본문 순서대로, 워드 · 한글에서는 쪽 아래에 들어가요"],
     ],

@@ -33,6 +33,7 @@ import {
 import {
   applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
 } from "./writetools.js";
+import { equationInfo, equationPng, katexHtml, MATH_MARK_RE, protectInlineMath, texToText } from "./writemath.js"; // 수식
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
@@ -82,6 +83,8 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
   const { src: prepared, clusters, bibTitle } = prepare(text);
   // 각주: 본문 [^이름] → 자리표시, 정의 줄([^이름]: …)은 뺀다. 인용 자리표시를 먼저 매겨 인용 순번은 원고 글 순서 그대로
   const { text: src, notes } = extractFootnotes(prepared);
+  // 문장 안 수식 $…$ → 자리표시 (마크다운이 _ · * 를 서식으로 읽지 않게 — writemath.js)
+  const { text: mathSrc, maths } = protectInlineMath(src);
   const keys = [...new Set(clusters.flatMap((c) => c.items.map((it) => it.key)))];
   const lookup = keys.length ? await api.post("/api/citekeys", { keys }) : { items: {}, issues: {} };
   const rendered = await renderClusters(lookup.items, clusters, { style, locale, koreanFirst });
@@ -108,13 +111,16 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
     const out = [];
     for (const s of splitNotes(whole)) {
       if (typeof s !== "string") { out.push(noteRun(s.note)); continue; }
-      s.split(/(\d+)/).forEach((part) => {
-        const m = part.match(/^(\d+)$/);
-        if (m) out.push(...clusterRuns(Number(m[1]), fmt));
-        else if (part) {
-          // @fig:이름 · @tbl:이름 상호 참조는 번호를 다 매긴 뒤 채운다(resolveXrefs)
-          for (const x of splitXrefs(part)) out.push(typeof x === "string" ? { text: x, ...fmt } : { text: "", ...fmt, xref: x.xref });
-        }
+      s.split(MATH_MARK_RE).forEach((seg, mi) => {
+        if (mi % 2) { const tex = maths[Number(seg)] || ""; out.push({ text: texToText(tex), ...fmt, math: tex }); return; }
+        seg.split(/(\d+)/).forEach((part) => {
+          const m = part.match(/^(\d+)$/);
+          if (m) out.push(...clusterRuns(Number(m[1]), fmt));
+          else if (part) {
+            // @fig:이름 · @tbl:이름 상호 참조는 번호를 다 매긴 뒤 채운다(resolveXrefs)
+            for (const x of splitXrefs(part)) out.push(typeof x === "string" ? { text: x, ...fmt } : { text: "", ...fmt, xref: x.xref });
+          }
+        });
       });
     }
     return out;
@@ -149,7 +155,7 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
   // 그림 · 표: 원고에 나온 순서대로 번호(옮기거나 지우면 다시 매겨짐). 꼬리표 {#fig:이름} · {#tbl:이름} → 번호(@fig:이름 참조)
   const ko = /[가-힣]/.test(text);
   const labels = new Map();
-  const count = { fig: 0, tbl: 0 };
+  const count = { fig: 0, tbl: 0, eq: 0 };
   const captioned = new WeakSet();
   // 장마다 다시 매기기(표지 정보 → 그림 · 표 번호 "장마다"): 그림 2-1 · 표 3-2, 부록은 A-1. 첫 장 앞(국문 초록 등)은 연속 번호
   const chap = { cur: "", seq: 0, app: 0 };
@@ -163,6 +169,7 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
     else chap.seq = m ? Number(m[1]) : chap.seq + 1, chap.cur = String(chap.seq);
     count.fig = 0;
     count.tbl = 0;
+    count.eq = 0;
   };
   const order = { fig: 0, tbl: 0, eq: 0 }; // 원고 안 순서(0부터) — 미리보기 클릭 → 편집기 자리 찾기용. 번호(2-1)와 따로
   const numbered = (kind, label, body) => {
@@ -204,7 +211,12 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
         }
       } else if (t.type === "paragraph") {
         if (t.text.trim() === "") blocks.push(...bibBlocks());
-        else if (!figureOrCaption(t, tokens, k, depth)) blocks.push({ type: "paragraph", runs: inline(t.tokens) });
+        else if (!depth && equationInfo(t.text)) {
+          const eq = equationInfo(t.text);
+          const n = chapterNumbers && chap.cur ? `${chap.cur}-${++count.eq}` : ++count.eq;
+          if (eq.label && !labels.has(eq.label)) labels.set(eq.label, { kind: "eq", n });
+          blocks.push({ type: "equation", tex: eq.tex, number: n, index: order.eq++ });
+        } else if (!figureOrCaption(t, tokens, k, depth)) blocks.push({ type: "paragraph", runs: inline(t.tokens) });
       } else if (t.type === "list") {
         t.items.forEach((item, i) => {
           const runs = [];
@@ -235,7 +247,7 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
       }
     }
   };
-  walk(window.marked.lexer(src));
+  walk(window.marked.lexer(mathSrc));
   if (!bibPlaced && rendered.entries.length) blocks.push(...bibBlocks());
   resolveXrefs(blocks, labels, ko);
   return { blocks, clusters, rendered, missingKeys, issues: lookup.issues, items: lookup.items };
@@ -274,7 +286,7 @@ function runHtml(r, notes) {
     notes.push(r.footnote);
     return `<sup class="fn-ref">${notes.length}</sup>`;
   }
-  let h = esc(r.text);
+  let h = r.math ? katexHtml(r.math, false) : esc(r.text);
   if (r.code) h = `<code>${h}</code>`;
   if (r.b) h = `<b>${h}</b>`;
   if (r.i) h = `<i>${h}</i>`;
@@ -294,6 +306,8 @@ function blocksToHtml(blocks) {
       case "heading": return `<h${b.level + 1} data-h="${headingIndex++}">${r()}</h${b.level + 1}>`;
       case "list_item": return `<p class="doc-li" style="padding-left:${1.4 + b.depth * 1.2}em;text-indent:-1em">${b.ordered ? `${Number(b.number)}.` : ["•", "◦", "▪"][b.depth % 3]} ${r()}</p>`;
       // 그림: 아래 캡션 · 표: 위 캡션 (누르면 편집기에서 그 그림 줄 · 표 고치기 창)
+      case "equation": return `<div class="doc-eq"><div class="doc-eq-math">${katexHtml(b.tex, true)}</div>`
+        + `<span class="doc-eq-no">(${esc(String(b.number))})</span></div>`;
       case "figure": return `<figure class="doc-fig" data-fig-i="${Number(b.index)}" role="button" tabindex="0" title="눌러서 편집기에서 보기">`
         + `<img data-fig="${esc(b.src)}" alt="${esc(b.alt || "")}"><figcaption>${runsHtml(b.caption || [], notes)}</figcaption></figure>`;
       case "table": return `<div class="doc-tbl" data-tbl-i="${Number(b.index)}" role="button" tabindex="0" title="눌러서 표 고치기">`
@@ -456,6 +470,7 @@ export async function openManuscript(main, id) {
       <button class="btn sm ghost" data-md="quote" title="인용문 블록">❝</button>
       <button class="btn sm ghost" data-figure title="그림 넣기 — 붙여넣기 · 끌어 놓기도 돼요. 아래에 '그림 1. 설명' 캡션이 붙어요">그림</button>
       <button class="btn sm ghost" data-table title="표 넣기 · 고치기 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+T) — 커서가 표 안에 있으면 그 표를 고쳐요">표</button>
+      <button class="btn sm ghost" data-equation title="수식 넣기 — $$ 수식 $$ {#eq:이름}, 오른쪽에 번호 (1)이 붙고 본문에서 @eq:이름 으로 참조해요">수식</button>
       <button class="btn sm ghost" data-footnote title="각주 넣기 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+F) — 커서 자리에 [^N], 이 장 · 절 끝에 내용 줄 [^N]: 을 넣어요" aria-keyshortcuts="Control+Alt+F">각주</button>
       <span class="sep"></span>
       <button class="btn sm primary" data-cite title="[@ 를 입력해도 열려요">＋ 인용 넣기</button>
@@ -579,6 +594,14 @@ export async function openManuscript(main, id) {
   $("[data-shortcuts-hint]", view).onclick = () => shortcutDialog();
   $("[data-figure]", view).onclick = async () => insertFigures(ta, await pickFiles({ accept: "image/*", multiple: true }));
   $("[data-table]", view).onclick = () => editTable(ta);
+  // 수식: 커서 자리(문단 사이)에 $$ … $$ {#eq:식N} — 수식 칸을 골라 둔 채로 바로 쓰게
+  $("[data-equation]", view).onclick = () => {
+    const n = (ta.value.match(/\{#eq:/g) || []).length + 1;
+    let label = `식${n}`;
+    for (let k = n; ta.value.includes(`{#eq:${label}}`); k++) label = `식${k + 1}`;
+    const body = "y = ax + b";
+    applyEdit(ta, blockInsert(ta.value, ta.selectionStart, ta.selectionEnd, `$$ ${body} $$ {#eq:${label}}`, [3, 3 + body.length]));
+  };
   $("[data-footnote]", view).onclick = () => insertFootnote(ta);
   // 미리보기의 그림 · 표를 누르면 편집기의 그 그림 줄을 고르거나 표 고치기 창
   const docClick = (e) => {
@@ -2021,7 +2044,8 @@ async function exportAs(format, view, ta) {
       `서재에 없는 인용 키가 있어요: ${built.missingKeys.join(", ")}\n그대로 표시해서 내보낼까요?`, { ok: "그대로 내보내기" }))) return;
     const title = $("[data-title]", view).textContent.trim() || "원고";
     // manuscript_id: 서버가 이 원고의 그림 폴더에서 그림을 읽어 넣는다(그림 바이트는 보내지 않음)
-    const payload = { format, blocks: stripWarn(built.blocks), meta: { title }, filename: title, manuscript_id: W.m.id };
+    const blocks = office ? await equationFigures(built.blocks, W.m.id) : built.blocks;
+    const payload = { format, blocks: stripWarn(blocks), meta: { title }, filename: title, manuscript_id: W.m.id };
     if (office && fmtId !== "default") {
       // 표지의 국문 제목 기본값은 원고의 # 제목 (없으면 빈 칸으로 두어 ○○○로 들어가게)
       Object.assign(payload, { doc_format: fmtId, cover: W.m.cover || {}, meta: { title: docTitle(ta) } });
@@ -2042,8 +2066,25 @@ async function exportAs(format, view, ta) {
   } catch (e) { errorToast(e); }
 }
 
+// 줄 수식 블록 → 그림 블록(수식 + 오른쪽 번호를 그린 PNG를 이 원고 그림 폴더에 올림, 캡션 없음 — 그림 목차에 안 들어감).
+// 같은 수식 · 번호는 이 창에서 한 번만 올린다. 마크다운 내보내기는 수식 그대로($$ … $$)
+const eqUploads = new Map();
+async function equationFigures(blocks, mid) {
+  const out = [];
+  for (const b of blocks) {
+    if (b.type !== "equation") { out.push(b); continue; }
+    const key = `${mid}|${b.number}|${b.tex}`;
+    if (!eqUploads.has(key)) eqUploads.set(key, uploadFigure(mid, await equationPng(b.tex, String(b.number))).then((r) => r.name));
+    try { out.push({ type: "figure", src: await eqUploads.get(key), alt: b.tex.slice(0, 200), caption: [] }); } catch (e) {
+      eqUploads.delete(key);
+      throw e;
+    }
+  }
+  return out;
+}
+
 function stripWarn(blocks) {
-  const clean = (runs) => runs.map(({ warn, cite, xref, ...r }) => (r.footnote ? { ...r, footnote: clean(r.footnote) } : r));
+  const clean = (runs) => runs.map(({ warn, cite, xref, math, ...r }) => (r.footnote ? { ...r, footnote: clean(r.footnote) } : r));
   return blocks.map((b) => {
     const out = b.runs ? { ...b, runs: clean(b.runs) } : { ...b };
     if (b.caption) out.caption = clean(b.caption); // 그림 · 표 캡션

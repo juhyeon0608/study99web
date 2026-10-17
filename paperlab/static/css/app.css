@@ -1987,3 +1987,9 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .proof-diff ins { color: var(--success); text-decoration: none; font-weight: 600; }
 .proof-why { margin-left: 2px; }
 .proof-item.lost .proof-diff { opacity: .6; }
+
+/* ---------------- 논문 쓰기 수식 (writemath.js — 2026-10-17): 가운데 수식 · 오른쪽 번호 (1) */
+.doc .doc-eq { position: relative; display: flex; align-items: center; justify-content: center; margin: 10px 0; min-height: 2em; padding: 0 4.5em; }
+.doc .doc-eq-math { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+.doc .doc-eq-math .katex-display { margin: 0; }
+.doc .doc-eq-no { position: absolute; right: 0; top: 50%; transform: translateY(-50%); white-space: nowrap; }
