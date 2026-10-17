@@ -10,7 +10,7 @@ import {
 import { insertionText, planApply, trimRange, wordDiff, writeAnchor } from "./writeai.js";
 import { htmlToRuns, listStyles, renderClusters, styleOptions } from "./cite.js";
 import {
-  applyDocFormat, coverDialog, exportWarnings, formatManagerDialog, formatOptions, getFormat, listFormats,
+  applyDocFormat, coverDialog, exportWarnings, formatManagerDialog, formatOptions, getFormat, listFormats, listsNotice,
   missingCoverFields, usesHancomFonts, warningText,
 } from "./formats.js";
 import { ICON_REF, refPane } from "./refpane.js";
@@ -26,6 +26,8 @@ import {
   applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
 } from "./writetools.js";
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
+// 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
+import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, confirmDialog, copyText, debounce, el, errorToast, esc, fmtDate, modal, pickFiles,
   popupMenu, purifyMd, store, toast,
@@ -64,7 +66,9 @@ function prepare(text) {
 
 // 마크다운 → 문서 블록 (미리보기와 워드·한글 내보내기가 함께 쓴다)
 async function buildDocument(text, { style, locale, koreanFirst } = {}) {
-  const { src, clusters, bibTitle } = prepare(text);
+  const { src: prepared, clusters, bibTitle } = prepare(text);
+  // 각주: 본문 [^이름] → 자리표시, 정의 줄([^이름]: …)은 뺀다. 인용 자리표시를 먼저 매겨 인용 순번은 원고 글 순서 그대로
+  const { text: src, notes } = extractFootnotes(prepared);
   const keys = [...new Set(clusters.flatMap((c) => c.items.map((it) => it.key)))];
   const lookup = keys.length ? await api.post("/api/citekeys", { keys }) : { items: {}, issues: {} };
   const rendered = await renderClusters(lookup.items, clusters, { style, locale, koreanFirst });
@@ -78,16 +82,28 @@ async function buildDocument(text, { style, locale, koreanFirst } = {}) {
     if (r.missing && r.missing.length) runs.push({ text: ` [@${r.missing.join("; @")}?]`, warn: true, cite: n });
     return rendered.note ? [{ footnote: htmlToRuns(r.html) }] : runs;
   };
-  const textRuns = (s, fmt) => {
+  // 각주 런 { footnote: [런…] } — 각주 글 안의 각주(각주식 인용 스타일)는 글로 펼친다
+  const noteCache = new Map();
+  const noteRun = (n) => {
+    if (!noteCache.has(n)) {
+      const runs = notes[n] ? inline(window.marked.Lexer.lexInline(notes[n].text)) : [];
+      noteCache.set(n, runs.flatMap((r) => (r.footnote ? r.footnote : [r])));
+    }
+    return { footnote: noteCache.get(n).map((r) => ({ ...r })) };
+  };
+  const textRuns = (whole, fmt) => {
     const out = [];
-    s.split(/(\d+)/).forEach((part) => {
-      const m = part.match(/^(\d+)$/);
-      if (m) out.push(...clusterRuns(Number(m[1]), fmt));
-      else if (part) {
-        // @fig:이름 · @tbl:이름 상호 참조는 번호를 다 매긴 뒤 채운다(resolveXrefs)
-        for (const x of splitXrefs(part)) out.push(typeof x === "string" ? { text: x, ...fmt } : { text: "", ...fmt, xref: x.xref });
-      }
-    });
+    for (const s of splitNotes(whole)) {
+      if (typeof s !== "string") { out.push(noteRun(s.note)); continue; }
+      s.split(/(\d+)/).forEach((part) => {
+        const m = part.match(/^(\d+)$/);
+        if (m) out.push(...clusterRuns(Number(m[1]), fmt));
+        else if (part) {
+          // @fig:이름 · @tbl:이름 상호 참조는 번호를 다 매긴 뒤 채운다(resolveXrefs)
+          for (const x of splitXrefs(part)) out.push(typeof x === "string" ? { text: x, ...fmt } : { text: "", ...fmt, xref: x.xref });
+        }
+      });
+    }
     return out;
   };
   const inline = (tokens, fmt = {}) => {
@@ -404,6 +420,7 @@ export async function openManuscript(main, id) {
       <button class="btn sm ghost" data-md="quote" title="인용문 블록">❝</button>
       <button class="btn sm ghost" data-figure title="그림 넣기 — 붙여넣기 · 끌어 놓기도 돼요. 아래에 '그림 1. 설명' 캡션이 붙어요">그림</button>
       <button class="btn sm ghost" data-table title="표 넣기 · 고치기 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+T) — 커서가 표 안에 있으면 그 표를 고쳐요">표</button>
+      <button class="btn sm ghost" data-footnote title="각주 넣기 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+F) — 커서 자리에 [^N], 이 장 · 절 끝에 내용 줄 [^N]: 을 넣어요" aria-keyshortcuts="Control+Alt+F">각주</button>
       <span class="sep"></span>
       <button class="btn sm primary" data-cite title="[@ 를 입력해도 열려요">＋ 인용 넣기</button>
       <button class="btn sm ghost" data-bib title="참고문헌이 들어갈 자리">[참고문헌]</button>
@@ -472,6 +489,7 @@ export async function openManuscript(main, id) {
       e.preventDefault();
       applyEdit(ta, toggleListEdit(ta.value, ta.selectionStart, ta.selectionEnd, e.code === "Digit7"));
     } else if (mod && e.altKey && e.code === "KeyT") { e.preventDefault(); editTable(ta); }
+    else if (mod && e.altKey && !e.shiftKey && e.code === "KeyF") { e.preventDefault(); insertFootnote(ta); }
     // 장 · 절 제목 (번호 '제N장' · '제N절' 자동): Ctrl+Alt+2 · 3
     else if (mod && e.altKey && !e.shiftKey && (e.code === "Digit2" || e.code === "Digit3")) {
       e.preventDefault();
@@ -521,6 +539,7 @@ export async function openManuscript(main, id) {
   $("[data-shortcuts-hint]", view).onclick = () => shortcutDialog();
   $("[data-figure]", view).onclick = async () => insertFigures(ta, await pickFiles({ accept: "image/*", multiple: true }));
   $("[data-table]", view).onclick = () => editTable(ta);
+  $("[data-footnote]", view).onclick = () => insertFootnote(ta);
   // 미리보기의 그림 · 표를 누르면 편집기의 그 그림 줄을 고르거나 표 고치기 창
   const docClick = (e) => {
     if (e.type === "keydown" && e.key !== "Enter" && e.key !== " ") return;
@@ -1088,6 +1107,15 @@ function linePrefix(ta, prefix) {
 // ------------------------------------------------------------------ 그림 · 표 (docs/specs/writing-figures-tables.md)
 const koDoc = (ta) => /[가-힣]/.test(ta.value) || !ta.value.trim();
 
+// 각주 넣기: 커서 자리 [^N] + 장 · 절 끝 정의 줄 "[^N]: " (커서는 정의 줄로 — 바로 내용을 쓰게)
+function insertFootnote(ta) {
+  const edit = footnoteInsert(ta.value, ta.selectionStart, ta.selectionEnd);
+  if (!edit) return toast("코드 블록이나 각주 내용 줄 안에는 각주를 넣을 수 없어요");
+  applyEdit(ta, edit);
+  ta.blur(); // 정의 줄이 화면 밖이면 그쪽으로 스크롤되게 (selectRange와 같은 방법)
+  ta.focus();
+}
+
 // 편집기에서 a~b를 고르고 그 자리로 스크롤 (미리보기만 보이면 나란히 보기로)
 function selectRange(view, ta, a, b) {
   if (view.classList.contains("view-preview")) $('[data-view] button[data-v="split"]', view)?.click();
@@ -1637,7 +1665,7 @@ async function exportAs(format, view, ta) {
     downloadBlob(await res.blob(), `${title.replace(/[\\/:*?"<>|]+/g, "_")}.${format}`);
     const label = format === "hwpx" ? "한글" : format === "docx" ? "워드" : "마크다운";
     if (office && kind !== "none" && fmtId !== "default") {
-      toast(`${label} 파일로 저장했어요 · 목차는 워드(참조 → 목차) · 한글(도구 → 차례/색인)로 넣어 주세요`, "success", LONG);
+      toast(`${label} 파일로 저장했어요 · ${listsNotice(format, W.m.cover)}`, "success", LONG); // 목차 안내 (formats.js)
     } else toast(`${label} 파일로 저장했어요`, "success");
     const warnings = exportWarnings(res);
     if (warnings.length) toast(warningText(warnings, kind), "", LONG);
@@ -1649,7 +1677,7 @@ async function exportAs(format, view, ta) {
 }
 
 function stripWarn(blocks) {
-  const clean = (runs) => runs.map(({ warn, cite, xref, ...r }) => r);
+  const clean = (runs) => runs.map(({ warn, cite, xref, ...r }) => (r.footnote ? { ...r, footnote: clean(r.footnote) } : r));
   return blocks.map((b) => {
     const out = b.runs ? { ...b, runs: clean(b.runs) } : { ...b };
     if (b.caption) out.caption = clean(b.caption); // 그림 · 표 캡션

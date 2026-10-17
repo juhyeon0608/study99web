@@ -22,6 +22,7 @@ import re
 from typing import Any, Iterable
 
 from . import doc_formats as df
+from . import doc_lists
 from . import figures as fig
 
 Block = dict[str, Any]
@@ -632,6 +633,8 @@ _PAGE_NUMBER_PLACES = {"footer-center": ("footer", "center", "BOTTOM_CENTER"),
                        "header-center": ("header", "center", "TOP_CENTER"),
                        "header-right": ("header", "right", "TOP_RIGHT")}
 COVER_BOTTOM_MARGIN_MM = 10  # 표지류 구역의 실제 아래 여백(줄 위치는 '아래 N'으로 계산하므로 여유만 둔다)
+# 한글 목록 줄의 탭 채움: (hp:tab 숫자, hh:tabItem 이름) — 한컴이 만드는 차례와 같은 3번(DASH, 촘촘한 점선으로 보임)
+_HWPX_TOC_LEADER = (3, "DASH")
 CODE_FONT, CODE_SIZE = "Consolas", 9.5
 
 
@@ -674,17 +677,25 @@ def _render_formatted(builder, blocks: list[Block], fmt: dict, meta: dict, cover
                 warnings.append(f"cover-overflow:{pg['key']}")
             builder.cover_page(pg, lay)
 
-    body = [b for b in blocks if not (b.get("type") == "title" and not fmt["title"]["show"])]
+    # 목록 블록(type=contents)은 서버만 만든다 — 화면이 보낸 것은 버린다
+    body = [b for b in blocks if not (b.get("type") == "title" and not fmt["title"]["show"])
+            and b.get("type") != "contents"]
+    # 목차 · 그림 목차 · 표 목차 (doc_lists): 표지류 바로 뒤, 첫 장 앞 부분보다 앞 (표지 없는 양식은 빈 목록)
+    lists = doc_lists.build(body, fmt, cover) if kind != "none" else []
     pn = fmt["page_number"]
-    parts = [(body, pn["show"])]
+    parts = [(lists + body, pn["show"])]
     if pn["show"] and pn["start"] == "first_chapter":
         idx = next((i for i, b in enumerate(body)
                     if b.get("type") == "heading" and int(b.get("level") or 1) == 1), None)
         if idx:
             before = body[:idx]
-            # 첫 장 앞 부분(국문초록 등)은 쪽 번호 없는 구역. 쪽 나눔만 있으면 버린다
-            parts = ([(before, False)] if any(b.get("type") != "page_break" for b in before) else []) + [
-                (body[idx:], True)]
+            # 첫 장 앞 부분(목차 · 국문초록 등)은 쪽 번호 없는 구역. 쪽 나눔만 있으면 버린다
+            parts = ([(lists + before, False)] if lists or any(b.get("type") != "page_break" for b in before)
+                     else []) + [(body[idx:], True)]
+        elif idx == 0 and lists:
+            parts = [(lists, False), (body, True)]
+    if lists:  # 목록 항목의 쪽 번호(어림값). 쪽 번호를 안 넣는 양식이면 본문 처음부터 센다
+        doc_lists.fill_pages(parts if pn["show"] else [(p, True) for p, _ in parts], fmt)
     for part, numbered in parts:
         builder.body_section(numbered)
         for block in part:
@@ -710,6 +721,9 @@ class _FormattedBuilder:
         override_indent = False
         if kind == "page_break":
             self.pending_break = True
+            return
+        if kind == "contents":  # doc_lists가 넣은 목차 · 그림 목차 · 표 목차
+            self.contents(block)
             return
         if kind in ("figure", "table"):
             # 첫 문단(그림 문단 · 표 캡션)이 쪽 나눔을 받고 다음 것과 함께 둔다
@@ -780,18 +794,36 @@ class _FormattedBuilder:
         self.picture_paragraph(block.get("image"), dict(spec, line_pct=100))
         caption = _runs_of(block.get("caption"))
         if caption:
-            self.write_spec(self.caption_spec(), caption)
+            self.write_spec(self.caption_spec(), caption, role="figure")
 
     def table(self, block: Block, spec: dict) -> None:
         """위에 캡션 문단(spec) → 표. 표 쓰기는 table_grid(docx · hwpx 따로)"""
         caption = _runs_of(block.get("caption"))
         if caption or spec["page_break"]:
-            self.write_spec(spec, caption)
+            self.write_spec(spec, caption, role="table" if caption else None)
         self.table_grid(block)
 
-    def write_spec(self, spec: dict, runs: list[Run]) -> None:
-        """본문 모양 + spec의 정렬 · 간격 · 함께 두기를 모두 적용한 문단"""
+    def write_spec(self, spec: dict, runs: list[Run], role: str | None = None) -> None:
+        """본문 모양 + spec의 정렬 · 간격 · 함께 두기를 모두 적용한 문단.
+        role(figure · table) = 캡션 문단 — 워드는 그림 · 표 목차 필드가 모으는 캡션 스타일을 붙인다"""
         self.write("body", spec, runs, True)
+
+    def contents(self, block: Block) -> None:
+        """목차 · 그림 목차 · 표 목차 쪽 (doc_lists): 가운데 제목(제목 1수준 글자 모양 — 제목 스타일은 쓰지 않아
+        목차에 다시 잡히지 않음) → 항목 줄(글 + 점선 + 쪽 번호). 줄 쓰기는 list_title · list_entries(docx · hwpx 따로)"""
+        h1 = self.styles["headings.1"]
+        spec = _pspec(h1, align="center", left=df.mm(0), right=df.mm(0), first=df.mm(0), keep_next=True,
+                      page_break=bool(self.pending_break and not self.section_start))
+        spec["after_pt"] = max(float(spec["after_pt"]), 12.0)
+        self.pending_break = self.section_start = False
+        self.list_title(spec, _rspec(h1), block["title"])
+        self.list_entries(block)
+
+    def entry_spec(self, level: int) -> dict:
+        """목록 항목 문단: 본문 글자 · 줄간격, 왼쪽 정렬, 단계마다 2글자 들여쓰기, 위아래 간격 없음"""
+        body = self.styles["body"]
+        return _pspec(body, align="left", left=df.ch(2 * (max(1, level) - 1)), right=df.mm(0), first=df.mm(0),
+                      before_pt=0, after_pt=0, page_break=False)
 
     def bib_spec(self) -> dict:
         """참고문헌 항목 문단 사양: 왼쪽 = 들여쓰기 + 내어쓰기 폭, 첫 줄 = −내어쓰기 폭."""
@@ -910,6 +942,7 @@ class _DocxBuilder(_FormattedBuilder):
         self.last_is_cover = False
         self.started = False    # 첫 구역(문서 끝 sectPr)을 썼는지
         self.style_page_break: dict[str, bool] = {}
+        self.update_fields = False  # 목차 필드를 넣었으면 워드가 열 때 필드를 새로 계산하게(settings updateFields)
         self._setup_styles()
 
     def _setup_styles(self) -> None:
@@ -1078,11 +1111,85 @@ class _DocxBuilder(_FormattedBuilder):
         self._runs(p, runs)
         self.last_p = p._p
 
-    def write_spec(self, spec: dict, runs: list[Run]) -> None:
-        p = self.document.add_paragraph(style="Normal")
+    def write_spec(self, spec: dict, runs: list[Run], role: str | None = None) -> None:
+        p = self.document.add_paragraph(style=self._plain_style(_DOCX_CAPTION_STYLES[role]) if role else "Normal")
         _docx_ppr(p._p.get_or_add_pPr(), spec)
         self._runs(p, runs)
         self.last_p = p._p
+
+    # --- 목차 · 그림 목차 · 표 목차 (doc_lists): 진짜 TOC 필드 + 어림 쪽 번호로 채운 결과
+    def _plain_style(self, name: str, *, setup=None) -> str:
+        """Normal을 따르는 문단 스타일(없으면 만듦). setup(style)로 처음 만들 때만 꾸민다"""
+        from docx.enum.style import WD_STYLE_TYPE
+
+        styles = self.document.styles
+        try:
+            styles[name]
+        except KeyError:
+            style = styles.add_style(name, WD_STYLE_TYPE.PARAGRAPH)
+            style.base_style = styles["Normal"]
+            style.hidden = False
+            style.quick_style = False
+            if setup:
+                setup(style)
+        return name
+
+    def _entry_style(self, kind: str, level: int) -> str:
+        """목차 항목은 워드 기본 이름 'toc 1~3', 그림 · 표 목차는 'table of figures' — 워드가 필드를 새로 계산해도
+        같은 스타일을 쓴다. 오른쪽 끝 점선 탭 · 단계별 들여쓰기"""
+        from docx.enum.text import WD_TAB_ALIGNMENT, WD_TAB_LEADER
+        from docx.shared import Twips
+
+        page, m = self.fmt["page"], self.fmt["page"]["margin_mm"]
+        width = df.mm_to_twip(page["width_mm"] - m["left"] - m["right"])
+
+        def setup(style):
+            _docx_ppr(style.element.get_or_add_pPr(), self.entry_spec(level))
+            style.paragraph_format.tab_stops.add_tab_stop(Twips(width), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS)
+
+        return self._plain_style(f"toc {level}" if kind == "toc" else "table of figures", setup=setup)
+
+    def list_title(self, spec: dict, rspec: dict, text: str) -> None:
+        p = self.document.add_paragraph(style="Normal")
+        _docx_ppr(p._p.get_or_add_pPr(), spec)
+        run = p.add_run(_clean_text(text))
+        _docx_font(run.font, run._r.get_or_add_rPr(), rspec)
+        self.last_p = p._p
+
+    def list_entries(self, block: Block) -> None:
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+
+        def field(p, kind: str, instr: str | None = None) -> None:
+            r = OxmlElement("w:r")
+            if instr is None:
+                el = OxmlElement("w:fldChar")
+                el.set(qn("w:fldCharType"), kind)
+            else:
+                el = OxmlElement("w:instrText")
+                el.set(qn("xml:space"), "preserve")
+                el.text = instr
+            r.append(el)
+            p._p.append(r)
+
+        kind, items = block["kind"], block["entries"]
+        # \o 제목 1~N수준 · \u 개요 수준 문단 · \h 항목을 하이퍼링크로 · \z 웹 보기에서만 쪽 번호 숨김
+        if kind == "toc":
+            instr = f' TOC \\o "1-{int(block.get("depth") or 2)}" \\h \\z \\u '
+        else:  # 그림 · 표 캡션 스타일 문단을 모은다
+            instr = f' TOC \\h \\z \\t "{_DOCX_CAPTION_STYLES["figure" if kind == "lof" else "table"]},1" '
+        for i, e in enumerate(items):
+            p = self.document.add_paragraph(style=self._entry_style(kind, e["level"]))
+            if i == 0:
+                field(p, "begin")
+                field(p, "", instr)
+                field(p, "separate")
+            p.add_run(_clean_text(e["text"]))
+            p.add_run("\t" + (str(e["page"]) if e.get("page") else ""))
+            if i == len(items) - 1:
+                field(p, "end")
+            self.last_p = p._p
+        self.update_fields = True
 
     def picture_paragraph(self, image: dict | None, spec: dict) -> None:
         p = self.document.add_paragraph(style="Normal")
@@ -1127,9 +1234,39 @@ class _DocxBuilder(_FormattedBuilder):
     def finish(self) -> bytes:
         if self.last_p is None:
             self.document.add_paragraph()
+        if self.update_fields:
+            _docx_update_fields_on_open(self.document)
         buf = io.BytesIO()
         self.document.save(buf)
         return buf.getvalue()
+
+
+_DOCX_CAPTION_STYLES = {"figure": "Figure Caption", "table": "Table Caption"}  # 그림 · 표 목차 필드(\t)가 모으는 스타일
+# w:settings 안에서 updateFields 뒤에 와야 하는 요소들(OOXML CT_Settings 순서 — 순서가 틀리면 워드가 파일을 고치려 함)
+_SETTINGS_AFTER_UPDATE_FIELDS = (
+    "hdrShapeDefaults", "footnotePr", "endnotePr", "compat", "docVars", "rsids", "mathPr", "attachedSchema",
+    "themeFontLang", "clrSchemeMapping", "doNotIncludeSubdocsInStats", "doNotAutoCompressPictures", "forceUpgrade",
+    "captions", "readModeInkLockDown", "smartTagType", "schemaLibrary", "shapeDefaults", "doNotEmbedSmartTags",
+    "decimalSymbol", "listSeparator")
+
+
+def _docx_update_fields_on_open(document) -> None:
+    """워드가 문서를 열 때 필드(목차)를 새로 계산하게 한다 — '이 문서에는 다른 파일을 참조하는 필드가…' 물음에
+    [예]를 누르면 목차 쪽 번호가 실제 쪽으로 바뀐다(LibreOffice · 한컴은 저장된 어림값을 그대로 보여 줌)"""
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    settings = document.settings.element
+    if settings.find(qn("w:updateFields")) is not None:
+        return
+    el = OxmlElement("w:updateFields")
+    el.set(qn("w:val"), "true")
+    after = next((c for c in settings if isinstance(c.tag, str) and c.tag.rsplit("}", 1)[-1]
+                  in _SETTINGS_AFTER_UPDATE_FIELDS), None)
+    if after is not None:
+        after.addprevious(el)
+    else:
+        settings.append(el)
 
 
 def _footnote_styled(notes: _DocxFootnotes, paragraph, runs: list[Run], pspec: dict, rspec: dict) -> None:
@@ -1221,11 +1358,15 @@ class _HwpxBuilder(_FormattedBuilder):
 
             margins = {"intent": hwp(spec["first"]), "left": hwp(spec["left"]), "right": hwp(spec["right"]),
                        "prev": df.pt_to_hwp(spec["before_pt"]), "next": df.pt_to_hwp(spec["after_pt"])}
+            tab = {}
+            if spec.get("tab_right_mm"):  # 목록 항목: 오른쪽 끝 탭 + 점선(한컴 차례와 같은 채움 3번 = DASH)
+                tab["tab_pr_id_ref"] = self.header.ensure_tab_definition(tab_stops=[
+                    {"pos": df.mm_to_hwp(spec["tab_right_mm"]), "type": "RIGHT", "leader": _HWPX_TOC_LEADER[1]}])
             self._para_cache[key] = self.header.ensure_paragraph_format(
                 base_para_pr_id="0", alignment=_HWPX_ALIGN[spec["align"]],
                 line_spacing_percent=round(spec["line_pct"]), margins=margins,
                 break_setting={"page_break_before": bool(spec["page_break"]),
-                               "keep_with_next": bool(spec["keep_next"])})
+                               "keep_with_next": bool(spec["keep_next"])}, **tab)
         return self._para_cache[key]
 
     def char_id(self, rspec: dict, script: str | None = None) -> str:
@@ -1307,6 +1448,32 @@ class _HwpxBuilder(_FormattedBuilder):
         p = self._paragraph()
         p.para_pr_id_ref = self.para_id(spec)
         self._add_runs(p, self.styles[key], runs)
+
+    def list_title(self, spec: dict, rspec: dict, text: str) -> None:
+        p = self._paragraph()
+        p.para_pr_id_ref = self.para_id(spec)
+        p.add_run(_clean_text(text), char_pr_id_ref=self.char_id(rspec))
+
+    def list_entries(self, block: Block) -> None:
+        """정적 목록: 한 줄 = [단계 들여쓰기(전각 공백) + 글][탭(점선)][쪽 번호(어림값)] (doc_lists 참고).
+        탭 위치는 문단 들여쓰기와 무관하게 본문 오른쪽 끝이 되게 단계 들여쓰기는 문단 여백 대신 전각 공백으로 둔다"""
+        width = self.text_area_mm()[0]
+        body = self.styles["body"]
+        cid = self.char_id(_rspec(body, bold=False, italic=False))
+        para = self.para_id(dict(self.entry_spec(1), tab_right_mm=width))
+        size_hwp = df.pt_to_hwp(float(body["size_pt"]))
+        for e in block["entries"]:
+            text = df.FULL_SPACE * 2 * (max(1, e["level"]) - 1) + _clean_text(e["text"])
+            p = self._paragraph()
+            p.para_pr_id_ref = para
+            t = p.add_run(text, char_pr_id_ref=cid).element.find(f"{_HP}t")
+            # hp:tab 속성은 한글이 다시 배치하는 캐시값 — 글 길이로 어림한 남은 폭을 넣어 둔다
+            full = df.mm_to_hwp(width)
+            used = int(sum(1.0 if ord(c) >= 0x1100 else 0.3 if c == " " else 0.55 for c in text) * size_hwp) % full
+            tab = t.makeelement(f"{_HP}tab", {"width": str(full - used), "leader": str(_HWPX_TOC_LEADER[0]),
+                                              "type": "2"})
+            tab.tail = str(e["page"]) if e.get("page") else ""
+            t.append(tab)
 
     def picture_paragraph(self, image: dict | None, spec: dict) -> None:
         p = self._paragraph()

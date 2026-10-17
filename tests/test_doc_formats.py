@@ -163,7 +163,7 @@ class Hwpx:
     def text(p):
         out = []
         for run in p.findall(f"{HP}run"):
-            out += [t.text or "" for t in run.findall(f"{HP}t")]
+            out += ["".join(t.itertext()) for t in run.findall(f"{HP}t")]  # hp:t 안 hp:tab 뒤 글(목차 쪽 번호)까지
         return "".join(out)
 
     def para_with(self, text):
