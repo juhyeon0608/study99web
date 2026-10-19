@@ -115,7 +115,8 @@ test('AC-88 (h) electron-builder: publish generic · url = server.json public_ur
   assert.ok(cfg.publish[0].url.startsWith('https://'));
   assert.equal(cfg.extraMetadata.paperlabServer, SERVER);
   assert.equal(cfg.nsis.perMachine, false);
-  assert.equal(cfg.nsis.oneClick, true);
+  assert.equal(cfg.nsis.oneClick, false); // 설치 위치 고르기 (2026-10-19)
+  assert.equal(cfg.nsis.allowToChangeInstallationDirectory, true);
   assert.equal(cfg.nsis.deleteAppDataOnUninstall, false);
   assert.equal(cfg.win.artifactName, 'PaperLab-Setup-${version}.${ext}');
   assert.deepEqual(cfg.protocols, [{ name: 'PaperLab', schemes: ['paperlab'] }]);

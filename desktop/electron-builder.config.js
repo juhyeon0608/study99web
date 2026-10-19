@@ -57,7 +57,10 @@ module.exports = {
     artifactName: 'PaperLab-Setup-${version}.${ext}',
   },
   nsis: {
-    oneClick: true,
+    // 설치 위치를 고를 수 있게(2026-10-19 사용자 요청): 단계형 설치 창 — 기본 위치는 그대로(%LOCALAPPDATA%\Programs\PaperLab),
+    // 사용자별 설치라 관리자 권한 없이. 자동 업데이트는 처음 고른 위치에 조용히 덮어씀
+    oneClick: false,
+    allowToChangeInstallationDirectory: true,
     perMachine: false,
     deleteAppDataOnUninstall: false,
     createDesktopShortcut: true,
