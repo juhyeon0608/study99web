@@ -129,7 +129,11 @@ test('AC-88 (h) electron-builder: publish generic · url = server.json public_ur
   assert.deepEqual(pkg.dependencies, { 'electron-updater': '6.8.9', 'hwp.js': '0.0.3', 'word-extractor': '1.0.4' });
   assert.ok(cfg.files.includes('extract/**/*'));
   assert.ok(cfg.asarUnpack.includes('extract/**/*') && cfg.asarUnpack.includes('node_modules/hwp.js/**/*') && cfg.asarUnpack.includes('node_modules/word-extractor/**/*'));
-  assert.ok(cfg.extraResources.some((r) => r.from === 'build/THIRD_PARTY_NOTICES.txt'));
+  assert.ok(cfg.extraResources.some((r) => r.from === 'build/gen/THIRD_PARTY_NOTICES.html' && r.to === 'THIRD_PARTY_NOTICES.html'));
+  // 설치본에 .txt 없음(엑소스피어 랜섬웨어 방어가 서명 없는 설치 프로그램의 .txt 쓰기를 차단 — 2026-10-19)
+  assert.ok(!cfg.extraResources.some((r) => /\.txt$/i.test(r.to)));
+  assert.equal(cfg.afterPack, require('../scripts/txt-to-html').afterPack);
+  assert.ok(fs.readFileSync(path.join(ROOT, 'build', 'gen', 'THIRD_PARTY_NOTICES.html'), 'utf8').startsWith('<!doctype html>'));
   assert.ok(fs.existsSync(path.join(ROOT, 'ui', 'vendor', 'pdf.min.mjs')) && fs.existsSync(path.join(ROOT, 'ui', 'vendor', 'pdf.worker.min.mjs'))); // copy-vendor
 });
 

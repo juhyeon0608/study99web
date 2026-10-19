@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { copyAppCss } = require('./scripts/copy-css');
 const { copyVendor } = require('./scripts/copy-vendor');
+const { buildNoticesHtml, afterPack } = require('./scripts/txt-to-html');
 
 const SERVER_JSON = path.join(__dirname, '..', 'deploy', 'server-pc', 'server.json');
 // 추출 Worker 가 require 하는 패키지와 그 의존성(잠금 파일 기준 — 선택 동기화 9.5.4)
@@ -26,6 +27,7 @@ function publicUrl() {
 const server = publicUrl();
 copyAppCss(); // PD-5 — 빌드마다 app.css를 새로 복사
 copyVendor(); // 선택 동기화 9.4 — PDF.js 두 파일(ui/vendor/)을 서버 사본에서 새로 복사
+buildNoticesHtml(); // 설치본에 .txt 안 넣음(백신 차단 알림 — scripts/txt-to-html.js)
 console.log(`PaperLab 서버 주소(server.json): ${server} · 업데이트 주소: ${server}/downloads/`); // 빌드 로그 확인용(U6)
 
 module.exports = {
@@ -38,10 +40,11 @@ module.exports = {
   asarUnpack: ['extract/**/*', ...EXTRACT_DEPS.map((n) => `node_modules/${n}/**/*`)],
   extraResources: [
     { from: 'build', to: 'icons', filter: ['icon.ico', 'tray-*.ico'] },
-    { from: 'build/THIRD_PARTY_NOTICES.txt', to: 'THIRD_PARTY_NOTICES.txt' }, // 오픈 소스 고지(9.5.4 — 이 PC 상태 창 아래 링크로 엶)
+    { from: 'build/gen/THIRD_PARTY_NOTICES.html', to: 'THIRD_PARTY_NOTICES.html' }, // 오픈 소스 고지(9.5.4 — 이 PC 상태 창 아래 링크로 엶). .txt 는 백신이 차단
   ],
   extraMetadata: { paperlabServer: server },
   asar: true,
+  afterPack, // LICENSE.electron.txt → .html (백신 차단 알림)
   electronFuses: {
     runAsNode: false,
     enableCookieEncryption: true,

@@ -501,9 +501,9 @@ function openLogs() {
   shell.openPath(path.join(userData(), 'logs'));
 }
 
-/** 오픈 소스 고지(선택 동기화 9.5.4): 설치본은 resources\THIRD_PARTY_NOTICES.txt(extraResources), 개발 실행은 build\ */
+/** 오픈 소스 고지(선택 동기화 9.5.4): 설치본은 resources\THIRD_PARTY_NOTICES.html(extraResources — .txt 는 백신이 차단), 개발 실행은 build\ */
 function openNotices() {
-  shell.openPath(app.isPackaged ? path.join(process.resourcesPath, 'THIRD_PARTY_NOTICES.txt') : path.join(__dirname, '..', 'build', 'THIRD_PARTY_NOTICES.txt'));
+  shell.openPath(app.isPackaged ? path.join(process.resourcesPath, 'THIRD_PARTY_NOTICES.html') : path.join(__dirname, '..', 'build', 'THIRD_PARTY_NOTICES.txt'));
   return true;
 }
 

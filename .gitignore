@@ -21,6 +21,7 @@ node_modules/
 # 데스크톱 앱 (2단계 2b): 아이콘 폴더는 커밋(위 build/ 규칙의 예외), app.css 사본은 빌드 생성물(PD-5)
 !desktop/build/
 desktop/ui/app.css
+desktop/build/gen/
 # PC 앱 PDF.js 사본(선택 동기화 9.4 — scripts/copy-vendor.js 가 서버 static/vendor/pdfjs 에서 복사하는 생성물)
 desktop/ui/vendor/
 
