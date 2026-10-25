@@ -1993,3 +1993,13 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .doc .doc-eq-math { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
 .doc .doc-eq-math .katex-display { margin: 0; }
 .doc .doc-eq-no { position: absolute; right: 0; top: 50%; transform: translateY(-50%); white-space: nowrap; }
+
+/* ---------------- 논문 쓰기 AI 결과 · 그림 패널 폭 조절 손잡이 (2026-10-26) ---------------- */
+/* 패널 왼쪽 가장자리 8px — 끌기 · ← → · 두 번 누르면 기본 폭 */
+.ai-pane { position: relative; }
+.pane-resize { position: absolute; left: -4px; top: 0; bottom: 0; width: 8px; z-index: 5; cursor: col-resize; touch-action: none; }
+.pane-resize::after { content: ""; position: absolute; left: 3px; top: 0; bottom: 0; width: 2px; background: transparent; transition: background .15s; }
+.pane-resize:hover::after, .pane-resize:focus-visible::after, .pane-resizing .pane-resize::after { background: var(--accent); }
+.pane-resize:focus-visible { outline: none; }
+.pane-resizing, .pane-resizing * { cursor: col-resize !important; user-select: none; }
+@media (max-width: 760px) { .pane-resize { display: none; } }

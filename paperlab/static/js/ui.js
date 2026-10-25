@@ -1,6 +1,7 @@
 // 화면 공통 도우미: DOM 생성, 모달, 토스트, 마크다운·수식 렌더링
 
 import { refreshAll } from "./state.js";
+import { useLenientEmphasis } from "./writemd.js";
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 export const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
@@ -382,6 +383,7 @@ export function renderMarkdown(text, { citations = false } = {}) {
     .replace(/\\\[([\s\S]+?)\\\]/g, (_, m) => keep(tex(m.trim(), true)))
     .replace(/\\\(([\s\S]+?)\\\)/g, (_, m) => keep(tex(m.trim(), false)))
     .replace(/(^|[^\\$])\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d)/g, (_, pre, m) => pre + keep(tex(m, false)));
+  useLenientEmphasis(window.marked); // 한글 조사 옆 **굵게** (writemd.js)
   let html = window.marked ? window.marked.parse(src, { breaks: true, gfm: true }) : `<p>${esc(src)}</p>`;
   html = purifyMd(html) ?? esc(src);
   // 수식·인용 번호는 정화한 뒤 텍스트 노드에서만 바꾼다 (속성 안의 같은 글자는 건드리지 않는다)

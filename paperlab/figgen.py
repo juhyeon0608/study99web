@@ -274,8 +274,8 @@ SVG 규칙 (반드시 지키세요):
 
 내용 규칙:
 - 주어진 설명 · 원고 내용에 있는 것만 그리세요. 수치 · 이름 · 결과 · 관계를 지어내지 마세요.
-  모르는 값 · 확인이 필요한 부분은 그림 안에 [확인 필요]라고 쓰세요.
-- 그래프는 주어진 수치가 있을 때만 그 수치로 그리고, 수치가 없으면 축 · 범례만 두고 [확인 필요]로 표시하세요.
+  모르는 값 · 확인이 필요한 부분은 그림 안에 [확인 필요: 확인할 것]처럼 무엇을 확인해야 하는지 쓰세요(예: [확인 필요: 응답률]).
+- 그래프는 주어진 수치가 있을 때만 그 수치로 그리고, 수치가 없으면 축 · 범례만 두고 [확인 필요: 수치]로 표시하세요.
 
 출력 형식 (이 순서 그대로, 다른 말 · 설명 · 코드 블록 표시(```) 없이):
 그림 종류: <흐름도 · 개념도 · 막대그래프 같은 종류> — <왜 이 종류가 맞는지 한 줄>
@@ -355,7 +355,7 @@ def parse(text) -> dict:
     kind = _KIND_RE.search(head)
     caption = clean_caption(cap.group(1)) if cap else ""
     return {"svg": svg, "caption": caption, "kind_note": re.sub(r"\s+", " ", kind.group(1)).strip()[:300] if kind else "",
-            "check_needed": "[확인 필요]" in svg or "[확인 필요]" in caption}
+            "check_needed": "[확인 필요" in svg or "[확인 필요" in caption}
 
 
 def result_of(parsed: dict) -> dict:

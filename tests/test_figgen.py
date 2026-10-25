@@ -129,7 +129,7 @@ def test_sanitize_size_and_complexity_caps():
 def test_prompt_describe_has_svg_rules_font_and_format():
     system, prompt = figgen.build_request({"mode": "describe", "description": "연구 절차 흐름도", "lang": "ko"})
     for rule in ("viewBox", "16cm", "Malgun Gothic", "Noto Sans KR", "<script>", "<foreignObject>", "<image>", "on…=",
-                 "@import", "흑백", "[확인 필요]", "그림 종류:", "캡션:", "지어내지"):
+                 "@import", "흑백", "[확인 필요: 확인할 것]", "그림 종류:", "캡션:", "지어내지"):
         assert rule in system, rule
     assert "<request>\n연구 절차 흐름도\n</request>" in prompt and "한국어" in prompt
     with pytest.raises(ai.AIError):

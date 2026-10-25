@@ -157,6 +157,8 @@ def test_text_requests_carry_paper_text_and_rules():
     assert "[p.쪽번호]" in system and "사용자: 앞 질문" in prompt and prompt.endswith("질문: 어디?")
     system, prompt = ai.write_request("polish", "고칠 글", sources=[{"key": "he2016", "title": "ResNet"}])
     assert system == ai.WRITE_SYSTEM and '<source key="he2016">' in prompt and "<text>\n고칠 글\n</text>" in prompt
+    # [확인 필요]는 무엇을 확인할지 함께 (2026-10-26 사용자 요청 — 예: [확인 필요: 출처])
+    assert "[확인 필요: 확인할 것]" in system and "[확인 필요: 출처]" in system and "내용 없이 [확인 필요]만 쓰지 마세요" in system
     with pytest.raises(ai.AIError):
         ai.summary_request(ai.PaperContext(title="T", pdf_bytes=None, page_texts=[]), "한국어")
 

@@ -136,7 +136,7 @@ export function figPane(view, hooks) {
         placeholder="추가 요청 (선택) — 예: 흑백 흐름도로, 단계마다 짧은 설명"></textarea>`);
       t.value = S.extra;
       t.oninput = () => { S.extra = t.value; };
-      form.append(sel, snip, t, el(`<p class="small muted fig-hint">원고 내용에 있는 것만 그려요. 모르는 값은 그림에 [확인 필요]로 표시돼요.</p>`));
+      form.append(sel, snip, t, el(`<p class="small muted fig-hint">원고 내용에 있는 것만 그려요. 모르는 값은 그림에 [확인 필요: 무엇]으로 표시돼요.</p>`));
     }
     form.append(el(`<div class="ai-actions"><button type="button" class="btn sm primary" data-act="make">그림 만들기</button>
       <span class="small muted">내 PC의 Claude로 그려요 · 창을 닫아도 계속돼요</span></div>`));
@@ -206,7 +206,7 @@ export function figPane(view, hooks) {
     prev.append(svgImg(res.svg, res.caption) || el(`<div class="msg error">그림을 보여 줄 수 없어요</div>`));
     out.append(prev);
     if (res.kind_note) out.append(Object.assign(el(`<p class="small muted fig-kind"></p>`), { textContent: `그림 종류: ${res.kind_note}` }));
-    if (res.check_needed) out.append(el(`<div class="notice" data-tone="warn">${ICON_WARN}<div>그림에 <b>[확인 필요]</b> 표시가 있어요. 원고 내용에 없던 값이에요 — 확인해서 고쳐 주세요.</div></div>`));
+    if (res.check_needed) out.append(el(`<div class="notice" data-tone="warn">${ICON_WARN}<div>그림에 <b>[확인 필요: …]</b> 표시가 있어요. 원고 내용에 없던 값이에요 — 확인해서 고쳐 주세요.</div></div>`));
     const capRow = el(`<label class="field fig-cap"><span class="ai-sec-h">캡션</span><input class="input" data-fig-cap maxlength="300"></label>`);
     const cap = $("input", capRow);
     cap.value = S.caption.has(j.id) ? S.caption.get(j.id) : (S.base && S.base.caption) || res.caption || "";

@@ -132,6 +132,32 @@ export function loadPaneOpen(storage) {
 export function savePaneOpen(storage, open) {
   try { storage.setItem(AI_PANE_KEY, JSON.stringify({ open: !!open })); } catch { /* 저장 못 함 — 이번만 */ }
 }
+// 패널 폭(2026-10-26 사용자 요청 — 왼쪽 가장자리를 끌어 넓히기 · 좁히기). 이 브라우저에 px 로 기억, 없거나 깨졌으면 기본 폭(CSS)
+export const AI_PANE_W_KEY = "paperlab.writeAiWidth";
+export const PANE_MIN_W = 280;
+export const PANE_MAX_W = 1600;
+export function clampPaneWidth(w) {
+  const n = Math.round(Number(w));
+  return Number.isFinite(n) ? Math.min(Math.max(n, PANE_MIN_W), PANE_MAX_W) : null;
+}
+export function loadPaneWidth(storage) {
+  try {
+    const raw = storage.getItem(AI_PANE_W_KEY);
+    return raw ? clampPaneWidth(raw) : null;
+  } catch {
+    return null;
+  }
+}
+export function savePaneWidth(storage, w) {
+  try {
+    if (w == null) storage.removeItem(AI_PANE_W_KEY);
+    else storage.setItem(AI_PANE_W_KEY, String(clampPaneWidth(w)));
+  } catch { /* 저장 못 함 — 이번만 */ }
+}
+// CSS 폭: 고른 폭이되 창이 좁아지면 편집기 자리(560px)를 남기고 줄어듦(최소 280px)
+export function paneWidthCss(w) {
+  return `clamp(${PANE_MIN_W}px, ${clampPaneWidth(w)}px, max(${PANE_MIN_W}px, 100vw - 560px))`;
+}
 // 이 브라우저의 localStorage (사생활 보호 창 · 막힌 저장소에서는 읽기만 해도 오류 → null)
 export function browserStorage() {
   try { return globalThis.localStorage || null; } catch { return null; }
