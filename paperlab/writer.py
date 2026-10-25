@@ -92,6 +92,27 @@ def _table_align(block: Block, col: int) -> str:
     return a if a in ("left", "center", "right") else "left"
 
 
+def _cell_align(block: Block, row: int, col: int) -> str:
+    """칸 정렬: 머리글 줄은 늘 가운데, 나머지는 열 정렬 (2026-10-26 사용자 요청 — 내용은 왼쪽 · 머리글만 가운데)"""
+    return "center" if row == 0 and block.get("header", True) else _table_align(block, col)
+
+
+def _hwpx_text_run(p, text: str, **kw):
+    """HWPX 글 런 — 줄바꿈(표 칸 안 Shift+Enter)은 <hp:lineBreak/>로 (글자 줄바꿈은 한글이 무시함)"""
+    parts = text.split("\n")
+    run = p.add_run(parts[0], **kw)
+    if len(parts) > 1:
+        t = run.element.find(f"{_HP}t")
+        if t is None:
+            t = run.element.makeelement(f"{_HP}t", {})
+            run.element.append(t)
+        for part in parts[1:]:
+            br = t.makeelement(f"{_HP}lineBreak", {})
+            br.tail = part
+            t.append(br)
+    return run
+
+
 def _cell_runs(block: Block, row: int, runs: list[Run]) -> list[Run]:
     return [dict(r, b=True) for r in runs] if row == 0 and block.get("header", True) else runs
 
@@ -260,7 +281,7 @@ def _docx_table(document, block: Block, fill):
     for r, row in enumerate(rows):
         cells = table.rows[r].cells
         for c, runs in enumerate(row):
-            fill(cells[c].paragraphs[0], _cell_runs(block, r, runs), _table_align(block, c))
+            fill(cells[c].paragraphs[0], _cell_runs(block, r, runs), _cell_align(block, r, c))
     if block.get("header", True) and len(rows) > 1:
         table.rows[0]._tr.get_or_add_trPr().append(OxmlElement("w:tblHeader"))
     return table
@@ -440,9 +461,9 @@ class _HwpxWriter:
             script = "sup" if r.get("sup") else ("sub" if r.get("sub") else None)
             cid = self.char(b=bold or r.get("b"), i=r.get("i"), script=script, size=size)
             if cid is None:
-                paragraph.add_run(text)
+                _hwpx_text_run(paragraph, text)
             else:
-                paragraph.add_run(text, char_pr_id_ref=cid)
+                _hwpx_text_run(paragraph, text, char_pr_id_ref=cid)
 
     def fmt(self, paragraph, **kw):
         from hwpx._document import layout
@@ -459,7 +480,7 @@ class _HwpxWriter:
             for c, runs in enumerate(row):
                 p = t.cell(r, c).paragraphs[0]
                 self.runs(p, _cell_runs(block, r, runs))
-                self.fmt(p, alignment=_HWPX_ALIGN[_table_align(block, c)], first_line_indent_mm=0,
+                self.fmt(p, alignment=_HWPX_ALIGN[_cell_align(block, r, c)], first_line_indent_mm=0,
                          spacing_after_pt=0)
 
 
@@ -607,7 +628,7 @@ def to_markdown(blocks: list[Block]) -> str:
             out.append((f"![{alt}](fig:{src})\n\n" if src else "") + md(_runs_of(b.get("caption"))))
         elif kind == "table":
             rows = _table_rows(b)
-            cell = lambda runs: md(runs).replace("|", "\\|").replace("\n", " ")  # noqa: E731
+            cell = lambda runs: md(runs).replace("|", "\\|").replace("\n", "<br>")  # noqa: E731 — 칸 안 줄바꿈
             sep = {"left": ":--", "center": ":-:", "right": "--:"}
             lines = ["| " + " | ".join(cell(c) for c in rows[0]) + " |",
                      "| " + " | ".join(sep[_table_align(b, i)] for i in range(len(rows[0]))) + " |"]
@@ -1506,7 +1527,7 @@ class _HwpxBuilder(_FormattedBuilder):
         for r, row in enumerate(rows):
             for c, runs in enumerate(row):
                 p = t.cell(r, c).paragraphs[0]
-                p.para_pr_id_ref = self.para_id(self.cell_spec(_table_align(block, c)))
+                p.para_pr_id_ref = self.para_id(self.cell_spec(_cell_align(block, r, c)))
                 self._add_runs(p, self.styles["body"], _cell_runs(block, r, runs))
 
     def _add_runs(self, p, st: dict, runs: list[Run]) -> None:
@@ -1522,7 +1543,7 @@ class _HwpxBuilder(_FormattedBuilder):
             rspec = _rspec(st, bold=st["bold"] or bool(r.get("b")), italic=st["italic"] or bool(r.get("i")))
             if r.get("code"):
                 rspec.update(fonts=dict(st["fonts"], latin=CODE_FONT), size=CODE_SIZE)
-            p.add_run(text, char_pr_id_ref=self.char_id(rspec, script))
+            _hwpx_text_run(p, text, char_pr_id_ref=self.char_id(rspec, script))
 
     def finish(self) -> bytes:
         # 쪽 번호 글자는 본문 글꼴·크기

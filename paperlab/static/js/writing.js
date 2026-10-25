@@ -139,6 +139,7 @@ async function buildDocument(text, { style, locale, koreanFirst, chapterNumbers 
         runs.push(...inline(t.tokens, fmt));
         if (t.href && t.text !== t.href) runs.push({ text: ` (${t.href})`, ...fmt });
       } else if (t.type === "image") runs.push({ text: t.text || "", ...fmt });
+      else if (t.type === "html" && /^<br\s*\/?>$/i.test(t.text.trim())) runs.push({ text: "\n", ...fmt }); // 표 칸 안 줄바꿈
       else if (t.type === "html") runs.push(...textRuns(t.text.replace(/<[^>]+>/g, ""), fmt));
       else if (t.tokens && t.tokens.length) runs.push(...inline(t.tokens, fmt));
       else runs.push(...textRuns(unescapeHtml(t.text ?? t.raw ?? ""), fmt));
@@ -289,7 +290,7 @@ function runHtml(r, notes) {
     notes.push(r.footnote);
     return `<sup class="fn-ref">${notes.length}</sup>`;
   }
-  let h = r.math ? katexHtml(r.math, false) : esc(r.text);
+  let h = r.math ? katexHtml(r.math, false) : esc(r.text).replace(/\n/g, "<br>");
   if (r.code) h = `<code>${h}</code>`;
   if (r.b) h = `<b>${h}</b>`;
   if (r.i) h = `<i>${h}</i>`;
@@ -315,8 +316,8 @@ function blocksToHtml(blocks) {
         + `<img data-fig="${esc(b.src)}" alt="${esc(b.alt || "")}"><figcaption>${runsHtml(b.caption || [], notes)}</figcaption></figure>`;
       case "table": return `<div class="doc-tbl" data-tbl-i="${Number(b.index)}" role="button" tabindex="0" title="눌러서 표 고치기">`
         + `<p class="doc-cap">${runsHtml(b.caption || [], notes)}</p><table>${b.rows.map((row, ri) => `<tr>${row.map((cell, ci) => {
-          const tag = ri === 0 ? "th" : "td";
-          return `<${tag} style="text-align:${esc(b.align[ci] || "left")}">${runsHtml(cell, notes)}</${tag}>`;
+          const tag = ri === 0 ? "th" : "td"; // 머리글은 늘 가운데, 정렬 단추는 내용 칸 (writer.py _cell_align와 같게)
+          return `<${tag} style="text-align:${ri === 0 ? "center" : esc(b.align[ci] || "left")}">${runsHtml(cell, notes)}</${tag}>`;
         }).join("")}</tr>`).join("")}</table></div>`;
       case "quote": return `<blockquote>${r()}</blockquote>`;
       case "code": return `<pre>${esc(b.text)}</pre>`;
@@ -535,6 +536,8 @@ export async function openManuscript(main, id) {
     autocomplete(ta);
   });
   ta.addEventListener("blur", () => setTimeout(() => { if (document.activeElement !== ta) hideSuggest(); }, 150));
+  // 표(캡션 줄 포함)를 두 번 누르면 표 고치기 창 (2026-10-26 사용자 요청 — 미리보기는 한 번 누르기)
+  ta.addEventListener("dblclick", () => { if (tableAt(ta.value, ta.selectionStart)) editTable(ta); });
   let softBreak = false; // Shift+Enter: 목록을 잇지 않는 줄바꿈 (아래 input 보정에서 뺌)
   ta.addEventListener("keydown", (e) => {
     softBreak = e.key === "Enter" && e.shiftKey;
@@ -1227,6 +1230,18 @@ async function insertFigures(ta, files) {
 }
 
 // 표 넣기 · 고치기: 커서가 표(또는 바로 위 캡션 줄) 안이면 그 표를 고치고, 아니면 크기를 골라 새 표
+// 그림 · 표 번호를 장마다(표 2-1)로 — 표 창의 [장마다 번호로] (표지 정보의 같은 설정)
+async function setChapterNumbering() {
+  const m = W.m;
+  if (!m) return false;
+  const cover = { ...(m.cover || {}), caption_numbering: "chapter" };
+  try { await api.patch(`/api/manuscripts/${m.id}`, { cover }); } catch (e) { errorToast(e); return false; }
+  m.cover = cover;
+  if (W.ta && W.m === m) renderPreview(W.ta.closest(".writer"), W.ta);
+  toast("그림 · 표 번호를 장마다 새로 매겨요 — 표지 정보에서 바꿀 수 있어요", "success");
+  return true;
+}
+
 async function editTable(ta) {
   const ko = koDoc(ta);
   const tables = findTables(ta.value);
@@ -1239,7 +1254,8 @@ async function editTable(ta) {
     if (!size) return;
     table = newTable(size.rows, size.cols, ko);
   }
-  const res = await tableDialog(table, { existing: !!found });
+  const chapter = !!(W.m && W.m.cover && W.m.cover.caption_numbering === "chapter");
+  const res = await tableDialog(table, { existing: !!found, ko, chapter, setChapter: setChapterNumbering });
   if (!res || W.ta !== ta) return;
   if (!found) {
     applyEdit(ta, blockInsert(ta.value, s, e, tableMarkdown(res.table, ko), [0, 0]));

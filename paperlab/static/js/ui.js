@@ -136,17 +136,19 @@ const focusables = (root) => (root ? $$(FOCUSABLE, root).filter((n) => n.getClie
 function syncInert() {
   const top = $$("body > .modal-backdrop").pop();
   for (const n of document.body.children) {
-    if (n.id !== "toasts" && n.id !== "app-banner") n.inert = !!top && n !== top;
+    // 떠 있는 창(floating — 표 고치기 등)은 뒤 화면을 막지 않는다: 참고 문서를 보며 고치게 (2026-10-26)
+    if (n.id !== "toasts" && n.id !== "app-banner") n.inert = !!top && !top.classList.contains("floating") && n !== top;
   }
 }
 
 let openModals = 0;
 let modalSeq = 0;
-export function modal({ title, body = "", foot = null, wide = false, onClose = null }) {
+// floating: 뒤를 어둡게 · 막지 않는 창(밖을 눌러도 닫히지 않음, Esc는 창 안에서만). 모든 창은 머리줄을 끌어 옮길 수 있다
+export function modal({ title, body = "", foot = null, wide = false, onClose = null, floating = false }) {
   const tid = `modal-title-${++modalSeq}`;
-  const back = el(`<div class="modal-backdrop">
-    <div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-labelledby="${tid}">
-      <div class="modal-head"><h3 id="${tid}">${esc(title)}</h3><button class="icon-btn" data-close title="닫기" aria-label="닫기">✕</button></div>
+  const back = el(`<div class="modal-backdrop${floating ? " floating" : ""}">
+    <div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="${floating ? "false" : "true"}" aria-labelledby="${tid}">
+      <div class="modal-head" title="끌어서 창 옮기기"><h3 id="${tid}">${esc(title)}</h3><button class="icon-btn" data-close title="닫기" aria-label="닫기">✕</button></div>
       <div class="modal-body"></div>
     </div></div>`);
   const box = $(".modal", back);
@@ -170,6 +172,7 @@ export function modal({ title, body = "", foot = null, wide = false, onClose = n
   };
   const onKey = (e) => {
     if (back !== $$("body > .modal-backdrop").pop()) return;
+    if (floating && !box.contains(document.activeElement)) return; // 뒤 화면에서 쓰는 중이면 그 화면 키
     if (e.key === "Escape") return close();
     if (e.key !== "Tab") return;
     // 초점 가두기: 마지막 → 처음, 처음 → 마지막 (창 밖은 inert라 브라우저 주소창으로 빠지지 않게)
@@ -182,7 +185,8 @@ export function modal({ title, body = "", foot = null, wide = false, onClose = n
       f[e.shiftKey ? f.length - 1 : 0].focus();
     }
   };
-  back.addEventListener("mousedown", (e) => { if (e.target === back) close(); });
+  back.addEventListener("mousedown", (e) => { if (e.target === back && !floating) close(); });
+  dragModal(box);
   $("[data-close]", back).onclick = close;
   document.addEventListener("keydown", onKey);
   document.body.appendChild(back);
@@ -196,6 +200,45 @@ export function modal({ title, body = "", foot = null, wide = false, onClose = n
     f.focus();
   }, 30);
   return { el: back, body: bodyEl, close };
+}
+
+// 창 옮기기: 머리줄(단추 밖)을 끌면 창이 따라온다. 화면 밖으로 다 나가지 않게 머리줄 일부는 남김. 두 번 누르면 가운데로
+function dragModal(box) {
+  const head = $(".modal-head", box);
+  let dx = 0;
+  let dy = 0;
+  const place = () => { box.style.transform = dx || dy ? `translate(${dx}px, ${dy}px)` : ""; };
+  head.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || e.target.closest("button, input, select, textarea, a")) return;
+    e.preventDefault();
+    const sx = e.clientX - dx;
+    const sy = e.clientY - dy;
+    const r0 = box.getBoundingClientRect();
+    const base = { left: r0.left - dx, top: r0.top - dy };
+    head.setPointerCapture(e.pointerId);
+    box.classList.add("dragging");
+    const move = (ev) => {
+      const keep = 80; // 화면 안에 남길 폭
+      dx = Math.min(Math.max(ev.clientX - sx, keep - base.left - r0.width), innerWidth - keep - base.left);
+      dy = Math.min(Math.max(ev.clientY - sy, -base.top), innerHeight - 48 - base.top);
+      place();
+    };
+    const up = () => {
+      head.removeEventListener("pointermove", move);
+      head.removeEventListener("pointerup", up);
+      head.removeEventListener("pointercancel", up);
+      box.classList.remove("dragging");
+    };
+    head.addEventListener("pointermove", move);
+    head.addEventListener("pointerup", up);
+    head.addEventListener("pointercancel", up);
+  });
+  head.addEventListener("dblclick", (e) => {
+    if (e.target.closest("button")) return;
+    dx = 0;
+    dy = 0;
+    place();
+  });
 }
 
 export const modalOpen = () => openModals > 0;

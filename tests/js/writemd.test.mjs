@@ -96,3 +96,22 @@ test("[확인 필요: …] 색 표시: 편집기 강조 층 HTML · 미리보기
   assert.match(css, /\.writer-ta, \.writer-hl \{ padding: 16px 16px 48px; \}/); // 좁은 화면 여백도 같게
   assert.match(css, /\.doc mark\.check-mark \{/);
 });
+
+test("표: 칸 안 줄바꿈 <br> 왕복 · 머리글 가운데 · 표 창 (2026-10-26)", async () => {
+  const we = await import(pathToFileURL(join(JS, "writeedit.js")).href);
+  const md2 = we.tableMarkdown({ rows: [["구분", "AS-IS"], ["보안", "1) 개인 PC\n2) 공유 폴더"]], align: [null, null], caption: "시험" });
+  assert.match(md2, /\| 보안 \| 1\) 개인 PC<br>2\) 공유 폴더 \|/);
+  const t = we.findTables(md2, marked.lexer)[0];
+  assert.deepEqual(t.rows[1], ["보안", "1) 개인 PC\n2) 공유 폴더"]);
+  assert.deepEqual(we.findTables("| a |\n| --- |\n| x<br/>y |", null)[0].rows[1], ["x\ny"]);
+  const w = readFileSync(join(JS, "writing.js"), "utf8");
+  assert.match(w, /<br\\s\*\\\/\?>\$\/i\.test\(t\.text\.trim\(\)\)\) runs\.push\(\{ text: "\\n"/);
+  assert.match(w, /text-align:\$\{ri === 0 \? "center"/);
+  assert.match(w, /addEventListener\("dblclick", \(\) => \{ if \(tableAt\(ta\.value, ta\.selectionStart\)\) editTable\(ta\); \}\)/);
+  const tools = readFileSync(join(JS, "writetools.js"), "utf8");
+  assert.match(tools, /floating: true/);
+  assert.match(tools, /e\.shiftKey \|\| e\.isComposing/);
+  const ui = readFileSync(join(JS, "ui.js"), "utf8");
+  assert.match(ui, /dragModal\(box\);/);
+  assert.match(ui, /!top\.classList\.contains\("floating"\)/);
+});

@@ -322,7 +322,8 @@ const alignOf = (c) => { const s = c.replace(/\s+/g, ""); return s.startsWith(":
 function tableFromLines(lines, starts, i, j) {
   const header = splitRow(lines[i]);
   const cols = header.length;
-  const rows = [header, ...lines.slice(i + 2, j).map((l) => splitRow(l))].map((r) => Array.from({ length: Math.max(cols, 1) }, (_, k) => r[k] ?? ""));
+  const rows = [header, ...lines.slice(i + 2, j).map((l) => splitRow(l))]
+    .map((r) => Array.from({ length: Math.max(cols, 1) }, (_, k) => (r[k] ?? "").replace(BR_RE, "\n")));
   const t = { from: starts[i], to: starts[j - 1] + lines[j - 1].length, rows, align: splitRow(lines[i + 1]).map(alignOf), caption: "", label: "",
     captionFrom: null, captionTo: null };
   for (const k of [i - 1, i - 2]) {
@@ -406,7 +407,9 @@ export function tableAt(value, pos) {
   return findTables(value).find((t) => (pos >= t.from && pos <= t.to) || (t.captionFrom != null && pos >= t.captionFrom && pos <= t.to)) || null;
 }
 
-const cellText = (s) => String(s ?? "").replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
+// 칸 안 줄바꿈(표 창 Shift+Enter)은 <br>로 — 마크다운 표 칸은 한 줄 (2026-10-26 사용자 요청)
+const cellText = (s) => String(s ?? "").trim().replace(/[ \t]*\r?\n[ \t]*/g, "<br>").replace(/\|/g, "\\|");
+export const BR_RE = /<br\s*\/?>/gi;
 
 // { rows: [[칸…]…](첫 줄 = 머리글), align, caption, label } → 마크다운 (캡션 줄 + 빈 줄 없이 표)
 export function tableMarkdown({ rows, align = [], caption = "", label = "" }, ko = true) {

@@ -103,17 +103,24 @@ export function hydrateFigures(root, mid) {
 // ------------------------------------------------------------- 표 고치기 창
 // table = { rows: [[칸…]…], align, caption, label } (writeedit.findTables · newTable 모양)
 // → { action: "save", table } | { action: "delete" } | null(취소)
-export function tableDialog(table, { existing = false } = {}) {
+// ko · chapter: 캡션 번호 안내(표 1 · 표 2-1), setChapter: [장마다 번호로] — 표지 정보의 그림 · 표 번호 설정을 바꿈(writing.js)
+// 떠 있는 창(floating): 뒤 화면을 막지 않아 참고 문서를 보며 고칠 수 있고, 머리줄을 끌어 옮긴다 (2026-10-26 사용자 요청)
+export function tableDialog(table, { existing = false, ko = true, chapter = false, setChapter = null } = {}) {
   return new Promise((resolve) => {
     const t = { rows: table.rows.map((r) => [...r]), align: [...(table.align || [])], caption: table.caption || "",
       label: (table.label || "").replace(/^tbl:/, "") };
     let cur = { r: Math.min(1, t.rows.length - 1), c: 0 };
+    const word = ko ? "표" : "Table";
+    const capHint = (ch) => (ch ? `표 위에 "${esc(word)} 2-1. 제목"처럼 장 번호와 함께 들어가요 (제1장 앞은 1, 2, …)`
+      : `표 위에 "${esc(word)} 1. 제목"으로 들어가요 — 처음부터 이어 매기는 번호예요`);
     const body = el(`<div class="tbl-dlg">
       <div class="grid-2">
         <div class="field"><label for="tbl-cap">표 제목 (캡션)</label><input class="input" id="tbl-cap" data-cap aria-describedby="tbl-cap-hint">
-          <div class="hint small muted" id="tbl-cap-hint" style="margin-top:4px">표 위에 "표 1. 제목"으로 들어가요</div></div>
+          <div class="hint small muted" id="tbl-cap-hint" style="margin-top:4px"><span data-cap-hint></span>
+            <button type="button" class="btn sm ghost" data-chapter style="margin-left:4px;height:22px;padding:0 6px"
+              title="그림 · 표 번호를 장마다 새로 매겨요 (표지 정보 → 그림 · 표 번호)">장마다 번호(2-1)로</button></div></div>
         <div class="field"><label for="tbl-label">참조 이름 (선택)</label><input class="input" id="tbl-label" data-label placeholder="예: result" aria-describedby="tbl-label-hint">
-          <div class="hint small muted" id="tbl-label-hint" style="margin-top:4px">본문에 @tbl:이름 으로 쓰면 "표 1"로 바뀌어요</div></div>
+          <div class="hint small muted" id="tbl-label-hint" style="margin-top:4px">본문에 @tbl:이름 으로 쓰면 "${esc(word)} 1"처럼 번호로 바뀌어요</div></div>
       </div>
       <div class="row tbl-tools" role="toolbar" aria-label="표 편집">
         <button type="button" class="btn sm" data-op="row-above">위에 줄 추가</button>
@@ -124,44 +131,60 @@ export function tableDialog(table, { existing = false } = {}) {
         <button type="button" class="btn sm" data-op="col-right">오른쪽에 칸 추가</button>
         <button type="button" class="btn sm" data-op="col-del">칸 삭제</button>
         <span class="sep"></span>
-        <span class="seg" data-align aria-label="이 칸 정렬"><button type="button" data-a="left">왼쪽</button><button type="button" data-a="center">가운데</button><button type="button" data-a="right">오른쪽</button></span>
+        <span class="small muted">내용 정렬</span>
+        <span class="seg" data-align aria-label="이 열의 내용 정렬 (머리글은 늘 가운데)" title="이 열의 내용 칸 정렬이에요. 머리글 줄은 늘 가운데예요"><button type="button" data-a="left">왼쪽</button><button type="button" data-a="center">가운데</button><button type="button" data-a="right">오른쪽</button></span>
       </div>
       <div class="tbl-grid-wrap"><table class="tbl-grid"></table></div>
-      <p class="small muted" style="margin:6px 0 0">첫 줄은 머리글(굵게)이에요. Enter는 아래 칸, Tab은 다음 칸으로 가요. 칸 안의 | 글자도 그대로 넣을 수 있어요.</p>
+      <p class="small muted" style="margin:6px 0 0">첫 줄은 머리글(굵게 · 가운데)이에요. <b>Shift+Enter</b>는 칸 안 줄바꿈, Enter는 아래 칸, Tab은 다음 칸으로 가요. 칸 안의 | 글자도 그대로 넣을 수 있어요. 창은 제목 줄을 끌어 옮길 수 있고, 뒤 화면도 그대로 볼 수 있어요.</p>
     </div>`);
     const foot = el(`<div style="display:contents"><div class="left">${existing ? `<button class="btn danger" data-del>표 삭제</button>` : ""}</div>
       <button class="btn" data-no>취소</button><button class="btn primary" data-ok>${existing ? "저장" : "넣기"}</button></div>`);
     let result = null;
-    const m = modal({ title: existing ? "표 고치기" : "표 넣기", body, foot, wide: true, onClose: () => resolve(result) });
+    const m = modal({ title: existing ? "표 고치기" : "표 넣기", body, foot, wide: true, floating: true, onClose: () => resolve(result) });
     $("[data-cap]", body).value = t.caption;
     $("[data-label]", body).value = t.label;
+    const drawHint = (ch) => {
+      $("[data-cap-hint]", body).textContent = capHint(ch);
+      $("[data-chapter]", body).hidden = ch || !setChapter;
+    };
+    drawHint(chapter);
+    $("[data-chapter]", body).onclick = async (e) => {
+      const b = e.currentTarget;
+      b.disabled = true;
+      if (setChapter && await setChapter()) drawHint(true);
+      b.disabled = false;
+    };
     const grid = $(".tbl-grid", body);
     const read = () => {
-      for (const inp of $$("input[data-r]", grid)) t.rows[Number(inp.dataset.r)][Number(inp.dataset.c)] = inp.value;
+      for (const inp of $$("textarea[data-r]", grid)) t.rows[Number(inp.dataset.r)][Number(inp.dataset.c)] = inp.value;
     };
+    // 칸 높이를 글 줄 수에 맞춤 (CSS field-sizing을 모르는 브라우저용)
+    const fit = (inp) => {
+      if (globalThis.CSS && CSS.supports && CSS.supports("field-sizing", "content")) return;
+      inp.style.height = "auto";
+      inp.style.height = String(inp.scrollHeight + 2) + "px";
+    };
+    grid.addEventListener("input", (e) => { if (e.target.matches("textarea[data-r]")) fit(e.target); });
     const draw = (focus = true) => {
       const cols = t.rows[0].length;
-      grid.innerHTML = t.rows.map((row, r) => `<tr>${row.map((_, c) => `<td><input class="input ${r === 0 ? "head" : ""}" data-r="${r}" data-c="${c}"
-        aria-label="${esc(`${r === 0 ? "머리글" : `${r}줄`} ${c + 1}칸`)}" style="text-align:${esc(t.align[c] || "left")}"></td>`).join("")}</tr>`).join("");
-      for (const inp of $$("input[data-r]", grid)) inp.value = t.rows[Number(inp.dataset.r)][Number(inp.dataset.c)] ?? "";
+      grid.innerHTML = t.rows.map((row, r) => `<tr>${row.map((_, c) => `<td><textarea class="input ${r === 0 ? "head" : ""}" rows="1" data-r="${r}" data-c="${c}"
+        aria-label="${esc(`${r === 0 ? "머리글" : `${r}줄`} ${c + 1}칸`)}" style="text-align:${esc(t.align[c] || "left")}"></textarea></td>`).join("")}</tr>`).join("");
+      for (const inp of $$("textarea[data-r]", grid)) { inp.value = t.rows[Number(inp.dataset.r)][Number(inp.dataset.c)] ?? ""; fit(inp); }
       $("[data-op=row-del]", body).disabled = t.rows.length <= 1;
       $("[data-op=col-del]", body).disabled = cols <= 1;
       for (const op of ["row-above", "row-below"]) $(`[data-op=${op}]`, body).disabled = t.rows.length >= MAX_ROWS;
       for (const op of ["col-left", "col-right"]) $(`[data-op=${op}]`, body).disabled = cols >= MAX_COLS;
       cur = { r: Math.min(cur.r, t.rows.length - 1), c: Math.min(cur.c, cols - 1) };
       $$("[data-align] button", body).forEach((b) => b.classList.toggle("active", (t.align[cur.c] || "left") === b.dataset.a));
-      if (focus) $(`input[data-r="${cur.r}"][data-c="${cur.c}"]`, grid)?.focus();
+      if (focus) $(`textarea[data-r="${cur.r}"][data-c="${cur.c}"]`, grid)?.focus();
     };
     grid.addEventListener("focusin", (e) => {
-      const inp = e.target.closest("input[data-r]");
+      const inp = e.target.closest("textarea[data-r]");
       if (!inp) return;
       cur = { r: Number(inp.dataset.r), c: Number(inp.dataset.c) };
       $$("[data-align] button", body).forEach((b) => b.classList.toggle("active", (t.align[cur.c] || "left") === b.dataset.a));
     });
-    grid.addEventListener("keydown", (e) => {
-      const inp = e.target.closest("input[data-r]");
-      if (!inp || e.key !== "Enter" || e.isComposing) return;
-      e.preventDefault();
+    const nextRow = () => {
       read();
       if (cur.r === t.rows.length - 1) {
         if (t.rows.length >= MAX_ROWS) return;
@@ -169,6 +192,23 @@ export function tableDialog(table, { existing = false } = {}) {
       }
       cur.r++;
       draw();
+    };
+    let shiftEnter = false;
+    grid.addEventListener("keydown", (e) => {
+      const inp = e.target.closest("textarea[data-r]");
+      shiftEnter = e.key === "Enter" && e.shiftKey;
+      if (!inp || e.key !== "Enter") return;
+      if (e.shiftKey || e.isComposing || e.keyCode === 229) return; // Shift+Enter = 칸 안 줄바꿈 · 한글 조합 중은 아래 input에서
+      e.preventDefault();
+      nextRow();
+    });
+    // 한글 조합 중 Enter처럼 keydown에서 못 막고 브라우저가 줄을 바꾼 경우: 그 줄바꿈을 지우고 아래 칸으로
+    grid.addEventListener("input", (e) => {
+      const inp = e.target.closest("textarea[data-r]");
+      if (!inp || e.inputType !== "insertLineBreak" || shiftEnter) return;
+      const p = inp.selectionStart;
+      if (inp.value[p - 1] === "\n") inp.value = inp.value.slice(0, p - 1) + inp.value.slice(p);
+      nextRow();
     });
     $(".tbl-tools", body).addEventListener("click", (e) => {
       const b = e.target.closest("button");

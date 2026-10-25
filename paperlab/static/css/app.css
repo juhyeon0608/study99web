@@ -463,7 +463,12 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 @keyframes fade { from { opacity: 0; } }
 .modal { background: var(--surface); border-radius: 14px; box-shadow: var(--shadow-lg); width: min(560px, 100%); max-height: calc(100vh - 40px); display: flex; flex-direction: column; }
 .modal.wide { width: min(760px, 100%); }
-.modal-head { display: flex; align-items: center; padding: 16px 20px 8px; gap: 10px; }
+.modal-head { display: flex; align-items: center; padding: 16px 20px 8px; gap: 10px; cursor: move; user-select: none; touch-action: none; }
+.modal-head .icon-btn { cursor: pointer; }
+.modal.dragging { transition: none; box-shadow: 0 18px 50px rgba(0, 0, 0, .28); }
+/* 떠 있는 창: 뒤를 어둡게 하지 않고 뒤 화면을 그대로 쓸 수 있게(창만 눌림) */
+.modal-backdrop.floating { background: transparent; pointer-events: none; animation: none; }
+.modal-backdrop.floating .modal { pointer-events: auto; box-shadow: 0 12px 40px rgba(0, 0, 0, .25), 0 0 0 1px var(--border); }
 .modal-head h3 { margin: 0; font-size: 16px; flex: 1; }
 .modal-body { padding: 8px 20px 16px; overflow-y: auto; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
@@ -1748,9 +1753,10 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .tbl-dlg .tbl-tools .sep { width: 1px; height: 20px; background: var(--border); margin: 0 4px; }
 .tbl-grid-wrap { max-height: 50vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
 .tbl-grid { border-collapse: collapse; width: 100%; }
-.tbl-grid td { padding: 2px; min-width: 90px; }
-.tbl-grid .input { width: 100%; height: 30px; }
-.tbl-grid .input.head { font-weight: 700; background: var(--surface-2); }
+.tbl-grid td { padding: 2px; min-width: 90px; vertical-align: top; }
+.tbl-grid .input { width: 100%; min-height: 30px; height: auto; display: block; resize: none; overflow: hidden;
+  padding: 5px 8px; line-height: 1.45; field-sizing: content; font: inherit; }
+.tbl-grid .input.head { font-weight: 700; background: var(--surface-2); text-align: center !important; }
 .kbd-help { display: grid; gap: 12px; }
 .kbd-help h4 { margin: 4px 0 8px; font-size: 13px; }
 .kbd-table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
