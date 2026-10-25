@@ -397,7 +397,7 @@ class ApiRunner:
         question = params.get("question") or ""
         progress("검색어를 만드는 중", 0.05, step="queries")
         if not params.get("queries"):
-            system, prompt = find.query_request(question)
+            system, prompt = find.query_for(params)
             params["queries"] = find.parse_queries(ai.complete_text(system, prompt, engine, find.QUERY_SCHEMA, "queries"),
                                                    None, question)
         if "candidates" not in params:
@@ -408,11 +408,11 @@ class ApiRunner:
             with self._tx(uid) as lib:
                 jobs.set_params(lib, job, params)
         counts = params.get("counts") or {}
-        if not params["candidates"]:
+        if not find.needs_summary(params):
             return {"answer": ""}
-        progress("한국어 요약을 쓰는 중", 0.6, step="summary", counts=counts)
-        system, prompt = find.summary_request(question, params["candidates"])
-        return {"answer": find.check_answer(ai.complete_text(system, prompt, engine), len(params["candidates"]))}
+        progress("근거를 판정하는 중" if find.is_claim(params) else "한국어 요약을 쓰는 중", 0.6, step="summary", counts=counts)
+        system, prompt = find.summary_for(params)
+        return {"answer": find.check_for(params, ai.complete_text(system, prompt, engine))}
 
     def _run_index(self, job_id: int, uid: str, guide: str) -> None:
         """색인 작업(10.1절): 그 사용자의 대기 논문을 한 편씩(편마다 짧은 트랜잭션). 끝내기 직전 같은 트랜잭션에서
@@ -506,7 +506,7 @@ class ApiRunner:
                 jobs._end(lib, cur, "failed", "search_failed", error)
                 return
             jobs.set_params(lib, cur, params)
-            if not params["candidates"]:  # 0편이면 요약 없이 성공 (13.1절 5)
+            if not find.needs_summary(params):  # 0편이면 요약 없이 성공 (13.1절 5) — 출처 확인은 서재 조각이 있으면 판정
                 jobs.finish_success(lib, cur, {"answer": ""})
                 return
             lib._x("update paperlab.jobs set not_before = now(), progress = %s, updated_at = now() where id = %s "

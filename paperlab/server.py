@@ -2827,6 +2827,41 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         view, _ = new_job(ctx, "find", {"question": question}, None)
         return JSONResponse({"job": view}, status_code=202)
 
+    @app.post("/api/source-check")
+    def source_check(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """출처 확인 (2026-10-26 사용자 요청): 원고 문장 하나 → 내 서재 본문 조각(혼합 검색, 지금) + 외부 논문 검색 →
+        AI 판정 · 고친 문장 · 확인할 곳. 작업 종류는 find(params.mode = "claim") — 백그라운드 · 끝남 알림 · 24시간 정리 그대로"""
+        claim = re.sub(r"\s+", " ", str(data.get("claim") or "")).strip()
+        if not 5 <= len(claim) <= find.CLAIM_MAX:
+            raise HTTPException(400, "확인할 문장은 5~1,500자로 골라 주세요")
+        mid = data.get("manuscript_id")
+        if mid is not None:
+            if not jobs.valid_id(mid):
+                raise HTTPException(400, "원고 번호가 올바르지 않아요")
+            need_manuscript(ctx, mid)
+        route_for(ctx, "find")  # 경로가 없으면 검색 전에 400
+        rows = rag.searchable(rag.scope_rows(ctx.lib, "library", None))
+        library, lib_warn = [], []
+        if rows:
+            ctx.release()  # R2 로드 · 임베딩 동안 DB 연결을 잡지 않는다 (서재 질문과 같음)
+            try:
+                hits = rg.search(user_tx(ctx), ctx.uid, rows, claim, k=find.LIB_N, per_paper=2)
+            except rag.RagBusy:
+                hits, lib_warn = [], ["library_busy"]
+            info = {r["id"]: r for r in rows}
+            pids = sorted({h["paper_id"] for h in hits})
+            keys = {r["id"]: r["citekey"] or "" for r in ctx.lib._all(
+                "select id, citekey from paperlab.papers where user_id = %s and id = any(%s)", (ctx.uid, pids))} if pids else {}
+            library = [{"n": i + 1, "paper_id": h["paper_id"], "citekey": keys.get(h["paper_id"], ""),
+                        "title": info[h["paper_id"]]["title"], "year": info[h["paper_id"]]["year"], "page": h["page"],
+                        "text": (h.get("text") or "").strip()[:find.LIB_TEXT_MAX]}
+                       for i, h in enumerate(hits) if h["paper_id"] in keys]
+        params = {"question": claim, "mode": "claim", "library": library, "lib_warnings": lib_warn}
+        if mid is not None:
+            params["manuscript_id"] = mid
+        view, _ = new_job(ctx, "find", params, None)
+        return JSONResponse({"job": view}, status_code=202)
+
     def verify_job(ctx: RequestCtx, mid: int, active: bool = False) -> dict | None:
         cond = " and j.kind = 'verify' and j.params ->> 'manuscript_id' = %(mid)s"
         if active:

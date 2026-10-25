@@ -456,6 +456,7 @@ export async function renderJobs(main) {
 // 3단계 작업 이름 · 여는 주소 (docs/design/phase3-ask-ui.md 7.1절)
 const SCOPE_LABEL = { library: "서재 전체", collection: "컬렉션", folder: "폴더" };
 export function kindLabel(j) {
+  if (j.kind === "find" && j.find_mode === "claim") return "출처 확인";
   return j.kind === "chat" && !j.paper_id && j.scope ? "서재 질문" : KIND_LABEL[j.kind] || j.kind;
 }
 export function jobTitle(j) {
@@ -465,6 +466,7 @@ export function jobTitle(j) {
   if (j.kind === "proofread") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "맞춤법 점검 (원고가 지워졌어요)";
   if (j.kind === "index") return "서재 색인";
   if (j.kind === "figure") return j.figure && j.figure.mode === "edit" ? "원고 그림 고치기" : "원고 그림";
+  if (j.kind === "find" && j.find_mode === "claim") return j.manuscript_title ? `원고: ${j.manuscript_title}` : "출처 확인";
   if (j.kind === "find") return j.question ? `“${j.question.length > 40 ? `${j.question.slice(0, 40)}…` : j.question}”` : "AI로 찾기 (결과가 지워졌어요)";
   if (j.kind === "chat" && !j.paper_id && j.scope) return SCOPE_LABEL[j.scope.type] || "서재 질문";
   return j.paper_title || "삭제된 논문";
@@ -472,6 +474,8 @@ export function jobTitle(j) {
 export function jobHref(j) {
   if (j.kind === "index") return "#/ask";
   if (j.kind === "figure") return j.figure && j.figure.manuscript_id ? `#/write/${Number(j.figure.manuscript_id)}` : "";
+  // 출처 확인: 그 원고를 열고 AI 패널 '출처'로 (openAiJobFromHash)
+  if (j.kind === "find" && j.find_mode === "claim") return j.manuscript_id && j.manuscript_title != null ? `#/write/${Number(j.manuscript_id)}/j${Number(j.id)}` : "#/jobs";
   if (j.kind === "find") return `#/ask/find/j${j.id}`;
   if (j.kind === "verify") return j.manuscript_id ? `#/write/${j.manuscript_id}` : "";
   if (j.kind === "proofread") return j.manuscript_id && j.manuscript_title != null ? `#/write/${Number(j.manuscript_id)}` : "";

@@ -2012,6 +2012,31 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .doc .doc-eq-math .katex-display { margin: 0; }
 .doc .doc-eq-no { position: absolute; right: 0; top: 50%; transform: translateY(-50%); white-space: nowrap; }
 
+/* ---------------- 논문 쓰기 출처 확인 (AI 패널 '출처' — 2026-10-26) ---------------- */
+.src-head { display: flex; flex-direction: column; gap: 8px; }
+.src-actions { gap: 6px; flex-wrap: wrap; }
+.src-actions .btn { flex: none; white-space: nowrap; }
+.src-pick { flex: 1; min-width: 0; width: 0; height: 30px; text-overflow: ellipsis; }
+.src-out { display: flex; flex-direction: column; gap: 12px; }
+.src-claim blockquote { margin: 4px 0; padding: 8px 10px; border-left: 3px solid var(--border); background: var(--surface-2); border-radius: 6px;
+  font-size: 13.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+.src-claim mark.check-mark, .src-claim mark { background: #ffe08a; color: #9a3412; border-radius: 3px; padding: 0 2px; }
+.src-result { display: flex; flex-direction: column; gap: 10px; }
+.src-verdict { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chip.src-v { font-weight: 700; }
+.chip.src-v[data-tone="ok"] { background: var(--ok-soft, #dcfce7); color: var(--ok, #166534); border-color: transparent; }
+.chip.src-v[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.chip.src-v[data-tone="bad"] { background: var(--danger-soft, #fee2e2); color: var(--danger, #b91c1c); border-color: transparent; }
+.src-sec p { margin: 2px 0 6px; font-size: 13.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; white-space: pre-line; }
+.src-h { font-size: 12px; font-weight: 700; color: var(--text-3); }
+.src-revised { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.src-ref { margin: 0 1px; cursor: pointer; border: 0; }
+.src-lib { margin: 4px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.src-lib > li { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; transition: background .3s; }
+.src-lib > li.is-flash, .src-ext > li.is-flash { background: var(--accent-soft); }
+.src-lib-t { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; font-size: 13px; overflow-wrap: anywhere; }
+.src-lib-x { margin: 4px 0; color: var(--text-2); line-height: 1.6; max-height: 9.6em; overflow: auto; }
+
 /* ---------------- 논문 쓰기 AI 결과 · 그림 패널 폭 조절 손잡이 (2026-10-26) ---------------- */
 /* 패널 왼쪽 가장자리 8px — 끌기 · ← → · 두 번 누르면 기본 폭 */
 .ai-pane { position: relative; }

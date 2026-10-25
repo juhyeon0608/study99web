@@ -604,8 +604,9 @@ def job_view(r: dict, devices: list[dict], free: dict, detail: bool = False) -> 
         "id": r["id"], "kind": r["kind"], "status": r["status"], "runner": r["runner"], "engine": r["engine"],
         "route": r["route"], "route_index": r["route_index"],
         "paper_id": r["paper_id"], "paper_title": r.get("paper_title"),
-        "manuscript_title": r.get("manuscript_title") if r["kind"] in ("write", "verify", "ms_chat", "proofread") else None,
-        "manuscript_id": params.get("manuscript_id") if r["kind"] in ("write", "verify", "ms_chat", "proofread") else None,
+        "manuscript_title": r.get("manuscript_title") if r["kind"] in ("write", "verify", "ms_chat", "proofread", "find") else None,
+        "manuscript_id": params.get("manuscript_id") if r["kind"] in ("write", "verify", "ms_chat", "proofread", "find") else None,
+        "find_mode": params.get("mode") or "question" if r["kind"] == "find" else None,  # 출처 확인(claim) · AI로 찾기
         "scope": params.get("scope") if r["kind"] == "chat" else None,
         "device": {"id": r["device_id"], "name": r["device_name"]} if r.get("device_id") and r.get("device_name") else None,
         "waiting_reason": waiting_reason(r, devices, free),
@@ -667,7 +668,7 @@ def list_jobs(lib: Library, free: dict, status: str = "active", paper_id: int | 
     if manuscript_id is not None:
         if not valid_id(manuscript_id):
             raise JobError(400, "조건이 올바르지 않아요", "bad_request")
-        cond += " and j.kind in ('write', 'verify', 'proofread') and j.params ->> 'manuscript_id' = %(mid)s"
+        cond += " and j.kind in ('write', 'verify', 'proofread', 'find') and j.params ->> 'manuscript_id' = %(mid)s"
     rows = lib._all(_JOB_SELECT + cond + " order by j.created_at desc, j.id desc limit %(limit)s", params)
     total = lib._one("select count(*)::int as n from paperlab.jobs j where j.user_id = %(uid)s" + cond, params)["n"]
     devices = device_rows(lib)
@@ -881,8 +882,12 @@ def _apply(lib: Library, job: dict, parsed: dict, model: str):
     if kind == "find":
         cands = params.get("candidates") or []
         sources = [dict(c, in_library=x) for c, x in zip(cands, lib.match_library(cands))]
-        return {"answer": parsed.get("answer") or "", "sources": sources, "queries": params.get("queries") or [],
-                "warnings": params.get("warnings") or []}
+        out = {"answer": parsed.get("answer") or "", "sources": sources, "queries": params.get("queries") or [],
+               "warnings": params.get("warnings") or []}
+        if find.is_claim(params):  # 출처 확인: 확인한 문장 · 서재 조각(L번호)도 결과에
+            out.update(mode="claim", claim=params.get("question") or "", library=params.get("library") or [],
+                       warnings=out["warnings"] + (params.get("lib_warnings") or []))
+        return out
     if kind == "verify":
         return verify.apply_results(lib, job, parsed["results"])
     if kind in EXPLAIN_KINDS:
@@ -1036,10 +1041,10 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
     if job["kind"] == "chat" and job["paper_id"] is None:  # 범위 대화 — 출처는 params.sources로 고정(11.3절)
         scope = params.get("scope") or {}
         return rag.ask_request(lib, params, lib.scope_history(scope.get("type"), scope.get("id")), lang)
-    if job["kind"] == "find":  # CLI 두 단계(13.2절): ① 검색어 ② 요약
+    if job["kind"] == "find":  # CLI 두 단계(13.2절): ① 검색어 ② 요약 (출처 확인은 ② 판정 — find.py)
         if not params.get("queries"):
-            return find.query_request(params.get("question") or "")
-        return find.summary_request(params.get("question") or "", params.get("candidates") or [])
+            return find.query_for(params)
+        return find.summary_for(params)
     if job["kind"] in EXPLAIN_KINDS:  # 4단계: 쪽 문맥은 지금 page_texts에서
         return explain.build_request(lib, job["paper_id"], params)[:2]
     if job["kind"] == "proofread":
@@ -1075,7 +1080,7 @@ def cli_task(lib: Library, job: dict) -> dict | None:
         local = local_task({"local": {"paper_id": job["paper_id"], "sha256": loc["rep_sha"] or "",
                                       "file_name": loc["file_name"] or "", "holder": loc["local_device_id"]}})
     try:
-        if job["kind"] == "find" and params.get("queries") and not params.get("candidates"):
+        if job["kind"] == "find" and params.get("queries") and "candidates" not in params:  # 출처 확인은 0편 + 서재 조각으로도 판정
             find_hold(lib, job, params)  # 서버 검색이 아직 — 검색이 끝나면 다시 잡힘
             return None
         if job["kind"] == "verify":
@@ -1142,7 +1147,7 @@ def parse_result(job: dict, text: str, structured=None) -> dict:
     if job["kind"] == "find":
         if not params.get("queries"):
             return {"queries": find.parse_queries(text, structured, params.get("question") or "")}
-        return {"answer": find.check_answer(text, len(params.get("candidates") or []))}
+        return {"answer": find.check_for(params, text)}
     if job["kind"] == "verify":
         return {"results": verify.parse_results(text, structured)}
     if job["kind"] in EXPLAIN_KINDS:

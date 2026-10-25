@@ -35,7 +35,9 @@ import {
   applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
 } from "./writetools.js";
 import { equationInfo, equationPng, katexHtml, MATH_MARK_RE, protectInlineMath, texToText } from "./writemath.js"; // 수식
-import { CHECK_RE, useLenientEmphasis, wrapParts } from "./writemd.js"; // 한글 조사 옆 굵게 · 기울임
+import { CHECK_RE, useLenientEmphasis, wrapParts } from "./writemd.js";
+import { claimAt, markerIndex } from "./writesrc.js"; // 출처 확인 (2026-10-26)
+import { sourceView } from "./writesrcui.js"; // 한글 조사 옆 굵게 · 기울임
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
@@ -613,6 +615,17 @@ export async function openManuscript(main, id) {
   // 미리보기의 그림 · 표를 누르면 편집기의 그 그림 줄을 고르거나 표 고치기 창
   const docClick = (e) => {
     if (e.type === "keydown" && e.key !== "Enter" && e.key !== " ") return;
+    const mark = e.target.closest("mark.check-mark");
+    if (mark) { // [확인 필요] 표시 → 원고의 그 문장으로 출처 확인 (같은 글의 표시 중 몇 번째인지로 자리를 찾음)
+      e.preventDefault();
+      const same = $$("mark.check-mark", $("[data-doc]", view)).filter((x) => x.textContent === mark.textContent);
+      const at = markerIndex(ta.value, mark.textContent, same.indexOf(mark));
+      if (at < 0) return toast("편집기에서 이 표시를 찾지 못했어요. 문장에 커서를 두고 AI 도우미 → 출처 확인을 눌러 주세요");
+      const claim = claimAt(ta.value, at);
+      if (claim) flashRange(view, ta, claim.from, claim.to);
+      if (W.ai) W.ai.source(claim);
+      return;
+    }
     const tbl = e.target.closest(".doc-tbl[data-tbl-i]");
     const fig = !tbl && e.target.closest(".doc-fig[data-fig-i]");
     if (!tbl && !fig) return;
@@ -1412,6 +1425,7 @@ function aiMenu(anchor, ta) {
     ...ENDINGS.map(([v, label]) => ({ label: `끝맺음: ${label}`, sub: v === cur ? "✓ 사용 중" : "", action: () => setEnding(v) })),
     "-",
     { label: "AI와 대화하며 고치기…", sub: "Alt+C", action: () => W.ai && W.ai.chat() },
+    { label: "출처 확인 (AI)…", sub: "커서 문장 · [확인 필요]", action: () => W.ai && W.ai.source(claimAt(ta.value, ta.selectionStart, ta.selectionEnd)) },
   ], { left: true });
 }
 
@@ -1646,10 +1660,11 @@ function aiPane(view, ta, m) {
       <button type="button" class="btn sm ghost" data-ai-close title="AI 결과 패널 닫기 (Alt+A) — 만드는 중인 작업은 계속돼요">닫기</button>
     </div>
     <div class="seg ai-views" role="group" aria-label="AI 패널 보기">${[["result", "결과", "글쓰기 도우미 결과"], ["batch", "일괄", "장 · 절 일괄 처리 결과"],
-      ["chat", "대화", "AI와 대화하며 원고 고치기 (Alt+C)"]].map(([v, label, title]) => `<button type="button" data-ai-view="${v}" title="${title}">${label}</button>`).join("")}</div>
+      ["chat", "대화", "AI와 대화하며 원고 고치기 (Alt+C)"], ["source", "출처", "[확인 필요] 문장의 근거를 서재 · 외부 논문에서 AI가 확인"]].map(([v, label, title]) => `<button type="button" data-ai-view="${v}" title="${title}">${label}</button>`).join("")}</div>
     <div class="panel-body ai-pane-body" data-ai-body></div>
     <div class="panel-body ai-pane-body hidden" data-ai-batch></div>
-    <div class="ai-pane-chat hidden" data-ai-chat></div>`;
+    <div class="ai-pane-chat hidden" data-ai-chat></div>
+    <div class="panel-body ai-pane-body hidden" data-ai-src></div>`;
   const pick = $("[data-ai-pick]", aside);
   const body = $("[data-ai-body]", aside);
   // 대화 · 일괄 보기 (writechatui.js) — 편집기 · 넣기 도우미를 넘겨줌
@@ -1657,6 +1672,15 @@ function aiPane(view, ta, m) {
     say: (t) => sayWriter(view, t), ending: () => getEnding(), modeName: (md) => MODE_LABEL[md] || "AI 글쓰기" };
   const chatV = chatView($("[data-ai-chat]", aside), helpers);
   const batchV = batchView($("[data-ai-batch]", aside), helpers);
+  // 출처 확인 (writesrcui.js): 고친 문장 넣기 전 원고를 버전 기록에
+  const srcV = sourceView($("[data-ai-src]", aside), { ...helpers, replace: (from, to, text) => {
+    if (W.m) saveVersion(W.m.id, ta.value);
+    ta.focus();
+    ta.setSelectionRange(from, to);
+    insertText(ta, text);
+    flashRange(view, ta, from, from + text.length);
+    toast("고친 문장으로 바꿨어요 — Ctrl+Z로 되돌릴 수 있어요", "success");
+  } });
 
   const merged = (j) => S.detail.get(j.id) || j;
   const list = () => {
@@ -1964,7 +1988,9 @@ function aiPane(view, ta, m) {
     pick.classList.toggle("hidden", v !== "result");
     $("[data-ai-batch]", aside).classList.toggle("hidden", v !== "batch");
     $("[data-ai-chat]", aside).classList.toggle("hidden", v !== "chat");
+    $("[data-ai-src]", aside).classList.toggle("hidden", v !== "source");
     if (v === "chat" && S.open) chatV.show(); else chatV.hide();
+    if (v === "source" && S.open) srcV.show(); else srcV.hide();
     if (v === "batch" && S.open) batchV.show(bid); else batchV.hide();
   };
   $(".ai-views", aside).addEventListener("click", (e) => {
@@ -2004,9 +2030,18 @@ function aiPane(view, ta, m) {
     if (!S.open) setOpen(true, { bid }); else setView("batch", bid);
     sayWriter(view, "AI 패널 '일괄'에서 문단마다 진행을 보여 드려요. 계속 쓰셔도 돼요");
   };
+  // 출처 확인 보기: claim(문장)이면 새로 확인, job이면 그 결과
+  const openSource = (claim, job = null) => {
+    if (!alive()) return;
+    S.view = "source";
+    if (!S.open) setOpen(true); else setView("source");
+    if (job) srcV.open(job);
+    else if (claim !== undefined) srcV.start(claim);
+  };
   const show = (job, { fresh = false } = {}) => {
     if (!alive() || !job) return;
     if (job.kind === "ms_chat") return openChat(); // 원고 AI 대화 답 (끝남 알림 [열기])
+    if (job.kind === "find") return openSource(undefined, job); // 출처 확인 결과
     if (job.write && job.write.batch) return openBatch(job.write.batch.id); // 일괄 처리의 문단 하나
     if (S.view !== "result") setView("result");
     if (!S.jobs.some((x) => x.id === job.id)) S.extra = job; // 목록을 다시 받기 전 · 다른 원고의 결과
@@ -2058,7 +2093,8 @@ function aiPane(view, ta, m) {
   document.addEventListener("keydown", onKey);
   const onOpenJob = (e) => { // 끝남 알림 [열기] · 작업 화면 [원고에 넣기] — 같은 원고면 다시 불러오지 않고 이 패널에서
     const j = e.detail;
-    if (!j || (j.kind !== "write" && j.kind !== "ms_chat") || !alive() || Number(j.manuscript_id) !== m.id) return;
+    if (!j || (j.kind !== "write" && j.kind !== "ms_chat" && !(j.kind === "find" && j.find_mode === "claim")) || !alive()
+      || Number(j.manuscript_id) !== m.id) return;
     e.preventDefault();
     show(j);
   };
@@ -2071,7 +2107,7 @@ function aiPane(view, ta, m) {
   return {
     refresh, show,
     toggle: () => setOpen(!S.open),
-    chat: openChat, batch: openBatch,
+    chat: openChat, batch: openBatch, source: (claim) => openSource(claim ?? null),
     target: (id, text) => { if (text) S.targets.set(id, text); }, // 보낸 범위 한 줄 (이 화면에서 만든 결과만)
     destroy: () => {
       S.dead = true;
@@ -2079,6 +2115,7 @@ function aiPane(view, ta, m) {
       stopWatch();
       chatV.destroy();
       batchV.destroy();
+      srcV.hide();
       document.removeEventListener("keydown", onKey);
       window.removeEventListener("paperlab:open-job", onOpenJob);
     },
@@ -2092,7 +2129,7 @@ async function openAiJobFromHash(m, ta) {
   history.replaceState(history.state, "", `#/write/${m.id}`);
   let job;
   try { job = await api.get(`/api/jobs/${Number(hit[1])}`); } catch (err) { return errorToast(err); }
-  if (W.m !== m || W.ta !== ta || (job.kind !== "write" && job.kind !== "ms_chat")) return; // ms_chat: 원고 AI 대화 답
+  if (W.m !== m || W.ta !== ta || (job.kind !== "write" && job.kind !== "ms_chat" && job.kind !== "find")) return; // ms_chat: 원고 AI 대화 답 · find: 출처 확인
   if (W.ai) W.ai.show(job);
 }
 
