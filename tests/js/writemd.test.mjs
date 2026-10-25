@@ -84,13 +84,16 @@ test("AI 패널 폭: 범위 · 저장 · 깨진 값 · CSS (2026-10-26 끌어서
 });
 
 test("[확인 필요: …] 색 표시: 편집기 강조 층 HTML · 미리보기 · 편집기 연결", () => {
-  assert.equal(md.checkMarkHtml("표시 없음"), "");
-  assert.equal(md.checkMarkHtml("[확인 대상]"), "");
-  assert.equal(md.checkMarkHtml("a <b> [확인 필요: 수치 — 통계청 KOSIS] 끝\n[확인필요]"),
-    "a &lt;b&gt; <mark>[확인 필요: 수치 — 통계청 KOSIS]</mark> 끝\n<mark>[확인필요]</mark>\n ");
+  const found = (v) => [...v.matchAll(md.CHECK_RE)].map((m) => [m.index, m[0]]);
+  assert.deepEqual(found("표시 없음 [확인 대상]"), []);
+  assert.deepEqual(found("a [확인 필요: 수치 — 통계청 KOSIS] 끝\n[확인필요]"), [[2, "[확인 필요: 수치 — 통계청 KOSIS]"], [28, "[확인필요]"]]);
   assert.equal([..."[확인 필요: 출처\n]".matchAll(md.CHECK_RE)].length, 0); // 줄을 넘지 않음
   const w = readFileSync(join(JS, "writing.js"), "utf8");
   assert.match(w, /checkLayer\(ta\);/);
+  // 층 글은 한 조각(표시를 요소로 나누지 않음 — 글자 간격이 어긋나지 않게), 상자는 Range로 잰 자리
+  assert.match(w, /hl\.textContent = hits\.length \? `\$\{last\}\\n ` : "";/);
+  assert.match(w, /r\.getClientRects\(\)/);
+  assert.doesNotMatch(w, /checkMarkHtml/);
   assert.match(w, /doc\.innerHTML = blocksToHtml\(built\.blocks\)[^\n]*\n\s*markChecks\(doc\);/);
   const css = readFileSync(join(ROOT, "paperlab", "static", "css", "app.css"), "utf8");
   assert.match(css, /\.writer-ta, \.writer-hl \{ padding: 16px 16px 48px; \}/); // 좁은 화면 여백도 같게

@@ -541,13 +541,13 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 /* [확인 필요: …] 강조 층(2026-10-26): textarea 뒤에 같은 글꼴 · 여백 · 줄바꿈으로 깔고 표시 부분만 칠함 */
 .writer-edit { position: relative; }
 .writer-hl {
-  position: absolute; left: 0; top: 0; box-sizing: border-box; overflow: hidden; pointer-events: none;
+  position: absolute; inset: 0; box-sizing: border-box; overflow-x: hidden; overflow-y: scroll; pointer-events: none;
   padding: 24px 28px 80px; font-family: var(--font); font-size: 15px; line-height: 1.85; tab-size: 2;
   white-space: pre-wrap; overflow-wrap: break-word; color: transparent; background: var(--surface);
 }
 .writer-hl:empty { display: none; }
-.writer-hl mark { color: transparent; background: rgba(255, 170, 0, .32); border-radius: 3px; box-shadow: 0 0 0 1px rgba(230, 140, 0, .55); }
-.writer-ta.has-hl { position: relative; background: transparent; }
+.writer-hl .hl-box { position: absolute; background: rgba(255, 170, 0, .32); border-radius: 3px; box-shadow: 0 0 0 1px rgba(230, 140, 0, .55); }
+.writer-ta.has-hl { position: relative; background: transparent; overflow-y: scroll; } /* 층과 같은 스크롤 막대 자리 */
 .doc mark.check-mark { background: #ffe08a; color: #9a3412; font-weight: 600; border-radius: 3px; padding: 0 2px; }
 @media print { .doc mark.check-mark { background: none; color: inherit; font-weight: inherit; } }
 .writer-preview { overflow-y: auto; min-height: 0; padding: 24px; background: var(--surface-3); }

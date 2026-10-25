@@ -35,7 +35,7 @@ import {
   applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
 } from "./writetools.js";
 import { equationInfo, equationPng, katexHtml, MATH_MARK_RE, protectInlineMath, texToText } from "./writemath.js"; // 수식
-import { CHECK_RE, checkMarkHtml, useLenientEmphasis, wrapParts } from "./writemd.js"; // 한글 조사 옆 굵게 · 기울임
+import { CHECK_RE, useLenientEmphasis, wrapParts } from "./writemd.js"; // 한글 조사 옆 굵게 · 기울임
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
@@ -1417,27 +1417,50 @@ function aiMenu(anchor, ta) {
 
 // 보낼 글을 편집기에서 잠깐 골라 보여 준다 — 1.2초 뒤 그 사이 아무것도 안 했으면 원래 커서 · 선택으로 되돌림
 // [확인 필요: …] 색 표시 (2026-10-26 사용자 요청): textarea 는 글자색을 못 바꾸므로 뒤에 같은 글자 · 같은 줄바꿈의 층을 깔고
-// 표시 부분에만 배경색을 칠한다(글자는 textarea 것이 그대로 보임). 폭 · 높이 · 스크롤은 textarea 를 따라감
+// 표시 자리에만 색 상자를 놓는다(글자는 textarea 것이 그대로 보임).
+// - 층의 글은 원고 전체를 글 조각 하나로 둔다: 표시를 <mark>로 나누면 글자 모양 잇기(커닝)가 끊겨 뒤 글자가 조금씩 밀리고
+//   줄 끝에서 줄바꿈 자리까지 달라짐(2026-10-26 사용자 지적 "위치가 안 맞아"). 상자 자리는 Range 로 잰다
+// - 층은 편집 칸에 꽉 차게(inset 0 — 폭을 px로 재면 화면 배율에서 소수점이 잘림), 스크롤 막대 자리는 둘 다 늘 잡아 둠
 function checkLayer(ta) {
   const hl = el(`<div class="writer-hl" aria-hidden="true"></div>`);
   ta.before(hl);
   let last = null;
-  const fit = () => {
-    hl.style.width = `${ta.clientWidth}px`; // 스크롤 막대를 뺀 폭 — 줄바꿈 자리가 같아야 함
-    hl.style.height = `${ta.clientHeight}px`;
-    hl.scrollTop = ta.scrollTop;
+  let hits = [];
+  const sync = () => { hl.scrollTop = ta.scrollTop; };
+  const paint = () => {
+    for (const b of [...hl.children]) b.remove();
+    const node = hl.firstChild;
+    if (!node || !hits.length) return;
+    const base = hl.getBoundingClientRect();
+    const frag = document.createDocumentFragment();
+    const r = document.createRange();
+    for (const m of hits) {
+      r.setStart(node, m.index);
+      r.setEnd(node, m.index + m[0].length);
+      for (const q of r.getClientRects()) {
+        if (q.width < 1) continue;
+        const b = document.createElement("span");
+        b.className = "hl-box";
+        Object.assign(b.style, { left: `${q.left - base.left + hl.scrollLeft}px`, top: `${q.top - base.top + hl.scrollTop}px`,
+          width: `${q.width}px`, height: `${q.height}px` });
+        frag.append(b);
+      }
+    }
+    hl.append(frag);
+    sync();
   };
   const draw = () => {
     if (ta.value === last) return;
     last = ta.value;
-    const html = checkMarkHtml(last);
-    hl.innerHTML = html;
-    ta.classList.toggle("has-hl", !!html);
-    if (html) fit();
+    hits = last.includes("[확인") ? [...last.matchAll(CHECK_RE)] : [];
+    ta.classList.toggle("has-hl", hits.length > 0);
+    hl.textContent = hits.length ? `${last}\n ` : "";
+    paint();
   };
   ta.addEventListener("input", draw);
-  ta.addEventListener("scroll", () => { hl.scrollTop = ta.scrollTop; });
-  new ResizeObserver(() => { if (hl.firstChild) fit(); }).observe(ta);
+  ta.addEventListener("scroll", sync);
+  new ResizeObserver(() => { if (hits.length) paint(); }).observe(ta); // 폭이 바뀌면 줄바꿈이 바뀜 — 다시 잼
+  if (document.fonts) document.fonts.ready.then(() => { if (hits.length) paint(); });
   // AI 결과 넣기 · 되돌리기처럼 input 없이 글이 바뀌는 경우: 잠깐씩 비교(같으면 아무것도 안 함)
   const timer = setInterval(() => (ta.isConnected ? draw() : clearInterval(timer)), 700);
   draw();

@@ -42,21 +42,5 @@ export function wrapParts(value, start, end, before, after, fallback = "글자")
 }
 
 // [확인 필요: 무엇 — 어디서] 표시 (2026-10-26 사용자 요청 — "눈에 띄게 색을 바꿔 나중에 확인하고 자료를 넣게"):
-// 편집기(글자 뒤 강조 층)와 미리보기에서 같은 규칙으로 찾는다. 제출 전 점검(writecheck.js)의 규칙과 같음
+// 편집기(글자 뒤 강조 층 — writing.js checkLayer)와 미리보기에서 같은 규칙으로 찾는다. 제출 전 점검(writecheck.js)의 규칙과 같음
 export const CHECK_RE = /\[확인\s*필요[^\]\n]*\]/g;
-
-const escHl = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-/** 편집기 강조 층 HTML: 글자는 그대로(투명) 두고 표시 부분만 <mark>. 표시가 없으면 "" (층을 비워 둠) */
-export function checkMarkHtml(value) {
-  const v = String(value ?? "");
-  if (!v.includes("[확인")) return "";
-  let out = "";
-  let last = 0;
-  for (const m of v.matchAll(CHECK_RE)) {
-    out += escHl(v.slice(last, m.index)) + `<mark>${escHl(m[0])}</mark>`;
-    last = m.index + m[0].length;
-  }
-  if (!last) return "";
-  return out + escHl(v.slice(last)) + "\n "; // 끝 줄바꿈도 textarea와 같은 높이가 되게
-}
