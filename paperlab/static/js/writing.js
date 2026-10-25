@@ -35,7 +35,7 @@ import {
   applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
 } from "./writetools.js";
 import { equationInfo, equationPng, katexHtml, MATH_MARK_RE, protectInlineMath, texToText } from "./writemath.js"; // 수식
-import { useLenientEmphasis, wrapParts } from "./writemd.js"; // 한글 조사 옆 굵게 · 기울임
+import { CHECK_RE, checkMarkHtml, useLenientEmphasis, wrapParts } from "./writemd.js"; // 한글 조사 옆 굵게 · 기울임
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
@@ -505,6 +505,7 @@ export async function openManuscript(main, id) {
     <div class="sr-only" role="status" data-ref-live></div></section>`);
   main.appendChild(view);
   const ta = $(".writer-ta", view);
+  checkLayer(ta); // 편집기에서 [확인 필요: …] 색 표시
   ta.value = m.content;
   W.ta = ta;
 
@@ -930,6 +931,7 @@ async function renderPreview(view, ta) {
     if (seq !== W.seq || token !== W.previewToken) return;
     W.built = built;
     doc.innerHTML = blocksToHtml(built.blocks) || `<p class="muted">왼쪽에 글을 쓰면 여기에 서식대로 보여요.</p>`;
+    markChecks(doc); // [확인 필요: …] 색 표시
     hydrateFigures(doc, W.m.id);
     drawCites(view, built);
     if (W.ref) W.ref.citesChanged();
@@ -1398,6 +1400,51 @@ function aiMenu(anchor, ta) {
 }
 
 // 보낼 글을 편집기에서 잠깐 골라 보여 준다 — 1.2초 뒤 그 사이 아무것도 안 했으면 원래 커서 · 선택으로 되돌림
+// [확인 필요: …] 색 표시 (2026-10-26 사용자 요청): textarea 는 글자색을 못 바꾸므로 뒤에 같은 글자 · 같은 줄바꿈의 층을 깔고
+// 표시 부분에만 배경색을 칠한다(글자는 textarea 것이 그대로 보임). 폭 · 높이 · 스크롤은 textarea 를 따라감
+function checkLayer(ta) {
+  const hl = el(`<div class="writer-hl" aria-hidden="true"></div>`);
+  ta.before(hl);
+  let last = null;
+  const fit = () => {
+    hl.style.width = `${ta.clientWidth}px`; // 스크롤 막대를 뺀 폭 — 줄바꿈 자리가 같아야 함
+    hl.style.height = `${ta.clientHeight}px`;
+    hl.scrollTop = ta.scrollTop;
+  };
+  const draw = () => {
+    if (ta.value === last) return;
+    last = ta.value;
+    const html = checkMarkHtml(last);
+    hl.innerHTML = html;
+    ta.classList.toggle("has-hl", !!html);
+    if (html) fit();
+  };
+  ta.addEventListener("input", draw);
+  ta.addEventListener("scroll", () => { hl.scrollTop = ta.scrollTop; });
+  new ResizeObserver(() => { if (hl.firstChild) fit(); }).observe(ta);
+  // AI 결과 넣기 · 되돌리기처럼 input 없이 글이 바뀌는 경우: 잠깐씩 비교(같으면 아무것도 안 함)
+  const timer = setInterval(() => (ta.isConnected ? draw() : clearInterval(timer)), 700);
+  draw();
+}
+
+// 미리보기: 글 조각(text node) 안의 [확인 필요: …] 를 <mark class="check-mark"> 로
+function markChecks(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  const hits = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) if (n.nodeValue.includes("[확인")) hits.push(n);
+  for (const n of hits) {
+    const v = n.nodeValue;
+    const frag = document.createDocumentFragment();
+    let last = 0;
+    for (const m of v.matchAll(CHECK_RE)) {
+      frag.append(v.slice(last, m.index), Object.assign(document.createElement("mark"), { className: "check-mark", textContent: m[0],
+        title: "확인이 필요한 곳 — 자료를 확인해 고친 뒤 표시를 지우세요" }));
+      last = m.index + m[0].length;
+    }
+    if (last) n.replaceWith(frag, v.slice(last));
+  }
+}
+
 function flashRange(view, ta, a, b) {
   if (!ta.offsetParent) return;
   const keep = [ta.selectionStart, ta.selectionEnd, ta.value];

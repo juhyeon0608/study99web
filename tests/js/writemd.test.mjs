@@ -55,7 +55,7 @@ test("굵게 감싸기: 고른 글 앞뒤 빈칸은 표시 밖 (두 번 클릭�
 test("writing.js · ui.js 가 확장을 걸고 wrap 이 wrapParts 를 씀", () => {
   const w = readFileSync(join(JS, "writing.js"), "utf8");
   assert.match(w, /async function buildDocument[^\n]*\n\s*useLenientEmphasis\(window\.marked\)/);
-  assert.match(w, /function wrap\(ta, before, after\) \{\n\s*const w = wrapParts\(/);
+  assert.match(w, /function wrap\(ta, before, after\) \{\s*const w = wrapParts\(/);
   assert.match(readFileSync(join(JS, "ui.js"), "utf8"), /useLenientEmphasis\(window\.marked\);[^\n]*\n\s*let html = window\.marked/);
 });
 
@@ -81,4 +81,18 @@ test("AI 패널 폭: 범위 · 저장 · 깨진 값 · CSS (2026-10-26 끌어서
   assert.match(w, /paneResizer\(view\);/);
   assert.match(w, /\$\$\("#ai-pane, #fig-pane", view\)/);
   assert.match(readFileSync(join(ROOT, "paperlab", "static", "css", "app.css"), "utf8"), /\.pane-resize \{[^}]*cursor: col-resize/);
+});
+
+test("[확인 필요: …] 색 표시: 편집기 강조 층 HTML · 미리보기 · 편집기 연결", () => {
+  assert.equal(md.checkMarkHtml("표시 없음"), "");
+  assert.equal(md.checkMarkHtml("[확인 대상]"), "");
+  assert.equal(md.checkMarkHtml("a <b> [확인 필요: 수치 — 통계청 KOSIS] 끝\n[확인필요]"),
+    "a &lt;b&gt; <mark>[확인 필요: 수치 — 통계청 KOSIS]</mark> 끝\n<mark>[확인필요]</mark>\n ");
+  assert.equal([..."[확인 필요: 출처\n]".matchAll(md.CHECK_RE)].length, 0); // 줄을 넘지 않음
+  const w = readFileSync(join(JS, "writing.js"), "utf8");
+  assert.match(w, /checkLayer\(ta\);/);
+  assert.match(w, /doc\.innerHTML = blocksToHtml\(built\.blocks\)[^\n]*\n\s*markChecks\(doc\);/);
+  const css = readFileSync(join(ROOT, "paperlab", "static", "css", "app.css"), "utf8");
+  assert.match(css, /\.writer-ta, \.writer-hl \{ padding: 16px 16px 48px; \}/); // 좁은 화면 여백도 같게
+  assert.match(css, /\.doc mark\.check-mark \{/);
 });

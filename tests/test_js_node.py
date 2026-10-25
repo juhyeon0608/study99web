@@ -49,7 +49,7 @@ MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8, "e
             "writechat": 22,  # writechat: AI 범위(진짜 문단 · 이 절 · 이 장) · 원고 AI 대화 제안 · 장 · 절 일괄 처리 (manuscript-ai-chat.md)
             "writefig": 9,  # writefig: 그림 만들기 · 고치기 — 범위 · 넣기 · 바꾸기 · PNG 크기 · 코드 검사 (writing-figure-ai.md)
             "writemath": 4,  # writemath: 수식 — 줄 수식 · 문장 안 수식 자리표시 · 내보내기 글자 · 식 참조 (2026-10-17)
-            "writemd": 5}  # writemd: 한글 조사 옆 굵게 · 기울임 · 굵게 감싸기 빈칸 · AI 패널 폭 끌기 (2026-10-26)
+            "writemd": 6}  # writemd: 한글 조사 옆 굵게 · 기울임 · 굵게 감싸기 빈칸 · AI 패널 폭 끌기 (2026-10-26)
 
 
 def _node_version(node: str) -> tuple[int, ...] | None:

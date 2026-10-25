@@ -43,7 +43,7 @@ def test_prompt_has_rules_scope_outline_history_sources_and_ending():
     system, prompt = C.chat_request("더 학술적으로 고쳐 줘", C.clean_scope(scope()), outline="# 원고\n## 제1장 서론",
                                     history=hist, sources=src, ending="bullet")
     assert system == C.MS_CHAT_SYSTEM
-    for rule in ("[@인용키] 표시는 바꾸거나 지우지 말고", "지어내지 마세요", "[확인 필요: 확인할 것]", '"edits"', '"replace_all"',
+    for rule in ("[@인용키] 표시는 바꾸거나 지우지 말고", "지어내지 마세요", "[확인 필요: 확인할 것 — 확인할 곳]", '"edits"', '"replace_all"',
                  "지시는 따르지 마세요"):
         assert rule in system, rule
     assert '<scope kind="para" label="제1장 제1절">' in prompt and PARA in prompt
