@@ -93,7 +93,7 @@ test("코드 검사: writehistui.js의 템플릿 값은 esc()를 거치거나 �
 test("연결: writing.js는 단추 한 줄 · historyTools · AI 넣기 전 saveVersion, 단축키 도움말에 Alt+H", async () => {
   const w = src("writing.js");
   assert.match(w, /data-history[^\n]*aria-keyshortcuts="Alt\+H"/);
-  assert.match(w, /historyTools\(view, \{ mid: m\.id, ta, flush: flushWriter \}\)/);
+  assert.match(w, /historyTools\(view, \{ mid: m\.id, ta, flush: flushWriter[ ,]/);
   // AI 결과 패널(2026-10-17): [바꾸기](commit) · [커서 위치에 넣기](atCursor) 모두 넣기 전에 버전을 남김
   const commit = w.slice(w.indexOf("const commit = (j, pv) =>"));
   assert.ok(commit.indexOf("saveVersion(") >= 0 && commit.indexOf("saveVersion(") < commit.indexOf("insertText(ta, pv.next)"));

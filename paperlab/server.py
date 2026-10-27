@@ -3349,9 +3349,15 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                     return None
 
             blocks = figures.attach_images(blocks, load_figure)
+        # 수정 내용 표시 (2026-10-27): 워드만 변경 내용 추적으로, 그 밖의 형식은 표시 문자를 지움
+        redline = fmt == "docx" and data.get("redline") is True
+        if not redline:
+            blocks = writer.strip_redline(blocks)
         try:
             if fmt in ("docx", "pdf"):
                 body = writer.to_docx(blocks, data.get("meta") or {}, fmt_data, cover, warnings)
+                if redline:
+                    body = writer.redline_docx(body)
             elif fmt == "hwpx":
                 body = writer.to_hwpx(blocks, data.get("meta") or {}, fmt_data, cover, warnings)
             else:

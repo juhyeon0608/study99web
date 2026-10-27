@@ -38,6 +38,7 @@ import { equationInfo, equationPng, katexHtml, MATH_MARK_RE, protectInlineMath, 
 import { CHECK_RE, useLenientEmphasis, wrapParts } from "./writemd.js";
 import { claimAt, markerIndex } from "./writesrc.js"; // 출처 확인 (2026-10-26)
 import { tableFromCells, tableFromTsv } from "./writepaste.js"; // 표 붙여넣기 (2026-10-27)
+import { redlineMarkdown } from "./writeredline.js"; // 수정 표시 워드 (2026-10-27)
 import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
 import { JOURNAL_LABELS, JOURNAL_NUM_KEYS, cleanJournal, parseJournal } from "./writejournal.js"; // 투고 규정 (2026-10-27)
 import { matchDialog } from "./writematchui.js"; // 서재 대조: 인용 빠짐 · 표절 미리 점검 (2026-10-27)
@@ -759,7 +760,8 @@ export async function openManuscript(main, id) {
   W.fig = figPane(view, { ta, m, saveVersion: (c) => saveVersion(m.id, c), say: (t) => sayWriter(view, t), closeAi: () => view.dataset.aiPane === "open" && W.ai && W.ai.toggle() });
   paneResizer(view); // AI 결과 · 그림 패널 폭 끌어서 바꾸기
   openAiJobFromHash(m, ta);
-  historyTools(view, { mid: m.id, ta, flush: flushWriter }); // [기록] · Alt+H (docs/specs/manuscript-history.md)
+  historyTools(view, { mid: m.id, ta, flush: flushWriter, // [기록] · Alt+H (docs/specs/manuscript-history.md)
+    redline: (old, name) => exportAs("docx", view, ta, { redline: old, versionName: name }) }); // 수정 표시 워드 (2026-10-27)
 }
 
 // ------------------------------------------------------------------ 논문 양식 · 표지 정보
@@ -2677,7 +2679,8 @@ function coverMissingDialog(missing) {
   });
 }
 
-async function exportAs(format, view, ta) {
+// opts.redline = 비교할 지난 버전 글 → 바뀐 곳을 워드 변경 내용 추적으로 (writeredline.js · 서버 writer.redline_docx)
+async function exportAs(format, view, ta, opts = {}) {
   if (W.saver) await W.saver.flush();
   const office = format === "docx" || format === "hwpx" || format === "pdf";
   const fmtId = (W.fmt && W.fmt.id) || "default";
@@ -2691,14 +2694,21 @@ async function exportAs(format, view, ta) {
         if (choice !== "go") return;
       }
     }
-    const built = await buildDocument(ta.value, { style: currentStyle(view), koreanFirst: state.settings.korean_first !== false,
+    let source = ta.value;
+    if (opts.redline != null) {
+      const r = redlineMarkdown(opts.redline, ta.value);
+      if (!r.ins && !r.del) return toast("이 버전과 지금 원고가 같아요");
+      source = r.text;
+    }
+    const built = await buildDocument(source, { style: currentStyle(view), koreanFirst: state.settings.korean_first !== false,
       chapterNumbers: !!(W.m && W.m.cover && W.m.cover.caption_numbering === "chapter") });
     if (built.missingKeys.length && !(await confirmDialog(
       `서재에 없는 인용 키가 있어요: ${built.missingKeys.join(", ")}\n그대로 표시해서 내보낼까요?`, { ok: "그대로 내보내기" }))) return;
     const title = $("[data-title]", view).textContent.trim() || "원고";
     // manuscript_id: 서버가 이 원고의 그림 폴더에서 그림을 읽어 넣는다(그림 바이트는 보내지 않음)
     const blocks = office ? await equationFigures(built.blocks, W.m.id) : built.blocks;
-    const payload = { format, blocks: stripWarn(blocks), meta: { title }, filename: title, manuscript_id: W.m.id };
+    const payload = { format, blocks: stripWarn(blocks), meta: { title }, filename: opts.redline != null ? `${title}_수정표시` : title,
+      manuscript_id: W.m.id, ...(opts.redline != null ? { redline: true } : {}) };
     if (office && fmtId !== "default") {
       // 표지의 국문 제목 기본값은 원고의 # 제목 (없으면 빈 칸으로 두어 ○○○로 들어가게)
       Object.assign(payload, { doc_format: fmtId, cover: W.m.cover || {}, meta: { title: docTitle(ta) } });
@@ -2706,7 +2716,11 @@ async function exportAs(format, view, ta) {
     if (format === "pdf") toast("PDF로 바꾸는 중이에요 (몇 초 걸려요)…");
     const res = await api.raw("POST", "/api/export-document", payload);
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "내보내지 못했어요");
-    downloadBlob(await res.blob(), `${title.replace(/[\\/:*?"<>|]+/g, "_")}.${format}`);
+    downloadBlob(await res.blob(), `${payload.filename.replace(/[\\/:*?"<>|]+/g, "_")}.${format}`);
+    if (opts.redline != null) {
+      toast(`수정 표시 워드로 저장했어요 (${opts.versionName} → 지금). 워드의 [검토] 탭에서 변경 내용을 보거나 적용할 수 있어요`, "success", LONG);
+      return;
+    }
     const label = { hwpx: "한글", docx: "워드", pdf: "PDF" }[format] || "마크다운";
     if (office && kind !== "none" && fmtId !== "default") {
       toast(`${label} 파일로 저장했어요 · ${listsNotice(format, W.m.cover)}`, "success", LONG); // 목차 안내 (formats.js)

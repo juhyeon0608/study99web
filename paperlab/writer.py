@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import io
 import re
+from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from . import doc_formats as df
@@ -1558,3 +1559,88 @@ class _HwpxBuilder(_FormattedBuilder):
         if getattr(report, "issues", ()):
             raise ValueError(f"한글 문서 검증 실패: {report.issues[:3]}")
         return self.doc.to_bytes()
+
+
+# ------------------------------------------------------------------ 수정 내용 표시 (2026-10-27)
+# 화면(writeredline.js)이 넣은 글을 U+E000…U+E001, 지운 글을 U+E002…U+E003으로 감싸 보낸다. 워드 파일을 다 만든 뒤
+# 글자 런을 그 자리에서 나눠 w:ins · w:del(변경 내용 추적)로 감싼다 — 양식 · 기본 서식 · 표 · 각주 어디서 만든 런이든 같게
+REDLINE_MARKS = ""
+_REDLINE_RE = re.compile("([-])")
+REDLINE_AUTHOR = "PaperLab"
+
+
+def strip_redline(blocks):
+    """표시 문자 지우기 (한글 · 마크다운 · 수정 표시 없는 내보내기)"""
+    if isinstance(blocks, str):
+        return re.sub("[-]", "", blocks)
+    if isinstance(blocks, list):
+        return [strip_redline(b) for b in blocks]
+    if isinstance(blocks, dict):
+        return {k: strip_redline(v) for k, v in blocks.items()}
+    return blocks
+
+
+def redline_docx(data: bytes, when: str = "") -> bytes:
+    """워드 파일의 표시 문자 → 변경 내용 추적. 표시는 문단마다 새로 시작(문단을 넘는 표시는 문단 끝에서 닫힘)"""
+    import copy
+    import io
+    import zipfile
+
+    from lxml import etree
+
+    W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    q = lambda t: f"{{{W}}}{t}"  # noqa: E731
+    when = when or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    zin = zipfile.ZipFile(io.BytesIO(data))
+    out = io.BytesIO()
+    next_id = [9000]
+
+    def fix(xml: bytes) -> bytes:
+        root = etree.fromstring(xml)
+        for p in root.iter(q("p")):
+            state = None
+            for r in [r for r in p.iter(q("r")) if r.getparent().tag != q("del") and r.getparent().tag != q("ins")]:
+                ts = r.findall(q("t"))
+                if len(ts) != 1 or not _REDLINE_RE.search(ts[0].text or ""):
+                    if state and ts:  # 표시 안쪽의 다른 런(굵게 · 위첨자 등)
+                        wrap(r, state)
+                    continue
+                parent, idx = r.getparent(), r.getparent().index(r)
+                parent.remove(r)
+                pieces = []
+                for part in _REDLINE_RE.split(ts[0].text or ""):
+                    if part in ("", ""):
+                        state = "ins" if part == "" else "del"
+                    elif part in ("", ""):
+                        state = None
+                    elif part:
+                        nr = copy.deepcopy(r)
+                        t = nr.find(q("t"))
+                        t.text = part
+                        t.set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+                        pieces.append((nr, state))
+                for k, (nr, st) in enumerate(pieces):
+                    parent.insert(idx + k, nr)
+                    if st:
+                        wrap(nr, st)
+        return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=True)
+
+    def wrap(r, st):
+        box = etree.Element(q(st))
+        box.set(q("id"), str(next_id[0]))
+        next_id[0] += 1
+        box.set(q("author"), REDLINE_AUTHOR)
+        box.set(q("date"), when)
+        r.addprevious(box)
+        box.append(r)
+        if st == "del":
+            for t in r.findall(q("t")):
+                t.tag = q("delText")
+
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            body = zin.read(item.filename)
+            if item.filename in ("word/document.xml", "word/footnotes.xml") and any(m.encode() in body for m in REDLINE_MARKS):
+                body = fix(body)
+            zout.writestr(item, body)
+    return out.getvalue()

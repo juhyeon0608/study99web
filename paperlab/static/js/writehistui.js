@@ -17,8 +17,8 @@ export function saveVersion(mid, content, reason = "ai_apply") {
 }
 
 // 원고 화면에 [기록] 단추 · Alt+H 연결. ta: 편집기, flush: 쓰던 글 지금 저장(Promise)
-export function historyTools(view, { mid, ta, flush }) {
-  const open = () => historyDialog({ mid, ta, flush });
+export function historyTools(view, { mid, ta, flush, redline = null }) {
+  const open = () => historyDialog({ mid, ta, flush, redline });
   const btn = $("[data-history]", view);
   if (btn) btn.onclick = open;
   view.addEventListener("keydown", (e) => {
@@ -57,7 +57,7 @@ function labelDialog(value) {
   });
 }
 
-export async function historyDialog({ mid, ta, flush }) {
+export async function historyDialog({ mid, ta, flush, redline = null }) {
   const base = `/api/manuscripts/${mid}/versions`;
   const body = el(`<div class="hist">
     <div class="hist-side">
@@ -74,6 +74,7 @@ export async function historyDialog({ mid, ta, flush }) {
     </div></div>`);
   const foot = el(`<div style="display:contents"><div class="left"><button class="btn" data-label disabled>이름</button>
     <button class="btn" data-del disabled>삭제</button></div>
+    ${redline ? `<button class="btn" data-redline disabled title="이 버전 → 지금 원고에서 바뀐 곳을 워드의 변경 내용 추적(넣은 글 · 지운 글)으로 표시해 내보내요">수정 표시 워드</button>` : ""}
     <button class="btn" data-copy disabled>복사</button><button class="btn primary" data-restore disabled>이 버전으로 되돌리기</button></div>`);
   const dlg = modal({ title: "버전 기록", body, foot, wide: true });
   dlg.el.querySelector(".modal").classList.add("hist-modal");
@@ -81,7 +82,7 @@ export async function historyDialog({ mid, ta, flush }) {
   const listEl = $("[data-list]", body);
 
   const setButtons = () => {
-    for (const k of ["[data-label]", "[data-del]", "[data-copy]", "[data-restore]"]) $(k, foot).disabled = !S.cur;
+    for (const k of ["[data-label]", "[data-del]", "[data-copy]", "[data-restore]", "[data-redline]"]) if ($(k, foot)) $(k, foot).disabled = !S.cur;
   };
 
   const content = async (v) => {
@@ -188,6 +189,15 @@ export async function historyDialog({ mid, ta, flush }) {
     } catch (err) { errorToast(err); } finally { btn.disabled = false; }
   };
 
+  if (redline) {
+    $("[data-redline]", foot).onclick = async () => {
+      const v = S.cur;
+      if (!v) return;
+      let text;
+      try { text = await content(v); } catch (e) { return errorToast(e); }
+      redline(text, `${timeText(v.created_at)} · ${versionTitle(v)}`);
+    };
+  }
   $("[data-copy]", foot).onclick = async () => {
     if (!S.cur) return;
     try { copyText(await content(S.cur)); } catch (e) { errorToast(e); }
