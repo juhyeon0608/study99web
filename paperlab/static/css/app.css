@@ -2084,3 +2084,15 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .journal-ai { margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; }
 .journal-ai summary { cursor: pointer; font-size: 13px; }
 .journal-ai textarea { width: 100%; margin-top: 6px; font-family: inherit; }
+
+/* ---------------------------------------------------------------- 서재 대조: 인용 빠짐 · 표절 미리 점검 (2026-10-27) */
+.match-box { min-width: min(640px, 80vw); }
+.match-st { margin: 0 0 8px; }
+.match-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; max-height: 60vh; overflow-y: auto; }
+.match-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--surface); }
+.match-s { display: flex; gap: 8px; align-items: flex-start; }
+.match-s .link { flex: 1; min-width: 0; text-align: left; font-size: 13.5px; line-height: 1.6; }
+.match-s .chip { flex: none; }
+.match-hits { list-style: none; margin: 6px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+.match-ref { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; margin-top: 4px; }
+.match-x { margin: 4px 0; white-space: pre-line; background: var(--surface-2); padding: 6px 8px; border-radius: 6px; }

@@ -2829,6 +2829,32 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         view, _ = new_job(ctx, "find", {"question": question}, None)
         return JSONResponse({"job": view}, status_code=202)
 
+    @app.post("/api/library-match")
+    def library_match(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """원고 문장 여러 개 → 내 서재 본문에서 가까운 조각 (2026-10-27 — 인용 빠짐 점검 · 표절 미리 점검).
+        AI 글 생성 없음(임베딩 검색만). overlap = 문장 글자 5-gram 중 조각에도 있는 비율(표현을 그대로 옮겼는지)"""
+        raw = data.get("queries")
+        if not isinstance(raw, list) or not 0 < len(raw) <= 150 or not all(isinstance(q, str) for q in raw):
+            raise HTTPException(400, "문장을 1~150개 보내 주세요")
+        queries = [re.sub(r"\s+", " ", q).strip()[:600] for q in raw]
+        k = data.get("k") if data.get("k") in (1, 2, 3, 5) else 3
+        rows = rag.searchable(rag.scope_rows(ctx.lib, "library", None))
+        if not rows:
+            return {"results": [[] for _ in queries], "indexed": 0}
+        info = {r["id"]: r for r in rows}
+        keys = {r["id"]: r["citekey"] or "" for r in ctx.lib._all(
+            "select id, citekey from paperlab.papers where user_id = %s and id = any(%s)", (ctx.uid, list(info)))}
+        ctx.release()  # R2 로드 · 임베딩 동안 DB 연결을 잡지 않는다
+        try:
+            found = rg.batch_search(user_tx(ctx), ctx.uid, rows, queries, k=k)
+        except rag.RagBusy:
+            raise HTTPException(503, "서재 색인을 불러오는 중이에요. 잠시 뒤 다시 해 주세요") from None
+        results = [[{"paper_id": h["paper_id"], "citekey": keys.get(h["paper_id"], ""), "title": info[h["paper_id"]]["title"],
+                     "year": info[h["paper_id"]]["year"], "page": h["page"], "score": h["score"],
+                     "overlap": rag.overlap(q, h["text"]), "text": h["text"].strip()[:500]}
+                    for h in hits if h["paper_id"] in info] for q, hits in zip(queries, found)]
+        return {"results": results, "indexed": len(rows)}
+
     @app.post("/api/source-check")
     def source_check(data: dict = Body(...), ctx: RequestCtx = Ctx):
         """출처 확인 (2026-10-26 사용자 요청): 원고 문장 하나 → 내 서재 본문 조각(혼합 검색, 지금) + 외부 논문 검색 →

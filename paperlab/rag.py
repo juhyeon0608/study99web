@@ -582,6 +582,21 @@ def scope_rows(lib, stype: str, sid: int | None) -> list[dict]:
                     {"uid": lib.uid, "sid": sid})
 
 
+_NOT_WORD = re.compile(r"[\W_]+")
+
+
+def overlap(sentence: str, passage: str, n: int = 5) -> float:
+    """문장의 글자 n-gram 중 조각에도 있는 비율 (빈칸 · 기호 무시) — 표절 미리 점검 (2026-10-27).
+    0.5 이상이면 표현을 거의 그대로 옮긴 문장. 짧은 문장(20자 미만)은 0"""
+    a = _NOT_WORD.sub("", str(sentence).lower())
+    b = _NOT_WORD.sub("", str(passage).lower())
+    if len(a) < 20 or len(b) < n:
+        return 0.0
+    grams = {a[i:i + n] for i in range(len(a) - n + 1)}
+    have = {b[i:i + n] for i in range(len(b) - n + 1)}
+    return round(len(grams & have) / len(grams), 3)
+
+
 def searchable(rows: list[dict]) -> list[dict]:
     return [r for r in rows if r["rag_version"] in SEARCH_VERSIONS and r["rag_key"]]
 
@@ -763,6 +778,43 @@ class Rag:
             page_text.update(page_slices(lib, missing))
             for o in out:
                 o["text"] = (page_text.get((o["paper_id"], o["page"])) or "")[o["char_start"]:o["char_end"]]
+        return out
+
+    def batch_search(self, tx: Callable, uid: str, rows: list[dict], queries: list[str], k: int = 3,
+                     per_paper: int = 1) -> list[list[dict]]:
+        """원고 문장 여러 개를 한 번에 (인용 빠짐 · 표절 미리 점검 — 2026-10-27): 임베딩 한 번 + 벡터만(문장마다 낱말 검색은
+        하지 않음) → 문장마다 상위 k조각(논문당 per_paper). 조각 글은 짧은 트랜잭션 하나로"""
+        papers = self.papers(tx, uid, rows)
+        dims = [pid for pid, (_, mat) in papers.items() if mat.shape[1]]
+        if not queries or not self.embedder or not dims:
+            return [[] for _ in queries]
+        q = self.embedder.embed([QUERY_PREFIX + s for s in queries])
+        scores = np.concatenate([papers[pid][1] @ q.T for pid in dims])  # 조각 × 문장
+        offsets = np.cumsum([0] + [papers[pid][1].shape[0] for pid in dims])
+        out: list[list[dict]] = []
+        for qi in range(len(queries)):
+            col = scores[:, qi]
+            n = min(len(col), max(k * 8, 16))
+            top = np.argpartition(-col, n - 1)[:n]
+            top = top[np.argsort(-col[top])]
+            owner = np.searchsorted(offsets, top, "right") - 1
+            res, per = [], {}
+            for i, j in zip(top, owner):
+                pid = dims[j]
+                if per.get(pid, 0) >= per_paper:
+                    continue
+                per[pid] = per.get(pid, 0) + 1
+                m = papers[pid][0][int(i - offsets[j])]
+                res.append({"paper_id": pid, "page": int(m["page"]), "char_start": int(m["start"]), "char_end": int(m["end"]),
+                            "score": round(float(col[i]), 4)})
+                if len(res) >= k:
+                    break
+            out.append(res)
+        with tx() as lib:
+            pages = page_slices(lib, [h for res in out for h in res])
+        for res in out:
+            for h in res:
+                h["text"] = (pages.get((h["paper_id"], h["page"])) or "")[h["char_start"]:h["char_end"]]
         return out
 
     def sources_for(self, tx: Callable, uid: str, rows: list[dict], question: str) -> list[dict]:

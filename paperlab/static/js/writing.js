@@ -40,6 +40,7 @@ import { claimAt, markerIndex } from "./writesrc.js"; // 출처 확인 (2026-10-
 import { tableFromCells, tableFromTsv } from "./writepaste.js"; // 표 붙여넣기 (2026-10-27)
 import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
 import { JOURNAL_LABELS, JOURNAL_NUM_KEYS, cleanJournal, parseJournal } from "./writejournal.js"; // 투고 규정 (2026-10-27)
+import { matchDialog } from "./writematchui.js"; // 서재 대조: 인용 빠짐 · 표절 미리 점검 (2026-10-27)
 import { sourceView } from "./writesrcui.js"; // 한글 조사 옆 굵게 · 기울임
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
@@ -1722,6 +1723,8 @@ function aiMenu(anchor, ta) {
     "-",
     { label: "AI와 대화하며 고치기…", sub: "Alt+C", action: () => W.ai && W.ai.chat() },
     { label: "출처 확인 (AI)…", sub: "커서 문장 · [확인 필요]", action: () => W.ai && W.ai.source(claimAt(ta.value, ta.selectionStart, ta.selectionEnd)) },
+    { label: "인용이 필요한 문장 찾기…", sub: "내 서재에서 논문 추천", action: () => libraryMatch(ta, "cite") },
+    { label: "표절 미리 점검…", sub: "내 서재 원문과 대조", action: () => libraryMatch(ta, "similar") },
     "-",
     ...TOOL_MENU.map(([mode, label, sub]) => ({ label, sub, action: () => runTool(mode, ta) })),
   ], { left: true });
@@ -1821,7 +1824,8 @@ const TOOL_MENU = [
   ["memo", "메모 · 받아쓰기 → 논문 문단…", "고른 글 또는 붙여 넣기"], ["review", "AI 모의 심사…", "원고 전체 · 예상 질문"],
   ["response", "심사 의견 대응표…", "의견 → 수정 내용 · 위치"],
 ];
-const MODE_LABEL = Object.fromEntries([...AI_MODES.filter((x) => x !== "-"), ...TOOL_MENU.map(([k, l]) => [k, l.replace(/…$/, "")])]);
+const MODE_LABEL = Object.fromEntries([...AI_MODES.filter((x) => x !== "-"), ...TOOL_MENU.map(([k, l]) => [k, l.replace(/…$/, "")]),
+  ["paraphrase", "표절 피해 바꿔 쓰기"], ["journal", "투고 규정 읽기"]]);
 const REVIEW_MAX = 150000; // 모의 심사로 보내는 원고 글자 수 (긴 원고는 앞부분만)
 const PASTE = {
   stats: { title: "통계 결과 → 표 · 문장", label: "분석 결과를 붙여 넣으세요 (SPSS · jamovi · R 출력, 엑셀 표 — 표를 복사해 그대로)",
@@ -1906,6 +1910,30 @@ function matrixDialog(ta) {
       md.close();
     };
   });
+}
+
+// 서재 대조 (writematchui.js): 고른 논문 넣기 · 바꿔 쓰기는 이 원고 편집기에서
+function libraryMatch(ta, mode) {
+  const view = ta.closest(".writer");
+  matchDialog(ta, mode, {
+    select: (a, b) => selectRange(view, ta, a, b),
+    apply: (edit) => applyEdit(ta, { ...edit, selStart: edit.from + edit.text.length, selEnd: edit.from + edit.text.length }),
+    paraphrase: (s, hit) => paraphrase(ta, s, hit),
+  });
+}
+
+async function paraphrase(ta, s, hit) {
+  if (!(await ensureAiRoute("write"))) return;
+  const view = ta.closest(".writer");
+  if (view) flashRange(view, ta, s.from, s.to);
+  let job;
+  try {
+    job = (await api.post("/api/ai/write", { mode: "paraphrase", text: s.text, context: String(hit.text || "").slice(0, 6000),
+      instruction: hit.citekey ? `출처 인용 표시: [@${hit.citekey}]` : "", manuscript_id: W.m ? W.m.id : null,
+      ...writeAnchor(ta.value, s.from, s.to, false) })).job;
+  } catch (err) { return errorToast(err); }
+  trackJob(job);
+  if (W.ai && W.ta === ta) W.ai.show(job, { fresh: true });
 }
 
 async function runTool(mode, ta) {
