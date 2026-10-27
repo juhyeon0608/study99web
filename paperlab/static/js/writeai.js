@@ -203,8 +203,8 @@ export function resultsButtonText({ ready = 0, active = 0 } = {}) {
 
 // 논문 검토 · 정리 도구 (2026-10-27): 원고 글이 아니라 창에 붙여 넣은 글 · 고른 논문으로 만드는 결과 — 끝난 결과의 [다시 실행]은
 // 원래 글을 다시 찾을 수 없어 막고(실패 · 취소는 서버 다시 시도), 보고서(심사평 · 대응표)는 원고를 바꾸지 않음(커서에 넣기 · 복사만)
-export const TOOL_MODES = new Set(["matrix", "stats", "review", "response", "journal"]);
-export const REPORT_MODES = new Set(["review", "response", "journal"]);
+export const TOOL_MODES = new Set(["matrix", "stats", "review", "response", "journal", "slides"]);
+export const REPORT_MODES = new Set(["review", "response", "journal", "slides"]);
 
 // 결과를 원고에 넣는 단추들을 쓸 수 있는지. here = 지금 연 원고의 결과인지
 export function paneActions(j, { here = true } = {}) {

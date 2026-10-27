@@ -34,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__, citations, compose, convert, csl_style, doc_formats, downloads, explain, find, format_import, jobs, \
-    pdf, rag, sync, translate, verify, versions, worker_api, writer
+    pdf, rag, slides, sync, translate, verify, versions, worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, WRITE_MODES, WRITE_NO_TEXT_MODES, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
@@ -3270,6 +3270,15 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             g["items"] = keep
         return {"since": since, "groups": groups, "total": sum(len(g["items"]) for g in groups), "errors": errors}
 
+    @app.post("/api/slides")
+    def make_slides(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """발표 자료 (2026-10-27): AI가 만든 슬라이드 JSON(글 또는 객체) → PowerPoint 파일"""
+        try:
+            body = slides.to_pptx(slides.parse(data.get("data")))
+        except slides.SlidesError as e:
+            raise HTTPException(400, str(e)) from e
+        return _file_response(body, str(data.get("filename") or "발표 자료")[:100], "pptx")
+
     # 철회 논문 확인 (2026-10-27): DOI별 결과를 하루 동안 기억 — 점검표를 열 때마다 OpenAlex를 다시 묻지 않게
     retract_cache: dict[str, tuple[bool, float]] = {}
     RETRACT_TTL = 24 * 3600
@@ -3300,7 +3309,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     def _file_response(body: bytes, filename: str, fmt: str, stream: bool = False) -> Response:
         types = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                 "hwpx": "application/hwp+zip", "md": "text/markdown; charset=utf-8", "pdf": "application/pdf"}
+                 "hwpx": "application/hwp+zip", "md": "text/markdown; charset=utf-8", "pdf": "application/pdf",
+                 "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation"}
         safe = re.sub(r'[\\/:*?"<>|\r\n]+', "_", filename or "document").strip() or "document"
         headers = {"Content-Disposition": f"attachment; filename=\"document.{fmt}\"; filename*=UTF-8''{quote(safe + '.' + fmt)}"}
         if stream:

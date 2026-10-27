@@ -36,3 +36,16 @@ test("화면 연결: 버전 기록 [수정 표시 워드] → 워드 내보내�
   assert.match(w, /redline: \(old, name\) => exportAs\("docx", view, ta, \{ redline: old, versionName: name \}\)/);
   assert.match(w, /\{ redline: true \}/);
 });
+
+test("발표 자료: AI 답(JSON) → 패널 목록 · 읽지 못하면 null · 메뉴 · PPT 단추", async () => {
+  const S = await import(pathToFileURL(join(JS, "writeslides.js")).href);
+  const esc = (s) => String(s).replace(/</g, "&lt;");
+  const h = S.slidesHtml('{"title":"발표","slides":[{"title":"<배경>","bullets":["가"],"notes":"노트"}],"questions":[{"q":"질문","a":"답"}]}', esc);
+  assert.match(h, /1\. &lt;배경>/);
+  assert.match(h, /예상 질문/);
+  assert.equal(S.slidesHtml("그냥 글", esc), null);
+  const w = readFileSync(join(JS, "writing.js"), "utf8");
+  assert.match(w, /\["slides", "발표 자료 만들기…"/);
+  assert.match(w, /add\("pptx", "PPT 파일 받기"/);
+  assert.match(w, /api\.raw\("POST", "\/api\/slides"/);
+});

@@ -39,6 +39,7 @@ import { CHECK_RE, useLenientEmphasis, wrapParts } from "./writemd.js";
 import { claimAt, markerIndex } from "./writesrc.js"; // 출처 확인 (2026-10-26)
 import { tableFromCells, tableFromTsv } from "./writepaste.js"; // 표 붙여넣기 (2026-10-27)
 import { redlineMarkdown } from "./writeredline.js"; // 수정 표시 워드 (2026-10-27)
+import { slidesHtml } from "./writeslides.js"; // 발표 자료 (2026-10-27)
 import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
 import { JOURNAL_LABELS, JOURNAL_NUM_KEYS, cleanJournal, parseJournal } from "./writejournal.js"; // 투고 규정 (2026-10-27)
 import { matchDialog } from "./writematchui.js"; // 서재 대조: 인용 빠짐 · 표절 미리 점검 (2026-10-27)
@@ -1854,7 +1855,7 @@ function currentHeading(ta) {
 const TOOL_MENU = [
   ["matrix", "선행연구 비교표…", "고른 논문 → 표"], ["stats", "통계 결과 → 표 · 문장…", "SPSS · jamovi · 엑셀"],
   ["memo", "메모 · 받아쓰기 → 논문 문단…", "고른 글 또는 붙여 넣기"], ["review", "AI 모의 심사…", "원고 전체 · 예상 질문"],
-  ["response", "심사 의견 대응표…", "의견 → 수정 내용 · 위치"],
+  ["response", "심사 의견 대응표…", "의견 → 수정 내용 · 위치"], ["slides", "발표 자료 만들기…", "원고 전체 → PPT · 예상 질문"],
 ];
 const MODE_LABEL = Object.fromEntries([...AI_MODES.filter((x) => x !== "-"), ...TOOL_MENU.map(([k, l]) => [k, l.replace(/…$/, "")]),
   ["paraphrase", "표절 피해 바꿔 쓰기"], ["journal", "투고 규정 읽기"]]);
@@ -1980,12 +1981,15 @@ async function runTool(mode, ta) {
     const r = await matrixDialog(ta);
     if (!r) return;
     ({ keys, instruction } = r);
-  } else if (mode === "review") {
+  } else if (mode === "review" || mode === "slides") {
     text = ta.value.trim();
-    if (text.length < 300) return toast("모의 심사를 하기엔 원고가 너무 짧아요");
+    if (text.length < 300) return toast(`${mode === "review" ? "모의 심사" : "발표 자료"}를 만들기엔 원고가 너무 짧아요`);
     const cut = text.length > REVIEW_MAX;
-    if (!(await confirmDialog(`원고 전체(${text.length.toLocaleString("ko-KR")}자)를 AI 심사위원이 읽고 총평 · 주요 지적 · 세부 지적 · 예상 질문을 써요.`
-      + `${cut ? ` 원고가 길어 앞 ${REVIEW_MAX.toLocaleString("ko-KR")}자만 보내요.` : ""} 원고는 바뀌지 않아요.`, { ok: "모의 심사 시작", title: "AI 모의 심사" }))) return;
+    const what = mode === "review" ? "AI 심사위원이 읽고 총평 · 주요 지적 · 세부 지적 · 예상 질문을 써요"
+      : "AI가 심사 발표용 슬라이드 12~18장(발표자 노트 포함)과 예상 질문을 만들어요. 결과에서 [PPT 파일 받기]를 누르면 PowerPoint로 받아요";
+    if (!(await confirmDialog(`원고 전체(${text.length.toLocaleString("ko-KR")}자)를 ${what}.`
+      + `${cut ? ` 원고가 길어 앞 ${REVIEW_MAX.toLocaleString("ko-KR")}자만 보내요.` : ""} 원고는 바뀌지 않아요.`,
+    { ok: mode === "review" ? "모의 심사 시작" : "발표 자료 만들기", title: mode === "review" ? "AI 모의 심사" : "발표 자료 만들기" }))) return;
     text = text.slice(0, REVIEW_MAX);
   } else {
     const r = await pasteDialog(PASTE[mode]);
@@ -2002,7 +2006,7 @@ async function runTool(mode, ta) {
   } catch (err) { return errorToast(err); }
   trackJob(job);
   if (W.ai && W.ta === ta) {
-    W.ai.target(job.id, mode === "review" ? "대상: 원고 전체" : mode === "matrix" ? `논문 ${keys.length}편` : "");
+    W.ai.target(job.id, mode === "review" || mode === "slides" ? "대상: 원고 전체" : mode === "matrix" ? `논문 ${keys.length}편` : "");
     W.ai.show(job, { fresh: true });
   }
   if (W.ta === ta && ta.offsetParent && (!document.activeElement || document.activeElement === document.body)) ta.focus();
@@ -2313,7 +2317,8 @@ function aiPane(view, ta, m) {
         sec.append(out, el(`<p class="small muted ai-diff-legend"><del>지우는 글</del> · <ins>넣는 글</ins></p>`));
       } else {
         out.className = "ai-out prose";
-        out.innerHTML = purifyMd(window.marked.parse(result)) ?? esc(result);
+        const deck = w.mode === "slides" ? slidesPreview(result) : null; // 발표 자료: JSON → 슬라이드 목록
+        out.innerHTML = deck ?? purifyMd(window.marked.parse(result)) ?? esc(result);
         sec.append(out);
       }
     }
@@ -2348,6 +2353,7 @@ function aiPane(view, ta, m) {
       insert ? "원래 자리에 넣어요 — 그 사이 원고가 바뀌었으면 먼저 보여 드려요" : "원래 글을 결과로 바꿔요 — 그 사이 원고가 바뀌었으면 먼저 보여 드려요");
     add("cursor", "커서 위치에 넣기", "", act.cursor && !c, "편집기 커서 뒤에 새 문단으로 넣어요 (고른 글은 지우지 않아요)");
     add("copy", "복사", "", act.copy);
+    if (w.mode === "slides" && result) add("pptx", "PPT 파일 받기", "primary", true, "PowerPoint 파일(16:9, 발표자 노트 · 예상 질문 포함)로 받아요");
     add("rerun", "다시 실행", "", act.rerun && (ready || st === "failed" || st === "cancelled"),
       st === "failed" || st === "cancelled" ? "같은 글로 새 작업을 만들어요" : "지금 원고의 같은 자리로 새 작업을 만들어요");
     if (act.dismiss) add("dismiss", "넣지 않기", "ghost", true, "결과를 원고에 넣지 않아요. 작업 화면에서 7일 동안 다시 열 수 있어요");
@@ -2457,7 +2463,8 @@ function aiPane(view, ta, m) {
     const a = b.dataset.act;
     if (a === "tab-result" || a === "tab-diff") { S.tab = a === "tab-diff" ? "diff" : "result"; return draw(); }
     if (a === "unconfirm") { S.confirm = null; draw(); return $('[data-act="apply"]', body)?.focus(); }
-    ({ locate, apply: doApply, confirm: confirmApply, cursor: atCursor, copy: (x) => copyText(resultText(x)), rerun, dismiss })[a]?.(j);
+    ({ locate, apply: doApply, confirm: confirmApply, cursor: atCursor, copy: (x) => copyText(resultText(x)), rerun, dismiss,
+      pptx: (x) => downloadSlides(resultText(x), `${docTitle(ta) || "원고"}_발표`) })[a]?.(j);
   });
   pick.onchange = () => {
     const id = Number(pick.value);
@@ -2677,6 +2684,17 @@ function coverMissingDialog(missing) {
     $("[data-cover]", foot).onclick = () => { result = "cover"; m.close(); };
     setTimeout(() => $("[data-cover]", foot).focus(), 40);
   });
+}
+
+// 발표 자료 (2026-10-27): 패널 미리보기 · PPT 파일 받기(서버 /api/slides)
+const slidesPreview = (text) => slidesHtml(text, esc);
+async function downloadSlides(text, name) {
+  try {
+    const res = await api.raw("POST", "/api/slides", { data: text, filename: name });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "PPT 파일을 만들지 못했어요");
+    downloadBlob(await res.blob(), `${name.replace(/[\\/:*?"<>|]+/g, "_")}.pptx`);
+    toast("PPT 파일로 저장했어요 — 발표자 노트와 예상 질문이 들어 있어요", "success");
+  } catch (e) { errorToast(e); }
 }
 
 // opts.redline = 비교할 지난 버전 글 → 바뀐 곳을 워드 변경 내용 추적으로 (writeredline.js · 서버 writer.redline_docx)
