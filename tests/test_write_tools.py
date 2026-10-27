@@ -34,3 +34,16 @@ def test_validate_cover_journal():
                 {"journal": {"notes": ["x"] * 13}}):
         with pytest.raises(df.FormatError):
             df.validate_cover(bad)
+
+
+def test_paper_alert_settings():
+    """새 논문 알림 설정 (2026-10-27): 검색어 정리 · 종류 · 중복 · 10개 · 날짜"""
+    from paperlab.config import split_settings_changes
+    plain, _ = split_settings_changes({"paper_alerts": {"queries": [
+        {"q": "  청소년   우울 ", "kind": "topic"}, {"q": "청소년 우울", "kind": "topic"}, {"q": "Hinton", "kind": "author"},
+        {"q": "x", "kind": "topic"}, {"q": "기타", "kind": "zzz"}, "bad"], "checked": "2026-10-27"}})
+    assert plain["paper_alerts"] == {"queries": [{"q": "청소년 우울", "kind": "topic"}, {"q": "Hinton", "kind": "author"},
+                                                 {"q": "기타", "kind": "topic"}], "checked": "2026-10-27"}
+    assert split_settings_changes({"paper_alerts": {"queries": [], "checked": "어제"}})[0]["paper_alerts"]["checked"] == ""
+    with pytest.raises(ValueError):
+        split_settings_changes({"paper_alerts": {"queries": [{"q": f"주제 {i}"} for i in range(11)]}})

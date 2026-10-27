@@ -58,6 +58,8 @@ DEFAULT_SETTINGS: dict = {
     "korean_first": True,
     # 새 원고의 기본 논문 양식 (기본 양식 id 또는 내 양식 'user-{번호}')
     "doc_format_default": "default",
+    # 새 논문 알림 (2026-10-27): 관심 검색어 · 저자 [{q, kind: "topic"|"author"}] 10개까지, 마지막 확인 날짜(YYYY-MM-DD)
+    "paper_alerts": {"queries": [], "checked": ""},
 }
 
 SECRET_KEYS = AI_KEY_NAMES + ("openalex_api_key", "semantic_scholar_api_key")
@@ -415,6 +417,30 @@ def normalize_api_models(value) -> dict:
     return out
 
 
+ALERT_MAX = 10
+_DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def normalize_alerts(value) -> dict:
+    """새 논문 알림 설정 정리: 검색어 2~200자 · 종류 topic/author · 같은 것은 한 번 · 10개까지"""
+    if not isinstance(value, dict):
+        raise ValueError("알림 설정이 올바르지 않아요")
+    out, seen = [], set()
+    for q in value.get("queries") or []:
+        if not isinstance(q, dict):
+            continue
+        text = re.sub(r"\s+", " ", str(q.get("q") or "")).strip()[:200]
+        kind = q.get("kind") if q.get("kind") in ("topic", "author") else "topic"
+        if len(text) < 2 or (kind, text.lower()) in seen:
+            continue
+        seen.add((kind, text.lower()))
+        out.append({"q": text, "kind": kind})
+    if len(out) > ALERT_MAX:
+        raise ValueError(f"알림 검색어는 {ALERT_MAX}개까지예요")
+    checked = value.get("checked") if isinstance(value.get("checked"), str) and _DAY_RE.match(value.get("checked")) else ""
+    return {"queries": out, "checked": checked}
+
+
 def split_settings_changes(changes: dict) -> tuple[dict, dict]:
     """PUT /api/settings 본문 → (평문 설정 변경, 비밀 변경 {이름: 값 | None(지우기)}).
 
@@ -441,6 +467,8 @@ def split_settings_changes(changes: dict) -> tuple[dict, dict]:
                 value = normalize_cli_efforts(value)
             elif key == "api_models":
                 value = normalize_api_models(value)
+            elif key == "paper_alerts":
+                value = normalize_alerts(value)
             elif key == "translate_language" and value not in TRANSLATE_LANGS:
                 raise ValueError("번역 언어는 ko · en · ja · zh 중에서 골라 주세요")
             plain[key] = value

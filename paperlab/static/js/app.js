@@ -241,6 +241,7 @@ async function enterApp(me) {
   await restoreDrafts(me.user_id);
   loadUsage();
   route().catch((e) => console.error(e));
+  setTimeout(() => import("./alerts.js").then((m) => m.dailyAlertCheck()).catch(() => {}), 4000); // 새 논문 알림 — 하루 한 번
 }
 
 // ----------------------------------------------------------- google login

@@ -11,6 +11,7 @@ import {
   oaOpenLabel, offReason, searchErrorView, sourceLimits, viaHtml,
 } from "./sourcemeta.js";
 import { state } from "./state.js";
+import { alertsButton, alertsDialog } from "./alerts.js"; // 새 논문 알림 (2026-10-27)
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, el, errorToast, esc, fmtNum, josa, liveSay, safeUrl, store,
 } from "./ui.js";
@@ -73,6 +74,7 @@ export function renderDiscover(main) {
         <select class="input" name="source" style="width:auto" aria-label="데이터베이스" aria-describedby="src-off-note">${sourceOptions()}</select>
         <button class="btn primary" style="height:40px;padding:0 20px">검색</button>
         <button type="button" class="btn" style="height:40px" data-ai-find title="입력한 글을 질문으로 여러 검색어로 찾아 한국어로 요약해요">✦ AI로 찾기</button>
+        ${alertsButton()}
       </form>
       <div class="discover-filters" role="group" aria-label="검색 조건" aria-describedby="src-limit-note">
         <span>기간</span>
@@ -108,6 +110,7 @@ export function renderDiscover(main) {
   view.submitSearch = submit;
   form.onsubmit = (e) => { e.preventDefault(); submit(); };
   // 3단계 AI로 찾기 (시안 2.2절 · AD-5): 입력 글을 메모리로 넘기고 바로 실행. 2자 미만이면 입력칸에 초점만
+  $("[data-alerts]", view).onclick = () => alertsDialog(); // 새 논문 알림 (2026-10-27)
   $("[data-ai-find]", view).onclick = () => {
     const q = $("[name=q]", view).value.trim();
     if (q.length < 2) return $("[name=q]", view).focus();

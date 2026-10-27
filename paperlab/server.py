@@ -3238,6 +3238,38 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         return {"items": {k: (citations.to_csl_item(found[k]) if k in found else None) for k in keys},
                 "issues": {k: citations.citation_issues(found[k]) for k in found}}
 
+    @app.post("/api/alerts/check")
+    def check_alerts(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """새 논문 알림 (2026-10-27): 저장한 관심 검색어 · 저자마다 since 이후 새 논문 (서재에 있는 논문은 뺌).
+        since가 없으면 마지막 확인 날짜, 그것도 없으면 30일 전. mark=true면 오늘을 마지막 확인 날짜로 저장"""
+        alerts = ctx.settings.get("paper_alerts") or {}
+        queries = alerts.get("queries") or []
+        since = data.get("since")
+        if not (isinstance(since, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", since)):
+            since = alerts.get("checked") or (datetime.now().date() - timedelta(days=30)).isoformat()
+        if data.get("mark") is True:
+            ctx.lib.update_settings({"paper_alerts": {"queries": queries, "checked": datetime.now().date().isoformat()}}, ctx.email)
+        ctx.release()
+        groups, errors = [], 0
+        for q in queries:
+            try:
+                items = ctx.sources.new_works(q["q"], q["kind"], since)
+            except SourceError:
+                errors += 1
+                items = []
+            groups.append({"q": q["q"], "kind": q["kind"], "items": items})
+        with db.user_tx(ctx.claims) as lib:  # 서재에 이미 있는 논문은 빼고
+            ids = lib.match_library([it for g in groups for it in g["items"]])
+        i = 0
+        for g in groups:
+            keep = []
+            for it in g["items"]:
+                if not ids[i]:
+                    keep.append(it)
+                i += 1
+            g["items"] = keep
+        return {"since": since, "groups": groups, "total": sum(len(g["items"]) for g in groups), "errors": errors}
+
     # 철회 논문 확인 (2026-10-27): DOI별 결과를 하루 동안 기억 — 점검표를 열 때마다 OpenAlex를 다시 묻지 않게
     retract_cache: dict[str, tuple[bool, float]] = {}
     RETRACT_TTL = 24 * 3600

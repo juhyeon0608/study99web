@@ -447,6 +447,17 @@ class Sources:
     def lookup_openalex(self, work_id: str) -> dict:
         return norm_openalex(self._get_json(f"{OPENALEX}/works/{work_id}", self._openalex_params({})))
 
+    def new_works(self, query: str, kind: str, since: str, limit: int = 8) -> list[dict]:
+        """새 논문 알림 (2026-10-27): since(YYYY-MM-DD) 이후 출판된 OpenAlex 작품, 새것부터. kind=author면 저자 이름 검색"""
+        flt = f"from_publication_date:{since}"
+        params = {"per-page": limit}
+        if kind == "author":  # 저자는 새것부터, 주제는 관련도 순(날짜순이면 관련 없는 새 논문이 앞에 옴)
+            params.update({"filter": f"{flt},raw_author_name.search:{query.replace(',', ' ')}", "sort": "publication_date:desc"})
+        else:
+            params.update({"search": query, "filter": flt})
+        data = self._get_json(f"{OPENALEX}/works", self._openalex_params(params))
+        return [norm_openalex(w) for w in data.get("results") or []]
+
     def retracted_dois(self, dois: list[str]) -> set[str]:
         """철회된 논문 DOI (OpenAlex is_retracted — Retraction Watch 기반, 2026-10-27). 50개씩 묶어 묻는다(DOI 필터 OR)"""
         from .db import normalize_doi
