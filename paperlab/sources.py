@@ -447,6 +447,26 @@ class Sources:
     def lookup_openalex(self, work_id: str) -> dict:
         return norm_openalex(self._get_json(f"{OPENALEX}/works/{work_id}", self._openalex_params({})))
 
+    def retracted_dois(self, dois: list[str]) -> set[str]:
+        """철회된 논문 DOI (OpenAlex is_retracted — Retraction Watch 기반, 2026-10-27). 50개씩 묶어 묻는다(DOI 필터 OR)"""
+        from .db import normalize_doi
+        clean = []
+        for d in dict.fromkeys(dois):
+            try:
+                clean.append(check_doi(d))
+            except ValueError:
+                continue
+        out: set[str] = set()
+        for i in range(0, len(clean), 50):
+            part = clean[i:i + 50]
+            data = self._get_json(f"{OPENALEX}/works", self._openalex_params(
+                {"filter": "is_retracted:true,doi:" + "|".join(part), "select": "doi", "per-page": 50}))
+            for w in data.get("results") or []:
+                d = normalize_doi(w.get("doi") or "")
+                if d:
+                    out.add(d)
+        return out
+
     def resolve(self, text: str) -> dict:
         kind, value = detect_identifier(text)
         if kind == "doi":

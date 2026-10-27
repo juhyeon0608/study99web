@@ -48,7 +48,7 @@ from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
 from .db import (PAPER_TRASHED, SYNC_MODES, SYNC_OPS_DAYS, TOMBSTONE_DAYS, TRASH_DAYS, Database, DBUnavailable, Library,
-                 NotFoundError, folder_name_problem, iso)
+                 NotFoundError, folder_name_problem, iso, normalize_doi)
 from .db import local_ai_state as _local_ai_state
 from . import citegraph as cg
 from .graph_build import (DEADLINE_S, ERRORS as GRAPH_ERRORS, FIELDS_META, WARNINGS as GRAPH_WARNINGS, BadSeed, Flights,
@@ -3237,6 +3237,34 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         found = ctx.lib.papers_by_citekeys(keys)
         return {"items": {k: (citations.to_csl_item(found[k]) if k in found else None) for k in keys},
                 "issues": {k: citations.citation_issues(found[k]) for k in found}}
+
+    # 철회 논문 확인 (2026-10-27): DOI별 결과를 하루 동안 기억 — 점검표를 열 때마다 OpenAlex를 다시 묻지 않게
+    retract_cache: dict[str, tuple[bool, float]] = {}
+    RETRACT_TTL = 24 * 3600
+
+    @app.post("/api/retractions")
+    def check_retractions(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """원고의 인용키 → 철회된 논문 (OpenAlex is_retracted). DOI가 없는 논문은 확인하지 못함(checked에 안 셈)"""
+        keys = [str(k)[:200] for k in data.get("keys") or [] if isinstance(k, str)][:500]
+        found = ctx.lib.papers_by_citekeys(keys)
+        by_doi: dict[str, list[str]] = {}
+        for k, p in found.items():
+            d = normalize_doi(p.get("doi") or "")
+            if d:
+                by_doi.setdefault(d, []).append(k)
+        ctx.release()  # 외부 조회 동안 DB 연결을 잡지 않는다
+        now = time.time()
+        ask = [d for d in by_doi if not (d in retract_cache and now - retract_cache[d][1] < RETRACT_TTL)]
+        if ask:
+            try:
+                bad = ctx.sources.retracted_dois(ask)
+            except SourceError as e:
+                raise HTTPException(502, f"철회 여부를 확인하지 못했어요: {e}") from e
+            for d in ask:
+                retract_cache[d] = (d in bad, now)
+        retracted = [{"key": k, "title": found[k].get("title") or "", "doi": d}
+                     for d, ks in by_doi.items() if retract_cache.get(d, (False, 0))[0] for k in ks]
+        return {"checked": len(by_doi), "no_doi": len(found) - sum(len(v) for v in by_doi.values()), "retracted": retracted}
 
     def _file_response(body: bytes, filename: str, fmt: str, stream: bool = False) -> Response:
         types = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",

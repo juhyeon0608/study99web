@@ -50,3 +50,13 @@ test("점검표 연결 · 화면: '양식' 묶음 · [투고 규정] 단추 · �
   assert.equal(A.paneActions(job("memo", false)).rerun, true); // 고른 글 메모 정리는 보통 다시 실행
   assert.equal(A.paneActions({ ...job("matrix"), status: "failed" }).rerun, true);
 });
+
+test("철회 논문: 화면이 받아 둔 목록 → 인용 '꼭 고칠 것' (그 키의 첫 인용 자리)", () => {
+  const v = "# 제목\n\n본문 [@bad2019] 그리고 [@ok2020; @bad2019].";
+  const r = C.checkManuscript(v, { retracted: [{ key: "bad2019", title: "철회된 연구" }, { key: "none", title: "" }] });
+  const it = r.items.filter((x) => x.code === "cite-retracted");
+  assert.equal(it.length, 1);
+  assert.equal(v.slice(it[0].from, it[0].to), "[@bad2019]");
+  assert.equal(it[0].sev, "must");
+  assert.match(readFileSync(join(JS, "writing.js"), "utf8"), /api\.post\("\/api\/retractions", \{ keys \}\)/);
+});

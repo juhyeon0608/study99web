@@ -32,7 +32,7 @@ export function checkPanel(view, hooks) {
     const built = c.built || {};
     return checkManuscript(ta.value, {
       coverKind: c.coverKind, cover: c.cover, format: f.data || null, style: c.style || null,
-      items: built.items || null, issues: built.issues || null, verify: c.verify || null,
+      items: built.items || null, issues: built.issues || null, verify: c.verify || null, retracted: c.retracted || null,
     });
   };
 

@@ -610,6 +610,9 @@ export async function openManuscript(main, id) {
   $("[data-shortcuts-hint]", view).onclick = () => shortcutDialog();
   $("[data-goals]", view).onclick = () => goalsDialog(view, ta);
   focusMode(view, ta); // 집중 모드 (2026-10-27)
+  const retractions = watchRetractions(view, ta); // 철회 논문 확인 (2026-10-27)
+  ta.addEventListener("input", retractions);
+  retractions();
   $("[data-figure]", view).onclick = async () => insertFigures(ta, await pickFiles({ accept: "image/*", multiple: true }));
   $("[data-table]", view).onclick = () => editTable(ta);
   // 수식: 커서 자리(문단 사이)에 $$ … $$ {#eq:식N} — 수식 칸을 골라 둔 채로 바로 쓰게
@@ -738,7 +741,7 @@ export async function openManuscript(main, id) {
   });
   // 제출 전 점검표 (docs/specs/writing-checklist.md): 미리보기가 받아 둔 인용 정보 · 양식 · 표지 · 인용 검증 결과로 점검 (AI 없음)
   W.check = checkPanel(view, { ta, ctx: () => ({ format: W.fmt, coverKind: coverKind(), cover: m.cover, built: W.built, verify: W.vd && W.vd.data,
-    style: currentStyle(view) }),
+    style: currentStyle(view), retracted: W.retracted && W.retracted.mid === m.id ? W.retracted.list : null }),
     select: (a, b) => selectRange(view, ta, a, b), openCover: () => openCoverDialog(view, ta), verify: () => runVerify(view, ta),
     rerun: () => renderPreview(view, ta), say: (t) => sayWriter(view, t), extra: () => W.proof && W.proof.checkLine(),
     openGlossary: glossaryDialog, openJournal: () => journalDialog(ta) });
@@ -1007,6 +1010,33 @@ function drawStatus(view, ta) {
   $("[data-status-text]", view).textContent =
     `글자 ${chars.toLocaleString("ko-KR")}자 (공백 제외 ${noSpace.toLocaleString("ko-KR")}자) · 단어 ${words.toLocaleString("ko-KR")}개 · 인용 ${cites}곳`;
   drawGoals(view, ta);
+}
+
+// ------------------------------------------------------------------ 철회 논문 확인 (2026-10-27)
+// 인용키가 바뀌면 5초 뒤 서버에 물어(서버가 DOI별로 하루 기억) 점검표 '인용'에 꼭 고칠 것으로 띄운다
+function watchRetractions(view, ta) {
+  const m = W.m;
+  let last = "";
+  let timer = null;
+  return () => {
+    const keys = [...new Set((ta.value.match(CITE_RE) || []).flatMap((raw) => (parseCitation(raw.slice(1, -1)) || []).map((it) => it.key)))]
+      .filter((k) => !/^(fig|tbl|eq):/.test(k)).sort();
+    const sig = keys.join("|");
+    if (sig === last) return;
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      if (W.m !== m) return;
+      last = sig;
+      if (!keys.length) { W.retracted = { mid: m.id, list: [] }; return; }
+      let r;
+      try { r = await api.post("/api/retractions", { keys }); } catch { last = ""; return; }
+      if (W.m !== m) return;
+      const fresh = r.retracted.filter((x) => !(W.retracted && W.retracted.mid === m.id && W.retracted.list.some((y) => y.key === x.key)));
+      W.retracted = { mid: m.id, list: r.retracted };
+      if (W.check) W.check.refresh();
+      if (fresh.length) toast(`철회된 논문을 인용했어요 — ${fresh.map((x) => `@${x.key}`).join(", ")}. 제출 전 점검에서 확인해 주세요`, "error", LONG);
+    }, 5000);
+  };
 }
 
 // ------------------------------------------------------------------ 집중 모드 (2026-10-27 — Scrivener · iA Writer)

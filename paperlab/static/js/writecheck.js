@@ -521,6 +521,11 @@ export function checkManuscript(text, opts = {}) {
         count.set(it.key, (count.get(it.key) || 0) + 1);
       }
     }
+    // 철회된 논문 (2026-10-27 — 화면이 /api/retractions로 받아 둔 값: [{ key, title }])
+    for (const r of opts.retracted || []) {
+      const c = first.get(r.key);
+      if (c) push("must", "cite", "cite-retracted", `철회된 논문을 인용했어요 — @${r.key}${r.title ? `: ${r.title.slice(0, 50)}` : ""}`, c.from, c.to);
+    }
     for (const [k, c] of first) {
       const n = count.get(k);
       const where = n > 1 ? ` (${n}곳)` : "";

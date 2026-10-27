@@ -42,3 +42,19 @@ def test_library_match_input_checks(local_client):
     assert local_client.post("/api/library-match", json={"queries": []}).status_code == 400
     assert local_client.post("/api/library-match", json={"queries": ["a"] * 151}).status_code == 400
     assert local_client.post("/api/library-match", json={"queries": [1, 2]}).status_code == 400
+
+
+def test_retracted_dois_batches_and_normalizes(monkeypatch):
+    """철회 논문 (2026-10-27): DOI 50개씩 OpenAlex is_retracted 필터, 결과 DOI는 소문자 · 주소 없이"""
+    from paperlab.sources import Sources
+    calls = []
+
+    def fake(self, url, params=None, headers=None):
+        calls.append(params["filter"])
+        return {"results": [{"doi": "https://doi.org/10.1000/BAD.1"}] if "10.1000/bad.1" in params["filter"] else []}
+
+    monkeypatch.setattr(Sources, "_get_json", fake)
+    s = Sources(lambda k: None)
+    dois = ["10.1000/bad.1"] + [f"10.1000/ok.{i}" for i in range(60)] + ["not a doi", "10.1000/bad.1"]
+    assert s.retracted_dois(dois) == {"10.1000/bad.1"}
+    assert len(calls) == 2 and all(c.startswith("is_retracted:true,doi:") for c in calls)
