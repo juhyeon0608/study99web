@@ -20,6 +20,7 @@ from urllib.parse import quote
 import httpx
 import anthropic
 
+from . import tls
 from .config import redact
 
 MODELS = {
@@ -444,7 +445,8 @@ class AIService:
         key = self.get_setting("anthropic_api_key") or None
         if not key:
             raise AIError("설정에서 Anthropic API 키를 넣어주세요.", "api_no_key")
-        kw = {"http_client": self._http_client} if self._http_client else {}
+        # 인증서 묶음을 매번 읽지 않게 공용 SSL 문맥 (tls.py — 호출마다 1.7초)
+        kw = {"http_client": self._http_client or anthropic.DefaultHttpxClient(verify=tls.context())}
         # api_key를 명시하면 SDK(1.x)는 자격 증명 환경 변수(ANTHROPIC_API_KEY · ANTHROPIC_AUTH_TOKEN)와 프로필 ·
         # 기본 자격 증명 탐색을 하지 않는다. 다만 ANTHROPIC_BASE_URL은 여전히 읽으므로 주소를 고정해 사용자 키가
         # 다른 곳으로 가지 않게 한다(승인자 L3). 운영 진입점(serve.py)은 시작할 때 ANTHROPIC_* 환경 변수를 지운다.
@@ -531,7 +533,7 @@ class AIService:
             if schema:
                 # 스키마는 프롬프트에 글로 들어 있음(summary_request). 공식 참조에서 확인한 필드(responseMimeType)만 쓴다
                 body["generationConfig"] = {"responseMimeType": "application/json"}
-        client = self._http_client or httpx.Client()
+        client = self._http_client or httpx.Client(verify=tls.context())
         try:
             r = client.post(url, json=body, headers=headers, timeout=TEXT_API_TIMEOUT)
         except httpx.TimeoutException:

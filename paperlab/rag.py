@@ -26,7 +26,7 @@ from typing import Callable
 import numpy as np
 from psycopg.types.json import Jsonb
 
-from . import pdf
+from . import pdf, tls
 from .ai import fence, fence_attr
 from .storage import RAG_TYPE, NotFound, StorageError, StorageKeyError, UserStorage, rag_key
 
@@ -173,7 +173,7 @@ def download_model(directory: Path, client=None) -> list[str]:
 
     got = []
     own = client is None
-    client = client or httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0), follow_redirects=True)
+    client = client or httpx.Client(timeout=httpx.Timeout(60.0, connect=15.0), follow_redirects=True, verify=tls.context())
     client.event_hooks["request"] = [only_hf]
     try:
         for name, (sha, size) in MODEL_FILES.items():

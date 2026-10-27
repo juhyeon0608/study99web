@@ -175,8 +175,8 @@ def interrupted_message(leased_at) -> str:
     return INTERRUPTED if leased_at is None or leased_at < STARTED_AT else LEASE_TIMEOUT
 # AI는 내 PC(연결된 PC 앱 워커)의 CLI 또는 내가 넣은 API 키로만 실행한다 — 서버 PC의 CLI · 서버 환경의 키는 쓰지 않음
 # (2026-10-16 제품 책임자 결정). 두 경로가 모두 없을 때 API 오류 · 화면 안내에 같은 문구
-NO_ROUTE = ("AI를 실행할 방법이 없어요. 설정 → 연결된 PC에서 PaperLab 앱을 설치한 내 PC를 연결하거나, "
-            "설정 → AI 엔진에서 내 API 키를 넣어 주세요. (서버의 CLI · 키는 쓰지 않아요)")
+NO_ROUTE = ("AI를 쓸 방법이 아직 없어요. 설정에서 ① 내 API 키를 넣거나, "
+            "② 내 PC에 PaperLab 앱을 깔고 [이 PC 연결]을 눌러 주세요(그 PC에 로그인된 Claude · Codex로 AI가 돌아가요).")
 # 팀장 결정 Q2a-1: 설치 파일이 아직 없으면(2a 동안) 키 등록만 안내
 NO_ROUTE_SOON = ("AI를 실행할 방법이 없어요. 설정 → AI 엔진에서 내 API 키를 넣어 주세요. "
                  "(PC 앱 연결은 곧 지원돼요 · 서버의 CLI · 키는 쓰지 않아요)")

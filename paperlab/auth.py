@@ -19,6 +19,8 @@ import httpx
 import jwt
 from jwt import PyJWK
 
+from . import tls
+
 ASYMMETRIC_ALGS = ("ES256", "RS256")
 JWKS_TTL = 600  # 공식 문서: 엔드포인트가 10분 캐시되므로 더 길게 캐시하지 않는다
 LEEWAY = 30  # exp 시계 오차 (가정)
@@ -67,7 +69,7 @@ class JWKSCache:
         self.fetch_count = 0
 
     def _http_fetch(self) -> dict:
-        r = httpx.get(self.url, timeout=5)
+        r = httpx.get(self.url, timeout=5, verify=tls.context())
         r.raise_for_status()
         return r.json()
 

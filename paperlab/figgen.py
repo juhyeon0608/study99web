@@ -255,8 +255,8 @@ def route_note(route_: list[dict]) -> str:
         return ""
     e = route_[0].get("engine")
     where = f"내 PC의 {e}" if route_[0].get("runner") == "cli" else f"내 {ai.ENGINE_COMPANY.get(e, e)} API 키"
-    return (f"Claude(PC의 claude CLI · Claude API 키)를 쓸 수 없어 {where}로 그려요. 그림 품질이 다를 수 있어요. "
-            "설정 → 연결된 PC에서 claude CLI를 쓰는 PC를 연결하면 Claude로 그려요.")
+    return (f"Claude를 쓸 수 없어 {where}로 그려요. 그림 품질이 다를 수 있어요. "
+            "Claude로 그리려면 설정에서 Claude API 키를 넣거나, Claude가 로그인된 내 PC를 연결해 주세요.")
 
 
 # ---------------------------------------------------------------- 프롬프트

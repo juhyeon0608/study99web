@@ -278,7 +278,7 @@ export async function settingsDialog({ focus = "" } = {}) {
   const user = state.user || {};
   const body = el(`<form autocomplete="off">
     <div class="section-title" id="set-ai-title" style="margin-top:0">AI 엔진</div>
-    <div class="notice" data-tone="info" data-ai-intro>${ICON_INFO}<div><b>AI는 내가 넣은 API 키나 연결된 내 PC의 CLI로만 실행해요</b> (서버의 CLI · 키는 쓰지 않아요). API 키가 있으면 API로 먼저, 안 되면 연결된 PC의 CLI로 실행해요. 키가 없는 엔진은 PC에서만 실행돼요. PC를 꺼도 AI를 쓰려면 API 키가 필요해요.</div></div>
+    <div class="notice" data-tone="info" data-ai-intro>${ICON_INFO}<div><b>AI는 두 가지 방법 중 하나로 써요.</b> ① <b>내 API 키</b> — 아래에 넣은 키로 바로 써요. PC를 꺼도 돼요. ② <b>내 PC</b> — PaperLab 앱을 깔고 연결한 내 PC가, 그 PC에 로그인된 Claude · Codex 등으로 대신 일해요. 그 PC가 켜져 있어야 해요. 둘 다 있으면 아래 순서대로 써요. PaperLab 서버의 AI는 쓰지 않아요.</div></div>
     ${JOB_KINDS.map(([kind, label, hint]) => `<div class="field"><label id="rt-${kind}">${label} — 쓰는 순서</label>${hint ? `<div class="hint">${hint}</div>` : ""}
       <div class="row" role="group" aria-labelledby="rt-${kind}">${[0, 1, 2].map((i) => `<select class="input grow" data-route-kind="${kind}" data-route-i="${i}" aria-label="${label} ${i + 1}순위 엔진"${i === 0 ? ` aria-describedby="rl-${kind}"` : ""}></select>`).join("")}</div>
       <div class="hint" data-route-line="${kind}" id="rl-${kind}"></div></div>`).join("")}
@@ -319,12 +319,12 @@ export async function settingsDialog({ focus = "" } = {}) {
       <div class="hint" id="set-tr-lang-hint">선택 번역과 전체 번역의 대상 언어예요. 쉬운 설명은 위 ‘AI 답변 언어’로 써요.</div></div>
     <div class="status-line ${status.ready ? "ok" : "bad"}" id="ai-status">${status.ready ? "✓" : "!"} ${esc(status.message)}</div>
 
-    <div class="section-title" id="set-pc-title">연결된 PC</div>
-    <div class="field"><div class="hint">PaperLab 앱을 설치하고 연결한 PC는 그 PC의 claude · codex · gemini · Antigravity(agy) 로그인으로 AI 작업을 실행해요. 여러 대가 켜져 있으면 먼저 가져간 PC가 실행해요.</div></div>
+    <div class="section-title" id="set-pc-title">내 PC로 AI 쓰기</div>
+    <div class="field"><div class="hint">내 PC에 PaperLab 앱을 깔고 연결해 두면, AI 기능을 누를 때 그 PC가 대신 일해요. 그 PC에 로그인해 둔 Claude · Codex · Gemini · Antigravity를 쓰니 API 키가 없어도 돼요. PC가 켜져 있어야 하고, 여러 대면 켜진 PC 중 한 대가 해요.</div></div>
     <div data-pc-mismatch-slot></div>
     <ul class="item-list" data-device-list aria-labelledby="set-pc-title"></ul>
     <div class="row" data-pc-actions style="margin-bottom:6px"></div>
-    <div class="field"><div class="hint">PC를 더 이상 쓰지 않으면 여기서 해지해 주세요. 앱을 지워도 연결은 남아 있어요.</div></div>
+    <div class="field"><div class="hint">더 이상 쓰지 않는 PC는 [연결 끊기]를 눌러 주세요. 앱을 지워도 연결은 남아 있어요.</div></div>
     <details class="sync-help" data-sync-help><summary>PC에만 두기란?</summary>
       <p class="hint">폴더 동기화를 켠 PC에서는 폴더 · 파일마다 ‘PC에만 두기’를 고를 수 있어요(서재의 폴더 · 파일 메뉴). 파일은 그 PC에만 두고, 서버에는 제목 · 저자 · 노트 · 하이라이트 · 태그 같은 정보만 저장해요. 본문 검색 · 서재 질문 · 선택 설명 · 번역에서는 빠지고, AI 요약 · 질문은 그 PC의 AI(CLI)로만 돼요.</p>
       <p class="hint is-strong">${esc(BACKUP_HELP)}</p></details>
@@ -572,8 +572,8 @@ function aiSection(body, s, getDevices) {
       let text;
       if (!parts.length) {
         const e = list[0];
-        text = COMPANY[e] ? `이대로는 ${josa(label, "을/를")} 쓸 수 없어요 — ${COMPANY[e]} API 키를 넣거나, ${e}가 있는 PC를 연결해 주세요.`
-          : `이대로는 ${josa(label, "을/를")} 쓸 수 없어요 — ${engineName(e)}(agy)가 있는 PC를 연결해 주세요. ${engineName(e)}는 API 키 없이 PC에서만 실행돼요.`;
+        text = COMPANY[e] ? `이대로는 ${josa(label, "을/를")} 쓸 수 없어요 — ${COMPANY[e]} API 키를 넣거나, ${e}가 로그인된 내 PC를 연결해 주세요.`
+          : `이대로는 ${josa(label, "을/를")} 쓸 수 없어요 — ${engineName(e)}(agy)가 로그인된 내 PC를 연결해 주세요. ${engineName(e)}는 API 키가 없어 PC로만 써요.`;
       } else if (!cliEngines.length) text = `${parts.join(" → ")}만 써요`;
       else if (parts.every((p) => p.startsWith("PC의")) && parts.length === 1) text = `${parts[0]}만 써요 (${on ? `켜진 PC ${on}대` : "켜진 PC 없음 — 켜질 때까지 기다려요"})`;
       else text = `${parts[0]} → ${parts.length > 1 ? `${parts.length === 2 ? "안 되면 " : ""}${parts.slice(1).join(" → ")}` : ""} (${on ? `켜진 PC ${on}대` : "켜진 PC 없음"})`;
@@ -667,7 +667,7 @@ function pcSection(body, getDevices, setDevices) {
     list.innerHTML = "";
     const active = devices.filter((d) => !d.revoked);
     if (!active.length) {
-      list.appendChild(el(`<li class="item-card" data-state="empty"><p class="item-meta" style="font-size:13px">연결된 PC가 없어요. PC를 연결하면 API 키 없이도 그 PC의 claude · codex · gemini · Antigravity 로그인으로 요약 · 대화 · 글쓰기를 쓸 수 있어요.</p></li>`));
+      list.appendChild(el(`<li class="item-card" data-state="empty"><p class="item-meta" style="font-size:13px">아직 연결한 PC가 없어요. 내 PC에 PaperLab 앱을 깔고 [이 PC 연결]을 누르면, API 키 없이 그 PC의 Claude · Codex 로그인으로 요약 · 대화 · 글쓰기를 쓸 수 있어요.</p></li>`));
     }
     for (const d of devices) list.appendChild(deviceCard(d));
     const here = info && info.paired && active.some((d) => d.id === info.deviceId);
@@ -680,18 +680,18 @@ function pcSection(body, getDevices, setDevices) {
   const deviceCard = (d) => {
     const state_ = d.revoked ? "revoked" : !d.online ? "offline" : d.paused ? "paused" : "online";
     const chip = { online: `<span class="chip success">● 켜짐</span>`, paused: `<span class="chip warn">❙❙ 일시 중지</span>`, offline: `<span class="chip">○ 꺼짐</span>`,
-      revoked: `<span class="chip">해지됨 · ${esc(fmtAgo(d.revoked_at))}</span>` }[state_];
+      revoked: `<span class="chip">연결 끊음 · ${esc(fmtAgo(d.revoked_at))}</span>` }[state_];
     const engines = engineChips(d);
     const os = String(d.os || "").split(/\s+/).slice(0, 2).join(" ");
-    const lead = state_ === "revoked" ? "이 PC는 작업을 받지 않아요. 30일 뒤 목록에서 사라져요."
-      : state_ === "paused" ? "이 PC에서 작업 받기를 멈춰 두었어요" : state_ === "online" && d.running_jobs ? `실행 중 ${d.running_jobs}개` : "";
+    const lead = state_ === "revoked" ? "연결을 끊은 PC예요. AI 일을 하지 않고, 30일 뒤 목록에서 사라져요."
+      : state_ === "paused" ? "이 PC에서 AI 일 받기를 멈춰 두었어요" : state_ === "online" && d.running_jobs ? `실행 중 ${d.running_jobs}개` : "";
     const meta = [lead, `마지막 확인 ${fmtAgo(d.last_seen_at) || "기록 없음"}`, d.app_version ? `앱 ${d.app_version}` : "", os].filter(Boolean);
     const card = el(`<li class="item-card" data-device-id="${d.id}" data-state="${state_}">
       <div class="item-head"><span class="item-title">${esc(d.name)}</span>${chip}
         ${info && info.deviceId === d.id ? `<span class="chip accent">이 PC</span>` : ""}
         ${d.update_required && !d.revoked ? `<span class="chip warn">업데이트 필요</span>` : ""}
         ${d.revoked ? "" : `<span class="item-actions"><button type="button" class="btn sm" data-device-rename aria-label="${esc(d.name)} 이름 바꾸기">이름 바꾸기</button>
-          <button type="button" class="btn sm danger" data-device-revoke aria-label="${esc(d.name)} 연결 해지">연결 해지</button></span>`}</div>
+          <button type="button" class="btn sm danger" data-device-revoke aria-label="${esc(d.name)} 연결 끊기">연결 끊기</button></span>`}</div>
       ${d.revoked ? "" : `<div class="chips" aria-label="엔진">${engines}</div>`}
       <p class="item-meta">${esc(state_ === "revoked" ? lead : meta.join(" · "))}</p></li>`);
     const sl = syncWebLine(d);
@@ -708,11 +708,11 @@ function pcSection(body, getDevices, setDevices) {
       $("[data-device-revoke]", card).onclick = async () => {
         // 선택 동기화 10.5절: 이 PC에만 있는 파일이 있으면 한 줄 더 (해지하면 서재에서 열 수 없음)
         const localLine = revokeLocalText(d);
-        if (!(await confirmDialog(`이 PC는 더 이상 작업을 받지 않아요. 실행 중인 작업은 다른 PC로 넘어가요.${localLine ? ` ${localLine}` : ""}`,
-          { title: `‘${d.name}’ 연결을 해지할까요?`, ok: "해지", danger: true }))) return;
+        if (!(await confirmDialog(`이 PC는 더 이상 AI 일을 하지 않아요. 하던 일은 다른 PC나 API 키로 넘어가요.${localLine ? ` ${localLine}` : ""}`,
+          { title: `‘${d.name}’ 연결을 끊을까요?`, ok: "연결 끊기", danger: true }))) return;
         try {
           const r = await api.del(`/api/devices/${d.id}`);
-          toast(`연결을 해지했어요${r.requeued_jobs ? ` · 실행 중이던 작업 ${r.requeued_jobs}개를 다시 대기시켰어요` : ""}${r.local_orphaned
+          toast(`연결을 끊었어요${r.requeued_jobs ? ` · 실행 중이던 작업 ${r.requeued_jobs}개를 다시 대기시켰어요` : ""}${r.local_orphaned
             ? ` · 이 PC에만 있던 파일 ${r.local_orphaned}개는 이제 열 수 없어요(정보 · 노트는 남아요)` : ""}`, "success", r.local_orphaned ? { duration: 8000 } : {});
           reload();
         } catch (e) { errorToast(e); }
@@ -724,7 +724,7 @@ function pcSection(body, getDevices, setDevices) {
   const pairHere = async (e) => {
     const btn = e.currentTarget;
     if (info && info.paired && info.accountHint && info.accountHint !== maskEmail(user().email)) {
-      if (!(await confirmDialog(`${info.accountHint} 계정의 작업은 더 이상 이 PC에서 실행되지 않아요. 그 계정의 연결된 PC 목록에서 이 PC를 해지해 주세요.`,
+      if (!(await confirmDialog(`지금 이 PC는 ${info.accountHint} 계정의 AI 일을 하고 있어요. 다시 연결하면 그 계정의 일은 더 이상 이 PC에서 하지 않아요. 그 계정의 설정 → 내 PC로 AI 쓰기에서도 이 PC의 [연결 끊기]를 눌러 주세요.`,
         { title: "이 PC를 지금 계정으로 다시 연결할까요?", ok: "다시 연결" }))) return;
     }
     btn.disabled = true;
@@ -750,7 +750,7 @@ function pcSection(body, getDevices, setDevices) {
       try { info = await dk.info(); } catch { info = null; }
       const mine = maskEmail(user().email);
       if (info && info.paired && info.accountHint && info.accountHint !== mine) {
-        $("[data-pc-mismatch-slot]", body).innerHTML = `<div class="notice" data-tone="warn" data-pc-mismatch>${ICON_WARN}<div>이 PC의 작업 실행은 <b>${esc(info.accountHint)}</b> 계정에 연결돼 있어요. 이 계정의 작업을 이 PC에서 실행하려면 [이 PC 연결]을 눌러 주세요.</div></div>`;
+        $("[data-pc-mismatch-slot]", body).innerHTML = `<div class="notice" data-tone="warn" data-pc-mismatch>${ICON_WARN}<div>이 PC는 지금 <b>${esc(info.accountHint)}</b> 계정의 AI 일을 하고 있어요. 지금 계정의 AI 일을 이 PC에 맡기려면 [이 PC 연결]을 눌러 주세요.</div></div>`;
       }
     }
     draw();
@@ -864,7 +864,7 @@ export async function pcAppDialog() {
         <li>“Windows의 PC 보호” 창이 뜨면 <b>[추가 정보] → [실행]</b>을 눌러요.</li>
         <li>관리자 권한 없이 설치되고 PaperLab 창이 열려요.</li>
         <li><b>[Google로 계속하기]</b> → 브라우저에서 로그인해요.</li>
-        <li>설정 → 연결된 PC → <b>[이 PC 연결]</b>을 눌러요.</li>
+        <li>설정 → 내 PC로 AI 쓰기 → <b>[이 PC 연결]</b>을 눌러요.</li>
         <li>쓰려는 AI 도구에 한 번 로그인해요. 명령 프롬프트에서 claude · codex · gemini · agy(Antigravity)를 실행하면 돼요.</li>
       </ol>
       <div class="notice" data-tone="info">${ICON_INFO}<div>“알 수 없는 게시자” 경고가 떠요. PaperLab은 코드 서명 인증서가 없어서 Windows가 처음 보는 프로그램으로 표시해요. 이 화면에서 받은 파일이면 실행해도 돼요. 확실히 하려면 아래에서 파일 지문을 비교해 보세요.</div></div>

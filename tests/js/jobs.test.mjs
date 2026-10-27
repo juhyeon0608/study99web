@@ -100,7 +100,7 @@ describe("백그라운드 AI · 끝남 알림 (2026-10-16)", () => {
       "전체 번역 실패 — API 키가 올바르지 않아요 (P)");
   });
   test("경로 없음 안내는 연결된 PC와 내 API 키를 함께 말한다 (서버 CLI 없음)", () => {
-    assert.match(J.NO_ROUTE_TEXT, /설정 → 연결된 PC/);
+    assert.match(J.NO_ROUTE_TEXT, /\[이 PC 연결\]/);
     assert.match(J.NO_ROUTE_TEXT, /API 키/);
   });
   test("알림 허락 안내: Notification이 없거나 이미 정했으면 띄우지 않음", () => {

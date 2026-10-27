@@ -41,6 +41,7 @@ from .api_runner import ApiRunner
 from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
 from . import extsources
 from . import figures
+from . import tls  # 공용 SSL 문맥 (외부 검색 · AI 호출마다 인증서 묶음을 다시 읽지 않게 — 2026-10-28)
 from . import mschat
 from . import figgen  # 그림 만들기 · 자연어로 고치기 (docs/specs/writing-figure-ai.md)
 from . import proofread  # 맞춤법 · 띄어쓰기 점검 작업 (2026-10-17)
@@ -313,6 +314,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     rag_cache: 벡터 캐시(테스트가 상한 · 유휴 시간을 작게 주입).
     API 실행기는 앱 수명(lifespan) 시작 때 돈다 — uvicorn 실행 · `with TestClient(app)`. 테스트는 app.state.runner.start()."""
     db = database or Database(config.db_url, timeout=config.db_pool_timeout)
+    # 외부 HTTPS용 인증서 묶음을 미리 읽어 둔다(tls.py — 첫 검색 · AI 호출이 1.7초 늦지 않게, 시작을 막지 않음)
+    threading.Thread(target=tls.context, name="tls-warm", daemon=True).start()
     store = storage or create_storage(config.storage_backend, config.r2)
     verifier = verifier or TokenVerifier(config.supabase_url, config.jwt_secret, jwks=jwks)
     # 개발 서버에서 개발용 허용 목록이 비어 있으면 테스트 프로젝트 사용자를 모두 허용 (운영은 항상 목록대로)

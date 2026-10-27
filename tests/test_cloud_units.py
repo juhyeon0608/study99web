@@ -157,7 +157,7 @@ def test_ai_routes_only_user_keys_and_user_pcs(monkeypatch):
     st = jobs.ai_status(nothing.get, [], True)
     assert st["ready"] is False and st["message"] == jobs.NO_ROUTE
     assert st["kinds"]["write"]["first"] is None and st["kinds"]["write"]["message"] == jobs.NO_ROUTE
-    assert "연결된 PC" in jobs.NO_ROUTE and "API 키" in jobs.NO_ROUTE and "API 키" in jobs.NO_ROUTE_SOON
+    assert "[이 PC 연결]" in jobs.NO_ROUTE and "API 키" in jobs.NO_ROUTE and "API 키" in jobs.NO_ROUTE_SOON
     user = UserSettings({}, {"anthropic_api_key": "sk-ant-user-1234567890"})
     pc = [{"id": 1, "revoked_at": None, "online": True, "paused": False,
            "engines": [{"name": "claude", "logged_in": True, "slots": 1}]}]

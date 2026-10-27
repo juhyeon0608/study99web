@@ -194,7 +194,7 @@ export function statusLineEl(onCancel) {
 // ------------------------------------------------------------------ 요약 진행 카드 (6장)
 const CARD_MSG = {
   no_online_worker: "PaperLab 앱이 켜진 PC가 생기면 바로 시작해요. 탭을 닫아도 기다려요.",
-  no_engine_on_worker: "{p}가 설치 · 로그인된 PC가 연결돼 있지 않아요. 설정에서 PC를 연결하거나 엔진 순서를 바꿔 주세요.",
+  no_engine_on_worker: "{p}가 로그인된 내 PC가 연결돼 있지 않아요. 설정 → 내 PC로 AI 쓰기에서 연결하거나, 쓰는 순서를 바꿔 주세요.",
   all_workers_busy: "PC가 하던 작업을 끝내면 시작해요.",
   holder_offline: "이 파일을 가진 PC가 켜지면 시작해요. 탭을 닫아도 기다려요.",
 };
@@ -408,7 +408,7 @@ export function notifyOffer() {
 
 // AI를 시작하기 전에: 이 작업 종류의 경로(내 API 키 · 연결된 내 PC의 CLI)가 있는지. 없으면 안내 + [설정 열기] → false.
 // 서버 PC의 CLI · 서버 키로 대신하지 않는다 (2026-10-16 제품 책임자 결정)
-export const NO_ROUTE_TEXT = "AI를 실행할 방법이 없어요. 설정 → 연결된 PC에서 PaperLab 앱을 설치한 내 PC를 연결하거나, 설정 → AI 엔진에서 내 API 키를 넣어 주세요.";
+export const NO_ROUTE_TEXT = "AI를 쓸 방법이 아직 없어요. 설정에서 ① 내 API 키를 넣거나, ② 내 PC에 PaperLab 앱을 깔고 [이 PC 연결]을 눌러 주세요(그 PC에 로그인된 Claude · Codex로 AI가 돌아가요).";
 export async function ensureAiRoute(kind) {
   let st;
   try { st = await api.get("/api/ai/status"); } catch { return true; } // 상태를 못 받으면 서버가 판단(경로 없음 400 — 같은 문구)

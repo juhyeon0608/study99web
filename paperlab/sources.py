@@ -24,7 +24,7 @@ from urllib.parse import quote
 
 import httpx
 
-from . import __version__
+from . import __version__, tls
 
 log = logging.getLogger("paperlab.sources")
 
@@ -267,7 +267,7 @@ class Sources:
         email_addr = (self.get_setting("contact_email") or "") if email else ""
         ua = f"PaperLab/{__version__}" + (f" (mailto:{email_addr})" if email_addr else "")
         return httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=True,
-                            headers={"User-Agent": ua}, transport=self._transport)
+                            headers={"User-Agent": ua}, transport=self._transport, verify=tls.context())
 
     def _get_json(self, url: str, params: dict | None = None, headers: dict | None = None) -> dict:
         host = url.split("/")[2]
@@ -820,7 +820,7 @@ def strict_get(url: str, params: dict, headers: dict, transport: httpx.BaseTrans
     """엄격한 GET 한 번 (1B 9.5절 규칙 — 그래프 · 5단계 외부 소스 공용, K-1): 리디렉션을 따라가지 않고, 2xx 본문은 10MB까지
     (넘으면 _TooLarge), 시간 제한 연결 5초 · 읽기 15초. 2xx가 아니면 본문을 읽지 않는다"""
     with httpx.Client(timeout=GRAPH_TIMEOUT, follow_redirects=False, headers={"User-Agent": ua},
-                      transport=transport) as c:
+                      transport=transport, verify=tls.context()) as c:
         with c.stream("GET", url, params=params, headers=headers) as r:
             if not 200 <= r.status_code < 300:
                 return r.status_code, r.headers, b""
