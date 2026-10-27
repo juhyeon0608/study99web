@@ -18,6 +18,7 @@ import { closeReader, flushReader, openReader, stopSummaries } from "./reader.js
 import { folderMark, folderMenu, sizeText } from "./syncmode.js";
 import { resetRefMemory } from "./refpane.js";
 import { closeWriter, composeDialog, flushWriter, openManuscript, renderWriteList, unsavedDraft } from "./writing.js";
+import { openPalette } from "./palette.js"; // 명령 팔레트 Ctrl+K (2026-10-28)
 import { actions, onRefresh, refreshAll, resetState, setUsageLoader, state } from "./state.js";
 import {
   $, $$, avatarEl, closeMenus, confirmDialog, el, errorToast, esc, josa, modalOpen, popupMenu, promptDialog, saveError, store,
@@ -519,6 +520,7 @@ $("#account-btn").onclick = (e) => openAccountMenu(e.currentTarget, e, true);
 // 좁은 화면 오른쪽 아래 버튼: 오른쪽 맞춤
 $("#account-mini").onclick = (e) => openAccountMenu(e.currentTarget, e, false);
 $("#open-settings").onclick = () => settingsDialog();
+$("#open-palette").onclick = () => openPalette();
 
 // -------------------------------------------------------- 저장 공간 (D14)
 let meter = null;
@@ -969,6 +971,12 @@ window.addEventListener("drop", (e) => {
 // 단축키: / 검색, Esc는 각 화면/모달이 처리
 window.addEventListener("keydown", (e) => {
   if (!signedIn() || modalOpen()) return;
+  // 명령 팔레트 (2026-10-28): 입력 중에도 — 다시 누르면 닫힘
+  if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "k" || e.key === "K" || e.code === "KeyK")) {
+    e.preventDefault();
+    openPalette();
+    return;
+  }
   const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName) || document.activeElement.isContentEditable;
   if (e.key === "/" && !typing) {
     const box = $("#main .searchbox input");

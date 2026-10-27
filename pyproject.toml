@@ -26,6 +26,7 @@ dependencies = [
   "cryptography>=42",
   # 3단계 RAG (명세 6.3절): 벡터 행렬 · 서버 PC 로컬 임베딩(EmbeddingGemma ONNX — 모델 파일은 admin rag-model --download)
   "numpy>=1.26",
+  "scipy>=1.11",  # 통계 계산 → APA 표 (2026-10-28 — paperlab/stats.py)
   "onnxruntime>=1.18",
   "tokenizers>=0.19",
 ]

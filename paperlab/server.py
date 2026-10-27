@@ -44,6 +44,7 @@ from . import figures
 from . import mschat
 from . import figgen  # 그림 만들기 · 자연어로 고치기 (docs/specs/writing-figure-ai.md)
 from . import proofread  # 맞춤법 · 띄어쓰기 점검 작업 (2026-10-17)
+from . import stats as statcalc  # 통계 계산 → APA 표 · 문장 (2026-10-28)
 from .citecache import TTL_REFERENCES, PgStore, fresh as cache_fresh, read_oa
 from .config import ServerConfig, UserSettings, split_settings_changes
 from .crypto import DecryptError, SecretBox
@@ -3282,6 +3283,14 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         except slides.SlidesError as e:
             raise HTTPException(400, str(e)) from e
         return _file_response(body, str(data.get("filename") or "발표 자료")[:100], "pptx")
+
+    @app.post("/api/stats")
+    def run_stats(data: dict = Body(...), ctx: RequestCtx = Ctx):
+        """통계 계산 (2026-10-28): 붙여 넣은 표 + 분석 종류 · 변인 → APA 표 · 결과 문장 (AI 없음 — paperlab/stats.py)"""
+        try:
+            return statcalc.run(data)
+        except statcalc.StatsError as e:
+            raise HTTPException(400, str(e)) from e
 
     # 철회 논문 확인 (2026-10-27): DOI별 결과를 하루 동안 기억 — 점검표를 열 때마다 OpenAlex를 다시 묻지 않게
     retract_cache: dict[str, tuple[bool, float]] = {}

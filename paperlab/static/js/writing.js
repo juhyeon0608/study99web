@@ -44,6 +44,9 @@ import { commentsDialog, openCommentCount, shareDialog } from "./writeshareui.js
 import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
 import { JOURNAL_LABELS, JOURNAL_NUM_KEYS, cleanJournal, parseJournal } from "./writejournal.js"; // 투고 규정 (2026-10-27)
 import { matchDialog } from "./writematchui.js"; // 서재 대조: 인용 빠짐 · 표절 미리 점검 (2026-10-27)
+import { statsDialog } from "./writestatsui.js"; // 통계 계산 → APA 표 (2026-10-28)
+import { registerCommands } from "./palette.js"; // 명령 팔레트 Ctrl+K (2026-10-28)
+import { moveSection, sections } from "./writeoutline.js"; // 개요에서 장 · 절 옮기기 (2026-10-28)
 import { sourceView } from "./writesrcui.js"; // 한글 조사 옆 굵게 · 기울임
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
@@ -356,6 +359,8 @@ export function closeWriter() {
   W.proof = null;
   if (W.saver) W.saver.flush();
   W.saver = null;
+  if (W.palette) W.palette(); // 명령 팔레트에서 이 원고의 명령 빼기
+  W.palette = null;
   W.m = null;
   W.ta = null;
   clearTimeout(W.previewTimer);
@@ -485,6 +490,7 @@ export async function openManuscript(main, id) {
       <button class="btn sm ghost" data-md="quote" title="인용문 블록">❝</button>
       <button class="btn sm ghost" data-figure title="그림 넣기 — 붙여넣기 · 끌어 놓기도 돼요. 아래에 '그림 1. 설명' 캡션이 붙어요">그림</button>
       <button class="btn sm ghost" data-table title="표 넣기 · 고치기 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+T) — 커서가 표 안에 있으면 그 표를 고쳐요">표</button>
+      <button class="btn sm ghost" data-stats title="통계 계산 — 엑셀 원자료를 붙여 넣으면 서버가 t검정 · 분산분석 · 상관 · 회귀 · 카이제곱 · 신뢰도를 계산해 APA 표와 결과 문장을 넣어요 (AI 아님)">통계</button>
       <button class="btn sm ghost" data-equation title="수식 넣기 — $$ 수식 $$ {#eq:이름}, 오른쪽에 번호 (1)이 붙고 본문에서 @eq:이름 으로 참조해요">수식</button>
       <button class="btn sm ghost" data-footnote title="각주 넣기 (${MAC ? "⌘+⌥" : "Ctrl+Alt"}+F) — 커서 자리에 [^N], 이 장 · 절 끝에 내용 줄 [^N]: 을 넣어요" aria-keyshortcuts="Control+Alt+F">각주</button>
       <span class="sep"></span>
@@ -615,12 +621,14 @@ export async function openManuscript(main, id) {
   $("[data-shortcuts-hint]", view).onclick = () => shortcutDialog();
   $("[data-goals]", view).onclick = () => goalsDialog(view, ta);
   focusMode(view, ta); // 집중 모드 (2026-10-27)
+  W.palette = registerCommands("writer", () => (W.ta === ta ? writerCommands(view, ta) : []));
   shareTools(view, ta, m); // 공유 링크 · 받은 의견 (2026-10-27)
   const retractions = watchRetractions(view, ta); // 철회 논문 확인 (2026-10-27)
   ta.addEventListener("input", retractions);
   retractions();
   $("[data-figure]", view).onclick = async () => insertFigures(ta, await pickFiles({ accept: "image/*", multiple: true }));
   $("[data-table]", view).onclick = () => editTable(ta);
+  $("[data-stats]", view).onclick = () => statsDialog({ insert: (md) => applyEdit(ta, blockInsert(ta.value, ta.selectionStart, ta.selectionEnd, md)) });
   // 수식: 커서 자리(문단 사이)에 $$ … $$ {#eq:식N} — 수식 칸을 골라 둔 채로 바로 쓰게
   $("[data-equation]", view).onclick = () => {
     const n = (ta.value.match(/\{#eq:/g) || []).length + 1;
@@ -978,16 +986,10 @@ async function renderPreview(view, ta) {
   }
 }
 
+// 개요: 누르면 그 자리로, 장 · 절(## · ###)은 끌어 놓거나 Alt+↑↓로 순서 바꾸기 (2026-10-28 — writeoutline.js)
 function drawOutline(view, ta) {
   const box = $("[data-outline]", view);
-  const lines = ta.value.split("\n");
-  const heads = [];
-  let pos = 0;
-  lines.forEach((line) => {
-    const m = line.match(/^(#{1,4})\s+(.+)/);
-    if (m) heads.push({ level: m[1].length, text: m[2], pos });
-    pos += line.length + 1;
-  });
+  const heads = sections(ta.value).map((h) => ({ ...h, pos: h.from }));
   const titleEl = $("[data-title]", view);
   titleEl.textContent = (heads.find((h) => h.level === 1) || {}).text || "제목 없는 원고";
   titleEl.title = titleEl.textContent; // 긴 제목은 말줄임 — 마우스를 올리면 전체
@@ -1003,8 +1005,65 @@ function drawOutline(view, ta) {
       const target = $(`[data-doc] [data-h="${i}"]`, view);
       if (target) target.scrollIntoView({ block: "start", behavior: "smooth" });
     };
+    if (h.level >= 2) {
+      b.draggable = true;
+      b.dataset.i = i;
+      b.title = `${h.text}\n끌어 놓아 순서 바꾸기 · Alt+↑↓`;
+      b.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/x-paperlab-section", String(i)); e.dataTransfer.effectAllowed = "move"; b.classList.add("dragging"); });
+      b.addEventListener("dragend", () => { b.classList.remove("dragging"); clearDrop(box); });
+      b.addEventListener("keydown", (e) => {
+        if (!e.altKey || (e.key !== "ArrowUp" && e.key !== "ArrowDown")) return;
+        e.preventDefault();
+        const same = heads.map((x, k) => [x, k]).filter(([x]) => x.level === h.level);
+        const at = same.findIndex(([, k]) => k === i);
+        const other = same[at + (e.key === "ArrowUp" ? -1 : 1)];
+        // 같은 단계의 앞 · 뒤 장 · 절과 자리 바꾸기 (위: 앞 장 · 절 앞으로, 아래: 뒤 장 · 절 뒤로)
+        if (other) moveOutline(view, ta, i, other[1], e.key === "ArrowDown", h.text);
+      });
+    }
     box.appendChild(b);
   });
+  if (!box.dataset.dnd) { // 끌어 놓기 받기 (한 번만 — 버튼은 글을 고칠 때마다 새로 그림)
+    box.dataset.dnd = "1";
+    box.addEventListener("dragover", (e) => {
+      const t = e.target.closest(".outline-item[data-i]");
+      if (!t || !e.dataTransfer.types.includes("text/x-paperlab-section")) return;
+      e.preventDefault();
+      const r = t.getBoundingClientRect();
+      clearDrop(box);
+      t.classList.add(e.clientY > r.top + r.height / 2 ? "drop-after" : "drop-before");
+    });
+    box.addEventListener("dragleave", (e) => { if (!box.contains(e.relatedTarget)) clearDrop(box); });
+    box.addEventListener("drop", (e) => {
+      const t = e.target.closest(".outline-item[data-i]");
+      const from = e.dataTransfer.getData("text/x-paperlab-section");
+      if (!t || from === "") return;
+      e.preventDefault();
+      const after = t.classList.contains("drop-after");
+      clearDrop(box);
+      const i = Number(from);
+      const s = sections(ta.value)[i];
+      if (s) moveOutline(view, ta, i, Number(t.dataset.i), after, s.text);
+    });
+  }
+}
+
+function clearDrop(box) {
+  for (const x of $$(".drop-before, .drop-after", box)) x.classList.remove("drop-before", "drop-after");
+}
+
+function moveOutline(view, ta, i, j, after, name) {
+  const r = moveSection(ta.value, i, j, after);
+  if (!r) return;
+  applyEdit(ta, diffEdit(ta.value, r.value, r.from, r.from));
+  flashRange(view, ta, r.from, r.from + r.value.slice(r.from).indexOf("\n"));
+  toast(`'${name}'을(를) 옮겼어요 — 되돌리려면 Ctrl+Z`);
+  // 옮긴 장 · 절의 개요 단추에 초점을 둬 Alt+↑↓를 이어서 누를 수 있게
+  setTimeout(() => {
+    const k = sections(ta.value).findIndex((x) => x.from === r.from);
+    const btn = $(`[data-outline] .outline-item[data-i="${k}"]`, view);
+    if (btn) btn.focus();
+  }, 60);
 }
 
 function drawStatus(view, ta) {
@@ -1775,9 +1834,14 @@ function setScope(v) {
 }
 
 function aiMenu(anchor, ta) {
+  popupMenu(anchor, aiItems(ta), { left: true });
+}
+
+// AI 도우미 메뉴 항목 (메뉴 · 명령 팔레트가 같이 씀)
+function aiItems(ta) {
   const cur = getEnding();
   const sc = getScope();
-  popupMenu(anchor, [
+  return [
     ...AI_MODES.map((m) => (m === "-" ? "-" : { label: m[1], action: () => runAi(m[0], ta) })),
     ...(W.fig ? ["-", ...W.fig.menuItems()] : []), // 그림 만들기 · 이 내용으로 · 커서의 그림 고치기 (writefigui.js)
     "-",
@@ -1792,7 +1856,35 @@ function aiMenu(anchor, ta) {
     { label: "표절 미리 점검…", sub: "내 서재 원문과 대조", action: () => libraryMatch(ta, "similar") },
     "-",
     ...TOOL_MENU.map(([mode, label, sub]) => ({ label, sub, action: () => runTool(mode, ta) })),
-  ], { left: true });
+  ];
+}
+
+// 명령 팔레트 (palette.js): 위 막대 · 도구 막대 · 상태 줄 단추 + AI 도우미 메뉴 + 내보내기 + 개요(장 · 절로 가기)
+function ownText(b) {
+  const c = b.cloneNode(true);
+  for (const x of c.querySelectorAll(".ck-badge, .count, svg")) x.remove();
+  return c.textContent.replace(/\s+/g, " ").trim();
+}
+function writerCommands(view, ta) {
+  const out = [];
+  for (const b of $$(".writer-bar button, .writer-tools button, .writer-status button", view)) {
+    if (b.matches("[data-ai], [data-export], [disabled]") || b.closest(".hidden")) continue;
+    const text = ownText(b);
+    if (!text) continue;
+    const title = b.title || "";
+    const head = title.split(/\s[—(]|\n/)[0].trim();
+    const seg = b.closest("[data-view]");
+    const label = seg ? `보기: ${text}` : text.length <= 2 && head && head.length <= 24 ? head : text;
+    const keys = ((title.match(/\(([^()]*(?:Ctrl|⌘|Alt|Shift)[^()]*)\)/) || [])[1] || "").split(" · ")[0];
+    out.push({ label, sub: label === head ? "" : head.slice(0, 40), keys, group: seg ? "보기" : "원고", action: () => b.click() });
+  }
+  for (const it of aiItems(ta)) if (it !== "-") out.push({ ...it, group: "AI" });
+  for (const it of exportItems(view, ta)) if (it !== "-") out.push({ ...it, label: `내보내기: ${it.label}`, group: "내보내기" });
+  const items = $$("[data-outline] .outline-item", view);
+  sections(ta.value).forEach((h, i) => {
+    if (items[i]) out.push({ label: `${"  ".repeat(Math.max(0, h.level - 2))}${h.text}`.trim(), sub: "이 장 · 절로 가기", group: "개요", action: () => items[i].click() });
+  });
+  return out;
 }
 
 // 보낼 글을 편집기에서 잠깐 골라 보여 준다 — 1.2초 뒤 그 사이 아무것도 안 했으면 원래 커서 · 선택으로 되돌림
@@ -1885,12 +1977,21 @@ function currentHeading(ta) {
 // (writeai.js — 새 글을 몰래 덮어쓰지 않음)
 // 논문 검토 · 정리 도구 (2026-10-27 사용자 요청): 고른 논문 · 붙여 넣은 글 · 원고 전체로 만드는 결과 (writeai.js TOOL_MODES)
 const TOOL_MENU = [
-  ["matrix", "선행연구 비교표…", "고른 논문 → 표"], ["stats", "통계 결과 → 표 · 문장…", "SPSS · jamovi · 엑셀"],
+  ["matrix", "선행연구 비교표…", "고른 논문 → 표"], ["stats", "통계 출력 → 표 · 문장 (AI)…", "SPSS · jamovi 출력 붙여넣기 — 원자료는 [통계] 단추"],
   ["memo", "메모 · 받아쓰기 → 논문 문단…", "고른 글 또는 붙여 넣기"], ["review", "AI 모의 심사…", "원고 전체 · 예상 질문"],
   ["response", "심사 의견 대응표…", "의견 → 수정 내용 · 위치"], ["slides", "발표 자료 만들기…", "원고 전체 → PPT · 예상 질문"],
+  ["align", "연구문제 ↔ 결론 대응 검사…", "원고 전체 · 빠진 답 찾기"],
 ];
 const MODE_LABEL = Object.fromEntries([...AI_MODES.filter((x) => x !== "-"), ...TOOL_MENU.map(([k, l]) => [k, l.replace(/…$/, "")]),
   ["paraphrase", "표절 피해 바꿔 쓰기"], ["journal", "투고 규정 읽기"]]);
+// 원고 전체를 보내는 도구 — 확인 창 문구
+const WHOLE = {
+  review: { title: "AI 모의 심사", ok: "모의 심사 시작", what: "AI 심사위원이 읽고 총평 · 주요 지적 · 세부 지적 · 예상 질문을 써요" },
+  slides: { title: "발표 자료 만들기", ok: "발표 자료 만들기",
+    what: "AI가 심사 발표용 슬라이드 12~18장(발표자 노트 포함)과 예상 질문을 만들어요. 결과에서 [PPT 파일 받기]를 누르면 PowerPoint로 받아요" },
+  align: { title: "연구문제 ↔ 결론 대응 검사", ok: "검사 시작",
+    what: "AI가 연구 문제 · 가설을 모두 찾아 결과 · 결론에서 답했는지 대응표(충분 · 부분 · 빠짐 · 어긋남)와 고칠 점을 써요" },
+};
 const REVIEW_MAX = 150000; // 모의 심사로 보내는 원고 글자 수 (긴 원고는 앞부분만)
 const PASTE = {
   stats: { title: "통계 결과 → 표 · 문장", label: "분석 결과를 붙여 넣으세요 (SPSS · jamovi · R 출력, 엑셀 표 — 표를 복사해 그대로)",
@@ -2013,15 +2114,14 @@ async function runTool(mode, ta) {
     const r = await matrixDialog(ta);
     if (!r) return;
     ({ keys, instruction } = r);
-  } else if (mode === "review" || mode === "slides") {
+  } else if (WHOLE[mode]) {
+    const w = WHOLE[mode];
     text = ta.value.trim();
-    if (text.length < 300) return toast(`${mode === "review" ? "모의 심사" : "발표 자료"}를 만들기엔 원고가 너무 짧아요`);
+    if (text.length < 300) return toast(`${w.title}을(를) 하기엔 원고가 너무 짧아요`);
     const cut = text.length > REVIEW_MAX;
-    const what = mode === "review" ? "AI 심사위원이 읽고 총평 · 주요 지적 · 세부 지적 · 예상 질문을 써요"
-      : "AI가 심사 발표용 슬라이드 12~18장(발표자 노트 포함)과 예상 질문을 만들어요. 결과에서 [PPT 파일 받기]를 누르면 PowerPoint로 받아요";
-    if (!(await confirmDialog(`원고 전체(${text.length.toLocaleString("ko-KR")}자)를 ${what}.`
+    if (!(await confirmDialog(`원고 전체(${text.length.toLocaleString("ko-KR")}자)를 ${w.what}.`
       + `${cut ? ` 원고가 길어 앞 ${REVIEW_MAX.toLocaleString("ko-KR")}자만 보내요.` : ""} 원고는 바뀌지 않아요.`,
-    { ok: mode === "review" ? "모의 심사 시작" : "발표 자료 만들기", title: mode === "review" ? "AI 모의 심사" : "발표 자료 만들기" }))) return;
+    { ok: w.ok, title: w.title }))) return;
     text = text.slice(0, REVIEW_MAX);
   } else {
     const r = await pasteDialog(PASTE[mode]);
@@ -2038,7 +2138,7 @@ async function runTool(mode, ta) {
   } catch (err) { return errorToast(err); }
   trackJob(job);
   if (W.ai && W.ta === ta) {
-    W.ai.target(job.id, mode === "review" || mode === "slides" ? "대상: 원고 전체" : mode === "matrix" ? `논문 ${keys.length}편` : "");
+    W.ai.target(job.id, WHOLE[mode] ? "대상: 원고 전체" : mode === "matrix" ? `논문 ${keys.length}편` : "");
     W.ai.show(job, { fresh: true });
   }
   if (W.ta === ta && ta.offsetParent && (!document.activeElement || document.activeElement === document.body)) ta.focus();
@@ -2692,15 +2792,19 @@ function draftDialog(ta, keys) {
 
 // ------------------------------------------------------------------ 내보내기
 function exportMenu(anchor, view, ta) {
+  popupMenu(anchor, exportItems(view, ta)).classList.add("export-menu");
+}
+
+function exportItems(view, ta) {
   const fmtName = `양식: ${(W.fmt && W.fmt.entry && W.fmt.entry.name) || "기본 (A4)"}`;
-  popupMenu(anchor, [
+  return [
     { label: "워드 (.docx)", sub: fmtName, action: () => exportAs("docx", view, ta) },
     { label: "한글 (.hwpx)", sub: fmtName, action: () => exportAs("hwpx", view, ta) },
     { label: "PDF (.pdf)", sub: `${fmtName} · 워드 파일을 서버에서 PDF로`, action: () => exportAs("pdf", view, ta) },
     { label: "마크다운 (.md)", sub: "각주 포함 · 양식과 무관", action: () => exportAs("md", view, ta) },
     "-",
     { label: "서식 그대로 복사", sub: "붙여넣기용", action: () => copyFormatted(view) },
-  ]).classList.add("export-menu");
+  ];
 }
 
 // 표지 필수 항목이 빈 채로 내보낼 때: "go" = 그대로, "cover" = 표지 정보 입력, null = 취소
