@@ -16,6 +16,7 @@ export function checkPanel(view, hooks) {
   const badge = $("[data-check-badge]", view);
   const pane = el(`<aside class="panel check-pane" role="dialog" aria-modal="false" aria-labelledby="ck-title" tabindex="-1" hidden>
     <div class="check-head"><b id="ck-title">제출 전 점검</b><span class="spacer"></span>
+      <button type="button" class="btn sm" data-ck-journal title="투고할 학술지의 분량 · 초록 · 주제어 · 참고문헌 · 인용 양식 규정으로 점검해요">투고 규정</button>
       <button type="button" class="btn sm" data-ck-terms title="이 원고에서 쓸 말 · 피할 말을 정해 두면 점검표가 찾아 줘요">용어집</button>
       <button type="button" class="btn sm" data-ck-run title="지금 원고로 다시 점검해요">다시 점검</button>
       <button type="button" class="icon-btn" data-ck-close aria-label="점검 닫기" title="닫기 (Alt+K · Esc)">✕</button></div>
@@ -30,7 +31,7 @@ export function checkPanel(view, hooks) {
     const f = c.format || {};
     const built = c.built || {};
     return checkManuscript(ta.value, {
-      coverKind: c.coverKind, cover: c.cover, format: f.data || null,
+      coverKind: c.coverKind, cover: c.cover, format: f.data || null, style: c.style || null,
       items: built.items || null, issues: built.issues || null, verify: c.verify || null,
     });
   };
@@ -131,6 +132,10 @@ export function checkPanel(view, hooks) {
       if (hooks.say && S.result) hooks.say(`다시 점검했어요: ${summaryText(S.result)}`);
       return;
     }
+    if (e.target.closest("[data-ck-journal]")) {
+      if (hooks.openJournal && (await hooks.openJournal())) refresh();
+      return;
+    }
     if (e.target.closest("[data-ck-terms]")) {
       if (hooks.openGlossary && (await hooks.openGlossary())) refresh();
       return;
@@ -152,6 +157,7 @@ export function checkPanel(view, hooks) {
     if (!act) return;
     const a = act.dataset.ckAct;
     if (a === "cover") { if (await hooks.openCover()) refresh(); }
+    else if (a === "journal") { if (hooks.openJournal && (await hooks.openJournal())) refresh(); }
     else if (a === "verify") hooks.verify();
     else if (a === "renumber") replaceAll(renumberHeadings(ta.value));
     else if (a === "glossary") replaceAll(applyGlossary(ta.value, ((hooks.ctx() || {}).cover || {}).glossary || []));

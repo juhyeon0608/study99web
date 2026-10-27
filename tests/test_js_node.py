@@ -53,7 +53,8 @@ MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8, "e
             "writesrc": 7,
             "writepaste": 4,
             "writeterms": 5,
-            "writegoals": 3}  # writegoals: 분량 · 일정 목표 (2026-10-27)  # writeterms: 용어 통일 (2026-10-27)  # writepaste: 표 붙여넣기 (2026-10-27)  # writesrc: 출처 확인 — 확인할 문장 · 표시 자리 · 판정 글 · 고친 문장 자리 · 근거 번호 · 화면 연결 (2026-10-26)  # writemd: 한글 조사 옆 굵게 · 기울임 · 굵게 감싸기 빈칸 · AI 패널 폭 끌기 (2026-10-26)
+            "writegoals": 3,
+            "writejournal": 3}  # writejournal: 투고 규정 · AI 도구 결과 단추 (2026-10-27)  # writegoals: 분량 · 일정 목표 (2026-10-27)  # writeterms: 용어 통일 (2026-10-27)  # writepaste: 표 붙여넣기 (2026-10-27)  # writesrc: 출처 확인 — 확인할 문장 · 표시 자리 · 판정 글 · 고친 문장 자리 · 근거 번호 · 화면 연결 (2026-10-26)  # writemd: 한글 조사 옆 굵게 · 기울임 · 굵게 감싸기 빈칸 · AI 패널 폭 끌기 (2026-10-26)
 
 
 def _node_version(node: str) -> tuple[int, ...] | None:

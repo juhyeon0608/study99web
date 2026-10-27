@@ -8,11 +8,12 @@
 import { CITE_RE, parseCitation } from "./refquote.js";
 import { XREF_RE, captionInfo, figureInfo, findFigures, findTables, renumberHeadings } from "./writeedit.js";
 import { termIssues } from "./writeterms.js"; // 용어 통일 (2026-10-27)
+import { journalIssues } from "./writejournal.js"; // 학술지 투고 규정 (2026-10-27)
 
 export const SEVERITY = [["must", "꼭 고칠 것"], ["warn", "확인 권장"]];
 export const GROUP_NAMES = { format: "양식", number: "번호", cite: "인용", text: "글", term: "용어" };
 export const ACTION_NAMES = { cover: "표지 정보", renumber: "번호 다시 매기기", spaces: "모두 고치기", verify: "인용 검증",
-  glossary: "용어집대로 모두 바꾸기" };
+  glossary: "용어집대로 모두 바꾸기", journal: "투고 규정" };
 // 표지가 있는 양식(표지 종류)별 규칙. 분량 · 장 순서는 인하대 대체 보고서 안내(분량 30쪽 이상, 서론 · 본론 · 결론 순)
 export const FORMAT_RULES = {
   thesis: { order: true, abstract: true, minPages: 0 },
@@ -295,6 +296,12 @@ export function checkManuscript(text, opts = {}) {
   checkCitations();
   checkText();
   for (const t of termIssues(value, (opts.cover && opts.cover.glossary) || [])) push(t.sev, "term", t.code, t.msg, t.from, t.to, t.action);
+  if (opts.cover && opts.cover.journal) {
+    for (const t of journalIssues(value, opts.cover.journal, { pages: est.pages, chars: est.chars, refs: keys.length, style: opts.style })) {
+      const at = t.at == null || t.at < 0 ? null : t.at;
+      push(t.sev, "format", t.code, t.msg, at, at, "journal");
+    }
+  }
   return finish(out, { pages: est.pages, chars: est.chars, minPages: (rules && rules.minPages) || 0, cites: cites.length, refs: keys.length });
 
   // ----- 양식: 표지 · 분량 · 장 순서 · 초록

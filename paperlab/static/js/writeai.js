@@ -201,13 +201,20 @@ export function resultsButtonText({ ready = 0, active = 0 } = {}) {
   return `AI 결과${ready ? ` ${ready}` : ""}${active ? ` · 만드는 중 ${active}` : ""}`;
 }
 
+// 논문 검토 · 정리 도구 (2026-10-27): 원고 글이 아니라 창에 붙여 넣은 글 · 고른 논문으로 만드는 결과 — 끝난 결과의 [다시 실행]은
+// 원래 글을 다시 찾을 수 없어 막고(실패 · 취소는 서버 다시 시도), 보고서(심사평 · 대응표)는 원고를 바꾸지 않음(커서에 넣기 · 복사만)
+export const TOOL_MODES = new Set(["matrix", "stats", "review", "response", "journal"]);
+export const REPORT_MODES = new Set(["review", "response", "journal"]);
+
 // 결과를 원고에 넣는 단추들을 쓸 수 있는지. here = 지금 연 원고의 결과인지
 export function paneActions(j, { here = true } = {}) {
   const st = resultState(j);
   const has = st === "ready" || st === "applied" || st === "dismissed";
+  const w = (j && j.write) || {};
+  const tool = TOOL_MODES.has(w.mode) || (w.mode === "memo" && w.insert);
   return {
-    apply: has && here, cursor: has && here, copy: has,
-    rerun: here && st !== "running" && st !== "missing",
+    apply: has && here && !REPORT_MODES.has(w.mode), cursor: has && here, copy: has,
+    rerun: here && st !== "running" && st !== "missing" && (!tool || st === "failed" || st === "cancelled"),
     cancel: st === "running",
     dismiss: st === "ready",
     applyLabel: j && j.write && j.write.insert ? "넣기" : "바꾸기",

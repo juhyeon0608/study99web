@@ -36,7 +36,7 @@ from starlette.concurrency import run_in_threadpool
 from . import __version__, citations, compose, convert, csl_style, doc_formats, downloads, explain, find, format_import, jobs, \
     pdf, rag, sync, translate, verify, versions, worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
-from .ai import MODELS, WRITE_MODES, AIError, AIService, PaperContext
+from .ai import MODELS, WRITE_MODES, WRITE_NO_TEXT_MODES, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
 from .auth import Allowlist, AuthError, JWKSCache, NotAllowed, TokenVerifier, bearer_token
 from . import extsources
@@ -2470,8 +2470,10 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         mode = data.get("mode") or "polish"
         if not isinstance(mode, str) or mode not in WRITE_MODES:  # 목록 · 객체면 in 검사가 500이 되므로 먼저 거름
             raise HTTPException(400, "알 수 없는 글쓰기 모드예요")
-        if not text and mode != "draft":
+        if not text and mode not in WRITE_NO_TEXT_MODES:
             raise HTTPException(400, "다듬을 글을 선택해 주세요")
+        if mode in WRITE_NO_TEXT_MODES and mode != "draft" and not data.get("keys"):
+            raise HTTPException(400, "비교할 논문을 골라 주세요")
         mid = data.get("manuscript_id")
         if mid is not None and (isinstance(mid, bool) or not isinstance(mid, int) or not 0 < mid < 10 ** 15):
             raise HTTPException(400, "원고 번호가 올바르지 않아요")

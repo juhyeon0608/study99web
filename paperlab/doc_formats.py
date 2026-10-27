@@ -473,6 +473,8 @@ def validate_cover(cover: Any) -> dict:
             out[key] = _glossary(value, path)
         elif key == "goals":
             out[key] = _goals(value, path)
+        elif key == "journal":
+            out[key] = _journal(value, path)
     if len(out.get("advisors", [])) > 2:
         raise FormatError("cover.advisors", "지도교수는 1명 또는 2명(공동지도)이에요")
     limit = 5 if out.get("degree", "master") == "doctor" else 3
@@ -533,6 +535,34 @@ def _goals(value: Any, path: str) -> dict:
                 or isinstance(day.get("start"), bool) or not isinstance(day.get("start"), int) or not 0 <= day["start"] <= 10_000_000:
             raise FormatError(f"{path}.day", "날짜와 글자 수로 입력해 주세요")
         out["day"] = {"date": day["date"], "start": day["start"]}
+    return out
+
+
+_JOURNAL_NUMS = ("max_pages", "max_chars", "abstract_ko_max", "abstract_en_max", "keywords_min", "keywords_max", "refs_max")
+
+
+def _journal(value: Any, path: str) -> dict:
+    """학술지 투고 규정 (2026-10-27): 이름 · 숫자 규정 · 인용 양식 · 그 밖의 규정 줄"""
+    if not isinstance(value, dict):
+        raise FormatError(path, "객체여야 해요")
+    out: dict[str, Any] = {}
+    for k in ("name", "style"):
+        if k in value:
+            v = value[k]
+            if not isinstance(v, str) or len(v) > 100:
+                raise FormatError(f"{path}.{k}", "100자 이하 글자로 입력해 주세요")
+            out[k] = v.strip()
+    for k in _JOURNAL_NUMS:
+        if k in value and value[k] is not None:
+            n = value[k]
+            if isinstance(n, bool) or not isinstance(n, int) or not 0 < n < 10_000_000:
+                raise FormatError(f"{path}.{k}", "양의 정수로 입력해 주세요")
+            out[k] = n
+    if "notes" in value:
+        notes = value["notes"]
+        if not isinstance(notes, list) or len(notes) > 12 or not all(isinstance(x, str) and len(x) <= 200 for x in notes):
+            raise FormatError(f"{path}.notes", "200자 이하 줄로 12개까지 입력해 주세요")
+        out["notes"] = list(notes)
     return out
 
 

@@ -1230,6 +1230,7 @@ export function coverDialog({ manuscriptId, cover, format, titleFallback = "" })
         // 이 창에 없는 원고 설정(용어집 · 분량 목표)은 그대로 둔다
         ...(cover && cover.glossary ? { glossary: cover.glossary } : {}),
         ...(cover && cover.goals ? { goals: cover.goals } : {}),
+        ...(cover && cover.journal ? { journal: cover.journal } : {}),
         degree: report ? c.degree : degree(),
         degree_field: q("degree_field").value.trim(),
         title_ko: q("title_ko").value.trim(),

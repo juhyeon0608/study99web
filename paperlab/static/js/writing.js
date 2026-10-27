@@ -28,7 +28,7 @@ import { state } from "./state.js";
 import {
   applyEditToValue, backspaceEdit, blockInsert, captionInfo, captionLabel, diffEdit, enterEdit, figureInfo, figureMarkdown, findFigures,
   findTables, headingEdit, indentEdit, inFence, isFrontMatter,
-  newTable, resolveXrefs, splitXrefs, tableAt, tableMarkdown, toggleListEdit,
+  newTable, outlineText, resolveXrefs, splitXrefs, tableAt, tableMarkdown, toggleListEdit,
   SCOPE_KINDS, SCOPE_NAMES, aiScope, scopeSummary,
 } from "./writeedit.js";
 import {
@@ -39,6 +39,7 @@ import { CHECK_RE, useLenientEmphasis, wrapParts } from "./writemd.js";
 import { claimAt, markerIndex } from "./writesrc.js"; // 출처 확인 (2026-10-26)
 import { tableFromCells, tableFromTsv } from "./writepaste.js"; // 표 붙여넣기 (2026-10-27)
 import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
+import { JOURNAL_LABELS, JOURNAL_NUM_KEYS, cleanJournal, parseJournal } from "./writejournal.js"; // 투고 규정 (2026-10-27)
 import { sourceView } from "./writesrcui.js"; // 한글 조사 옆 굵게 · 기울임
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
@@ -735,10 +736,11 @@ export async function openManuscript(main, id) {
     if (b && W.ref) W.ref.open(Number(b.dataset.refOpen));
   });
   // 제출 전 점검표 (docs/specs/writing-checklist.md): 미리보기가 받아 둔 인용 정보 · 양식 · 표지 · 인용 검증 결과로 점검 (AI 없음)
-  W.check = checkPanel(view, { ta, ctx: () => ({ format: W.fmt, coverKind: coverKind(), cover: m.cover, built: W.built, verify: W.vd && W.vd.data }),
+  W.check = checkPanel(view, { ta, ctx: () => ({ format: W.fmt, coverKind: coverKind(), cover: m.cover, built: W.built, verify: W.vd && W.vd.data,
+    style: currentStyle(view) }),
     select: (a, b) => selectRange(view, ta, a, b), openCover: () => openCoverDialog(view, ta), verify: () => runVerify(view, ta),
     rerun: () => renderPreview(view, ta), say: (t) => sayWriter(view, t), extra: () => W.proof && W.proof.checkLine(),
-    openGlossary: glossaryDialog });
+    openGlossary: glossaryDialog, openJournal: () => journalDialog(ta) });
   W.proof = proofPanel(view, { ta, mid: m.id, select: (a, b) => selectRange(view, ta, a, b), say: (t) => sayWriter(view, t),
     changed: () => W.check && W.check.refresh() }); // 맞춤법 · 띄어쓰기 점검 (Alt+P — docs/specs/writing-proofread.md)
   W.fmt = { id: fmtId, entry: null, data: null };
@@ -1423,6 +1425,83 @@ function glossaryDialog() {
   });
 }
 
+// 학술지 투고 규정 (2026-10-27): 값을 직접 넣거나, 규정 글을 붙여 넣으면 AI(글쓰기 작업 mode=journal)가 채움.
+// 원고 설정 cover.journal — 제출 전 점검표가 분량 · 초록 · 주제어 · 참고문헌 수 · 인용 양식을 본다
+function journalDialog(ta) {
+  const m = W.m;
+  if (!m) return Promise.resolve(false);
+  const j = (m.cover && m.cover.journal) || {};
+  return new Promise((resolve) => {
+    const nums = JOURNAL_NUM_KEYS.map((k) => `<div class="field"><label>${esc(JOURNAL_LABELS[k])}</label>
+      <input class="input" type="number" min="0" name="${k}" value="${j[k] ? Number(j[k]) : ""}"></div>`).join("");
+    const body = el(`<form class="journal-form">
+      <div class="field"><label>학술지 이름</label><input class="input" name="name" value="${esc(j.name || "")}" placeholder="예: 한국교육학연구"></div>
+      <div class="journal-grid">${nums}</div>
+      <div class="field"><label>인용 양식</label><input class="input" name="style" value="${esc(j.style || "")}" placeholder="예: APA 7판"></div>
+      <div class="field"><label>그 밖의 규정 (한 줄에 하나 — 점검표에는 안 나오고 여기서만 봐요)</label>
+        <textarea class="input" name="notes" rows="3">${esc((j.notes || []).join("\n"))}</textarea></div>
+      <details class="journal-ai"><summary>투고 규정 글로 채우기 (AI)</summary>
+        <textarea class="input" rows="6" data-rules placeholder="학술지 홈페이지의 투고 규정 · 원고 작성 요령을 복사해 붙여 넣으세요"></textarea>
+        <div class="row" style="gap:8px;align-items:center;margin-top:6px"><button type="button" class="btn sm" data-extract>AI로 규정 뽑기</button>
+          <span class="small muted" data-extract-st aria-live="polite"></span></div></details>
+    </form>`);
+    const foot = el(`<div style="display:contents"><button type="button" class="btn" data-clear>규정 지우기</button><span class="spacer"></span>
+      <button type="button" class="btn" data-no>취소</button><button type="button" class="btn primary" data-ok>저장</button></div>`);
+    let saved = false;
+    let stop = null;
+    const md = modal({ title: "학술지 투고 규정", body, foot, onClose: () => { if (stop) stop(); resolve(saved); } });
+    const fill = (r) => {
+      const f = (n) => body.querySelector(`[name="${n}"]`);
+      if (r.name) f("name").value = r.name;
+      for (const k of JOURNAL_NUM_KEYS) if (r[k]) f(k).value = String(r[k]);
+      if (r.style) f("style").value = r.style;
+      if (r.notes && r.notes.length) f("notes").value = r.notes.join("\n");
+    };
+    const st = $("[data-extract-st]", body);
+    $("[data-extract]", body).onclick = async () => {
+      const text = $("[data-rules]", body).value.trim();
+      if (text.length < 20) return toast("투고 규정 글을 붙여 넣어 주세요", "error");
+      if (!(await ensureAiRoute("write"))) return;
+      let job;
+      try {
+        job = (await api.post("/api/ai/write", { mode: "journal", text: text.slice(0, 30000), manuscript_id: m.id,
+          ...writeAnchor(ta.value, ta.selectionEnd, ta.selectionEnd, true) })).job;
+      } catch (err) { return errorToast(err); }
+      st.innerHTML = `<span class="spinner" aria-hidden="true"></span> AI가 규정을 읽는 중… (창을 닫으면 결과는 AI 결과 패널에 남아요)`;
+      if (stop) stop();
+      stop = watchJob(job.id, (n) => {
+        if (!n || isActive(n)) return;
+        stop && stop();
+        stop = null;
+        if (n.status !== "succeeded") { st.textContent = "규정을 뽑지 못했어요 — 값을 직접 넣어 주세요"; return; }
+        const r = parseJournal(n.result && n.result.text);
+        if (!r) { st.textContent = "AI 답을 읽지 못했어요 — 값을 직접 넣어 주세요"; return; }
+        fill(r);
+        handledJob(n.id);
+        api.post(`/api/jobs/${n.id}/handled`, { state: "applied" }).catch(() => {});
+        st.textContent = "AI가 뽑은 값을 넣었어요. 확인하고 저장해 주세요";
+      }, { first: job });
+    };
+    const save = async (journal) => {
+      const cover = { ...(m.cover || {}) };
+      if (journal) cover.journal = journal; else delete cover.journal;
+      try { await api.patch(`/api/manuscripts/${m.id}`, { cover }); } catch (err) { return errorToast(err); }
+      m.cover = cover;
+      saved = true;
+      toast(journal ? "투고 규정을 저장했어요 — 제출 전 점검에 반영돼요" : "투고 규정을 지웠어요", "success");
+      md.close();
+    };
+    $("[data-no]", foot).onclick = () => md.close();
+    $("[data-clear]", foot).onclick = () => save(null);
+    $("[data-ok]", foot).onclick = () => {
+      const fd = new FormData(body);
+      const raw = Object.fromEntries(JOURNAL_NUM_KEYS.map((k) => [k, Number(fd.get(k)) || null]));
+      const r = cleanJournal({ ...raw, name: fd.get("name"), style: fd.get("style"), notes: String(fd.get("notes") || "").split("\n") });
+      save(r && Object.keys(r).length ? r : null);
+    };
+  });
+}
+
 async function setChapterNumbering() {
   const m = W.m;
   if (!m) return false;
@@ -1643,6 +1722,8 @@ function aiMenu(anchor, ta) {
     "-",
     { label: "AI와 대화하며 고치기…", sub: "Alt+C", action: () => W.ai && W.ai.chat() },
     { label: "출처 확인 (AI)…", sub: "커서 문장 · [확인 필요]", action: () => W.ai && W.ai.source(claimAt(ta.value, ta.selectionStart, ta.selectionEnd)) },
+    "-",
+    ...TOOL_MENU.map(([mode, label, sub]) => ({ label, sub, action: () => runTool(mode, ta) })),
   ], { left: true });
 }
 
@@ -1734,7 +1815,138 @@ function currentHeading(ta) {
 // 실행하고 결과는 7일 동안 남는다. 끝나면 알림(jobs.js), 결과는 원고 오른쪽 AI 결과 패널(aiPane — 편집기를 가리지 않음) ·
 // 작업 화면에서 열어 넣는다. 넣을 때 그 사이 원고가 바뀌었으면 바뀌는 부분을 패널 안에서 보여 주고 물어본 뒤에만 바꾼다
 // (writeai.js — 새 글을 몰래 덮어쓰지 않음)
-const MODE_LABEL = Object.fromEntries(AI_MODES.filter((x) => x !== "-"));
+// 논문 검토 · 정리 도구 (2026-10-27 사용자 요청): 고른 논문 · 붙여 넣은 글 · 원고 전체로 만드는 결과 (writeai.js TOOL_MODES)
+const TOOL_MENU = [
+  ["matrix", "선행연구 비교표…", "고른 논문 → 표"], ["stats", "통계 결과 → 표 · 문장…", "SPSS · jamovi · 엑셀"],
+  ["memo", "메모 · 받아쓰기 → 논문 문단…", "고른 글 또는 붙여 넣기"], ["review", "AI 모의 심사…", "원고 전체 · 예상 질문"],
+  ["response", "심사 의견 대응표…", "의견 → 수정 내용 · 위치"],
+];
+const MODE_LABEL = Object.fromEntries([...AI_MODES.filter((x) => x !== "-"), ...TOOL_MENU.map(([k, l]) => [k, l.replace(/…$/, "")])]);
+const REVIEW_MAX = 150000; // 모의 심사로 보내는 원고 글자 수 (긴 원고는 앞부분만)
+const PASTE = {
+  stats: { title: "통계 결과 → 표 · 문장", label: "분석 결과를 붙여 넣으세요 (SPSS · jamovi · R 출력, 엑셀 표 — 표를 복사해 그대로)",
+    hint: "AI가 APA 형식 표와 결과 문단을 만들어 커서 자리에 넣어요. 결과에 없는 수치는 만들지 않아요.",
+    placeholder: "예)\n집단통계량\n집단  N  평균  표준편차\n실험  25  4.12  0.61\n통제  25  3.71  0.70\n독립표본 검정 t=2.21 자유도 48 유의확률 .032", ok: "표 · 문장 만들기" },
+  memo: { title: "메모 · 받아쓰기 → 논문 문단", label: "메모나 받아쓴 글을 붙여 넣거나, 🎤 받아쓰기로 말해 보세요",
+    hint: "AI가 뜻은 그대로 두고 논문 문단으로 정리해 커서 자리에 넣어요. 근거가 필요한 곳엔 [확인 필요]를 붙여요. Windows는 Win+H로도 받아쓸 수 있어요.",
+    placeholder: "예) 음 그러니까 설문 결과를 보면 남학생보다 여학생이 스트레스가 좀 더 높게 나왔고 이건 아마 학업 부담 때문인 것 같은데…", ok: "문단으로 정리", mic: true },
+  response: { title: "심사 의견 대응표", label: "심사 의견을 붙여 넣으세요 (여러 개면 번호 · 줄로 나눠서)",
+    hint: "AI가 의견마다 수정 내용(답변) · 수정 위치 표를 만들어요. 실제로 고친 내용은 꼭 확인해서 채우세요. 원고는 바뀌지 않아요.",
+    placeholder: "예)\n1. 연구 대상의 선정 기준이 불분명함.\n2. 표 3의 효과크기를 보고할 것.", ok: "대응표 만들기" },
+};
+
+// 붙여 넣을 글 창 (통계 결과 · 메모 · 심사 의견). 메모는 브라우저 받아쓰기(Web Speech — 크롬 · 엣지)
+function pasteDialog(cfg) {
+  return new Promise((resolve) => {
+    const body = el(`<div><label class="small" style="display:block;margin-bottom:6px">${esc(cfg.label)}</label>
+      <textarea class="input paste-ta" rows="12" style="width:100%;font-family:inherit"></textarea>
+      <p class="small muted" style="margin:6px 0 0">${esc(cfg.hint)}</p></div>`);
+    const ta = $("textarea", body);
+    ta.placeholder = cfg.placeholder;
+    const foot = el(`<div style="display:contents">${cfg.mic ? `<button type="button" class="btn" data-mic aria-pressed="false">🎤 받아쓰기</button><span class="spacer"></span>` : ""}
+      <button type="button" class="btn" data-no>취소</button><button type="button" class="btn primary" data-ok>${esc(cfg.ok)}</button></div>`);
+    let result = null;
+    let rec = null;
+    const md = modal({ title: cfg.title, body, foot, onClose: () => { if (rec) rec.stop(); resolve(result); } });
+    $("[data-no]", foot).onclick = () => md.close();
+    $("[data-ok]", foot).onclick = () => {
+      const t = ta.value.trim();
+      if (t.length < 5) return toast("내용을 붙여 넣어 주세요", "error");
+      result = t.slice(0, 30000);
+      md.close();
+    };
+    const mic = $("[data-mic]", foot);
+    if (mic) {
+      mic.onclick = () => {
+        if (rec) { rec.stop(); return; }
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) return toast("이 브라우저는 받아쓰기를 못 해요. 크롬 · 엣지에서 쓰거나 Windows 받아쓰기(Win+H)를 써 주세요", "error", LONG);
+        rec = new SR();
+        Object.assign(rec, { lang: "ko-KR", continuous: true, interimResults: false });
+        rec.onresult = (e) => {
+          for (let i = e.resultIndex; i < e.results.length; i++) {
+            if (e.results[i].isFinal) ta.value += (ta.value && !/\s$/.test(ta.value) ? " " : "") + e.results[i][0].transcript.trim();
+          }
+        };
+        rec.onerror = (e) => toast(e.error === "not-allowed" ? "마이크 권한을 허용해 주세요" : "받아쓰기가 멈췄어요 — Windows 받아쓰기(Win+H)도 쓸 수 있어요", "error");
+        rec.onend = () => { rec = null; mic.textContent = "🎤 받아쓰기"; mic.setAttribute("aria-pressed", "false"); };
+        try { rec.start(); } catch { rec = null; return; }
+        mic.textContent = "■ 받아쓰기 멈추기";
+        mic.setAttribute("aria-pressed", "true");
+      };
+    }
+    setTimeout(() => ta.focus(), 40);
+  });
+}
+
+// 선행연구 비교표: 논문 고르기 + 열 이름
+function matrixDialog(ta) {
+  return new Promise((resolve) => {
+    const chosen = new Set();
+    const body = el(`<form><div class="field"><label>비교할 논문 (초록 · AI 요약 · 내 메모를 근거로 써요)</label>
+        <div class="chips" data-keys></div><button type="button" class="btn sm" data-pick style="margin-top:6px;align-self:flex-start">＋ 논문 고르기</button></div>
+      <div class="field"><label>표의 열</label><input class="input" name="cols" value="연구 대상, 연구 방법, 주요 결과, 한계"></div>
+      <p class="small muted" style="margin:0">자료에 없는 칸은 '확인 필요'로 남겨요. 표와 정리 문단을 커서 자리에 넣어요.</p></form>`);
+    const foot = el(`<div style="display:contents"><button type="button" class="btn" data-no>취소</button><button type="button" class="btn primary" data-ok>비교표 만들기</button></div>`);
+    let result = null;
+    const md = modal({ title: "선행연구 비교표", body, foot, onClose: () => resolve(result) });
+    const drawKeys = () => {
+      $("[data-keys]", body).innerHTML = chosen.size ? [...chosen].map((k) => `<span class="chip">@${esc(k)}</span>`).join("")
+        : `<span class="small muted">아직 고른 논문이 없어요 (2~30편)</span>`;
+    };
+    drawKeys();
+    $("[data-pick]", body).onclick = () => citePicker(ta, null, {
+      preselected: [...chosen], onPick: (picked) => { picked.forEach((k) => chosen.add(k)); drawKeys(); },
+    });
+    $("[data-no]", foot).onclick = () => md.close();
+    $("[data-ok]", foot).onclick = () => {
+      if (chosen.size < 2) return toast("비교할 논문을 두 편 이상 골라 주세요", "error");
+      const cols = String(new FormData(body).get("cols") || "").trim();
+      result = { keys: [...chosen].slice(0, 30), instruction: cols ? `표의 열: ${cols}` : "" };
+      md.close();
+    };
+  });
+}
+
+async function runTool(mode, ta) {
+  if (mode === "memo" && ta.selectionEnd > ta.selectionStart) return runAi("memo", ta); // 고른 메모 글을 문단으로 바꿈
+  if (!(await ensureAiRoute("write"))) return;
+  const pos = ta.selectionEnd;
+  let text = "";
+  let keys = [];
+  let instruction = "";
+  let context = "";
+  if (mode === "matrix") {
+    const r = await matrixDialog(ta);
+    if (!r) return;
+    ({ keys, instruction } = r);
+  } else if (mode === "review") {
+    text = ta.value.trim();
+    if (text.length < 300) return toast("모의 심사를 하기엔 원고가 너무 짧아요");
+    const cut = text.length > REVIEW_MAX;
+    if (!(await confirmDialog(`원고 전체(${text.length.toLocaleString("ko-KR")}자)를 AI 심사위원이 읽고 총평 · 주요 지적 · 세부 지적 · 예상 질문을 써요.`
+      + `${cut ? ` 원고가 길어 앞 ${REVIEW_MAX.toLocaleString("ko-KR")}자만 보내요.` : ""} 원고는 바뀌지 않아요.`, { ok: "모의 심사 시작", title: "AI 모의 심사" }))) return;
+    text = text.slice(0, REVIEW_MAX);
+  } else {
+    const r = await pasteDialog(PASTE[mode]);
+    if (!r) return;
+    text = r;
+    if (mode === "response") context = outlineText(ta.value);
+    if (mode === "memo") instruction = ENDING_RULES[getEnding()];
+  }
+  if (W.ta !== ta) return;
+  let job;
+  try {
+    job = (await api.post("/api/ai/write", { mode, text, keys, instruction, context, manuscript_id: W.m ? W.m.id : null,
+      ...writeAnchor(ta.value, pos, pos, true) })).job;
+  } catch (err) { return errorToast(err); }
+  trackJob(job);
+  if (W.ai && W.ta === ta) {
+    W.ai.target(job.id, mode === "review" ? "대상: 원고 전체" : mode === "matrix" ? `논문 ${keys.length}편` : "");
+    W.ai.show(job, { fresh: true });
+  }
+  if (W.ta === ta && ta.offsetParent && (!document.activeElement || document.activeElement === document.body)) ta.focus();
+}
 
 // at = {from, to}: 패널의 [다시 실행] — 지금 원고에서 다시 찾은 원래 글(넣을 자리)로. 없으면 고른 글 · 커서 문단
 async function runAi(mode, ta, at = null) {
