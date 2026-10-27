@@ -469,11 +469,70 @@ def validate_cover(cover: Any) -> dict:
             if not isinstance(value, dict):
                 raise FormatError(path, "객체여야 해요")
             out[key] = {k: _bool(value[k], f"{path}.{k}") for k in INCLUDE_KEYS if k in value}
+        elif key == "glossary":
+            out[key] = _glossary(value, path)
+        elif key == "goals":
+            out[key] = _goals(value, path)
     if len(out.get("advisors", [])) > 2:
         raise FormatError("cover.advisors", "지도교수는 1명 또는 2명(공동지도)이에요")
     limit = 5 if out.get("degree", "master") == "doctor" else 3
     if len(out.get("committee", [])) > limit:
         raise FormatError("cover.committee", f"심사위원은 석사 3명, 박사 5명이에요 (지금 {len(out['committee'])}명)")
+    return out
+
+
+_DATE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
+
+
+def _term(value: Any, path: str) -> str:
+    if not isinstance(value, str) or not 1 <= len(value.strip()) <= 40:
+        raise FormatError(path, "용어는 1~40자로 적어 주세요")
+    return value.strip()
+
+
+def _glossary(value: Any, path: str) -> list:
+    """내 용어집 (점검표의 용어 통일, 2026-10-27): [{use: 쓸 말, avoid: [피할 말 …]}] 100개까지"""
+    if not isinstance(value, list) or len(value) > 100:
+        raise FormatError(path, "용어는 100개까지 넣을 수 있어요")
+    out = []
+    for i, item in enumerate(value):
+        p = f"{path}[{i}]"
+        if not isinstance(item, dict) or not isinstance(item.get("avoid"), list) or len(item["avoid"]) > 10:
+            raise FormatError(p, "쓸 말과 피할 말(10개까지)로 적어 주세요")
+        out.append({"use": _term(item.get("use"), f"{p}.use"), "avoid": [_term(a, f"{p}.avoid") for a in item["avoid"]]})
+    return out
+
+
+def _goals(value: Any, path: str) -> dict:
+    """분량 · 일정 목표 (2026-10-27): {deadline: YYYY-MM-DD, total: 전체 목표 글자 수, daily: 하루 목표,
+    chapters: {장 제목: 목표 글자 수}}"""
+    if not isinstance(value, dict):
+        raise FormatError(path, "객체여야 해요")
+    out: dict[str, Any] = {}
+    if "deadline" in value:
+        d = value["deadline"]
+        if not isinstance(d, str) or (d and not _DATE.match(d)):
+            raise FormatError(f"{path}.deadline", "YYYY-MM-DD 모양으로 입력해 주세요")
+        out["deadline"] = d
+    for k in ("total", "daily"):
+        if k in value:
+            n = value[k]
+            if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= 2_000_000:
+                raise FormatError(f"{path}.{k}", "0~2,000,000 사이 글자 수로 입력해 주세요")
+            out[k] = n
+    if "chapters" in value:
+        ch = value["chapters"]
+        if not isinstance(ch, dict) or len(ch) > 50 or not all(
+                isinstance(t, str) and 0 < len(t) <= 100 and isinstance(n, int) and not isinstance(n, bool)
+                and 0 <= n <= 2_000_000 for t, n in ch.items()):
+            raise FormatError(f"{path}.chapters", "장 제목과 목표 글자 수로 50개까지 입력해 주세요")
+        out["chapters"] = dict(ch)
+    if "day" in value:  # 오늘 처음 연 때의 글자 수 — 오늘 쓴 글자 = 지금 − start
+        day = value["day"]
+        if not isinstance(day, dict) or not isinstance(day.get("date"), str) or not _DATE.match(day["date"]) \
+                or isinstance(day.get("start"), bool) or not isinstance(day.get("start"), int) or not 0 <= day["start"] <= 10_000_000:
+            raise FormatError(f"{path}.day", "날짜와 글자 수로 입력해 주세요")
+        out["day"] = {"date": day["date"], "start": day["start"]}
     return out
 
 

@@ -950,6 +950,7 @@ const COVER_DEFAULTS = {
 export function listsNotice(format, cover) {
   const inc = coverWithDefaults(cover).include;
   if (!inc.toc && !inc.lof && !inc.lot) return "목차는 워드(참조 → 목차) · 한글(도구 → 차례/색인)로 넣어 주세요";
+  if (format === "pdf") return "PDF의 목차 쪽 번호는 어림값이에요. 정확한 쪽이 필요하면 워드로 내보내 필드를 업데이트한 뒤 PDF로 저장해 주세요";
   return format === "docx"
     ? "워드에서 열 때 필드를 업데이트할지 물으면 [예]를 눌러 목차 쪽 번호를 맞춰 주세요"
     : "목차 쪽 번호는 어림값이에요. 한글에서 쪽을 확인해 주세요";
@@ -1226,6 +1227,9 @@ export function coverDialog({ manuscriptId, cover, format, titleFallback = "" })
       const a1 = q("advisor_1").value.trim();
       const a2 = q("advisor_2").value.trim();
       const out = {
+        // 이 창에 없는 원고 설정(용어집 · 분량 목표)은 그대로 둔다
+        ...(cover && cover.glossary ? { glossary: cover.glossary } : {}),
+        ...(cover && cover.goals ? { goals: cover.goals } : {}),
         degree: report ? c.degree : degree(),
         degree_field: q("degree_field").value.trim(),
         title_ko: q("title_ko").value.trim(),

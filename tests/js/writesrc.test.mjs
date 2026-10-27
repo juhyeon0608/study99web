@@ -38,6 +38,18 @@ test("미리보기 표시 → 원고 자리 (같은 글의 표시 중 k번째)",
   assert.equal(W.markerIndex(v, "[확인 필요: 없음]", 0), -1);
 });
 
+test("원고의 [확인 필요] 목록: 같은 문장은 한 번 · 확인할 것 · 표 안은 문장 없음 · 작업 짝 키", () => {
+  const v = "가 문장이다 [확인 필요: 수치]. 나 문장 [확인 필요: 연도] 그리고 [확인 필요]. 다.\n\n| 표 | [확인 필요: 칸] |\n|---|---|";
+  const list = W.checkList(v);
+  assert.equal(list.length, 3);
+  assert.deepEqual(list.map((x) => x.need), ["수치", "연도", "칸"]);
+  assert.equal(list[0].claim.text, "가 문장이다 [확인 필요: 수치].");
+  assert.equal(list[1].claim.text, "나 문장 [확인 필요: 연도] 그리고 [확인 필요].");
+  assert.equal(list[2].claim, null);
+  assert.equal(v.slice(list[2].at, list[2].at + list[2].mark.length), "[확인 필요: 칸]");
+  assert.equal(W.claimKey(" a \n b  "), "a b");
+});
+
 test("판정 글 읽기: 판정 · 근거 · 고친 문장 · 확인할 곳 (굵게 · 목록 기호 · 여러 줄 · '없음')", () => {
   const a = W.parseClaim("**판정:** 일부 있음\n- 근거: 첫째 [L1].\n둘째 [2].\n고친 문장: \"새 문장 [@kim2024].\"\n확인할 곳: 없음");
   assert.deepEqual(a, { verdict: "일부 있음", tone: "warn", basis: "첫째 [L1].\n둘째 [2].", revised: "새 문장 [@kim2024].", where: "" });

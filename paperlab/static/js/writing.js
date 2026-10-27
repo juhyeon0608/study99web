@@ -27,7 +27,7 @@ import { state } from "./state.js";
 // 그림 · 표 · 캡션 · 목록 편집 · 단축키 도움말 (docs/specs/writing-figures-tables.md)
 import {
   applyEditToValue, backspaceEdit, blockInsert, captionInfo, captionLabel, diffEdit, enterEdit, figureInfo, figureMarkdown, findFigures,
-  findTables, headingEdit, indentEdit, isFrontMatter,
+  findTables, headingEdit, indentEdit, inFence, isFrontMatter,
   newTable, resolveXrefs, splitXrefs, tableAt, tableMarkdown, toggleListEdit,
   SCOPE_KINDS, SCOPE_NAMES, aiScope, scopeSummary,
 } from "./writeedit.js";
@@ -37,6 +37,8 @@ import {
 import { equationInfo, equationPng, katexHtml, MATH_MARK_RE, protectInlineMath, texToText } from "./writemath.js"; // 수식
 import { CHECK_RE, useLenientEmphasis, wrapParts } from "./writemd.js";
 import { claimAt, markerIndex } from "./writesrc.js"; // 출처 확인 (2026-10-26)
+import { tableFromCells, tableFromTsv } from "./writepaste.js"; // 표 붙여넣기 (2026-10-27)
+import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
 import { sourceView } from "./writesrcui.js"; // 한글 조사 옆 굵게 · 기울임
 import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (docs/specs/manuscript-history.md)
 // 각주 [^1] · "[^1]: 내용" 읽기와 [각주] 넣기 (docs/specs/export-lists-footnotes.md)
@@ -489,6 +491,7 @@ export async function openManuscript(main, id) {
       <button type="button" class="btn sm" data-verify title="${VERIFY_TITLE}">${ICON_VERIFY}<span>인용 검증</span></button>
       <button type="button" class="btn sm" data-check aria-expanded="false" aria-keyshortcuts="Alt+K" title="제출 전 점검 (Alt+K) — 양식 · 번호 · 인용 · 글에서 고칠 곳">점검<span class="ck-badge" data-check-badge hidden></span></button>
       <span class="spacer"></span>
+      <button type="button" class="btn sm" data-focus aria-pressed="false" aria-keyshortcuts="Control+Shift+F" title="집중 모드 — 편집기만 남기고, 쓰는 줄을 화면 가운데에 둬요 (${MAC ? "⌘" : "Ctrl"}+Shift+F · 끌 때 Esc)">집중</button>
       <button type="button" class="btn sm" data-history aria-haspopup="dialog" aria-keyshortcuts="Alt+H" title="버전 기록 — 지난 버전과 비교 · 되돌리기 · 지금 버전 저장 (Alt+H)">기록</button>
       <!-- '?'만으로는 단축키 도움말인 줄 몰라서(2026-10-17 사용자 지적) 글자로 보이게 -->
       <button type="button" class="btn sm" data-shortcuts title="단축키 · 서식 도움말 (${MAC ? "⌘" : "Ctrl"}+/)" aria-keyshortcuts="Control+/">⌨ 단축키</button>
@@ -504,6 +507,7 @@ export async function openManuscript(main, id) {
       <aside class="panel ai-pane" id="ai-pane" aria-label="AI 결과 패널"></aside>
     </div>
     <div class="writer-status small muted" data-status style="display:flex;align-items:center;gap:6px"><span data-status-text></span> <span data-verify-sum></span>
+      <button type="button" class="btn sm ghost goal-btn" data-goals title="분량 · 마감 목표 — 전체 · 장별 목표 글자 수, 하루 목표, 제출 마감일">목표 정하기</button>
       <span class="spacer"></span><button type="button" class="btn sm ghost" data-shortcuts-hint>단축키 보기 (${MAC ? "⌘" : "Ctrl"}+/)</button></div>
     <div class="sr-only" role="status" data-ref-live></div></section>`);
   main.appendChild(view);
@@ -581,6 +585,7 @@ export async function openManuscript(main, id) {
   });
   // 그림: 붙여넣기(글 없이 그림만 있을 때 — 워드에서 복사한 글은 그대로) · 끌어 놓기
   ta.addEventListener("paste", (e) => {
+    if (pasteTable(ta, e)) return;
     const files = imageFiles(e.clipboardData && e.clipboardData.files);
     if (!files.length || (e.clipboardData.getData("text/plain") || "").trim()) return;
     e.preventDefault();
@@ -601,6 +606,8 @@ export async function openManuscript(main, id) {
   });
   $("[data-shortcuts]", view).onclick = () => shortcutDialog();
   $("[data-shortcuts-hint]", view).onclick = () => shortcutDialog();
+  $("[data-goals]", view).onclick = () => goalsDialog(view, ta);
+  focusMode(view, ta); // 집중 모드 (2026-10-27)
   $("[data-figure]", view).onclick = async () => insertFigures(ta, await pickFiles({ accept: "image/*", multiple: true }));
   $("[data-table]", view).onclick = () => editTable(ta);
   // 수식: 커서 자리(문단 사이)에 $$ … $$ {#eq:식N} — 수식 칸을 골라 둔 채로 바로 쓰게
@@ -730,7 +737,8 @@ export async function openManuscript(main, id) {
   // 제출 전 점검표 (docs/specs/writing-checklist.md): 미리보기가 받아 둔 인용 정보 · 양식 · 표지 · 인용 검증 결과로 점검 (AI 없음)
   W.check = checkPanel(view, { ta, ctx: () => ({ format: W.fmt, coverKind: coverKind(), cover: m.cover, built: W.built, verify: W.vd && W.vd.data }),
     select: (a, b) => selectRange(view, ta, a, b), openCover: () => openCoverDialog(view, ta), verify: () => runVerify(view, ta),
-    rerun: () => renderPreview(view, ta), say: (t) => sayWriter(view, t), extra: () => W.proof && W.proof.checkLine() });
+    rerun: () => renderPreview(view, ta), say: (t) => sayWriter(view, t), extra: () => W.proof && W.proof.checkLine(),
+    openGlossary: glossaryDialog });
   W.proof = proofPanel(view, { ta, mid: m.id, select: (a, b) => selectRange(view, ta, a, b), say: (t) => sayWriter(view, t),
     changed: () => W.check && W.check.refresh() }); // 맞춤법 · 띄어쓰기 점검 (Alt+P — docs/specs/writing-proofread.md)
   W.fmt = { id: fmtId, entry: null, data: null };
@@ -988,14 +996,147 @@ function drawOutline(view, ta) {
 
 function drawStatus(view, ta) {
   const text = ta.value;
-  const body = text.replace(CITE_RE, "").replace(/!\[((?:\\.|[^\]\\])*)\]\(fig:[^)\s]*\)(?:\{#[^}]*\})?/g, "$1") // 그림 줄은 캡션 글만
-    .replace(/^#+\s.*$/gm, "").replace(/[*_>`#|-]/g, "");
+  const body = plainBody(text); // 그림 줄은 캡션 글만 · 제목 줄 · 인용 표시 뺌 (writegoals.js — 목표와 같은 셈)
   const chars = body.replace(/\n/g, "").length;
   const noSpace = body.replace(/\s/g, "").length;
   const words = (body.match(/\S+/g) || []).length;
   const cites = (text.match(CITE_RE) || []).length;
   $("[data-status-text]", view).textContent =
     `글자 ${chars.toLocaleString("ko-KR")}자 (공백 제외 ${noSpace.toLocaleString("ko-KR")}자) · 단어 ${words.toLocaleString("ko-KR")}개 · 인용 ${cites}곳`;
+  drawGoals(view, ta);
+}
+
+// ------------------------------------------------------------------ 집중 모드 (2026-10-27 — Scrivener · iA Writer)
+// 도구 막대 · 개요 · 미리보기 · 패널을 숨기고 편집기를 가운데 좁은 칸으로. 타자기 스크롤: 커서 줄을 화면 가운데에 둔다
+// (textarea는 커서 좌표를 주지 않아서, 같은 글꼴 · 폭의 숨은 거울에 커서 앞 글을 넣고 끝 자리를 잰다)
+function focusMode(view, ta) {
+  const btn = $("[data-focus]", view);
+  const edit = $(".writer-edit", view);
+  const exit = el(`<button type="button" class="btn sm focus-exit" title="집중 모드 끄기 (Esc)">집중 끝내기</button>`);
+  view.appendChild(exit);
+  let mirror = null;
+  const center = () => {
+    if (!view.classList.contains("focus-mode")) return;
+    if (!mirror) {
+      mirror = el(`<div class="writer-hl writer-mirror" aria-hidden="true"></div>`);
+      edit.appendChild(mirror);
+    }
+    mirror.textContent = ta.value.slice(0, ta.selectionEnd);
+    const mark = document.createElement("span");
+    mark.textContent = "\u200b";
+    mirror.appendChild(mark);
+    const y = mark.offsetTop;
+    mirror.textContent = "";
+    const top = Math.max(0, y - ta.clientHeight / 2 + 16);
+    if (Math.abs(ta.scrollTop - top) > 4) ta.scrollTop = top;
+  };
+  const set = (on) => {
+    view.classList.toggle("focus-mode", on);
+    btn.setAttribute("aria-pressed", String(on));
+    if (on) {
+      if (view.classList.contains("view-preview")) setView(view, ta, "split");
+      if (document.documentElement.requestFullscreen && !document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {});
+      ta.focus();
+      requestAnimationFrame(center);
+      sayWriter(view, "집중 모드를 켰어요. Esc로 끌 수 있어요");
+    } else {
+      if (document.fullscreenElement && document.exitFullscreen) document.exitFullscreen().catch(() => {});
+      ta.focus();
+    }
+  };
+  W.focus = { toggle: () => set(!view.classList.contains("focus-mode")), off: () => set(false) };
+  btn.onclick = W.focus.toggle;
+  exit.onclick = W.focus.off;
+  ta.addEventListener("input", () => requestAnimationFrame(center));
+  ta.addEventListener("keyup", (e) => { if (/^(Arrow|Page|Home|End|Enter)/.test(e.key)) center(); });
+  ta.addEventListener("click", () => requestAnimationFrame(center));
+  view.addEventListener("keydown", (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.shiftKey && !e.altKey && e.code === "KeyF") { e.preventDefault(); W.focus.toggle(); }
+    else if (e.key === "Escape" && view.classList.contains("focus-mode") && !modalOpen() && !e.defaultPrevented) W.focus.off();
+  });
+  // 브라우저 전체 화면을 Esc로 먼저 끄면 집중 모드도 함께 끈다
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement && view.isConnected && view.classList.contains("focus-mode")) set(false);
+  });
+}
+
+// ------------------------------------------------------------------ 분량 · 일정 목표 (2026-10-27)
+function drawGoals(view, ta) {
+  const btn = $("[data-goals]", view);
+  const m = W.m;
+  if (!btn || !m) return;
+  const goals = (m.cover && m.cover.goals) || null;
+  if (!hasGoals(goals)) {
+    btn.textContent = "목표 정하기";
+    btn.dataset.tone = "";
+    return;
+  }
+  const s = goalSummary(ta.value, goals);
+  btn.textContent = s.line || "목표";
+  btn.dataset.tone = s.left != null && s.left < 0 ? "bad" : goals.daily && s.todayDone >= goals.daily ? "ok" : "";
+  if (s.needsDay && W.dayFor !== `${m.id}|${dayKey()}`) {
+    // 오늘 처음 — 지금 글자 수를 오늘 시작값으로 (하루 한 번 저장)
+    W.dayFor = `${m.id}|${dayKey()}`;
+    const cover = { ...(m.cover || {}), goals: { ...goals, day: { date: dayKey(), start: s.now } } };
+    api.patch(`/api/manuscripts/${m.id}`, { cover }).then(() => { if (W.m === m) m.cover = cover; }).catch(() => { W.dayFor = null; });
+  }
+}
+
+function goalsDialog(view, ta) {
+  const m = W.m;
+  if (!m) return;
+  const g = (m.cover && m.cover.goals) || {};
+  const chapters = chapterCounts(ta.value);
+  const s = goalSummary(ta.value, g);
+  const num = (n) => (n ? String(n) : "");
+  const rows = chapters.map((c, i) => `<tr><td>${esc(c.title)}</td><td class="num">${c.chars.toLocaleString("ko-KR")}</td>
+    <td><input class="input" type="number" min="0" step="500" data-ch="${i}" value="${num(g.chapters && g.chapters[c.title])}" placeholder="목표"></td>
+    <td class="num" data-pct="${i}"></td></tr>`).join("");
+  const body = el(`<form class="goals-form">
+    <div class="row" style="gap:10px;flex-wrap:wrap">
+      <div class="field"><label>제출 마감일</label><input class="input" type="date" name="deadline" value="${esc(g.deadline || "")}"></div>
+      <div class="field"><label>전체 목표 (글자)</label><input class="input" type="number" min="0" step="1000" name="total" value="${num(g.total)}" placeholder="예: 60000"></div>
+      <div class="field"><label>하루 목표 (글자)</label><input class="input" type="number" min="0" step="100" name="daily" value="${num(g.daily)}" placeholder="예: 1500"></div>
+    </div>
+    <p class="small muted" style="margin:4px 0 10px">지금 ${s.now.toLocaleString("ko-KR")}자 · 오늘 쓴 글자 ${s.todayDone.toLocaleString("ko-KR")}자
+      — 글자 수는 아래 상태 줄과 같은 셈(공백 포함, 제목 · 인용 표시 뺌)이에요. 학위논문은 보통 A4 1쪽에 1,000~1,300자예요.</p>
+    ${chapters.length ? `<table class="goals-table"><thead><tr><th>장</th><th>지금</th><th>목표</th><th>진행</th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<p class="small muted">'## ' 장 제목을 쓰면 장마다 목표를 정할 수 있어요.</p>`}
+  </form>`);
+  const drawPct = () => {
+    for (const inp of $$("[data-ch]", body)) {
+      const c = chapters[Number(inp.dataset.ch)];
+      const t = Number(inp.value) || 0;
+      $(`[data-pct="${inp.dataset.ch}"]`, body).textContent = t ? `${Math.min(100, Math.floor((c.chars / t) * 100))}%` : "";
+    }
+  };
+  body.addEventListener("input", drawPct);
+  drawPct();
+  const foot = el(`<div style="display:contents"><button type="button" class="btn" data-clear>목표 지우기</button><span class="spacer"></span>
+    <button type="button" class="btn" data-no>취소</button><button type="button" class="btn primary" data-ok>저장</button></div>`);
+  const md = modal({ title: "분량 · 일정 목표", body, foot });
+  const save = async (goals) => {
+    const cover = { ...(m.cover || {}), goals };
+    try { await api.patch(`/api/manuscripts/${m.id}`, { cover }); } catch (e) { return errorToast(e); }
+    m.cover = cover;
+    drawGoals(view, ta);
+    md.close();
+  };
+  $("[data-no]", foot).onclick = () => md.close();
+  $("[data-clear]", foot).onclick = () => save({});
+  $("[data-ok]", foot).onclick = () => {
+    const fd = new FormData(body);
+    const int = (v) => Math.max(0, Math.min(2000000, Math.round(Number(v) || 0)));
+    const ch = {};
+    for (const inp of $$("[data-ch]", body)) {
+      const n = int(inp.value);
+      if (n) ch[chapters[Number(inp.dataset.ch)].title] = n;
+    }
+    const goals = { deadline: String(fd.get("deadline") || ""), total: int(fd.get("total")), daily: int(fd.get("daily")), chapters: ch };
+    if (g.day) goals.day = g.day;
+    save(goals);
+  };
 }
 
 // ------------------------------------------------------------------ 인용 검증 (3단계 12장 · 시안 6장)
@@ -1244,6 +1385,44 @@ async function insertFigures(ta, files) {
 
 // 표 넣기 · 고치기: 커서가 표(또는 바로 위 캡션 줄) 안이면 그 표를 고치고, 아니면 크기를 골라 새 표
 // 그림 · 표 번호를 장마다(표 2-1)로 — 표 창의 [장마다 번호로] (표지 정보의 같은 설정)
+// 내 용어집 (2026-10-27): 한 줄에 '쓸 말 ← 피할 말, 피할 말' — 원고 설정(cover.glossary)에 저장, 점검표가 찾아 줌
+export function parseGlossary(text) {
+  const out = [];
+  for (const line of String(text || "").split("\n")) {
+    const m = line.match(/^\s*([^←<=]+?)\s*(?:←|<-|<=|=)\s*(.+)$/);
+    if (!m) continue;
+    const avoid = m[2].split(/[,，]/).map((s) => s.trim()).filter((s) => s && s !== m[1].trim()).slice(0, 10);
+    if (avoid.length && m[1].trim().length <= 40 && avoid.every((a) => a.length <= 40)) out.push({ use: m[1].trim(), avoid });
+  }
+  return out.slice(0, 100);
+}
+
+function glossaryDialog() {
+  const m = W.m;
+  if (!m) return Promise.resolve(false);
+  const text = ((m.cover && m.cover.glossary) || []).map((g) => `${g.use} ← ${g.avoid.join(", ")}`).join("\n");
+  return new Promise((resolve) => {
+    const body = el(`<div><p class="small muted" style="margin:0 0 8px">한 줄에 <b>쓸 말 ← 피할 말</b>을 적어요. 피할 말은 쉼표로 여러 개.
+      제출 전 점검이 피할 말을 찾아 주고, [용어집대로 모두 바꾸기]로 한 번에 고칠 수 있어요.</p>
+      <textarea class="input" rows="10" style="width:100%;font-family:inherit" placeholder="연구 참여자 ← 참가자, 피험자&#10;사회관계망서비스 ← 소셜 미디어"></textarea></div>`);
+    $("textarea", body).value = text;
+    const foot = el(`<div style="display:contents"><button class="btn" data-no>취소</button><button class="btn primary" data-ok>저장</button></div>`);
+    let saved = false;
+    const md = modal({ title: "내 용어집", body, foot, onClose: () => resolve(saved) });
+    $("[data-no]", foot).onclick = () => md.close();
+    $("[data-ok]", foot).onclick = async () => {
+      const glossary = parseGlossary($("textarea", body).value);
+      const cover = { ...(m.cover || {}), glossary };
+      try { await api.patch(`/api/manuscripts/${m.id}`, { cover }); } catch (e) { return errorToast(e); }
+      m.cover = cover;
+      saved = true;
+      toast(`용어 ${glossary.length}개를 저장했어요`, "success");
+      md.close();
+    };
+    setTimeout(() => $("textarea", body).focus(), 40);
+  });
+}
+
 async function setChapterNumbering() {
   const m = W.m;
   if (!m) return false;
@@ -1287,6 +1466,44 @@ async function editTable(ta) {
     return toast("표를 지웠어요 — Ctrl+Z로 되돌릴 수 있어요");
   }
   applyEdit(ta, { from, to: t.to, text: tableMarkdown(res.table, ko), selStart: from, selEnd: from });
+}
+
+// 엑셀 · 한글 · 워드 표 붙여넣기 → 마크다운 표 (2026-10-27). 탭 글(엑셀) 먼저, 없으면 HTML 표 하나만 든 경우.
+// 표 · 코드 안에 붙일 때와 Ctrl+Shift+V(글만 붙여넣기)는 그대로. 되돌리기(Ctrl+Z)로 표 넣기 전으로
+function pasteTable(ta, e) {
+  const cd = e.clipboardData;
+  if (!cd || tableAt(ta.value, ta.selectionStart) || inFence(ta.value, ta.selectionStart)) return false;
+  let table = tableFromTsv(cd.getData("text/plain"));
+  const html = cd.getData("text/html");
+  if (!table && /<table/i.test(html)) table = htmlTable(html);
+  if (!table) return false;
+  e.preventDefault();
+  const ko = koDoc(ta);
+  applyEdit(ta, blockInsert(ta.value, ta.selectionStart, ta.selectionEnd, tableMarkdown(table, ko), [0, 0]));
+  toast(`표(${table.rows.length}줄 × ${table.rows[0].length}칸)로 넣었어요. 표를 두 번 눌러 캡션을 넣고 고칠 수 있어요 (Ctrl+Z: 되돌리기)`);
+  return true;
+}
+
+function htmlTable(html) {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const tables = doc.querySelectorAll("table");
+  if (tables.length !== 1) return null;
+  const t = tables[0];
+  // 표 밖의 글이 있으면(문단 + 표를 함께 복사) 글 그대로 붙인다
+  const outside = (doc.body.textContent || "").replace(t.textContent || "", "").trim();
+  if (outside.length > 2) return null;
+  const cells = [...t.querySelectorAll("tr")].filter((tr) => tr.closest("table") === t).map((tr) => {
+    const row = [];
+    for (const c of tr.querySelectorAll(":scope > td, :scope > th")) {
+      c.querySelectorAll("br").forEach((b) => b.replaceWith("\n"));
+      const ps = [...c.querySelectorAll("p")];
+      const text = ps.length > 1 ? ps.map((p) => p.textContent.trim()).filter(Boolean).join("\n") : c.textContent;
+      row.push(text.replace(/[ \t]+/g, " ").replace(/ *\n */g, "\n"));
+      for (let k = 1; k < (Number(c.getAttribute("colspan")) || 1); k++) row.push("");
+    }
+    return row;
+  });
+  return tableFromCells(cells);
 }
 
 async function libraryPapers(force = false) {
@@ -2168,6 +2385,7 @@ function exportMenu(anchor, view, ta) {
   popupMenu(anchor, [
     { label: "워드 (.docx)", sub: fmtName, action: () => exportAs("docx", view, ta) },
     { label: "한글 (.hwpx)", sub: fmtName, action: () => exportAs("hwpx", view, ta) },
+    { label: "PDF (.pdf)", sub: `${fmtName} · 워드 파일을 서버에서 PDF로`, action: () => exportAs("pdf", view, ta) },
     { label: "마크다운 (.md)", sub: "각주 포함 · 양식과 무관", action: () => exportAs("md", view, ta) },
     "-",
     { label: "서식 그대로 복사", sub: "붙여넣기용", action: () => copyFormatted(view) },
@@ -2191,7 +2409,7 @@ function coverMissingDialog(missing) {
 
 async function exportAs(format, view, ta) {
   if (W.saver) await W.saver.flush();
-  const office = format === "docx" || format === "hwpx";
+  const office = format === "docx" || format === "hwpx" || format === "pdf";
   const fmtId = (W.fmt && W.fmt.id) || "default";
   const kind = coverKind();
   try {
@@ -2215,18 +2433,20 @@ async function exportAs(format, view, ta) {
       // 표지의 국문 제목 기본값은 원고의 # 제목 (없으면 빈 칸으로 두어 ○○○로 들어가게)
       Object.assign(payload, { doc_format: fmtId, cover: W.m.cover || {}, meta: { title: docTitle(ta) } });
     }
+    if (format === "pdf") toast("PDF로 바꾸는 중이에요 (몇 초 걸려요)…");
     const res = await api.raw("POST", "/api/export-document", payload);
     if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "내보내지 못했어요");
     downloadBlob(await res.blob(), `${title.replace(/[\\/:*?"<>|]+/g, "_")}.${format}`);
-    const label = format === "hwpx" ? "한글" : format === "docx" ? "워드" : "마크다운";
+    const label = { hwpx: "한글", docx: "워드", pdf: "PDF" }[format] || "마크다운";
     if (office && kind !== "none" && fmtId !== "default") {
       toast(`${label} 파일로 저장했어요 · ${listsNotice(format, W.m.cover)}`, "success", LONG); // 목차 안내 (formats.js)
     } else toast(`${label} 파일로 저장했어요`, "success");
     const warnings = exportWarnings(res);
     if (warnings.length) toast(warningText(warnings, kind), "", LONG);
-    if (format === "docx" && fmtId !== "default" && !hancomNoticeShown.has(fmtId) && usesHancomFonts(W.fmt && W.fmt.data)) {
+    if ((format === "docx" || format === "pdf") && fmtId !== "default" && !hancomNoticeShown.has(fmtId) && usesHancomFonts(W.fmt && W.fmt.data)) {
       hancomNoticeShown.add(fmtId);
-      toast("휴먼명조 같은 한컴 글꼴이 없는 PC의 워드에서는 비슷한 다른 글꼴로 보여요. 제출 파일은 한컴오피스가 설치된 PC에서 확인하세요", "", LONG);
+      toast(format === "pdf" ? "PDF는 서버에 있는 글꼴로 만들어요. 휴먼명조 같은 한컴 글꼴은 비슷한 글꼴로 바뀔 수 있으니 제출 전에 확인하세요"
+        : "휴먼명조 같은 한컴 글꼴이 없는 PC의 워드에서는 비슷한 다른 글꼴로 보여요. 제출 파일은 한컴오피스가 설치된 PC에서 확인하세요", "", LONG);
     }
   } catch (e) { errorToast(e); }
 }

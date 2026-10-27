@@ -232,6 +232,33 @@ def test_ac03_default_format_and_markdown_via_api(local_client):
         assert export("md", doc_format=fid, cover=COVER) == md
 
 
+def test_pdf_export_converts_docx(local_client, monkeypatch):
+    """PDF: 워드 파일을 만들어 LibreOffice로 바꾼다. 변환기가 없으면 503, 변환 실패는 502 (2026-10-27)"""
+    from paperlab import convert
+    seen = {}
+
+    def fake_to_pdf(data, name):
+        seen["head"], seen["name"] = data[:2], name
+        return b"%PDF-1.7 fake"
+
+    monkeypatch.setattr(convert, "available", lambda: True)
+    monkeypatch.setattr(convert, "to_pdf", fake_to_pdf)
+    r = local_client.post("/api/export-document", json={"format": "pdf", "blocks": BLOCKS, "meta": META, "filename": "내 원고"})
+    assert r.status_code == 200, r.text
+    assert r.content == b"%PDF-1.7 fake" and r.headers["content-type"] == "application/pdf"
+    assert seen == {"head": b"PK", "name": "manuscript.docx"}
+    assert "%EB%82%B4%20%EC%9B%90%EA%B3%A0.pdf" in r.headers["content-disposition"]
+
+    def broken(data, name):
+        raise convert.ConvertError("시간 초과")
+    monkeypatch.setattr(convert, "to_pdf", broken)
+    r = local_client.post("/api/export-document", json={"format": "pdf", "blocks": BLOCKS, "meta": META})
+    assert r.status_code == 502 and "시간 초과" in r.json()["detail"]
+    monkeypatch.setattr(convert, "available", lambda: False)
+    r = local_client.post("/api/export-document", json={"format": "pdf", "blocks": BLOCKS, "meta": META})
+    assert r.status_code == 503
+
+
 # =================================================================== B. 양식 API
 @pytest.mark.db
 def test_ac06_list_builtins(client):

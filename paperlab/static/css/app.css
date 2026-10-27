@@ -2017,6 +2017,14 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .src-actions { gap: 6px; flex-wrap: wrap; }
 .src-actions .btn { flex: none; white-space: nowrap; }
 .src-pick { flex: 1; min-width: 0; width: 0; height: 30px; text-overflow: ellipsis; }
+.src-list { border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; background: var(--surface-2); }
+.src-list summary { cursor: pointer; font-size: 13px; }
+.src-items { list-style: none; margin: 6px 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.src-items li { display: flex; align-items: center; gap: 6px; padding: 4px 0; border-top: 1px dashed var(--border); }
+.src-item-go { flex: 1; min-width: 0; text-align: left; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.src-item-go b { color: #9a3412; font-weight: 600; }
+.src-item-act { display: flex; align-items: center; gap: 4px; flex: none; }
+.src-item-act .btn { padding: 2px 8px; }
 .src-out { display: flex; flex-direction: column; gap: 12px; }
 .src-claim blockquote { margin: 4px 0; padding: 8px 10px; border-left: 3px solid var(--border); background: var(--surface-2); border-radius: 6px;
   font-size: 13.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
@@ -2046,3 +2054,27 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .pane-resize:focus-visible { outline: none; }
 .pane-resizing, .pane-resizing * { cursor: col-resize !important; user-select: none; }
 @media (max-width: 760px) { .pane-resize { display: none; } }
+
+/* ---------------------------------------------------------------- 분량 · 일정 목표 (2026-10-27) */
+.goal-btn { max-width: 52vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-btn[data-tone="ok"] { color: var(--ok, #15803d); }
+.goal-btn[data-tone="bad"] { color: var(--danger, #b91c1c); }
+.goals-form .field { flex: 1; min-width: 150px; }
+.goals-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.goals-table th, .goals-table td { padding: 4px 6px; border-bottom: 1px solid var(--border); text-align: left; }
+.goals-table td.num, .goals-table th:nth-child(n+2) { text-align: right; white-space: nowrap; }
+.goals-table input { width: 110px; height: 28px; text-align: right; }
+
+/* ---------------------------------------------------------------- 집중 모드 (2026-10-27): 편집기만, 가운데 좁은 칸, 쓰는 줄은 화면 가운데 */
+.focus-exit { display: none; }
+.writer.focus-mode { grid-template-rows: 0 0 1fr auto; }
+.writer.focus-mode .writer-bar, .writer.focus-mode .writer-tools, .writer.focus-mode .writer-side, .writer.focus-mode .writer-preview,
+.writer.focus-mode .ref-pane, .writer.focus-mode .ai-pane, .writer.focus-mode .fig-pane, .writer.focus-mode .check-pane,
+.writer.focus-mode .pane-resize { display: none !important; }
+.writer.focus-mode .writer-body { grid-template-columns: minmax(0, 1fr) !important; }
+.writer.focus-mode .writer-edit { border-right: 0; }
+.writer.focus-mode .writer-ta, .writer.focus-mode .writer-hl { padding: 48px max(28px, calc(50% - 390px)) 50vh; font-size: 17px; line-height: 1.95; }
+.writer.focus-mode .focus-exit { display: inline-flex; position: fixed; top: 10px; right: 16px; z-index: 30; opacity: .35; transition: opacity .2s; }
+.writer.focus-mode .focus-exit:hover, .writer.focus-mode .focus-exit:focus-visible { opacity: 1; }
+.writer-mirror { visibility: hidden; z-index: -1; }
+.writer-mirror:empty { display: none; }

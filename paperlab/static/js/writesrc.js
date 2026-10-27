@@ -59,6 +59,26 @@ export function claimAt(value, start, end = start) {
   return text.length >= 5 && text.length <= CLAIM_MAX ? { from: pick.from, to: pick.from + text.length, text } : null;
 }
 
+/** 원고의 [확인 필요] 목록 (2026-10-27): 표시마다 { at, mark, need, claim } — 같은 문장에 표시가 여럿이면 한 번.
+ *  need = 표시의 '확인할 것' 글, claim = 그 문장(claimAt — 제목 · 표 안이면 null) */
+export function checkList(value) {
+  const v = String(value ?? "");
+  const out = [];
+  const seen = new Set();
+  for (const m of v.matchAll(CHECK_RE)) {
+    const claim = claimAt(v, m.index);
+    const key = claim ? `c${claim.from}` : `m${m.index}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const need = m[0].replace(/^\[확인\s*필요\s*[:：]?\s*/, "").replace(/\]$/, "").trim();
+    out.push({ at: m.index, mark: m[0], need, claim });
+  }
+  return out;
+}
+
+// 서버가 저장하는 문장(빈칸 정리)과 같게 — 지난 확인 작업과 짝짓기
+export const claimKey = (text) => String(text ?? "").replace(/\s+/g, " ").trim();
+
 /** 미리보기의 n번째 표시(같은 글의 표시 중 k번째) → 원고에서 그 표시의 자리 (없으면 -1) */
 export function markerIndex(value, markText, k) {
   let seen = 0;

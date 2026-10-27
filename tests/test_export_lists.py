@@ -367,3 +367,20 @@ def test_manuscript_cover_include_saved(client):
     assert client.get(f"/api/manuscripts/{mid}").json()["cover"]["include"] == include
     r = client.patch(f"/api/manuscripts/{mid}", json={"cover": dict(COVER, include={"lof": "no"})})
     assert r.status_code == 400 and r.json()["detail"].startswith("cover.include.lof")
+
+
+def test_validate_cover_glossary_and_goals():
+    """원고 설정: 내 용어집 · 분량/일정 목표 (2026-10-27) — 표지 정보와 함께 cover에 저장"""
+    out = df.validate_cover({"glossary": [{"use": " 연구 참여자 ", "avoid": ["피험자", "참가자"]}],
+                             "goals": {"deadline": "2026-12-15", "total": 60000, "daily": 1500, "chapters": {"제1장 서론": 8000},
+                                       "day": {"date": "2026-10-27", "start": 1200}, "zzz": 1}})
+    assert out["glossary"] == [{"use": "연구 참여자", "avoid": ["피험자", "참가자"]}]
+    assert out["goals"] == {"deadline": "2026-12-15", "total": 60000, "daily": 1500, "chapters": {"제1장 서론": 8000},
+                            "day": {"date": "2026-10-27", "start": 1200}}
+    assert df.validate_cover({"goals": {"deadline": ""}}) == {"goals": {"deadline": ""}}
+    for bad in ({"glossary": [{"use": "", "avoid": ["a"]}]}, {"glossary": [{"use": "a", "avoid": "b"}]},
+                {"glossary": [{"use": "a", "avoid": ["b"]}] * 101}, {"goals": {"deadline": "2026-13-01"}},
+                {"goals": {"total": -1}}, {"goals": {"daily": True}}, {"goals": {"chapters": {"": 1}}},
+                {"goals": {"day": {"date": "2026-10-27"}}}):
+        with pytest.raises(df.FormatError):
+            df.validate_cover(bad)

@@ -5,13 +5,15 @@
 import { api, qs } from "./api.js";
 import { FIND_FAIL, FIND_WARN } from "./ask.js";
 import { cancelJob, fmtClock, handledJob, isActive, jobLine, watchJob } from "./jobs.js";
-import { $, $$, copyText, el, errorToast, esc, toast } from "./ui.js";
+import { $, $$, copyText, debounce, el, errorToast, esc, toast } from "./ui.js";
 import { CHECK_RE } from "./writemd.js";
-import { claimAt, claimRange, parseClaim, refsHtml } from "./writesrc.js";
+import { checkList, claimAt, claimKey, claimRange, parseClaim, refsHtml } from "./writesrc.js";
 
 const STEPS = [["queries", "검색어 만들기"], ["search", "서재 · 외부 논문 검색"], ["summary", "근거 판정"]];
 const STATE_TEXT = { queued: "기다리는 중", running: "확인하는 중", succeeded: "끝남", failed: "실패", cancelled: "취소됨" };
 const LIB_WARN = { library_busy: "서재 색인을 불러오는 데 오래 걸려 이번에는 서재 논문을 빼고 확인했어요." };
+const BATCH = 10; // [모두 확인] 한 번에 넣는 문장 수
+const POLL_MS = 8000; // 목록의 '확인 중' 작업 새로 보기
 
 // 표시 부분만 칠한 문장 HTML
 function claimHtml(text) {
@@ -26,12 +28,16 @@ function claimHtml(text) {
 
 /** box: 패널 칸, h: { mid, ta, alive, flash(a, b), say(t), replace(from, to, text) } */
 export function sourceView(box, h) {
-  const S = { jobs: [], sel: null, claims: new Map(), stop: null, visible: false, loaded: false };
+  const S = { jobs: [], sel: null, claims: new Map(), stop: null, visible: false, loaded: false, poll: null };
   box.innerHTML = `<div class="src-head">
       <p class="small muted" style="margin:0">문장의 주장 · 수치를 <b>내 서재 논문 본문</b>과 <b>OpenAlex · Semantic Scholar</b>에서 찾아
         AI가 근거가 있는지 판정해요. 미리보기의 노란 <b>[확인 필요]</b> 표시를 누르거나, 문장에 커서를 두고(또는 글을 골라) 아래 단추를 눌러요.</p>
       <div class="row src-actions"><button type="button" class="btn sm primary" data-src-run>커서 문장 출처 확인</button>
         <select class="input src-pick" data-src-pick aria-label="지난 출처 확인 (새것이 위)"></select></div>
+      <details class="src-list" data-src-list><summary data-src-count>원고의 [확인 필요]</summary>
+        <ol class="src-items" data-src-items></ol>
+        <div class="row" style="gap:6px;align-items:center"><button type="button" class="btn sm" data-src-all>확인 안 한 문장 모두 확인</button>
+          <span class="small muted">한 번에 ${BATCH}문장까지</span></div></details>
     </div>
     <div class="src-out" data-src-out aria-live="polite"></div>`;
   const pick = $("[data-src-pick]", box);
@@ -170,6 +176,83 @@ export function sourceView(box, h) {
     }
   };
 
+  // ---- 원고의 [확인 필요] 목록 (2026-10-27): 표시마다 원고 자리 · 확인 상태 · [확인] / [결과]
+  const listBox = $("[data-src-list]", box);
+  const jobFor = (claim) => (claim ? S.jobs.find((j) => claimKey(j.question) === claimKey(claim.text)) : null);
+  const stateOf = (j) => {
+    if (!j || j.status === "cancelled") return null;
+    if (isActive(j)) return { text: "확인 중", tone: "" };
+    if (j.status === "failed") return { text: "실패", tone: "bad" };
+    if (!j.result) return { text: "지난 결과", tone: "" };
+    if (!j.result.answer) return { text: "자료 없음", tone: "bad" };
+    const a = parseClaim(j.result.answer);
+    return { text: a.verdict || "끝남", tone: a.tone };
+  };
+  const needsRun = (it) => {
+    const j = jobFor(it.claim);
+    return !!it.claim && (!stateOf(j) || j.status === "failed");
+  };
+  const drawList = () => {
+    const items = checkList(h.ta.value);
+    $("[data-src-count]", box).innerHTML = items.length ? `원고의 <b>[확인 필요]</b> ${items.length}곳`
+      : "원고에 [확인 필요] 표시가 없어요";
+    const ol = $("[data-src-items]", box);
+    ol.innerHTML = "";
+    for (const it of items) {
+      const j = jobFor(it.claim);
+      const st = stateOf(j);
+      const li = el(`<li><button type="button" class="link src-item-go"><b></b><span class="small muted"></span></button>
+        <span class="src-item-act">${st ? `<span class="chip src-v" data-tone="${esc(st.tone)}">${esc(st.text)}</span>` : ""}
+        ${st ? `<button type="button" class="btn sm" data-open>결과</button>` : ""}
+        ${needsRun(it) ? `<button type="button" class="btn sm" data-run>확인</button>` : ""}</span></li>`);
+      $("b", li).textContent = it.need || "확인할 것";
+      const plain = (it.claim ? it.claim.text : "").replace(CHECK_RE, "").replace(/\s+/g, " ").trim();
+      $(".small", li).textContent = plain ? ` · ${plain.length > 40 ? `${plain.slice(0, 40)}…` : plain}` : " · 제목 · 표 안 (직접 확인)";
+      $(".src-item-go", li).onclick = () => {
+        const at = h.ta.value.indexOf(it.mark, Math.max(0, it.at - 200));
+        if (at < 0) return toast("원고에서 이 표시를 찾지 못했어요 — 그 사이 고쳤을 수 있어요", "error");
+        h.flash(at, at + it.mark.length);
+      };
+      const open = $("[data-open]", li);
+      if (open) open.onclick = () => { S.sel = j.id; S.claims.set(j.id, { ...it.claim }); drawPick(); draw(); follow(j); };
+      const run = $("[data-run]", li);
+      if (run) run.onclick = () => start(it.claim);
+      ol.append(li);
+    }
+    const todo = items.filter(needsRun).length;
+    const all = $("[data-src-all]", box);
+    all.disabled = !todo;
+    all.textContent = todo ? `확인 안 한 문장 모두 확인 (${Math.min(todo, BATCH)})` : "모두 확인했어요";
+    schedulePoll();
+  };
+  // 목록에 '확인 중'이 있으면 몇 초마다 작업 상태만 새로 받는다 (결과 화면은 따라가는 작업만 다시 그림)
+  const schedulePoll = () => {
+    clearTimeout(S.poll);
+    S.poll = null;
+    if (!S.visible || !S.jobs.some((j) => isActive(j) && j.id !== S.sel)) return;
+    S.poll = setTimeout(async () => {
+      S.poll = null;
+      let data;
+      try { data = await api.get(`/api/jobs${qs({ status: "recent", kind: "find", manuscript_id: h.mid, limit: 30 })}`); } catch { return schedulePoll(); }
+      if (!h.alive() || !S.visible) return;
+      const fresh = new Map((data.jobs || []).map((j) => [j.id, j]));
+      S.jobs = S.jobs.map((j) => (j.id !== S.sel && fresh.has(j.id) ? fresh.get(j.id) : j));
+      drawPick();
+      drawList();
+    }, POLL_MS);
+  };
+  listBox.addEventListener("toggle", () => { if (listBox.open) drawList(); });
+  h.ta.addEventListener("input", debounce(() => { if (S.visible && listBox.open) drawList(); }, 800));
+  $("[data-src-all]", box).onclick = async () => {
+    const todo = checkList(h.ta.value).filter(needsRun).slice(0, BATCH);
+    let n = 0;
+    for (const it of todo) {
+      if (!(await start(it.claim, { quiet: true }))) break;
+      n++;
+    }
+    if (n) h.say(`${n}문장 출처 확인을 시작했어요. 차례로 확인해요 — 계속 쓰셔도 돼요`);
+  };
+
   // ---- 작업 따라가기
   const follow = (j) => {
     if (S.stop) S.stop();
@@ -182,6 +265,7 @@ export function sourceView(box, h) {
       if (!isActive(n) && S.visible && S.sel === n.id) handledJob(n.id); // 보고 있으면 끝남 알림 생략
       drawPick();
       if (S.sel === n.id) draw();
+      if (listBox.open) drawList();
       if (!isActive(n) && n.status === "succeeded" && S.visible) h.say("출처 확인이 끝났어요");
     }, { first: j });
   };
@@ -199,6 +283,8 @@ export function sourceView(box, h) {
     S.loaded = true;
     drawPick();
     draw();
+    if (checkList(h.ta.value).length) listBox.open = true;
+    drawList();
     const c = cur();
     if (c && isActive(c)) follow(c);
   };
@@ -210,26 +296,31 @@ export function sourceView(box, h) {
     if (c) follow(c);
   };
 
-  async function start(claim) {
-    if (!claim) return toast("확인할 문장을 찾지 못했어요. 문장에 커서를 두거나 글을 골라 주세요", "error");
+  async function start(claim, { quiet = false } = {}) {
+    if (!claim) {
+      toast("확인할 문장을 찾지 못했어요. 문장에 커서를 두거나 글을 골라 주세요", "error");
+      return false;
+    }
     let job;
     try {
       job = (await api.post("/api/source-check", { claim: claim.text, manuscript_id: h.mid })).job;
-    } catch (e) { return errorToast(e); }
-    if (!h.alive()) return;
+    } catch (e) { errorToast(e); return false; }
+    if (!h.alive()) return false;
     S.claims.set(job.id, { ...claim });
     S.jobs = [job, ...S.jobs.filter((x) => x.id !== job.id)];
     S.sel = job.id;
     drawPick();
     draw();
     follow(job);
-    h.say("출처 확인을 시작했어요. 보통 1분쯤 걸려요 — 계속 쓰셔도 돼요");
+    drawList();
+    if (!quiet) h.say("출처 확인을 시작했어요. 보통 1분쯤 걸려요 — 계속 쓰셔도 돼요");
+    return true;
   }
   $("[data-src-run]", box).onclick = () => start(claimAt(h.ta.value, h.ta.selectionStart, h.ta.selectionEnd));
 
   return {
-    show() { S.visible = true; if (!S.loaded) load(); else { draw(); const c = cur(); if (c) follow(c); } },
-    hide() { S.visible = false; if (S.stop) S.stop(); S.stop = null; },
+    show() { S.visible = true; if (!S.loaded) load(); else { draw(); drawList(); const c = cur(); if (c) follow(c); } },
+    hide() { S.visible = false; if (S.stop) S.stop(); S.stop = null; clearTimeout(S.poll); S.poll = null; },
     start,
     open(j) { // 끝남 알림 [열기] · 작업 화면에서 연 결과
       if (!S.jobs.some((x) => x.id === j.id)) S.jobs.unshift(j);

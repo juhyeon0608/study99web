@@ -3212,7 +3212,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     def _file_response(body: bytes, filename: str, fmt: str, stream: bool = False) -> Response:
         types = {"docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                 "hwpx": "application/hwp+zip", "md": "text/markdown; charset=utf-8"}
+                 "hwpx": "application/hwp+zip", "md": "text/markdown; charset=utf-8", "pdf": "application/pdf"}
         safe = re.sub(r'[\\/:*?"<>|\r\n]+', "_", filename or "document").strip() or "document"
         headers = {"Content-Disposition": f"attachment; filename=\"document.{fmt}\"; filename*=UTF-8''{quote(safe + '.' + fmt)}"}
         if stream:
@@ -3225,11 +3225,14 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
     @app.post("/api/export-document")
     def export_document(data: dict = Body(...), ctx: RequestCtx = Ctx):
-        """화면이 서식을 입힌 원고(블록 목록)를 워드·한글·마크다운 파일로 만든다."""
+        """화면이 서식을 입힌 원고(블록 목록)를 워드·한글·마크다운·PDF 파일로 만든다.
+        PDF는 워드 파일을 만든 뒤 서버의 LibreOffice로 바꾼다 (2026-10-27)."""
         fmt = data.get("format")
         blocks = data.get("blocks") or []
-        if fmt not in ("docx", "hwpx", "md") or not isinstance(blocks, list):
-            raise HTTPException(400, "format은 docx, hwpx, md 중 하나예요")
+        if fmt not in ("docx", "hwpx", "md", "pdf") or not isinstance(blocks, list):
+            raise HTTPException(400, "format은 docx, hwpx, md, pdf 중 하나예요")
+        if fmt == "pdf" and not convert.available():
+            raise HTTPException(503, "서버에 PDF 변환 프로그램(LibreOffice)이 없어요. 워드로 내보낸 뒤 PDF로 저장해 주세요")
         # 양식: 없거나 'default'면 지금 서식 그대로. 마크다운은 양식과 무관
         fmt_data, cover = None, None
         fmt_id = data.get("doc_format")
@@ -3259,7 +3262,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
 
             blocks = figures.attach_images(blocks, load_figure)
         try:
-            if fmt == "docx":
+            if fmt in ("docx", "pdf"):
                 body = writer.to_docx(blocks, data.get("meta") or {}, fmt_data, cover, warnings)
             elif fmt == "hwpx":
                 body = writer.to_hwpx(blocks, data.get("meta") or {}, fmt_data, cover, warnings)
@@ -3267,6 +3270,11 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 body = writer.to_markdown(blocks).encode("utf-8")
         except (ValueError, KeyError, TypeError) as e:
             raise HTTPException(400, f"문서를 만들지 못했어요: {e}") from e
+        if fmt == "pdf":
+            try:
+                body = convert.to_pdf(body, "manuscript.docx")
+            except convert.ConvertError as e:
+                raise HTTPException(502, f"PDF로 바꾸지 못했어요: {e}") from e
         response = _file_response(body, data.get("filename") or "원고", fmt)
         if warnings:
             # 화면이 토스트로 보여 준다 (예: ["cover-missing:name,department"])

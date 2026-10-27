@@ -3,6 +3,7 @@
 // 점검 규칙(순수 함수)은 writecheck.js에 있다.
 
 import { ACTION_NAMES, GROUP_NAMES, SEVERITY, badgeOf, checkManuscript, fixDoubleSpaces, renumberHeadings, summaryText } from "./writecheck.js";
+import { applyGlossary } from "./writeterms.js";
 import { diffEdit } from "./writeedit.js";
 import { applyEdit } from "./writetools.js";
 import { $, el, esc, modalOpen } from "./ui.js";
@@ -15,6 +16,7 @@ export function checkPanel(view, hooks) {
   const badge = $("[data-check-badge]", view);
   const pane = el(`<aside class="panel check-pane" role="dialog" aria-modal="false" aria-labelledby="ck-title" tabindex="-1" hidden>
     <div class="check-head"><b id="ck-title">제출 전 점검</b><span class="spacer"></span>
+      <button type="button" class="btn sm" data-ck-terms title="이 원고에서 쓸 말 · 피할 말을 정해 두면 점검표가 찾아 줘요">용어집</button>
       <button type="button" class="btn sm" data-ck-run title="지금 원고로 다시 점검해요">다시 점검</button>
       <button type="button" class="icon-btn" data-ck-close aria-label="점검 닫기" title="닫기 (Alt+K · Esc)">✕</button></div>
     <div class="check-sum small muted" data-ck-sum aria-live="polite"></div>
@@ -129,6 +131,10 @@ export function checkPanel(view, hooks) {
       if (hooks.say && S.result) hooks.say(`다시 점검했어요: ${summaryText(S.result)}`);
       return;
     }
+    if (e.target.closest("[data-ck-terms]")) {
+      if (hooks.openGlossary && (await hooks.openGlossary())) refresh();
+      return;
+    }
     if (e.target.closest("[data-ck-extra]")) {
       const ex = hooks.extra && hooks.extra();
       if (ex && ex.run) ex.run();
@@ -148,6 +154,7 @@ export function checkPanel(view, hooks) {
     if (a === "cover") { if (await hooks.openCover()) refresh(); }
     else if (a === "verify") hooks.verify();
     else if (a === "renumber") replaceAll(renumberHeadings(ta.value));
+    else if (a === "glossary") replaceAll(applyGlossary(ta.value, ((hooks.ctx() || {}).cover || {}).glossary || []));
     else if (a === "spaces") replaceAll(fixDoubleSpaces(ta.value));
   });
   pane.addEventListener("keydown", (e) => {
