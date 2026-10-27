@@ -44,7 +44,8 @@ import { commentsDialog, openCommentCount, shareDialog } from "./writeshareui.js
 import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
 import { JOURNAL_LABELS, JOURNAL_NUM_KEYS, cleanJournal, parseJournal } from "./writejournal.js"; // 투고 규정 (2026-10-27)
 import { matchDialog } from "./writematchui.js"; // 서재 대조: 인용 빠짐 · 표절 미리 점검 (2026-10-27)
-import { statsDialog } from "./writestatsui.js"; // 통계 계산 → APA 표 (2026-10-28)
+import { statsDialog } from "./writestatsui.js";
+import { guardNotes } from "./writeguard.js"; // AI 결과의 숫자 · 인용 대조 (2026-10-28) // 통계 계산 → APA 표 (2026-10-28)
 import { registerCommands } from "./palette.js"; // 명령 팔레트 Ctrl+K (2026-10-28)
 import { moveSection, sections } from "./writeoutline.js"; // 개요에서 장 · 절 옮기기 (2026-10-28)
 import { sourceView } from "./writesrcui.js"; // 한글 조사 옆 굵게 · 기울임
@@ -2455,6 +2456,17 @@ function aiPane(view, ta, m) {
       }
     }
     body.append(sec);
+
+    // 숫자 · 인용 대조 — AI가 다시 쓰며 바꾼 숫자 · 빠진 [@인용키] · 출력에 없는 통계 값 · 서재와 다른 연도 (엔진과 상관없이 코드로)
+    if (st !== "running" && result && ready && w.mode === "matrix" && !W.papers) { // 서재 목록을 받은 뒤 다시 그림
+      libraryPapers().then(() => { S.key = ""; draw(); }).catch(() => {});
+    } else if (st !== "running" && result && ready) {
+      for (const n of guardNotes(w, result, W.papers || [])) {
+        const box = el(`<div class="notice ai-guard" data-tone="${n.tone === "info" ? "info" : "warn"}">${n.tone === "info" ? ICON_INFO : ICON_WARN}<div></div></div>`);
+        box.lastElementChild.textContent = n.text;
+        body.append(box);
+      }
+    }
 
     // 넣기 확인 (원고가 바뀌었음 · 자리를 못 찾음) — 창을 띄우지 않고 패널 안에서
     if (c && c.kind === "moved") {

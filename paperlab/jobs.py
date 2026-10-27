@@ -594,7 +594,8 @@ def write_view(params: dict, result, detail: bool) -> dict:
            "batch": params.get("batch"), "batch_i": params.get("batch_i")}
     if detail:
         out.update(text=params.get("text") or "", sel_start=params.get("sel_start"), sel_end=params.get("sel_end"),
-                   doc_hash=params.get("doc_hash") or "", before=params.get("before") or "")
+                   doc_hash=params.get("doc_hash") or "", before=params.get("before") or "",
+                   keys=list(params.get("keys") or []))  # 선행연구 비교표: 고른 논문 (화면이 결과의 인용 키와 대조)
     return out
 
 

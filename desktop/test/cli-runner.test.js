@@ -182,6 +182,11 @@ test('AC-59 도구 끔: claude --tools "" · --permission-prompts none, codex --
   assert.equal(a[0], 'exec');
   assert.equal(a[a.indexOf('--sandbox') + 1], 'read-only');
   assert.ok(a.includes('--output-schema') && a[a.length - 1] === '-' && !a.includes('--bare'));
+  // read-only 여도 셸 읽기 명령은 돈다(2026-10-28 실측) → 명령 · 브라우저 · 화면 조작 · MCP 도구를 모두 끔
+  for (const name of ['shell_tool', 'unified_exec', 'code_mode_host', 'browser_use', 'computer_use', 'apps', 'plugins']) {
+    assert.equal(a[a.indexOf(`features.${name}=false`) - 1], '-c', name);
+  }
+  assert.ok(a.includes('mcp_servers={}'));
   const g = await run(task({ engine: 'gemini', json_schema: null, kind: 'chat' }));
   assert.equal(g.outcome, 'succeeded');
   assert.equal(g.text, '가짜 답 [p.1]');

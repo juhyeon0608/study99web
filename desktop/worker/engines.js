@@ -19,6 +19,12 @@ const MIN_VERSION = { claude: '2.1.259' };
 // CLI에는 API 모델 id를 넘기지 않는다 (11.6 · AC-55): claude는 별칭만, 나머지는 모양 검사 + claude- 거부
 const CLAUDE_MODELS = new Set(['opus', 'sonnet', 'haiku', 'fable']);
 const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+// codex: --sandbox read-only 는 '쓰기 · 네트워크'만 막고 셸 읽기 명령(Get-Content 등)은 실행한다 (2026-10-28 이 PC 실측 —
+// codex-cli 0.157.0 이 C:\Windows\win.ini 첫 줄을 읽어 답함). 논문 본문의 숨은 지시가 PC 파일을 읽어 결과에 섞지 못하게
+// 명령 · 브라우저 · 화면 조작 · 플러그인 · MCP 도구를 모두 끈다(-c 는 옛 버전도 받고, 모르는 기능 이름은 무시됨). 끄면 '실패로 닫힘'(실측)
+const CODEX_TOOLS_OFF = ['shell_tool', 'unified_exec', 'code_mode_host', 'browser_use', 'browser_use_external', 'computer_use', 'in_app_browser',
+  'apps', 'plugins', 'remote_plugin', 'multi_agent', 'image_generation', 'view_image', 'tool_suggest', 'skill_search', 'hooks',
+  'workspace_dependencies', 'goals', 'in_app_local_automation'];
 const GEMINI_INSTRUCTION = '표준 입력으로 받은 지시와 자료를 따라 답만 출력하세요.';
 // agy: 'agy models' 한 줄 = "<id><공백><표시 이름>". id 는 소문자 · 숫자 · . _ - (하이픈 하나 이상 — 머리글 줄 · "error:" 줄을 거름)
 const AGY_MODEL_RE = /^[a-z0-9][a-z0-9._]*-[a-z0-9._-]*[a-z0-9]$/;
@@ -81,6 +87,8 @@ function buildCommand(task, { files, model, schemaArg = true, effort = null, tim
   }
   if (engine === 'codex') {
     const args = ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--color', 'never', '-o', files.out];
+    for (const name of CODEX_TOOLS_OFF) args.push('-c', `features.${name}=false`);
+    args.push('-c', 'mcp_servers={}');
     if (schema) args.push('--output-schema', files.schema);
     if (model) args.push('-m', model);
     args.push('-');
@@ -229,6 +237,7 @@ function geminiLoggedIn(env) {
 }
 
 module.exports = {
+  CODEX_TOOLS_OFF,
   ENGINES, LABELS, DEFAULT_SLOTS, DEFAULT_TOTAL, MIN_VERSION, CLAUDE_MODELS, GEMINI_INSTRUCTION, AGY_EFFORTS,
   USAGE_RE, MODEL_ERR_RE, AUTH_RE,
   versionTuple, versionBelow, modelArg, effortArg, buildCommand, partialDelta, parseOutput, loginCommand, geminiLoggedIn,
