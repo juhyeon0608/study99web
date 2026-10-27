@@ -34,7 +34,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from . import __version__, citations, compose, convert, csl_style, doc_formats, downloads, explain, find, format_import, jobs, \
-    pdf, rag, slides, sync, translate, verify, versions, worker_api, writer
+    pdf, rag, shares, slides, sync, translate, verify, versions, worker_api, writer
 from .ai import MAX_PDF_BYTES as AI_MAX_PDF_BYTES
 from .ai import MODELS, WRITE_MODES, WRITE_NO_TEXT_MODES, AIError, AIService, PaperContext
 from .api_runner import ApiRunner
@@ -417,8 +417,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         origin = request.headers.get("origin")
         if origin is not None and not origin_ok(request, origin):
             return finish(JSONResponse({"detail": "허용되지 않은 출처", "code": "bad_origin"}, status_code=403))
-        if path.startswith("/api/worker/"):
+        if path.startswith("/api/worker/") or path.startswith("/api/public/"):
             # 워커 API: 기기 토큰 인증은 경로 처리기가 한다(Supabase JWT는 받지 않음 — AC-19). 쓰기 헤더는 같은 규칙
+            # 공개 API(/api/public/ — 원고 공유 링크, 2026-10-27): 로그인 없이 링크 토큰으로만. 쓰기는 공유 페이지가 붙이는 헤더 필요
             if request.method not in SAFE_METHODS and request.headers.get("x-paperlab") != "1":
                 return finish(JSONResponse({"detail": "허용되지 않은 요청", "code": "bad_request_header"},
                                            status_code=403))
@@ -3168,6 +3169,9 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     mschat.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, new_job=new_job, maintain=maintain,
                                               free=lambda: ws.free))
     figgen.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, new_job=new_job))  # POST /api/ai/figure
+    # 원고 공유 링크 · 의견 (2026-10-27): /s/토큰 · /api/public/share/… (로그인 없음) · /api/…/shares · comments
+    shares.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, db=db, storage=store,
+                                              page=STATIC_DIR / "share.html"))
 
     # -------------------------------------------------------- 원고 그림 (docs/specs/writing-figures-tables.md)
     @app.post("/api/manuscripts/{mid}/figures")

@@ -40,6 +40,7 @@ import { claimAt, markerIndex } from "./writesrc.js"; // 출처 확인 (2026-10-
 import { tableFromCells, tableFromTsv } from "./writepaste.js"; // 표 붙여넣기 (2026-10-27)
 import { redlineMarkdown } from "./writeredline.js"; // 수정 표시 워드 (2026-10-27)
 import { slidesHtml } from "./writeslides.js"; // 발표 자료 (2026-10-27)
+import { commentsDialog, openCommentCount, shareDialog } from "./writeshareui.js"; // 공유 링크 · 받은 의견 (2026-10-27)
 import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
 import { JOURNAL_LABELS, JOURNAL_NUM_KEYS, cleanJournal, parseJournal } from "./writejournal.js"; // 투고 규정 (2026-10-27)
 import { matchDialog } from "./writematchui.js"; // 서재 대조: 인용 빠짐 · 표절 미리 점검 (2026-10-27)
@@ -470,6 +471,8 @@ export async function openManuscript(main, id) {
       <select class="input" data-style title="인용 스타일" style="width:auto;max-width:190px">${styleOptions(styles, m.style || state.settings.citation_style || "apa")}</select>
       <select class="input fmt-select ${formats ? "" : "hidden"}" data-format title="내보낼 때 쓸 논문 양식" aria-label="논문 양식">${formats ? formatOptions(formats, fmtId, { manage: true }) : ""}</select>
       <button type="button" class="btn sm cover-btn hidden" data-cover title="표지 · 속표지 · 인정서에 들어갈 정보" aria-label="표지 정보">표지 정보</button>
+      <button type="button" class="btn sm" data-share title="지도교수님 등에게 원고 링크를 보내 의견을 받아요 (로그인 없이 읽기 · 문장에 의견)">공유</button>
+      <button type="button" class="btn sm" data-comments title="공유 링크로 받은 의견">의견<span class="ck-badge" data-comments-badge hidden></span></button>
       <span class="menu-wrap"><button class="btn sm" data-export>내보내기 ▾</button></span>
     </div>
     <div class="writer-tools">
@@ -612,6 +615,7 @@ export async function openManuscript(main, id) {
   $("[data-shortcuts-hint]", view).onclick = () => shortcutDialog();
   $("[data-goals]", view).onclick = () => goalsDialog(view, ta);
   focusMode(view, ta); // 집중 모드 (2026-10-27)
+  shareTools(view, ta, m); // 공유 링크 · 받은 의견 (2026-10-27)
   const retractions = watchRetractions(view, ta); // 철회 논문 확인 (2026-10-27)
   ta.addEventListener("input", retractions);
   retractions();
@@ -1013,6 +1017,34 @@ function drawStatus(view, ta) {
   $("[data-status-text]", view).textContent =
     `글자 ${chars.toLocaleString("ko-KR")}자 (공백 제외 ${noSpace.toLocaleString("ko-KR")}자) · 단어 ${words.toLocaleString("ko-KR")}개 · 인용 ${cites}곳`;
   drawGoals(view, ta);
+}
+
+// ------------------------------------------------------------------ 공유 링크 · 받은 의견 (2026-10-27)
+function shareTools(view, ta, m) {
+  const badge = $("[data-comments-badge]", view);
+  const setCount = (n) => {
+    badge.hidden = !n;
+    badge.textContent = n ? String(n) : "";
+    badge.dataset.tone = n ? "warn" : "";
+  };
+  const poll = async () => {
+    if (W.m !== m || !view.isConnected) return;
+    setCount(await openCommentCount(m.id));
+    setTimeout(poll, 120000);
+  };
+  poll();
+  $("[data-share]", view).onclick = () => shareDialog(m.id);
+  $("[data-comments]", view).onclick = () => commentsDialog(m.id, {
+    onCount: setCount,
+    find: (quote) => {
+      const q = quote.replace(/\s+/g, " ").trim();
+      let at = ta.value.indexOf(q);
+      if (at < 0) at = ta.value.indexOf(q.slice(0, 40)); // 미리보기 글(인용 · 서식이 풀린 글)이라 앞부분으로
+      if (at < 0) return false;
+      selectRange(view, ta, at, at + Math.min(q.length, ta.value.length - at));
+      return true;
+    },
+  });
 }
 
 // ------------------------------------------------------------------ 철회 논문 확인 (2026-10-27)

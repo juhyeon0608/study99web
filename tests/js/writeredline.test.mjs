@@ -49,3 +49,15 @@ test("발표 자료: AI 답(JSON) → 패널 목록 · 읽지 못하면 null · 
   assert.match(w, /add\("pptx", "PPT 파일 받기"/);
   assert.match(w, /api\.raw\("POST", "\/api\/slides"/);
 });
+
+test("공유 페이지: 인용 → 저자 · 연도, 그림 → 링크 그림 주소, 꼬리표 · [참고문헌] 자리 뺌 · 편집기 단추", async () => {
+  const S = await import(pathToFileURL(join(JS, "share.js")).href);
+  const md = "본문 [@kim2020; @lee2021, p. 3] 끝.\n\n![모형](fig:0123456789abcdef.png){#fig:m}\n\n[참고문헌]";
+  const out = S.prepareShare(md, { kim2020: "김철수, 2020" }, "/api/public/share/T");
+  assert.match(out, /본문 \(김철수, 2020; lee2021\) 끝\./);
+  assert.match(out, /!\[모형\]\(\/api\/public\/share\/T\/figures\/0123456789abcdef\.png\)/);
+  assert.doesNotMatch(out, /\{#fig|\[참고문헌\]/);
+  const w = readFileSync(join(JS, "writing.js"), "utf8");
+  assert.match(w, /data-share/);
+  assert.match(w, /shareTools\(view, ta, m\)/);
+});

@@ -1,0 +1,24 @@
+/* 원고 공유 페이지 (/s/토큰 — 2026-10-27) */
+.share-body { background: var(--surface-3, #f4f5f7); margin: 0; }
+.share-head { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 8px; padding: 10px 20px;
+  background: var(--surface, #fff); border-bottom: 1px solid var(--border, #e3e5e8); }
+.share-head .spacer { flex: 1; }
+.share-main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 20px; max-width: 1240px; margin: 0 auto; padding: 20px; }
+.share-doc { background: var(--surface, #fff); padding: 40px 48px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.06); min-width: 0; }
+.share-doc img { max-width: 100%; }
+.share-side { position: sticky; top: 64px; align-self: start; max-height: calc(100vh - 84px); overflow-y: auto;
+  background: var(--surface, #fff); border-radius: 10px; padding: 14px 16px; box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.share-side h3 { margin: 0 0 8px; font-size: 15px; }
+.share-comments { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.share-comments li { border-bottom: 1px dashed var(--border, #e3e5e8); padding-bottom: 8px; }
+.share-comments p { margin: 4px 0 0; font-size: 13.5px; line-height: 1.6; }
+.share-quote { margin: 4px 0; padding: 4px 8px; border-left: 3px solid #f59e0b; background: #fff7e6; font-size: 12.5px; color: #6b4e16; }
+.share-form { display: flex; flex-direction: column; gap: 6px; }
+.share-form textarea { font-family: inherit; resize: vertical; }
+.share-pick { position: absolute; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+@media (max-width: 900px) {
+  .share-main { grid-template-columns: minmax(0, 1fr); padding: 10px; }
+  .share-doc { padding: 20px 16px; }
+  .share-side { position: static; max-height: none; }
+  .share-hint { display: none; }
+}

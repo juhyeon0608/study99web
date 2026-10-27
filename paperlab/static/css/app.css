@@ -2101,3 +2101,14 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .alerts-list { list-style: none; margin: 8px 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .alerts-list li { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--border); border-radius: 16px; padding: 2px 4px 2px 6px; font-size: 13px; }
 .alerts-group h4 { margin: 12px 0 6px; font-size: 13.5px; }
+
+/* ---------------------------------------------------------------- 공유 링크 · 받은 의견 (2026-10-27) */
+.share-links, .cm-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.share-links li { display: flex; align-items: center; gap: 8px; justify-content: space-between; border-bottom: 1px dashed var(--border); padding: 6px 0; }
+.share-made { margin-top: 10px; }
+.cm-box { min-width: min(560px, 80vw); }
+.cm-list { max-height: 60vh; overflow-y: auto; }
+.cm-item { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.cm-item.is-done { opacity: .6; }
+.cm-quote { display: block; text-align: left; margin: 4px 0; padding: 4px 8px; border-left: 3px solid #f59e0b; background: #fff7e6; color: #6b4e16; font-size: 12.5px; }
+.cm-body { margin: 4px 0 6px; white-space: pre-wrap; font-size: 13.5px; line-height: 1.6; }
