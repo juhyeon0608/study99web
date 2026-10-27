@@ -628,7 +628,7 @@ export async function openManuscript(main, id) {
   retractions();
   $("[data-figure]", view).onclick = async () => insertFigures(ta, await pickFiles({ accept: "image/*", multiple: true }));
   $("[data-table]", view).onclick = () => editTable(ta);
-  $("[data-stats]", view).onclick = () => statsDialog({ insert: (md) => applyEdit(ta, blockInsert(ta.value, ta.selectionStart, ta.selectionEnd, md)) });
+  $("[data-stats]", view).onclick = () => statsDialog({ mid: m.id, insert: (md) => applyEdit(ta, blockInsert(ta.value, ta.selectionStart, ta.selectionEnd, md)) });
   // 수식: 커서 자리(문단 사이)에 $$ … $$ {#eq:식N} — 수식 칸을 골라 둔 채로 바로 쓰게
   $("[data-equation]", view).onclick = () => {
     const n = (ta.value.match(/\{#eq:/g) || []).length + 1;

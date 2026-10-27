@@ -179,6 +179,32 @@ def _sd(x: np.ndarray) -> float:
     return float(np.std(x, ddof=1)) if len(x) > 1 else float("nan")
 
 
+# 그래프 명세 (charts.render — AI 없이 계산값으로 그림). 평균 막대는 오차 막대 ±1 SD
+SD_NOTE = " (오차 막대: ±1 SD)"
+
+
+def _num_or_none(x: float) -> float | None:
+    return round(float(x), 6) if math.isfinite(x) else None
+
+
+def _mean_bars(caption: str, names: list[str], xs: list[np.ndarray], x_label: str = "", y_label: str = "평균") -> dict:
+    return {"caption": caption + SD_NOTE,
+            "spec": {"type": "bar", "x_label": x_label, "y_label": y_label, "categories": names,
+                     "series": [{"name": "평균", "values": [_num_or_none(x.mean()) for x in xs],
+                                 "errors": [_num_or_none(_sd(x)) for x in xs]}]}}
+
+
+def _scatter(caption: str, x: np.ndarray, y: np.ndarray, x_label: str, y_label: str) -> dict:
+    from . import charts
+    idx = np.arange(len(x))
+    if len(idx) > charts.MAX_POINTS:  # 고르게 골라 2,000개만 (회귀선 · R²도 이 점들로)
+        idx = np.linspace(0, len(x) - 1, charts.MAX_POINTS).round().astype(int)
+        caption += f" (점 {charts.MAX_POINTS:,}개만 표시)"
+    return {"caption": caption,
+            "spec": {"type": "scatter", "x_label": x_label, "y_label": y_label, "trend": True,
+                     "series": [{"name": "", "xy": [[float(x[i]), float(y[i])] for i in idx]}]}}
+
+
 def _table(caption: str, head: list[str], rows: list[list[str]], note: str = "", align: list | None = None) -> dict:
     return {"caption": caption, "rows": [head, *rows], "note": note,
             "align": align or ["left"] + ["right"] * (len(head) - 1)}
@@ -202,7 +228,8 @@ def describe(d: Data, p: dict) -> dict:
     para = "주요 변인의 기술통계는 표와 같다. " + ", ".join(text) + "이었다."
     para += (" 왜도의 절댓값이 2 미만, 첨도의 절댓값이 7 미만으로 정규분포 가정을 크게 벗어나지 않았다(Curran et al., 1996)."
              if normal else " 일부 변인의 왜도 · 첨도가 정규분포 기준(왜도 2, 첨도 7)을 넘어 해석에 주의가 필요하다.")
-    return {"tables": [_table("주요 변인의 기술통계", ["변인", "*N*", "*M*", "*SD*", "최솟값", "최댓값", "왜도", "첨도"], rows)], "text": para}
+    return {"tables": [_table("주요 변인의 기술통계", ["변인", "*N*", "*M*", "*SD*", "최솟값", "최댓값", "왜도", "첨도"], rows)], "text": para,
+            "chart": _mean_bars("주요 변인의 평균", names, [d.numeric([n])[:, 0] for n in names])}
 
 
 def ttest_ind(d: Data, p: dict) -> dict:
@@ -228,7 +255,7 @@ def ttest_ind(d: Data, p: dict) -> dict:
             f"{names[1]} 집단(*M* = {f2(b.mean())}, *SD* = {f2(_sd(b))})의 차이는 "
             f"{sig(pv, f'*t*({df_text(df)}) = {f2(t)}, {p_text(pv)}, *d* = {f2(dd)}')}.")
     return {"tables": [_table(f"{group}에 따른 {value}의 차이", ["집단", "*n*", "*M*", "*SD*", "*t*", "*df*", "*p*", "Cohen's *d*"], rows, note)],
-            "text": para}
+            "text": para, "chart": _mean_bars(f"{group}에 따른 {value}의 평균", names, xs, group, value)}
 
 
 def ttest_rel(d: Data, p: dict) -> dict:
@@ -250,7 +277,8 @@ def ttest_rel(d: Data, p: dict) -> dict:
             f"{b_name}(*M* = {f2(b.mean())}, *SD* = {f2(_sd(b))})의 차이를 대응표본 *t*검정으로 분석한 결과, 차이는 "
             f"{sig(pv, f'*t*({df}) = {f2(t)}, {p_text(pv)}, *d* = {f2(dz)}')}.")
     return {"tables": [_table(f"{josa(a_name, '와', '과')} {b_name}의 차이", ["변인", "*N*", "*M*", "*SD*", "*t*", "*df*", "*p*", "Cohen's *d*"], rows,
-                              "효과크기 *d* = 차이 점수의 평균 / 차이 점수의 표준편차.")], "text": para}
+                              "효과크기 *d* = 차이 점수의 평균 / 차이 점수의 표준편차.")], "text": para,
+            "chart": _mean_bars(f"{josa(a_name, '와', '과')} {b_name}의 평균", [a_name, b_name], [a, b])}
 
 
 def anova(d: Data, p: dict) -> dict:
@@ -297,7 +325,7 @@ def anova(d: Data, p: dict) -> dict:
                  else " Tukey 사후 검정에서는 유의한 쌍별 차이가 나타나지 않았다.")
     if float(lev.pvalue) < .05:
         para += " 다만 등분산 가정을 충족하지 않아(Levene 검정) 해석에 주의가 필요하다."
-    return {"tables": tables, "text": para}
+    return {"tables": tables, "text": para, "chart": _mean_bars(f"{group}에 따른 {value}의 평균", names, xs, group, value)}
 
 
 def corr(d: Data, p: dict) -> dict:
@@ -323,7 +351,10 @@ def corr(d: Data, p: dict) -> dict:
         rows.append(row)
     para = (f"주요 변인 간의 상관을 Pearson 상관분석으로 분석한 결과(*N* = {len(x)}), "
             + ("유의한 상관은 " + ", ".join(found) + "에서 나타났다." if found else "유의한 상관은 나타나지 않았다."))
-    return {"tables": [_table("주요 변인 간의 상관", head, rows, f"*N* = {len(x)}. {STAR_NOTE}")], "text": para}
+    out = {"tables": [_table("주요 변인 간의 상관", head, rows, f"*N* = {len(x)}. {STAR_NOTE}")], "text": para}
+    if k == 2:
+        out["chart"] = _scatter(f"{josa(names[0], '와', '과')} {names[1]}의 산점도", x[:, 0], x[:, 1], names[0], names[1])
+    return out
 
 
 def regression(d: Data, p: dict) -> dict:
@@ -380,7 +411,10 @@ def regression(d: Data, p: dict) -> dict:
             + ("유의한 예측변인은 " + ", ".join(effects) + tail(last, "였다", "이었다") + "." if effects else "유의한 예측변인은 없었다."))
     if any(v not in ("", "∞") and float(v) >= 10 for v in vif) or "∞" in vif:
         para += " 일부 변인의 VIF가 10 이상으로 다중공선성을 확인할 필요가 있다."
-    return {"tables": [_table(f"{y_name}에 대한 회귀분석 결과", head, rows, note)], "text": para}
+    out = {"tables": [_table(f"{y_name}에 대한 회귀분석 결과", head, rows, note)], "text": para}
+    if k == 1:
+        out["chart"] = _scatter(f"{josa(xs[0], '와', '과')} {y_name}의 산점도와 회귀선", X[:, 0], y, xs[0], y_name)
+    return out
 
 
 def chisq(d: Data, p: dict) -> dict:
@@ -419,7 +453,10 @@ def chisq(d: Data, p: dict) -> dict:
             para += warn + f" Fisher 정확 검정 결과({p_text(fp)})를 함께 보고한다."
         else:
             para += warn + " 범주를 합치는 것을 검토할 필요가 있다."
-    return {"tables": [_table(f"{a}에 따른 {b}의 분포", [f"{a} \\ {b}", *cb, "전체"], rows, note)], "text": para}
+    chart = {"caption": f"{a}에 따른 {b}의 분포",
+             "spec": {"type": "bar", "x_label": a, "y_label": "빈도", "categories": ra,
+                      "series": [{"name": y, "values": [int(obs[i, j]) for i in range(len(ra))]} for j, y in enumerate(cb)]}}
+    return {"tables": [_table(f"{a}에 따른 {b}의 분포", [f"{a} \\ {b}", *cb, "전체"], rows, note)], "text": para, "chart": chart}
 
 
 def alpha(d: Data, p: dict) -> dict:
@@ -470,4 +507,11 @@ def run(payload: dict) -> dict:
     with np.errstate(all="ignore"):
         out = RUN[kind](d, params)
     out["text"] = re.sub(r"\(\s*\)", "", out["text"])
+    chart = out.pop("chart", None)
+    if chart:
+        from . import charts, figgen
+        try:
+            out["chart"] = {"caption": chart["caption"], "svg": figgen.sanitize_svg(charts.render(chart["spec"]))}
+        except (charts.ChartError, figgen.SvgError):
+            pass  # 그래프를 못 그려도 표 · 문장은 그대로
     return out

@@ -33,7 +33,7 @@ export function cleanSvgText(svg) {
 }
 
 // SVG → <img src="blob:"> (불러오거나 실패하면 blob 주소를 바로 푼다)
-function svgImg(svg, alt) {
+export function svgImg(svg, alt) {
   const clean = cleanSvgText(svg);
   if (!clean) return null;
   const url = URL.createObjectURL(new Blob([clean], { type: "image/svg+xml" }));
@@ -76,7 +76,7 @@ export async function rasterize(svg) {
 }
 
 // PNG + SVG 원본을 원고 그림으로 올린다 → { name, … } (서버가 SVG를 다시 정화해 PNG 옆에 둠)
-async function uploadSvgFigure(mid, svg) {
+export async function uploadSvgFigure(mid, svg) {
   const png = await rasterize(svg);
   const fd = new FormData();
   fd.append("file", new File([png], "figure.png", { type: "image/png" }));
@@ -206,6 +206,7 @@ export function figPane(view, hooks) {
     prev.append(svgImg(res.svg, res.caption) || el(`<div class="msg error">그림을 보여 줄 수 없어요</div>`));
     out.append(prev);
     if (res.kind_note) out.append(Object.assign(el(`<p class="small muted fig-kind"></p>`), { textContent: `그림 종류: ${res.kind_note}` }));
+    if (res.chart) out.append(el(`<p class="small muted fig-kind">수치 그래프는 AI가 정한 값으로 프로그램이 정확한 비율로 그렸어요 — 값이 맞는지만 확인해 주세요.</p>`));
     if (res.check_needed) out.append(el(`<div class="notice" data-tone="warn">${ICON_WARN}<div>그림에 <b>[확인 필요: …]</b> 표시가 있어요. 원고 내용에 없던 값이에요 — 확인해서 고쳐 주세요.</div></div>`));
     const capRow = el(`<label class="field fig-cap"><span class="ai-sec-h">캡션</span><input class="input" data-fig-cap maxlength="300"></label>`);
     const cap = $("input", capRow);

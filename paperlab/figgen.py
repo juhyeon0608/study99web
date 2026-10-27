@@ -9,16 +9,19 @@
   모르는 값은 [확인 필요]) ③ 고치기(edit — 지난 SVG + 고쳐 달라는 말). 고치기 사슬은 params.chain(지난 작업 id들)으로 남는다.
 - AI가 만든 SVG는 믿지 않는다: sanitize_svg가 허용 목록(요소 · 속성)으로 **다시 써서** 저장한다(원문을 그대로 두지 않음).
   화면도 <img src="blob:">로만 보이고(인라인 DOM 금지), 원고 · 내보내기는 화면이 그린 PNG를 쓴다(SVG는 다시 고칠 때의 원본).
+- 수치 그래프(막대 · 꺾은선 · 산점도)는 AI가 SVG 좌표를 쓰지 않고 <chart>JSON 명세</chart>만 낸다 → charts.render가 정확한 비율로 그림
+  (2026-10-28 — 엔진이 claude · codex · gemini 어느 것이든 같은 그래프). 고칠 때도 SVG 대신 명세만 보낸다(짧고 빠름).
 """
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import xml.etree.ElementTree as ET
 from typing import Callable
 
-from . import ai
+from . import ai, charts
 
 SVG_MAX_BYTES = 300 * 1024      # SVG 원본 상한 (AI 결과 · 저장 원본 · 고칠 원본 모두)
 MAX_ELEMENTS = 5000             # 요소 수 상한 (그리는 브라우저가 멈추지 않게)
@@ -275,14 +278,31 @@ SVG 규칙 (반드시 지키세요):
 내용 규칙:
 - 주어진 설명 · 원고 내용에 있는 것만 그리세요. 수치 · 이름 · 결과 · 관계를 지어내지 마세요.
   모르는 값 · 확인이 필요한 부분은 그림 안에 [확인 필요: 확인할 것]처럼 무엇을 확인해야 하는지 쓰세요(예: [확인 필요: 응답률]).
-- 그래프는 주어진 수치가 있을 때만 그 수치로 그리고, 수치가 없으면 축 · 범례만 두고 [확인 필요: 수치]로 표시하세요.
+
+수치 그래프 (막대그래프 · 꺾은선그래프 · 산점도):
+- SVG를 직접 그리지 말고, SVG 자리에 <chart>JSON</chart>을 내세요. 프로그램이 수치를 정확한 비율로 그립니다(축 눈금 · 범례 · 흑백 무늬 자동).
+- JSON 모양: {{"type": "bar" | "line" | "scatter", "x_label": "가로축 이름", "y_label": "세로축 이름",
+  "categories": ["항목1", "항목2"], "series": [{{"name": "계열 이름", "values": [3.2, 4.1], "errors": [0.52, 0.61]}}],
+  "y_min": 1, "y_max": 5, "value_labels": true, "trend": false}}
+  · bar · line: values는 categories와 같은 순서 · 같은 개수. 계열이 여럿이면 series를 여러 개(묶은 막대 · 여러 선).
+  · errors(표준편차 · 표준오차 같은 ± 값)는 주어졌을 때만 넣고, 무엇인지 캡션에 쓰세요(예: 오차 막대는 ±1 SD).
+  · scatter: series마다 "xy": [[x, y], …]. 회귀선과 R²를 그리려면 "trend": true.
+  · y_min · y_max는 척도 범위(예: 5점 척도 1~5)를 알 때만. 모르는 값은 null — 그림에 [확인 필요: 수치]로 표시됩니다. 수치를 지어내지 마세요.
+- 도식 · 흐름도 · 개념도 · 모형도처럼 수치 그래프가 아닌 그림은 SVG로 그리세요.
 
 출력 형식 (이 순서 그대로, 다른 말 · 설명 · 코드 블록 표시(```) 없이):
 그림 종류: <흐름도 · 개념도 · 막대그래프 같은 종류> — <왜 이 종류가 맞는지 한 줄>
 캡션: <그림 캡션 한 문장. '그림 1.' 같은 번호는 붙이지 마세요>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="...">...</svg>"""
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="...">...</svg>  (수치 그래프면 이 줄 대신 <chart>{{…}}</chart>)"""
 
-_OUR_TAGS = re.compile(r"<(/?)(request|manuscript|previous_svg|previous_caption)\b", re.I)
+_OUR_TAGS = re.compile(r"<(/?)(request|manuscript|previous_svg|previous_chart|previous_caption)\b", re.I)
+_ATTR_VALUE = re.compile(r'="([^"]*)"')
+_LONG_NUM = re.compile(r"-?\d+\.\d{2,}")
+
+
+def compact_svg(svg: str) -> str:
+    """고칠 SVG를 AI에 보낼 때 속성 값의 긴 소수(12.3456)를 한 자리로 — 글자 내용(수치 라벨)은 그대로"""
+    return _ATTR_VALUE.sub(lambda m: '="' + _LONG_NUM.sub(lambda n: _fmt(round(float(n.group()), 1)), m.group(1)) + '"', svg)
 
 
 def _fence(text) -> str:
@@ -311,9 +331,17 @@ def build_request(params: dict) -> tuple[str, str]:
         cap = str(params.get("base_caption") or "").strip()
         if cap:
             parts.append(f"<previous_caption>{_fence(cap)}</previous_caption>")
-        parts.append(f"지금 그림(SVG):\n<previous_svg>\n{svg}\n</previous_svg>")
-        parts.append("위 그림을 아래 요청대로 고쳐 주세요. 요청하지 않은 부분(배치 · 글 · 양식)은 그대로 두고, "
-                     f"고친 그림 전체를 같은 출력 형식으로 다시 내 주세요.\n<request>\n{_fence(params.get('instruction') or '')}\n</request>")
+        spec = charts.spec_from_svg(svg)
+        if spec:  # 프로그램이 그린 수치 그래프: SVG 대신 명세만 (짧고, 고쳐도 비율이 정확)
+            parts.append("지금 그림은 프로그램이 그린 수치 그래프이고, 명세(JSON)는 아래와 같습니다.\n"
+                         f"<previous_chart>\n{_fence(json.dumps(spec, ensure_ascii=False))}\n</previous_chart>")
+            parts.append("위 그래프를 아래 요청대로 고쳐 주세요. 요청하지 않은 값 · 이름은 그대로 두고, 고친 명세 전체를 "
+                         "같은 출력 형식의 <chart>{…}</chart>로 다시 내 주세요(명세로 할 수 없는 요청일 때만 SVG로 새로 그리세요)."
+                         f"\n<request>\n{_fence(params.get('instruction') or '')}\n</request>")
+        else:
+            parts.append(f"지금 그림(SVG):\n<previous_svg>\n{compact_svg(svg)}\n</previous_svg>")
+            parts.append("위 그림을 아래 요청대로 고쳐 주세요. 요청하지 않은 부분(배치 · 글 · 양식)은 그대로 두고, "
+                         f"고친 그림 전체를 같은 출력 형식으로 다시 내 주세요.\n<request>\n{_fence(params.get('instruction') or '')}\n</request>")
     elif mode == "content":
         parts.append("위 원고 내용을 독자가 한눈에 이해하도록 돕는 그림 하나를 그려 주세요. 내용의 구조(단계 · 관계 · 비교 · 분류 · "
                      "시간 순서 · 수치)에 가장 맞는 그림 종류를 고르세요."
@@ -328,6 +356,7 @@ def build_request(params: dict) -> tuple[str, str]:
 
 # ---------------------------------------------------------------- 결과 읽기
 _SVG_START = re.compile(r"<svg[\s>]", re.I)
+_CHART_RE = re.compile(r"<chart\s*>(.*?)</chart\s*>", re.I | re.S)
 _CAPTION_RE = re.compile(r"^[\s>*_#-]*(?:캡션|caption)[\s*_]*[:：]\s*(.+?)\s*$", re.I | re.M)
 _KIND_RE = re.compile(r"^[\s>*_#-]*(?:그림\s*종류|figure\s*type)[\s*_]*[:：]\s*(.+?)\s*$", re.I | re.M)
 _CAP_NUM = re.compile(r"^(?:그림|figure|fig\.)\s*\d+\s*[.:：]?\s*", re.I)
@@ -340,8 +369,18 @@ def clean_caption(text) -> str:
 
 
 def parse(text) -> dict:
-    """CLI · API 원문 → {"svg", "caption", "kind_note", "check_needed"}. SVG가 없거나 쓸 수 없으면 AIError(bad_output)"""
+    """CLI · API 원문 → {"svg", "caption", "kind_note", "check_needed", "chart"}. SVG · 차트 명세가 없거나 쓸 수 없으면 AIError(bad_output).
+    <chart>JSON</chart>이 있으면 charts.render로 그린 SVG (chart=True)"""
     text = str(text or "")
+    c = _CHART_RE.search(text)
+    if c:
+        try:
+            svg = sanitize_svg(charts.render(charts.parse_spec(c.group(1))))
+        except (charts.ChartError, SvgError) as e:
+            if not _SVG_START.search(text[:c.start()] + text[c.end():]):
+                raise ai.AIError(f"AI가 낸 그래프 명세를 쓸 수 없어요: {e}", "bad_output") from None
+        else:
+            return _finish(svg, text[:c.start()] + "\n" + text[c.end():], chart=True)
     m = _SVG_START.search(text)
     end = text.lower().rfind("</svg>")
     if not m or end < m.start():
@@ -350,17 +389,20 @@ def parse(text) -> dict:
         svg = sanitize_svg(text[m.start():end + len("</svg>")])
     except SvgError as e:
         raise ai.AIError(f"AI가 만든 그림을 쓸 수 없어요: {e}", "bad_output") from None
-    head = text[:m.start()] + "\n" + text[end + len("</svg>"):]
+    return _finish(svg, text[:m.start()] + "\n" + text[end + len("</svg>"):])
+
+
+def _finish(svg: str, head: str, chart: bool = False) -> dict:
     cap = _CAPTION_RE.search(head)
     kind = _KIND_RE.search(head)
     caption = clean_caption(cap.group(1)) if cap else ""
     return {"svg": svg, "caption": caption, "kind_note": re.sub(r"\s+", " ", kind.group(1)).strip()[:300] if kind else "",
-            "check_needed": "[확인 필요" in svg or "[확인 필요" in caption}
+            "check_needed": "[확인 필요" in svg or "[확인 필요" in caption, "chart": chart}
 
 
 def result_of(parsed: dict) -> dict:
     """작업 result로 남길 모양 (jobs._apply)"""
-    return {k: parsed[k] for k in ("svg", "caption", "kind_note", "check_needed")}
+    return {k: parsed[k] for k in ("svg", "caption", "kind_note", "check_needed", "chart")}
 
 
 def view(params: dict) -> dict:

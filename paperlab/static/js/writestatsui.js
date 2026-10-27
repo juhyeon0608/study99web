@@ -2,10 +2,11 @@
 // ③ 서버가 계산(/api/stats — scipy, AI 아님)한 APA 표 · 결과 문장을 미리 보고 ④ 커서 자리에 넣기. 순수 함수는 writestats.js
 import { api } from "./api.js";
 import { $, $$, el, errorToast, esc, modal, pickFiles, renderMarkdown, toast } from "./ui.js";
+import { svgImg, uploadSvgFigure } from "./writefigui.js";
 import { ANALYSES, columnKinds, fieldOptions, parseData, statsMarkdown } from "./writestats.js";
 
-/** insert(markdown): 원고 커서 자리에 넣기 (writing.js) */
-export function statsDialog({ insert }) {
+/** insert(markdown): 원고 커서 자리에 넣기 (writing.js), mid: 원고 번호 (그래프 그림 올리기) */
+export function statsDialog({ insert, mid }) {
   let data = null;
   let kinds = [];
   let result = null;
@@ -17,7 +18,7 @@ export function statsDialog({ insert }) {
       <select class="input" data-kind>${ANALYSES.map((a) => `<option value="${a.key}">${esc(a.name)} — ${esc(a.hint)}</option>`).join("")}</select>
       <div data-fields class="stats-fields"></div></div>
     <div data-out class="stats-out" hidden></div>
-    <p class="small muted" style="margin:6px 0 0">계산은 서버가 직접 해요(AI 아님). 표는 APA 7판 형식, 결측값(빈칸 · NA · .)이 있는 행은 분석마다 빼요.</p></div>`);
+    <p class="small muted" style="margin:6px 0 0">계산 · 그래프는 서버가 직접 해요(AI 아님). 표는 APA 7판 형식, 결측값(빈칸 · NA · .)이 있는 행은 분석마다 빼요.</p></div>`);
   const foot = el(`<div style="display:contents"><button type="button" class="btn" data-no>닫기</button>
     <button type="button" class="btn" data-run disabled>계산하기</button><button type="button" class="btn primary" data-ok disabled>원고에 넣기</button></div>`);
   const md = modal({ title: "통계 계산 → APA 표 · 결과 문장", body, foot, wide: true });
@@ -98,6 +99,13 @@ export function statsDialog({ insert }) {
     try {
       result = await api.post("/api/stats", { columns: data.columns, rows: data.rows, analysis: kindSel.value, params: p });
       out.innerHTML = `<div class="doc stats-preview">${renderMarkdown(statsMarkdown(result))}</div>`;
+      const img = result.chart && mid ? svgImg(result.chart.svg, result.chart.caption) : null;
+      if (img) { // 그래프 (서버가 계산값으로 그림 — AI 아님): 미리 보고 넣을지 고르기
+        const box = el(`<div class="stats-chart"><label class="small"><input type="checkbox" data-chart checked> 그래프도 넣기 — <span></span></label></div>`);
+        $("span", box).textContent = result.chart.caption;
+        box.append(img);
+        out.prepend(box);
+      }
       okBtn.disabled = false;
       okBtn.focus();
     } catch (e) {
@@ -106,10 +114,18 @@ export function statsDialog({ insert }) {
       errorToast(e);
     } finally { runBtn.disabled = false; }
   };
-  okBtn.onclick = () => {
+  okBtn.onclick = async () => {
     if (!result) return;
-    insert(statsMarkdown(result));
-    toast("표와 결과 문장을 넣었어요 — 표 번호는 자동으로 매겨져요", "success");
+    let fig = "";
+    if (result.chart && $("[data-chart]", out)?.checked) {
+      okBtn.disabled = true;
+      try { fig = (await uploadSvgFigure(mid, result.chart.svg)).name; } catch (e) {
+        okBtn.disabled = false;
+        return errorToast(e);
+      }
+    }
+    insert(statsMarkdown(result, true, fig));
+    toast(fig ? "표 · 그래프 · 결과 문장을 넣었어요 — 표 · 그림 번호는 자동으로 매겨져요" : "표와 결과 문장을 넣었어요 — 표 번호는 자동으로 매겨져요", "success");
     md.close();
   };
   $("[data-no]", foot).onclick = () => md.close();

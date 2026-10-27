@@ -163,7 +163,7 @@ def test_parse_reads_caption_kind_and_sanitizes():
     out = figgen.parse(raw)
     assert out["caption"] == "연구 절차 [확인 필요]" and out["kind_note"].startswith("흐름도")
     assert out["check_needed"] is True and "onclick" not in out["svg"] and out["svg"].startswith("<svg ")
-    assert figgen.result_of(out).keys() == {"svg", "caption", "kind_note", "check_needed"}
+    assert figgen.result_of(out).keys() == {"svg", "caption", "kind_note", "check_needed", "chart"}
     en = figgen.parse(f"Figure type: bar chart\nCaption: Figure 2: Results by group\n{OK_SVG}")
     assert en["caption"] == "Results by group" and en["check_needed"] is False
 

@@ -1,7 +1,7 @@
 // 통계 계산 (2026-10-28 사용자 요청) — 순수 함수. 엑셀 원자료 읽기 · 열 종류 · 분석 목록 · 결과 → 원고 마크다운.
 // 계산은 서버(paperlab/stats.py — scipy)가 한다. 화면은 writestatsui.js
 import { splitTsv } from "./writepaste.js";
-import { tableMarkdown } from "./writeedit.js";
+import { figureMarkdown, tableMarkdown } from "./writeedit.js";
 
 export const MAX_ROWS = 5000;
 const MISSING = new Set(["", ".", "na", "n/a", "nan", "-", "null", "없음", "무응답", "#n/a"]);
@@ -87,12 +87,13 @@ export function fieldOptions(data, kinds, field) {
   return ok.map(([c]) => c);
 }
 
-/** 서버 결과 → 원고에 넣을 마크다운 (표마다 캡션 · 표 · '주.' 줄, 마지막에 결과 문단) */
-export function statsMarkdown(result, ko = true) {
+/** 서버 결과 → 원고에 넣을 마크다운 (표마다 캡션 · 표 · '주.' 줄, 그래프 그림 줄(figName — 올린 그림 이름), 마지막에 결과 문단) */
+export function statsMarkdown(result, ko = true, figName = "") {
   const parts = (result.tables || []).map((t) => {
     const md = tableMarkdown({ rows: t.rows, align: t.align || [], caption: t.caption, label: "" }, ko);
     return t.note ? `${md}\n\n*주.* ${t.note}` : md;
   });
+  if (figName && result.chart) parts.push(figureMarkdown(figName, result.chart.caption));
   if (result.text) parts.push(result.text);
   return parts.join("\n\n");
 }

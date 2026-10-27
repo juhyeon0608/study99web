@@ -35,14 +35,19 @@ test("열 종류 · 고를 칸: 숫자 칸은 숫자 열, 집단 칸은 범주 2
 test("결과 → 마크다운: 표: 캡션 · 표 · *주.* · 결과 문단", () => {
   const md = S.statsMarkdown({ tables: [{ caption: "기술통계", rows: [["변인", "*M*"], ["점수", "3.00"]], align: ["left", "right"], note: "*N* = 3." }],
     text: "평균은 3.00이었다." });
+  const withFig = S.statsMarkdown({ tables: [], text: "끝.", chart: { caption: "집단별 평균 [±1 SD]", svg: "<svg/>" } }, true, "abc");
+  assert.equal(withFig, "![집단별 평균 \\[±1 SD\\]](fig:abc)\n\n끝."); // 그래프 그림 줄은 올린 그림 이름이 있을 때만
+  assert.equal(S.statsMarkdown({ tables: [], text: "끝.", chart: { caption: "x" } }), "끝.");
   assert.equal(md, "표: 기술통계\n| 변인 | *M* |\n| :-- | --: |\n| 점수 | 3.00 |\n\n*주.* *N* = 3.\n\n평균은 3.00이었다.");
 });
 
 test("화면 연결: 도구 막대 [통계] · /api/stats · 원고에 넣기", () => {
   const w = readFileSync(join(JS, "writing.js"), "utf8");
   assert.match(w, /data-stats title="통계 계산/);
-  assert.match(w, /statsDialog\(\{ insert: \(md\) => applyEdit\(ta, blockInsert\(/);
+  assert.match(w, /insert: \(md\) => applyEdit\(ta, blockInsert\(/);
   const ui = readFileSync(join(JS, "writestatsui.js"), "utf8");
   assert.match(ui, /api\.post\("\/api\/stats"/);
-  assert.match(ui, /insert\(statsMarkdown\(result\)\)/);
+  assert.match(ui, /insert\(statsMarkdown\(result, true, fig\)\)/);
+  assert.match(ui, /uploadSvgFigure\(mid, result\.chart\.svg\)/);
+  assert.match(w, /statsDialog\(\{ mid: m\.id,/);
 });
