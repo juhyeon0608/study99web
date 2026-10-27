@@ -2067,7 +2067,7 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 
 /* ---------------------------------------------------------------- 집중 모드 (2026-10-27): 편집기만, 가운데 좁은 칸, 쓰는 줄은 화면 가운데 */
 .focus-exit { display: none; }
-.writer.focus-mode { grid-template-rows: 0 0 1fr auto; }
+.writer.focus-mode { grid-template-rows: minmax(0, 1fr) auto; } /* 숨긴 막대는 칸을 차지하지 않음 */
 .writer.focus-mode .writer-bar, .writer.focus-mode .writer-tools, .writer.focus-mode .writer-side, .writer.focus-mode .writer-preview,
 .writer.focus-mode .ref-pane, .writer.focus-mode .ai-pane, .writer.focus-mode .fig-pane, .writer.focus-mode .check-pane,
 .writer.focus-mode .pane-resize { display: none !important; }

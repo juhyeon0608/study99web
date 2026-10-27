@@ -206,7 +206,7 @@ export function sourceView(box, h) {
         ${st ? `<button type="button" class="btn sm" data-open>결과</button>` : ""}
         ${needsRun(it) ? `<button type="button" class="btn sm" data-run>확인</button>` : ""}</span></li>`);
       $("b", li).textContent = it.need || "확인할 것";
-      const plain = (it.claim ? it.claim.text : "").replace(CHECK_RE, "").replace(/\s+/g, " ").trim();
+      const plain = (it.claim ? it.claim.text : "").replace(CHECK_RE, "").replace(/\s+/g, " ").replace(/ ([.,?!])/g, "$1").trim();
       $(".small", li).textContent = plain ? ` · ${plain.length > 40 ? `${plain.slice(0, 40)}…` : plain}` : " · 제목 · 표 안 (직접 확인)";
       $(".src-item-go", li).onclick = () => {
         const at = h.ta.value.indexOf(it.mark, Math.max(0, it.at - 200));

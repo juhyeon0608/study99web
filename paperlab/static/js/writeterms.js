@@ -20,14 +20,14 @@ const TAILS = ["에서는", "으로는", "에게서", "이라는", "에서", "�
   "들", "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "도", "로", "만", "적", "인"];
 const HANGUL_WORD_RE = /[가-힣]+/g;
 
-// 점검하지 않을 부분을 같은 길이 빈칸으로: 코드 블록 · 인용 키 · 그림 · 링크 주소 · 꼬리표 · 수식 · 각주 정의 표시
+// 점검하지 않을 부분을 같은 길이 빈칸으로: 코드 블록 · 인용 키 · 그림 · 링크 주소 · 꼬리표 · 수식 · 각주 정의 표시 · [확인 필요: …]
 export function maskText(value) {
   const lines = String(value ?? "").split("\n");
   let fence = false;
   return lines.map((l) => {
     if (/^\s{0,3}(```|~~~)/.test(l)) { fence = !fence; return " ".repeat(l.length); }
     if (fence) return " ".repeat(l.length);
-    return l.replace(/\[@[^\]\n]*\]|@(?:fig|tbl|eq):[\w-]+|!\[[^\]\n]*\]\([^)\n]*\)|\]\([^)\n]*\)|https?:\/\/\S+|\{#[^}\n]*\}|\$\$?[^$\n]+\$\$?|\[\^[^\]\n]*\]/g,
+    return l.replace(/\[확인\s*필요[^\]\n]*\]|\[@[^\]\n]*\]|@(?:fig|tbl|eq):[\w-]+|!\[[^\]\n]*\]\([^)\n]*\)|\]\([^)\n]*\)|https?:\/\/\S+|\{#[^}\n]*\}|\$\$?[^$\n]+\$\$?|\[\^[^\]\n]*\]/g,
       (x) => " ".repeat(x.length));
   }).join("\n");
 }
@@ -115,7 +115,7 @@ export function termIssues(value, glossary = []) {
     const open = before.lastIndexOf("(");
     const inParen = open >= 0 && before.indexOf(")", open) < 0;
     if (/^\s?\(/.test(after) || inParen) continue;
-    push("warn", "term-abbr", `약어 '${abbr}'를 처음 쓸 때 풀어 써 주세요 (예: 풀어 쓴 말(${abbr}))`, m.index, m.index + m[0].length);
+    push("warn", "term-abbr", `처음 나온 약어 '${abbr}' — 풀어 쓴 말을 함께 적어 주세요 (예: 풀어 쓴 말(${abbr}))`, m.index, m.index + m[0].length);
   }
 
   // ④ 내 용어집: 피할 말이 나온 곳마다
