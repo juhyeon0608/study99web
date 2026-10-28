@@ -121,7 +121,8 @@ async function authedFetch(url, init = {}, { long = false } = {}) {
   if (res.status === 403 || res.status === 503) {
     const body = await res.clone().json().catch(() => null);
     const code = (body && body.code) || "";
-    if (code === "not_allowed") {
+    // 쓰는 도중 허용 목록에서 빠짐 · 관리자가 접근을 막음(access_rejected) · 승인 대기로 되돌림(pending_approval — 2026-10-29)
+    if (code === "not_allowed" || code === "access_rejected" || code === "pending_approval") {
       if (live && hooks.denied) hooks.denied();
       throw new ApiError(body.detail || "허용되지 않은 계정이에요", { status: 403, code, quiet: true });
     }

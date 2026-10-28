@@ -53,6 +53,8 @@ describe("검색 오류 (6.1절)", () => {
     assert.equal(S.searchErrorView("source_key_invalid", "kci").head, "KCI 키가 맞지 않거나 사용기간이 끝났어요.");
     assert.match(S.searchErrorView("upstream_limited", "kci").body, /공용 키/);
     assert.equal(S.searchErrorView("upstream_limited", "europepmc").body, "잠시 후 다시 시도해 주세요.");
+    assert.match(S.searchErrorView("upstream_limited", "semanticscholar").body, /내가 검색을 많이 해서가 아니에요/); // 공용 한도 (2026-10-28)
+    assert.deepEqual(S.searchErrorView("upstream_limited", "semanticscholar").actions, ["retry", "openalex"]);
     assert.deepEqual(S.searchErrorView("upstream_unavailable", "europepmc").actions, ["retry", "openalex"]);
     assert.deepEqual(S.searchErrorView("search_busy", "kci").actions, ["retry"]);
     assert.deepEqual(S.searchErrorView("unsupported_option", "kci").actions, ["relevance"]);

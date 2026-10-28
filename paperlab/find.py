@@ -95,7 +95,7 @@ def search_all(sources, queries: list[str], deadline_s: float = DEADLINE_S) -> t
     def one(q: str, src: str) -> list[dict]:
         for attempt in (0, 1):
             try:
-                return sources.search(q, src, 1, PER_SOURCE)["items"]
+                return sources.search(q, src, 1, PER_SOURCE, patient=False)["items"]  # 429를 기다리지 않음(AC-F06)
             except SourceError as e:
                 if attempt or "한도" in str(e) or "404" in str(e):
                     raise

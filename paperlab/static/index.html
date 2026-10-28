@@ -77,6 +77,16 @@
         <div class="gate-actions"><button type="button" class="btn primary" data-gate-switch>다른 계정으로 로그인</button></div>
       </div>
 
+      <!-- 관리자 승인 대기 (2026-10-29 — PAPERLAB_ALLOWLIST=approval, paperlab/access.py) -->
+      <div class="gate-pane" data-pane="pending" role="status">
+        <div class="gate-icon" data-tone="info"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"/></svg></div>
+        <h1 class="gate-title" tabindex="-1">가입 신청을 받았어요</h1>
+        <p class="gate-text">관리자가 승인하면 바로 쓸 수 있어요. 승인 뒤 아래 [다시 확인]을 눌러 주세요.</p>
+        <span class="gate-email hidden" data-pending-email></span>
+        <div class="gate-actions"><button type="button" class="btn primary" data-pending-check>다시 확인</button>
+          <button type="button" class="btn" data-pending-out>다른 계정으로 로그인</button></div>
+      </div>
+
       <!-- PC 앱 창 — 브라우저 로그인 대기 (E5, window.paperlabDesktop 이 있을 때만) -->
       <div class="gate-pane" data-pane="desktop-wait" role="status">
         <div class="gate-icon"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 9h18M6 6.8h.01M8.5 6.8h.01"/><rect x="3" y="4.5" width="18" height="15" rx="2"/></svg></div>

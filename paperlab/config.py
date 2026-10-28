@@ -218,8 +218,8 @@ def env_problems(env: dict, *, before_app_role: bool = False) -> dict[str, str]:
             parse_public_url(val("PAPERLAB_PUBLIC_URL"))
         except ValueError:
             problems["PAPERLAB_PUBLIC_URL"] = "https://호스트 형식이 아님 (경로 · 쿼리 없이)"
-    if val("PAPERLAB_ALLOWLIST").lower() not in ("", "on", "off"):
-        problems["PAPERLAB_ALLOWLIST"] = "허용 목록 값 틀림(on/off만)"
+    if val("PAPERLAB_ALLOWLIST").lower() not in ("", "on", "off", "approval"):
+        problems["PAPERLAB_ALLOWLIST"] = "허용 목록 값 틀림(on/off/approval만)"
     backend = (val("STORAGE_BACKEND") or "r2").lower()
     if backend == "fake":
         # 가짜 저장소는 테스트 · 개발 서버 전용 (승인자 L5)
@@ -256,6 +256,9 @@ class ServerConfig:
     public_url: str = ""
     # 허용 목록 검사(요청마다 403 not_allowed). PAPERLAB_ALLOWLIST=off일 때만 끈다 — 빈 목록을 "모두 허용"으로 보지 않음
     allowlist_enabled: bool = True
+    # 관리자 승인 가입 (2026-10-29 — PAPERLAB_ALLOWLIST=approval, access.py): 허용 목록 대신 관리자가 앱에서 승인
+    access_approval: bool = False
+    admin_emails: frozenset[str] = frozenset()
     # 서버가 여는 127.0.0.1 포트 (Host 허용 목록의 127.0.0.1:포트 · localhost:포트)
     local_port: int = DEFAULT_PORT
     # 5단계 공용 검색 키(U-1 · K-13). 없으면 그 소스만 꺼짐 — 서버 시작은 막지 않음. repr에 값을 넣지 않음
@@ -305,7 +308,9 @@ class ServerConfig:
             storage_backend=(env.get("STORAGE_BACKEND") or "r2").strip().lower(),
             r2={k: env[k].strip() for k in R2_VARS if env.get(k)},
             public_url=parse_public_url(env["PAPERLAB_PUBLIC_URL"]),
-            allowlist_enabled=(env.get("PAPERLAB_ALLOWLIST") or "on").strip().lower() != "off",
+            allowlist_enabled=(env.get("PAPERLAB_ALLOWLIST") or "on").strip().lower() not in ("off", "approval"),
+            access_approval=(env.get("PAPERLAB_ALLOWLIST") or "").strip().lower() == "approval",
+            admin_emails=parse_allowed_emails(env.get("PAPERLAB_ADMIN_EMAILS", "")),
             local_port=port,
             sync_user_cap_bytes=_mb(env, "PAPERLAB_SYNC_USER_CAP_MB", SYNC_USER_CAP_DEFAULT),
             db_limit_bytes=_mb(env, "PAPERLAB_DB_LIMIT_MB", DB_LIMIT_DEFAULT),

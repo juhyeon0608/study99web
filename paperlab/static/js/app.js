@@ -19,6 +19,7 @@ import { folderMark, folderMenu, sizeText } from "./syncmode.js";
 import { resetRefMemory } from "./refpane.js";
 import { closeWriter, composeDialog, flushWriter, openManuscript, renderWriteList, unsavedDraft } from "./writing.js";
 import { openPalette } from "./palette.js"; // 명령 팔레트 Ctrl+K (2026-10-28)
+import { accessDialog, pendingCount } from "./adminaccess.js"; // 관리자 승인 가입 (2026-10-29)
 import { actions, onRefresh, refreshAll, resetState, setUsageLoader, state } from "./state.js";
 import {
   $, $$, avatarEl, closeMenus, confirmDialog, el, errorToast, esc, josa, modalOpen, popupMenu, promptDialog, saveError, store,
@@ -92,6 +93,16 @@ function showLogin({ note = null, error = "" } = {}) {
   setNotice($("[data-gate-error]", gate), error);
   showGate("login");
   setTimeout(() => $("[data-google]", gate).focus(), 0);
+}
+
+// 관리자 승인 대기 (2026-10-29): 로그아웃하지 않고 기다림 — [다시 확인]은 /api/me를 다시 부름
+function showPending(email = "") {
+  resetGoogleButtons();
+  const em = $("[data-pending-email]", gate);
+  em.textContent = email;
+  em.classList.toggle("hidden", !email);
+  showGate("pending");
+  setTimeout(() => $(".gate-title", pane("pending")).focus(), 0);
 }
 
 function showDenied(email = "") {
@@ -192,7 +203,8 @@ async function boot({ retry = false } = {}) {
     try {
       me = await api.get("/api/me");
     } catch (e) {
-      if (e.code === "not_allowed") {
+      if (e.code === "pending_approval") return showPending((s.session.user && s.session.user.email) || "");
+      if (e.code === "not_allowed" || e.code === "access_rejected") {
         // 화면을 그린 뒤 자동 로그아웃 (명세 6.2-5)
         showDenied((s.session.user && s.session.user.email) || "");
         await signOut();
@@ -234,6 +246,13 @@ async function enterApp(me) {
   document.body.dataset.auth = "in";
   setApiLive(true);
   startJobBadge(); // 사이드바 "작업" 진행 중 개수 + AI 작업 끝남 알림(어느 화면에서든 — 2026-10-16 백그라운드 AI)
+  // 관리자: 승인 대기 중인 가입 신청이 있으면 알림 한 번 (2026-10-29)
+  if (me.is_admin && me.access_approval) {
+    pendingCount().then((n) => {
+      state.accessPending = n;
+      if (n) toast(`가입 신청 ${n}건이 승인을 기다려요 — 계정 메뉴 → 가입 신청`, "", { duration: 8000 });
+    });
+  }
   // 구글에서 돌아오면 주소에서 code를 지운 뒤(supabase-js) 떠나기 전 화면으로, 없으면 서재로
   let back = "";
   try { back = sessionStorage.getItem(RETURN_HASH_KEY) || ""; sessionStorage.removeItem(RETURN_HASH_KEY); } catch { /* 무시 */ }
@@ -339,6 +358,9 @@ if (window.paperlabDesktop) {
 $("[data-google]", gate).onclick = (e) => startGoogle(e.currentTarget, false);
 // 다른 계정으로: 구글 계정 고르기 창을 다시 띄운다 (안 그러면 같은 계정으로 돌아와 다시 거부될 수 있음)
 $("[data-gate-switch]", gate).onclick = (e) => startGoogle(e.currentTarget, true);
+// 승인 대기 화면: [다시 확인] = 처음부터 다시(승인됐으면 앱으로), [다른 계정으로 로그인] = 로그아웃 뒤 구글
+$("[data-pending-check]", gate).onclick = () => boot();
+$("[data-pending-out]", gate).onclick = async (e) => { await signOut(); startGoogle(e.currentTarget, true); };
 // 구글 화면에서 뒤로 가기로 돌아오면(bfcache) 버튼을 원래대로
 window.addEventListener("pageshow", (e) => { if (e.persisted) resetGoogleButtons(); });
 
@@ -489,6 +511,9 @@ function openAccountMenu(btn, e, left) {
     { label: "설정", action: () => settingsDialog() },
     { label: "로그아웃", action: logout },
   ];
+  // 관리자: 가입 신청 관리 (2026-10-29 — 관리자 승인 가입)
+  if (u.is_admin) items.unshift({ label: `가입 신청${state.accessPending ? ` (${state.accessPending})` : ""}`,
+    sub: state.accessPending ? "승인 대기" : "", action: () => accessDialog({ onCount: (n) => { state.accessPending = n; } }) });
   // 좁은 화면(사이드바 숨김)에서는 "작업 (n)" · "AI 질문" 항목 (디자인 9.1, 3단계 팀장 결정 — 시안 8장)
   // 6단계 SW-1: 좁은 화면에서는 "휴지통 (n)"을 "작업" 다음에
   if (!left) items.unshift({ label: `휴지통${state.stats.trash ? ` (${state.stats.trash})` : ""}`, action: () => { location.hash = "#/trash"; } });

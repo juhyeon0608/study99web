@@ -43,6 +43,7 @@ from . import extsources
 from . import figures
 from . import tls  # 공용 SSL 문맥 (외부 검색 · AI 호출마다 인증서 묶음을 다시 읽지 않게 — 2026-10-28)
 from . import mschat
+from . import access  # 관리자 승인 가입 (2026-10-29 — PAPERLAB_ALLOWLIST=approval)
 from . import figgen  # 그림 만들기 · 자연어로 고치기 (docs/specs/writing-figure-ai.md)
 from . import proofread  # 맞춤법 · 띄어쓰기 점검 작업 (2026-10-17)
 from . import stats as statcalc  # 통계 계산 → APA 표 · 문장 (2026-10-28)
@@ -321,7 +322,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     # 개발 서버에서 개발용 허용 목록이 비어 있으면 테스트 프로젝트 사용자를 모두 허용 (운영은 항상 목록대로)
     allowlist = Allowlist(config.allowed_emails, allow_all=dev and not config.allowed_emails,
                           enabled=config.allowlist_enabled)
-    if not config.allowlist_enabled:
+    gate = access.AccessGate(db, config.admin_emails)
+    if config.access_approval:
+        log.info("관리자 승인 가입 켜짐 (PAPERLAB_ALLOWLIST=approval) — 관리자 %d명", len(config.admin_emails))
+        if not config.admin_emails:
+            log.warning("PAPERLAB_ADMIN_EMAILS 가 비어 있어 가입 신청을 승인할 사람이 없어요")
+    elif not config.allowlist_enabled:
         log.warning("허용 목록 꺼짐 — Google OAuth 테스트 사용자로 제한 (PAPERLAB_ALLOWLIST=off)")
     elif not config.allowed_emails and not dev:
         log.warning("허용 목록이 비어 있어 모든 사용자 요청이 403이 됩니다 (ALLOWED_EMAILS · PAPERLAB_ALLOWLIST 확인)")
@@ -339,6 +345,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                   lifespan=lifespan)
     st = app.state
     st.config, st.db, st.storage, st.verifier, st.allowlist = config, db, store, verifier, allowlist
+    st.access_gate = gate  # 관리자 승인 가입 (access.py — 테스트가 관리자 목록을 바꿈)
     st.box = SecretBox(config.encryption_key)
     st.sources_factory = sources_factory or (lambda get: Sources(get))
     st.ai_factory = ai_factory or (lambda get: AIService(get))
@@ -439,6 +446,13 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 allowlist.check(claims)
             except NotAllowed:
                 return finish(JSONResponse(NOT_ALLOWED, status_code=403))
+            if config.access_approval:  # 관리자 승인 가입 (access.py)
+                try:
+                    acc = await run_in_threadpool(gate.status, claims)
+                except DBUnavailable:
+                    return finish(JSONResponse(DB_UNAVAILABLE, status_code=503))
+                if acc != "approved":
+                    return finish(JSONResponse(access.PENDING if acc == "pending" else access.REJECTED, status_code=403))
             user_id = claims["sub"]
             request.state.claims = claims
             ws.seen_user(user_id)  # 워커 적응형 폴링 — 최근 화면 활동 (10.2절)
@@ -841,7 +855,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         meta = ctx.claims.get("user_metadata") or {}
         name = str(meta.get("full_name") or meta.get("name") or "")[:200]
         prof = ctx.lib.ensure_profile(ctx.email, name)
-        return {"user_id": ctx.uid, "email": prof["email"] or ctx.email, "display_name": prof["display_name"]}
+        return {"user_id": ctx.uid, "email": prof["email"] or ctx.email, "display_name": prof["display_name"],
+                "is_admin": gate.is_admin(ctx.claims), "access_approval": config.access_approval}
 
     @app.get("/api/meta")
     def meta():
@@ -2146,6 +2161,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             else:
                 res = sources.search(q, source, page, 20, year_from, year_to, sort, oa)
         except SourceError as e:
+            if e.code:  # 화면이 종류별 안내 · 단추(다시 시도 · OpenAlex로 검색)를 보여 줌
+                return JSONResponse({"detail": str(e), "code": e.code}, status_code=503)
             raise HTTPException(502, str(e)) from e
         res["items"] = mark_library(ctx, res["items"])
         return res
@@ -3173,6 +3190,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     mschat.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, new_job=new_job, maintain=maintain,
                                               free=lambda: ws.free))
     figgen.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, new_job=new_job))  # POST /api/ai/figure
+    # 관리자 승인 가입 (2026-10-29): /api/admin/access — 관리자만
+    access.register(app, Ctx, SimpleNamespace(gate=gate, db=db, enabled=config.access_approval))
     # 원고 공유 링크 · 의견 (2026-10-27): /s/토큰 · /api/public/share/… (로그인 없음) · /api/…/shares · comments
     shares.register(app, Ctx, SimpleNamespace(need_manuscript=need_manuscript, db=db, storage=store,
                                               page=STATIC_DIR / "share.html"))

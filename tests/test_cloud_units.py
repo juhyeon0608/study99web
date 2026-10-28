@@ -253,7 +253,7 @@ def test_migration_files_follow_naming():
 
 
 # ---------------------------------------------------------------- 정적 검사
-SYSTEM_TABLES = {"allowed_emails", "schema_migrations"}
+SYSTEM_TABLES = {"allowed_emails", "schema_migrations", "access_requests"}  # access_requests: 서버(system_tx)만 — 관리자 승인 가입
 SHARED_TABLES = {"external_works", "citation_edges"}  # 인용 그래프 공용 캐시 (citation-graph 명세 8.4 · AC-G20)
 # 사용자 권한이 일부러 좁은 개인 표: 6단계 묘비는 security definer 트리거만 쓰고 사용자는 읽기 · 180일 정리만
 NARROW_GRANTS = {"sync_tombstones": "grant select, delete on paperlab.sync_tombstones to authenticated;"}
@@ -557,3 +557,7 @@ def test_allowlist_switch():
     with pytest.raises(ConfigError) as e:
         ServerConfig.from_env({**env, "PAPERLAB_ALLOWLIST": "false"})  # on · off 말고는 거부(오타로 꺼지지 않게)
     assert e.value.names == ["PAPERLAB_ALLOWLIST"]
+    # 관리자 승인 가입 (2026-10-29 — access.py): approval = 허용 목록 끔 + 승인 확인, 관리자 이메일 소문자
+    ap = ServerConfig.from_env({**env, "PAPERLAB_ALLOWLIST": "approval", "PAPERLAB_ADMIN_EMAILS": " Me@X.com , b@y.com"})
+    assert ap.access_approval and not ap.allowlist_enabled and ap.admin_emails == frozenset({"me@x.com", "b@y.com"})
+    assert not ServerConfig.from_env({**env, "PAPERLAB_ALLOWLIST": "off"}).access_approval

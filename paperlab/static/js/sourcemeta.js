@@ -95,6 +95,12 @@ export function searchErrorView(code, source) {
       return { head: `${name} 키가 맞지 않거나 사용기간이 끝났어요.`, body: "관리자에게 알려 주세요. 그동안은 다른 데이터베이스를 골라 주세요.",
         actions: source === "riss" ? ["openalex", "riss"] : ["openalex"] };
     case "upstream_limited":
+      // Semantic Scholar 키 없는 요청 = 전 세계 공용 한도 (2026-10-28 사용자 "한 번도 검색 안 했는데")
+      if (source === "semanticscholar") {
+        return { head: "Semantic Scholar가 지금 요청을 받지 않아요.",
+          body: "키 없이 쓰는 전 세계 사용자가 한도를 함께 나눠 써서 생겨요. 내가 검색을 많이 해서가 아니에요. 잠시 후 다시 시도하거나 OpenAlex로 찾아 주세요.",
+          actions: ["retry", "openalex"] };
+      }
       return { head: `${name}에 요청이 많아 잠시 막혔어요.`,
         body: keyed ? "PaperLab 사용자가 같은 공용 키를 함께 써서 생길 수 있어요. 잠시 후 다시 시도해 주세요." : "잠시 후 다시 시도해 주세요.",
         actions: ["retry"] };

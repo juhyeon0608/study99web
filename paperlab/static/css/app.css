@@ -937,6 +937,7 @@ body[data-auth="pending"] > .gate, body[data-auth="out"] > .gate {
 .gate-icon svg.ico { width: 22px; height: 22px; }
 .gate-icon[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); }
 .gate-icon[data-tone="danger"] { background: var(--danger-soft); color: var(--danger); }
+.gate-icon[data-tone="info"] { background: var(--accent-soft); color: var(--accent-text); }
 .gate-actions { display: flex; flex-direction: column; gap: 8px; }
 .gate-actions > .btn { width: 100%; height: 40px; font-size: 14px; }
 .gate-email {
@@ -2186,4 +2187,11 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .rv-item.rv-closed .rv-note { color: var(--text-3); }
 .rv-doc { font-size: 13.5px; line-height: 1.75; }
 .rv-doc [data-cid] { cursor: pointer; }
+/* 가입 신청 관리 (adminaccess.js — 2026-10-29) */
+.acc-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 60vh; overflow-y: auto; }
+.acc-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.acc-item[data-st="pending"] { border-left: 3px solid var(--warn); }
+.acc-item[data-st="rejected"] { opacity: .7; }
+.acc-item[data-st="pending"] .acc-st { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+.acc-item[data-st="approved"] .acc-st { background: var(--success-soft); color: var(--success); border-color: transparent; }
 

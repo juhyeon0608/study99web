@@ -307,3 +307,28 @@ def test_year_is_int_or_none():
     assert cr["year"] == 2021 and cr["issued"] == "2021-03-05"
     assert sources.norm_crossref({"issued": {"date-parts": [[None]]}, "created": {"date-parts": [[2018]]}})["year"] == 2018
     assert sources.norm_crossref({"issued": {"date-parts": [["n.d."]]}})["year"] is None
+
+
+def test_s2_search_retries_429_then_explains_shared_limit(monkeypatch):
+    """Semantic Scholar 키 없는 요청은 공용 한도라 첫 검색도 429 (2026-10-28): 쉬고 두 번 더, 그래도 429면 code로"""
+    monkeypatch.setattr(sources, "S2_LIMITER", sources.RateLimiter(0))
+    calls = []
+
+    def handler(request):
+        calls.append(request.url.path)
+        if len(calls) < 3:
+            return httpx.Response(429, headers={"Retry-After": "1"})
+        return httpx.Response(200, json={"total": 1, "data": [{"paperId": "x", "title": "T", "year": 2020}]})
+
+    s = sources.Sources(lambda k: "", transport=httpx.MockTransport(handler))
+    sleeps = []
+    s._sleep = sleeps.append
+    res = s.search("q", "semanticscholar")
+    assert res["total"] == 1 and len(calls) == 3 and sleeps == [1.0, 2.0]
+
+    calls.clear()
+    s2 = sources.Sources(lambda k: "", transport=httpx.MockTransport(lambda r: (calls.append(1), httpx.Response(429))[1]))
+    s2._sleep = lambda t: None
+    with pytest.raises(sources.SourceError) as e:
+        s2.search("q", "semanticscholar")
+    assert e.value.code == "upstream_limited" and len(calls) == 3

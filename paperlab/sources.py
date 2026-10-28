@@ -41,7 +41,13 @@ ATOM = {"a": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/a
 
 
 class SourceError(Exception):
-    pass
+    code = ""  # 화면 오류 상자 종류 (sourcemeta.js searchErrorView) — 비면 문구만. 하위 클래스가 덮어씀
+
+
+def _limited(message: str) -> SourceError:
+    e = SourceError(message)
+    e.code = "upstream_limited"
+    return e
 
 
 # ------------------------------------------------------------------ helpers
@@ -258,6 +264,7 @@ class Sources:
                  resolver: Callable[[str, int], list[str]] | None = None):
         self.get_setting = get_setting
         self._transport = transport
+        self._sleep = time.sleep  # 429 다시 시도 대기 (테스트에서 바꿔 넣음)
         # 사용자 주소로 PDF를 받을 때 쓰는 DNS 해석 (테스트에서 바꿔 넣음)
         self._resolver = resolver or _resolve_host
 
@@ -269,7 +276,7 @@ class Sources:
         return httpx.Client(timeout=httpx.Timeout(20.0, connect=10.0), follow_redirects=True,
                             headers={"User-Agent": ua}, transport=self._transport, verify=tls.context())
 
-    def _get_json(self, url: str, params: dict | None = None, headers: dict | None = None) -> dict:
+    def _get_json(self, url: str, params: dict | None = None, headers: dict | None = None, patient: bool = True) -> dict:
         host = url.split("/")[2]
 
         def same_host_only(request: httpx.Request) -> None:
@@ -277,16 +284,27 @@ class Sources:
             if request.url.host != host:
                 raise SourceError(f"{host} 오류 (다른 주소로 이동)")
 
-        try:
-            with self._client(email=url.startswith(CROSSREF)) as c:
-                c.event_hooks["request"] = [same_host_only]
-                r = c.get(url, params=params, headers=headers)
-        except httpx.HTTPError as e:
-            raise SourceError(f"{url.split('/')[2]}에 연결할 수 없어요: {e}") from e
+        # Semantic Scholar 키 없는 요청은 전 세계 키 없는 사용자가 한도를 함께 나눠 써서, 처음 검색해도 429가 자주 온다
+        # (2026-10-28 사용자 화면 "한 번도 검색 안 했는데"). 서버 전체 초당 1회로 보내고, 429면 잠깐 쉬고 두 번 더 해 본다
+        s2 = host == S2_HOST
+        for attempt in range(3 if s2 and patient else 1):  # patient=False: AI로 찾기 — 기다리지 않고 OpenAlex만으로
+            if s2:
+                S2_LIMITER.acquire()
+            try:
+                with self._client(email=url.startswith(CROSSREF)) as c:
+                    c.event_hooks["request"] = [same_host_only]
+                    r = c.get(url, params=params, headers=headers)
+            except httpx.HTTPError as e:
+                raise SourceError(f"{host}에 연결할 수 없어요: {e}") from e
+            if r.status_code != 429 or attempt == 2 or not s2:
+                break
+            self._sleep(min(4.0, max(1.0, _retry_after(r.headers)) * 2 ** attempt))  # 지수 백오프: 1초 → 2초 (S2 키 신청 때 약속)
         if r.status_code == 404:
             raise SourceError("찾을 수 없어요 (404)")
         if r.status_code == 429:
-            raise SourceError(f"{url.split('/')[2]} 요청 한도를 넘었어요. 잠시 후 다시 시도하거나 설정에서 API 키를 넣어주세요.")
+            if s2:
+                raise _limited("Semantic Scholar 공용 요청 한도가 차서 지금 요청을 받지 않아요.")
+            raise _limited(f"{host} 요청 한도를 넘었어요. 잠시 후 다시 시도하거나 설정에서 API 키를 넣어주세요.")
         if r.status_code >= 400:
             raise SourceError(f"{url.split('/')[2]} 오류 ({r.status_code})")
         return r.json()
@@ -305,14 +323,14 @@ class Sources:
     # ------------------------------------------------------------- search
     def search(self, query: str, source: str = "openalex", page: int = 1, per_page: int = 20,
                year_from: int | None = None, year_to: int | None = None, sort: str = "relevance",
-               open_access: bool = False) -> dict:
+               open_access: bool = False, patient: bool = True) -> dict:
         query = (query or "").strip()
         if not query:
             return {"items": [], "total": 0}
         if source == "arxiv":
             return self._search_arxiv(query, page, per_page, sort, year_from, year_to)
         if source == "semanticscholar":
-            return self._search_s2(query, page, per_page, year_from, year_to, open_access)
+            return self._search_s2(query, page, per_page, year_from, year_to, open_access, patient)
         if source == "crossref":
             return self._search_crossref(query, page, per_page, year_from, year_to, sort)
         return self._search_openalex(query, page, per_page, year_from, year_to, sort, open_access)
@@ -362,14 +380,14 @@ class Sources:
             raise SourceError(f"arXiv 오류 ({r.status_code})")
         return parse_arxiv_feed(r.text)
 
-    def _search_s2(self, query, page, per_page, year_from, year_to, open_access):
+    def _search_s2(self, query, page, per_page, year_from, year_to, open_access, patient=True):
         params = {"query": query, "offset": (page - 1) * per_page, "limit": per_page, "fields": S2_FIELDS}
         yr = self._year_range(year_from, year_to)
         if yr:
             params["year"] = yr
         if open_access:
             params["openAccessPdf"] = ""
-        data = self._get_json(f"{S2}/paper/search", params, self._s2_headers())
+        data = self._get_json(f"{S2}/paper/search", params, self._s2_headers(), patient)
         return {"items": [norm_s2(d) for d in data.get("data") or []], "total": data.get("total", 0)}
 
     def _search_crossref(self, query, page, per_page, year_from, year_to, sort):

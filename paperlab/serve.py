@@ -279,7 +279,7 @@ def main(argv: list[str] | None = None, *, runner=run_server, acl_check=env_file
         return 1
     log.info(json.dumps({"message": "서버 시작", "version": __version__, "commit": commit, "host": HOST,
                          "port": args.port, "storage": config.storage_backend,
-                         "allowlist": "on" if config.allowlist_enabled else "off",
+                         "allowlist": "approval" if config.access_approval else "on" if config.allowlist_enabled else "off",
                          "embed": app.state.rag.embedder is not None, "converter": convert.available()},
                         ensure_ascii=False))
     runner(app, args.port)

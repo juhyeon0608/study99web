@@ -357,7 +357,7 @@ def test_check_shows_allowlist_state(tmp_path, capsys, isolated):
     f = write_env(tmp_path / "b.env", good_env(PAPERLAB_ALLOWLIST="yes"))
     assert serve.main(["--check", "--env-file", str(f)], acl_check=lambda p: "") == 2
     out = capsys.readouterr().out
-    assert "허용 목록 값 틀림(on/off만)" in out and "on (" not in out
+    assert "허용 목록 값 틀림(on/off/approval만)" in out and "on (" not in out
     f = write_env(tmp_path / "c.env", good_env(PAPERLAB_ALLOWLIST="off", ALLOWED_EMAILS=None))
     assert serve.main(["--check", "--env-file", str(f)], acl_check=lambda p: "") == 0
     out = capsys.readouterr().out
