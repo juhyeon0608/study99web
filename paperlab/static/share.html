@@ -13,19 +13,23 @@
 </head>
 <body class="share-body">
   <header class="share-head"><b>PaperLab</b><span class="small muted" data-label></span><span class="spacer"></span>
-    <span class="small muted share-hint" data-hint>글을 골라 의견을 남기거나 직접 고칠 수 있어요 · 남긴 내용은 빨간색으로 보여요</span></header>
+    <span class="small muted share-hint" data-hint></span></header>
+  <div class="share-guide" data-guide hidden>
+    <div class="share-guide-text"><b>원고를 검토해 주세요.</b> 문단마다 있는 <b>[✏ 고치기]</b>를 누르면 그 문단을 직접 고칠 수 있고,
+      <b>[💬 의견]</b>을 누르면 의견을 남길 수 있어요. 보낸 내용은 원고를 쓴 사람에게 <span class="rv-ins">빨간색</span>으로 보여요. 로그인은 필요 없어요.</div>
+    <label class="share-name"><span>이름</span><input class="input" data-name maxlength="40" placeholder="예: 김교수" autocomplete="name"></label>
+  </div>
   <main class="share-main">
     <article class="doc share-doc" data-doc><p class="muted">불러오는 중…</p></article>
     <aside class="share-side" data-side hidden>
-      <h3>의견 <span data-count></span></h3>
+      <h3>남긴 의견 <span data-count></span></h3>
       <ol class="share-comments" data-comments></ol>
       <form class="share-form" data-form>
         <blockquote class="share-quote" data-quote hidden></blockquote>
         <label class="share-edit" data-edit hidden><span class="small">고친 글</span>
           <textarea class="input" name="replacement" rows="4" maxlength="4000"></textarea></label>
-        <input class="input" name="author" maxlength="40" placeholder="이름 (예: 김교수)" required />
-        <textarea class="input" name="body" rows="4" maxlength="4000" placeholder="의견을 적어 주세요. 본문에서 문장을 고르면 그 문장에 달려요." required></textarea>
-        <div class="row" style="gap:6px"><button class="btn primary" type="submit" data-submit>의견 남기기</button>
+        <textarea class="input" name="body" rows="4" maxlength="4000" placeholder="원고 전체에 대한 의견도 여기에 적을 수 있어요" required></textarea>
+        <div class="row" style="gap:6px"><button class="btn primary" type="submit" data-submit>의견 보내기</button>
           <button class="btn" type="button" data-clear-quote hidden>고른 문장 빼기</button></div>
       </form>
     </aside>

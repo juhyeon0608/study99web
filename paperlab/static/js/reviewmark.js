@@ -79,3 +79,25 @@ function wrapQuote(root, c) {
   }
   return true;
 }
+
+// 문단을 통째로 고쳤을 때 바뀐 부분만 (2026-10-28 — 교수님은 문단을 그냥 고치고 [보내기]): 낱말 단위로 앞 · 뒤 같은 부분을
+// 빼고 남은 원래 글(quote) → 고친 글(replacement). 글을 넣기만 했으면 앞 낱말(없으면 뒤 낱말)을 붙여 원고에서 자리를 찾게.
+// 바뀐 게 없으면 null
+export function editSpan(orig, next) {
+  const A = String(orig ?? "").trim().split(/(\s+)/).filter(Boolean);
+  const B = String(next ?? "").trim().split(/(\s+)/).filter(Boolean);
+  let i = 0;
+  while (i < A.length && i < B.length && A[i] === B[i]) i++;
+  let j = 0;
+  while (j < A.length - i && j < B.length - i && A[A.length - 1 - j] === B[B.length - 1 - j]) j++;
+  let a0 = i, a1 = A.length - j, b0 = i, b1 = B.length - j;
+  if (a0 === a1 && b0 === b1) return null;
+  const word = (k) => k >= 0 && k < A.length && /\S/.test(A[k]);
+  if (!A.slice(a0, a1).join("").trim()) { // 넣기만 함 → 이웃 낱말을 함께
+    if (word(a0 - 1) || word(a0 - 2)) { const k = word(a0 - 1) ? a0 - 1 : a0 - 2; b0 -= a0 - k; a0 = k; }
+    else if (word(a1) || word(a1 + 1)) { const k = word(a1) ? a1 + 1 : a1 + 2; b1 += k - a1; a1 = k; }
+  }
+  const quote = A.slice(a0, a1).join("").trim();
+  const replacement = B.slice(b0, b1).join("").trim();
+  return quote ? { quote, replacement } : null;
+}

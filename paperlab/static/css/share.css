@@ -27,3 +27,22 @@
   .share-side { position: static; max-height: none; }
   .share-hint { display: none; }
 }
+/* 쉽게 (2026-10-28): 위 안내 줄 · 이름 한 번 · 문단마다 [✏ 고치기] [💬 의견] · 문단 자리 칸 */
+.share-guide { position: sticky; top: 45px; z-index: 4; display: flex; gap: 16px; align-items: center; flex-wrap: wrap; max-width: 1240px;
+  margin: 12px auto 0; padding: 12px 18px; background: #fff5f5; border: 1px solid #f5c2c2; border-radius: 10px; font-size: 14px; line-height: 1.6; }
+.share-guide[hidden] { display: none; }
+.share-guide-text { flex: 1; min-width: 260px; }
+.share-name { display: flex; align-items: center; gap: 8px; margin: 0; font-weight: 600; }
+.share-name .input { width: 160px; }
+.share-name .input.need { border-color: #e53935; box-shadow: 0 0 0 3px rgba(229, 57, 53, .18); }
+.share-doc .blk { position: relative; border-radius: 6px; transition: background .12s; }
+.share-doc .blk:hover { background: #fafbfc; box-shadow: -8px 0 0 #fafbfc, 8px 0 0 #fafbfc; }
+.blk-tools { display: inline-flex; gap: 4px; margin-left: 8px; vertical-align: middle; opacity: .45; transition: opacity .12s; }
+.blk:hover > .blk-tools, .blk:focus-within > .blk-tools { opacity: 1; }
+.blk-tools .btn { font-size: 12px; padding: 2px 8px; height: auto; }
+@media (hover: none) { .blk-tools { opacity: 1; } }
+.blk-box { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 14px; padding: 10px 12px; border: 2px solid #e53935; border-radius: 8px; background: #fff; list-style: none; }
+.blk-box textarea { font-family: inherit; font-size: 15px; line-height: 1.7; resize: vertical; }
+.blk-box-h { color: #c62828; font-weight: 600; }
+@media (max-width: 900px) { .share-guide { position: static; margin: 10px; } .share-name .input { width: 100%; } .share-name { width: 100%; } }
+.share-form [hidden], .share-side [hidden] { display: none !important; }

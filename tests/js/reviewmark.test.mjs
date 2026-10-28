@@ -30,8 +30,9 @@ test("주인 화면(그림 주소 없음)은 그림을 글로, 공개 페이지�
 
 test("화면 연결: 공개 페이지 · 검토 보기 · AI 패널 · 원고 목록", () => {
   const share = readFileSync(join(JS, "share.js"), "utf8");
-  assert.match(share, /import \{ STATUS_LABEL, markReview, prepareShare \} from "\.\/reviewmark\.js";/);
-  assert.match(share, /kind: mode, replacement: mode === "edit" \? replacement : ""/);
+  assert.match(share, /import \{ STATUS_LABEL, editSpan, markReview, prepareShare \} from "\.\/reviewmark\.js";/);
+  assert.match(share, /send\(\{ kind: mode, quote, replacement: mode === "edit" \? replacement : "", body \}\)/);
+  assert.match(share, /const span = editSpan\(orig, ta\.value\);/);
   const html = readFileSync(join(ROOT, "paperlab", "static", "share.html"), "utf8");
   assert.match(html, /data-how="comment">의견 달기/);
   assert.match(html, /data-how="edit">고치기/);
@@ -42,4 +43,12 @@ test("화면 연결: 공개 페이지 · 검토 보기 · AI 패널 · 원고 �
   assert.match(w, /\["review", "검토",/);
   assert.match(w, /\$\("\[data-comments\]", view\)\.onclick = \(\) => W\.ai && W\.ai\.review\(\);/);
   assert.match(w, /api\.get\("\/api\/reviews"\)/);
+});
+
+test("문단을 통째로 고치면 바뀐 부분만: 바꿈 · 지움 · 넣음 · 같음", () => {
+  assert.deepEqual(R.editSpan("중소 기업은 제한된 자원을 가진다.", "중소 기업은 한정된 자원을 가진다."), { quote: "제한된", replacement: "한정된" });
+  assert.deepEqual(R.editSpan("가 나 다 라", "가 라"), { quote: "나 다", replacement: "" });
+  assert.deepEqual(R.editSpan("가 나 다", "가 나 새말 다"), { quote: "나", replacement: "나 새말" });
+  assert.deepEqual(R.editSpan("가 나", "새말 가 나"), { quote: "가", replacement: "새말 가" });
+  assert.equal(R.editSpan("같은 글", " 같은 글 "), null);
 });
