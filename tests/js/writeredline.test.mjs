@@ -45,7 +45,7 @@ test("발표 자료: AI 답(JSON) → 패널 목록 · 읽지 못하면 null · 
   assert.match(h, /예상 질문/);
   assert.equal(S.slidesHtml("그냥 글", esc), null);
   const w = readFileSync(join(JS, "writing.js"), "utf8");
-  assert.match(w, /\["slides", "발표 자료 만들기…"/);
+  assert.match(readFileSync(join(JS, "writeaimenu.js"), "utf8"), /\["slides", "발표 자료",/); // AI 도우미 '자료 만들기…' 묶음
   assert.match(w, /add\("pptx", "PPT 파일 받기"/);
   assert.match(w, /api\.raw\("POST", "\/api\/slides"/);
 });

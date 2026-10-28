@@ -505,9 +505,9 @@ export function figPane(view, hooks) {
     open,
     toggle: () => (S.open ? setOpen(false) : open()),
     menuItems: () => [
-      { label: "그림 만들기…", sub: "Alt+G", action: () => open({ mode: "describe" }) },
-      { label: "이 내용으로 그림 만들기", action: () => open({ mode: "content" }) },
-      { label: "커서의 그림 고치기", action: editAtCursor },
+      { key: "fig_describe", label: "그림 만들기…", sub: "Alt+G", action: () => open({ mode: "describe" }) },
+      { key: "fig_content", label: "이 내용으로 그림 만들기", action: () => open({ mode: "content" }) },
+      { key: "fig_edit", label: "커서의 그림 고치기", action: editAtCursor },
     ],
     destroy: () => {
       S.dead = true;

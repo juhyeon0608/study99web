@@ -318,8 +318,11 @@ describe("코드 검사", () => {
     const w = src("writing.js");
     assert.match(w, /W\.proof = proofPanel\(view, \{ ta, mid: m\.id/);
     assert.match(w, /if \(W\.proof\) W\.proof\.destroy\(\)/);
-    assert.match(w, /\["abstract_en", "영문 초록 만들기"\], \["abstract_ko", "국문 초록 만들기"\]/);
-    assert.match(w, /label: "맞춤법 · 띄어쓰기 점검…", sub: "Alt\+P"/);
+    const menu = src("writeaimenu.js"); // AI 도우미 묶음 (2026-10-28 버튼 정리)
+    assert.match(menu, /\["abstract_en", "영문 초록 만들기",/);
+    assert.match(menu, /\["abstract_ko", "국문 초록 만들기",/);
+    assert.match(menu, /\["proof", "맞춤법 · 띄어쓰기", "Alt\+P"\]/);
+    assert.match(w, /if \(key === "proof"\) return W\.proof && W\.proof\.open\(\);/);
     assert.match(w, /if \(ABSTRACT_MODES\[mode\]\) \{\n\s+return startAbstract\(mode, ta/);
     assert.match(w, /const resultText = \(j\) => withAbstractHeading\(/);
     assert.match(w, /applyPreview\(ta\.value, j\.write, resultText\(j\)\)/); // 넣기는 원래 패널 경로 그대로

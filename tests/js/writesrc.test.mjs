@@ -79,7 +79,8 @@ test("화면 연결: AI 패널 '출처' 보기 · 미리보기 표시 누르기 
   assert.match(w, /\["source", "출처",/);
   assert.match(w, /const srcV = sourceView\(\$\("\[data-ai-src\]", aside\)/);
   assert.match(w, /mark\.check-mark/);
-  assert.match(w, /출처 확인 \(AI\)…/);
+  assert.match(readFileSync(join(JS, "writeaimenu.js"), "utf8"), /\["source", "출처 확인",/); // AI 도우미 '점검…' 묶음
+  assert.match(w, /if \(key === "source"\) return W\.ai && W\.ai\.source\(claimAt\(/);
   const ui = readFileSync(join(JS, "writesrcui.js"), "utf8");
   assert.match(ui, /api\.post\("\/api\/source-check", \{ claim: claim\.text, manuscript_id: h\.mid \}\)/);
   assert.match(ui, /j\.find_mode === "claim"/);

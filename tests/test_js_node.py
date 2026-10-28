@@ -57,7 +57,7 @@ MIN_PASS = {"extlinks": 80, "graph": 15, "refquote": 10, "jobs": 8, "ask": 8, "e
             "writejournal": 4,
             "writematch": 4,
             "writeredline": 5,
-            "writestyle": 4, "writeoutline": 4, "palette": 4, "writestats": 4, "writeguard": 4}  # 문체 · 개요 옮기기 · 명령 팔레트 · 통계 계산 (2026-10-28)  # writeredline: 수정 표시 워드 (2026-10-27)  # writematch: 서재 대조 — 인용 빠짐 · 표절 미리 점검 (2026-10-27)  # writejournal: 투고 규정 · AI 도구 결과 단추 (2026-10-27)  # writegoals: 분량 · 일정 목표 (2026-10-27)  # writeterms: 용어 통일 (2026-10-27)  # writepaste: 표 붙여넣기 (2026-10-27)  # writesrc: 출처 확인 — 확인할 문장 · 표시 자리 · 판정 글 · 고친 문장 자리 · 근거 번호 · 화면 연결 (2026-10-26)  # writemd: 한글 조사 옆 굵게 · 기울임 · 굵게 감싸기 빈칸 · AI 패널 폭 끌기 (2026-10-26)
+            "writestyle": 4, "writeoutline": 4, "palette": 4, "writestats": 4, "writeguard": 4, "writeaimenu": 4}  # 문체 · 개요 옮기기 · 명령 팔레트 · 통계 계산 (2026-10-28)  # writeredline: 수정 표시 워드 (2026-10-27)  # writematch: 서재 대조 — 인용 빠짐 · 표절 미리 점검 (2026-10-27)  # writejournal: 투고 규정 · AI 도구 결과 단추 (2026-10-27)  # writegoals: 분량 · 일정 목표 (2026-10-27)  # writeterms: 용어 통일 (2026-10-27)  # writepaste: 표 붙여넣기 (2026-10-27)  # writesrc: 출처 확인 — 확인할 문장 · 표시 자리 · 판정 글 · 고친 문장 자리 · 근거 번호 · 화면 연결 (2026-10-26)  # writemd: 한글 조사 옆 굵게 · 기울임 · 굵게 감싸기 빈칸 · AI 패널 폭 끌기 (2026-10-26)
 
 
 def _node_version(node: str) -> tuple[int, ...] | None:

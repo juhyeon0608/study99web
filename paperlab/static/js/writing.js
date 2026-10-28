@@ -29,7 +29,7 @@ import {
   applyEditToValue, backspaceEdit, blockInsert, captionInfo, captionLabel, diffEdit, enterEdit, figureInfo, figureMarkdown, findFigures,
   findTables, headingEdit, indentEdit, inFence, isFrontMatter,
   newTable, outlineText, resolveXrefs, splitXrefs, tableAt, tableMarkdown, toggleListEdit,
-  SCOPE_KINDS, SCOPE_NAMES, aiScope, scopeSummary,
+  SCOPE_KINDS, aiScope, scopeSummary,
 } from "./writeedit.js";
 import {
   applyEdit, hydrateFigures, imageFiles, revokeFigureUrls, shortcutDialog, tableDialog, tableSizeDialog, uploadFigure,
@@ -54,6 +54,8 @@ import { historyTools, saveVersion } from "./writehistui.js"; // 버전 기록 (
 import { extractFootnotes, footnoteInsert, splitNotes } from "./writenotes.js";
 import { checkPanel } from "./writecheckui.js"; // 제출 전 점검표 (docs/specs/writing-checklist.md)
 import { figPane } from "./writefigui.js"; // 그림 만들기 · 자연어로 고치기 (docs/specs/writing-figure-ai.md)
+import { AI_GROUPS, ENDING_MODES, SCOPE_MODES, flatChoices } from "./writeaimenu.js"; // AI 도우미 묶음 (2026-10-28 버튼 정리)
+import { aiGroupDialog } from "./writeaimenuui.js";
 // 맞춤법 · 띄어쓰기 점검 패널 · 영문/국문 초록 만들기 (docs/specs/writing-proofread.md)
 import { ABSTRACT_MODES, withAbstractHeading } from "./writeproof.js";
 import { proofPanel, startAbstract } from "./writeproofui.js";
@@ -1796,11 +1798,6 @@ export async function citePicker(ta, replaceFrom, { multi = true, onPick = null,
 }
 
 // ------------------------------------------------------------------ AI 도우미
-const AI_MODES = [
-  ["polish", "문장 다듬기"], ["academic", "학술 문체로"], ["concise", "간결하게"], ["expand", "자세히 풀어 쓰기"],
-  "-", ["to_en", "영어로 번역"], ["to_ko", "한국어로 번역"], "-", ["continue", "이어 쓰기"], ["draft", "논문을 골라 초안 쓰기…"],
-  "-", ["abstract_en", "영문 초록 만들기"], ["abstract_ko", "국문 초록 만들기"], // 초록 → 영문 · 국문 초록 자리 (writing-proofread.md)
-];
 
 // 문장 끝맺음 (2026-10-17 사용자 지적: '학술 문체로 · 다듬기'가 개조식 '~함 · ~했음'을 '~이다'로 바꿈).
 // 원고마다 이 브라우저에 기억하고, 글을 새로 쓰는 모드의 추가 요청 맨 앞에 규칙을 붙인다(서버 2000자 자르기에도 남게)
@@ -1812,14 +1809,12 @@ const ENDING_RULES = {
     + "'~합니다'로 끝내지 마세요.",
   plain: "모든 문장을 서술체로 끝맺으세요. '~이다', '~한다'로 끝내고 '~합니다', '~함', '~임'으로 끝내지 마세요.",
 };
-const ENDING_MODES = new Set(["polish", "academic", "concise", "expand", "to_ko", "continue", "draft"]);
 const endingKey = () => `paperlab.ending.${W.m ? W.m.id : 0}`;
 function getEnding() {
   try { const v = localStorage.getItem(endingKey()); return ENDING_RULES[v] ? v : "keep"; } catch { return "keep"; }
 }
 function setEnding(v) {
   try { localStorage.setItem(endingKey(), v); } catch { /* 저장소 없음 — 이번만 */ }
-  toast(`AI 끝맺음: ${ENDINGS.find((x) => x[0] === v)[1]}`);
 }
 
 // AI에 보낼 범위 (2026-10-17 사용자 지적 "ai 보내는 범위가 좀 이상한"): 선택(없으면 커서 문단) · 문단 · 이 절 · 이 장.
@@ -1831,33 +1826,51 @@ function getScope() {
 }
 function setScope(v) {
   try { localStorage.setItem(scopeKey(), v); } catch { /* 저장소 없음 — 이번만 */ }
-  toast(`AI 범위: ${SCOPE_NAMES[v]}`);
 }
 
 function aiMenu(anchor, ta) {
   popupMenu(anchor, aiItems(ta), { left: true });
 }
 
-// AI 도우미 메뉴 항목 (메뉴 · 명령 팔레트가 같이 씀)
+// AI 도우미 메뉴 (2026-10-28 사용자 요청 "버튼 정리 — 합치고 안에서 옵션을 선택"): 묶음 7개만 두고, 묶음을 누르면 창에서
+// 방식 · 범위 · 끝맺음을 고른다 (writeaimenu.js). 묶음마다 지난번 고른 방식을 이 브라우저에 기억
+const GROUP_BREAK = new Set(["chat", "check"]); // 이 묶음 앞에 구분선
 function aiItems(ta) {
-  const cur = getEnding();
-  const sc = getScope();
-  return [
-    ...AI_MODES.map((m) => (m === "-" ? "-" : { label: m[1], action: () => runAi(m[0], ta) })),
-    ...(W.fig ? ["-", ...W.fig.menuItems()] : []), // 그림 만들기 · 이 내용으로 · 커서의 그림 고치기 (writefigui.js)
-    "-",
-    ...SCOPE_KINDS.map((v) => ({ label: `범위: ${SCOPE_MENU[v]}`, sub: v === sc ? "✓ 사용 중" : "", action: () => setScope(v) })),
-    { label: "맞춤법 · 띄어쓰기 점검…", sub: "Alt+P", action: () => W.proof && W.proof.open() },
-    "-",
-    ...ENDINGS.map(([v, label]) => ({ label: `끝맺음: ${label}`, sub: v === cur ? "✓ 사용 중" : "", action: () => setEnding(v) })),
-    "-",
-    { label: "AI와 대화하며 고치기…", sub: "Alt+C", action: () => W.ai && W.ai.chat() },
-    { label: "출처 확인 (AI)…", sub: "커서 문장 · [확인 필요]", action: () => W.ai && W.ai.source(claimAt(ta.value, ta.selectionStart, ta.selectionEnd)) },
-    { label: "인용이 필요한 문장 찾기…", sub: "내 서재에서 논문 추천", action: () => libraryMatch(ta, "cite") },
-    { label: "표절 미리 점검…", sub: "내 서재 원문과 대조", action: () => libraryMatch(ta, "similar") },
-    "-",
-    ...TOOL_MENU.map(([mode, label, sub]) => ({ label, sub, action: () => runTool(mode, ta) })),
-  ];
+  const out = [];
+  for (const g of AI_GROUPS) {
+    if (g.needs && !W[g.needs]) continue;
+    if (GROUP_BREAK.has(g.id) && out.length) out.push("-");
+    out.push({ label: g.label, sub: g.sub || "", action: () => openAiGroup(g, ta) });
+  }
+  return out;
+}
+// 명령 팔레트: 방식마다 한 줄 ("글 고치기: 간결하게") — 찾아서 바로 실행
+function aiPaletteItems(ta) {
+  return flatChoices({ fig: !!W.fig }).map((c) => ({ label: c.label, sub: c.sub, action: () => runAiChoice(c.key, ta) }));
+}
+const lastChoiceKey = (g) => `paperlab.aiLast.${g}`;
+async function openAiGroup(g, ta) {
+  if (!g.choices) return runAiChoice(g.id, ta);
+  let last = "";
+  try { last = localStorage.getItem(lastChoiceKey(g.id)) || ""; } catch { /* 저장소 없음 */ }
+  const r = await aiGroupDialog(g, { last, scope: getScope(), scopes: SCOPE_MENU, ending: getEnding(), endings: ENDINGS });
+  if (!r || W.ta !== ta) return;
+  try { localStorage.setItem(lastChoiceKey(g.id), r.key); } catch { /* 저장소 없음 */ }
+  if (SCOPE_MODES.has(r.key) && SCOPE_KINDS.includes(r.scope)) setScope(r.scope);
+  if (ENDING_MODES.has(r.key) && ENDING_RULES[r.ending]) setEnding(r.ending);
+  runAiChoice(r.key, ta);
+}
+const TOOL_KEYS = new Set(["matrix", "stats", "memo", "review", "response", "slides", "align"]);
+function runAiChoice(key, ta) {
+  if (key === "chat") return W.ai && W.ai.chat();
+  if (key === "proof") return W.proof && W.proof.open();
+  if (key === "source") return W.ai && W.ai.source(claimAt(ta.value, ta.selectionStart, ta.selectionEnd));
+  if (key === "cite" || key === "similar") return libraryMatch(ta, key);
+  if (key.startsWith("fig_")) { // 그림 만들기 · 이 내용으로 · 커서의 그림 고치기 (writefigui.js)
+    const it = W.fig && W.fig.menuItems().find((x) => x.key === key);
+    return it && it.action();
+  }
+  return TOOL_KEYS.has(key) ? runTool(key, ta) : runAi(key, ta);
 }
 
 // 명령 팔레트 (palette.js): 위 막대 · 도구 막대 · 상태 줄 단추 + AI 도우미 메뉴 + 내보내기 + 개요(장 · 절로 가기)
@@ -1879,7 +1892,7 @@ function writerCommands(view, ta) {
     const keys = ((title.match(/\(([^()]*(?:Ctrl|⌘|Alt|Shift)[^()]*)\)/) || [])[1] || "").split(" · ")[0];
     out.push({ label, sub: label === head ? "" : head.slice(0, 40), keys, group: seg ? "보기" : "원고", action: () => b.click() });
   }
-  for (const it of aiItems(ta)) if (it !== "-") out.push({ ...it, group: "AI" });
+  for (const it of aiPaletteItems(ta)) out.push({ ...it, group: "AI" });
   for (const it of exportItems(view, ta)) if (it !== "-") out.push({ ...it, label: `내보내기: ${it.label}`, group: "내보내기" });
   const items = $$("[data-outline] .outline-item", view);
   sections(ta.value).forEach((h, i) => {
@@ -1976,14 +1989,9 @@ function currentHeading(ta) {
 // 실행하고 결과는 7일 동안 남는다. 끝나면 알림(jobs.js), 결과는 원고 오른쪽 AI 결과 패널(aiPane — 편집기를 가리지 않음) ·
 // 작업 화면에서 열어 넣는다. 넣을 때 그 사이 원고가 바뀌었으면 바뀌는 부분을 패널 안에서 보여 주고 물어본 뒤에만 바꾼다
 // (writeai.js — 새 글을 몰래 덮어쓰지 않음)
-// 논문 검토 · 정리 도구 (2026-10-27 사용자 요청): 고른 논문 · 붙여 넣은 글 · 원고 전체로 만드는 결과 (writeai.js TOOL_MODES)
-const TOOL_MENU = [
-  ["matrix", "선행연구 비교표…", "고른 논문 → 표"], ["stats", "통계 출력 → 표 · 문장 (AI)…", "SPSS · jamovi 출력 붙여넣기 — 원자료는 [통계] 단추"],
-  ["memo", "메모 · 받아쓰기 → 논문 문단…", "고른 글 또는 붙여 넣기"], ["review", "AI 모의 심사…", "원고 전체 · 예상 질문"],
-  ["response", "심사 의견 대응표…", "의견 → 수정 내용 · 위치"], ["slides", "발표 자료 만들기…", "원고 전체 → PPT · 예상 질문"],
-  ["align", "연구문제 ↔ 결론 대응 검사…", "원고 전체 · 빠진 답 찾기"],
-];
-const MODE_LABEL = Object.fromEntries([...AI_MODES.filter((x) => x !== "-"), ...TOOL_MENU.map(([k, l]) => [k, l.replace(/…$/, "")]),
+// 논문 검토 · 정리 도구 (2026-10-27 사용자 요청): 고른 논문 · 붙여 넣은 글 · 원고 전체로 만드는 결과 (writeai.js TOOL_MODES).
+// 메뉴 묶음은 writeaimenu.js — 작업 이름도 거기 방식 이름을 쓴다
+const MODE_LABEL = Object.fromEntries([...AI_GROUPS.flatMap((g) => g.choices || []).map(([k, l]) => [k, l]),
   ["paraphrase", "표절 피해 바꿔 쓰기"], ["journal", "투고 규정 읽기"]]);
 // 원고 전체를 보내는 도구 — 확인 창 문구
 const WHOLE = {

@@ -48,7 +48,7 @@ test("화면 연결: Ctrl+K · 사이드바 버튼 · 원고 명령(도구 막�
   assert.match(app, /\$\("#open-palette"\)\.onclick = \(\) => openPalette\(\)/);
   const w = readFileSync(join(JS, "writing.js"), "utf8");
   assert.match(w, /registerCommands\("writer"/);
-  assert.match(w, /for \(const it of aiItems\(ta\)\)/);
+  assert.match(w, /for \(const it of aiPaletteItems\(ta\)\)/); // AI는 방식마다 한 줄 (writeaimenu.js flatChoices)
   assert.match(w, /for \(const it of exportItems\(view, ta\)\)/);
   assert.match(w, /if \(W\.palette\) W\.palette\(\);/);
   assert.match(readFileSync(join(JS, "writeedit.js"), "utf8"), /명령 팔레트/);

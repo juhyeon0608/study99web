@@ -2145,3 +2145,15 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .stats-chart { margin: 0 0 10px; }
 .stats-chart img { display: block; max-width: 100%; max-height: 340px; margin-top: 6px; background: #fff; border: 1px solid var(--border); border-radius: 6px; }
 .stats-preview thead th { border-top: 1.5px solid var(--text); border-bottom: 1px solid var(--text); font-weight: 600; }
+
+/* AI 도우미 묶음 창 (writeaimenuui.js — 2026-10-28 버튼 정리): 방식 목록 + 범위 · 끝맺음 */
+.ai-group { display: grid; gap: 14px; min-width: min(420px, 80vw); }
+.ai-group .field { display: grid; gap: 6px; margin: 0; }
+.ai-group .seg { flex-wrap: wrap; }
+.ai-choices { display: grid; gap: 4px; }
+.ai-choice { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; cursor: pointer; margin: 0; }
+.ai-choice:hover { background: var(--surface-2); }
+.ai-choice:has(input:checked) { border-color: var(--accent); background: var(--surface-2); }
+.ai-choice input { margin-top: 3px; }
+.ai-choice span { display: grid; gap: 2px; }
+.ai-choice small { color: var(--text-2); font-size: 12px; }

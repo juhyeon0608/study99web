@@ -51,8 +51,7 @@ test("[@키] 넣기: 마침표 앞 · 문장이 바뀌었으면 null · 겹침 �
 
 test("화면 연결: AI 도우미 메뉴 · 서버 주소 · 바꿔 쓰기 모드", () => {
   const w = readFileSync(join(JS, "writing.js"), "utf8");
-  assert.match(w, /libraryMatch\(ta, "cite"\)/);
-  assert.match(w, /libraryMatch\(ta, "similar"\)/);
+  assert.match(w, /if \(key === "cite" \|\| key === "similar"\) return libraryMatch\(ta, key\);/);
   assert.match(w, /mode: "paraphrase"/);
   assert.match(readFileSync(join(JS, "writematchui.js"), "utf8"), /api\.post\("\/api\/library-match"/);
 });

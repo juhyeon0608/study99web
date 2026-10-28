@@ -163,5 +163,5 @@ test("writing.js 연결은 한 줄씩 (import · 열기 · 닫기 · AI 도우�
   assert.match(w, /import \{ figPane \} from "\.\/writefigui\.js";/);
   assert.match(w, /W\.fig = figPane\(view, \{ ta, m, saveVersion: \(c\) => saveVersion\(m\.id, c\)/);
   assert.match(w, /if \(W\.fig\) W\.fig\.destroy\(\);/);
-  assert.match(w, /\.\.\.\(W\.fig \? \["-", \.\.\.W\.fig\.menuItems\(\)\] : \[\]\)/);
+  assert.match(w, /W\.fig && W\.fig\.menuItems\(\)\.find\(\(x\) => x\.key === key\)/); // AI 도우미 '그림…' 묶음 (writeaimenu.js)
 });

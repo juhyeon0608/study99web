@@ -308,7 +308,9 @@ describe("코드 검사", () => {
     assert.match(w, /BATCH_MODES\.has\(mode\) && sc\.paras\.length > 1\) return runBatch\(mode, ta, sc\)/);
     assert.match(w, /api\.post\(`\/api\/manuscripts\/\$\{W\.m\.id\}\/ai-batch`/);
     assert.match(w, /flashRange\(view, ta, s, e\)/);
-    assert.match(w, /\.\.\.SCOPE_KINDS\.map\(\(v\) => \(\{ label: `범위: \$\{SCOPE_MENU\[v\]\}`/);
+    // 범위는 AI 도우미 묶음 창에서 고름 (2026-10-28 버튼 정리 — writeaimenuui.js)
+    assert.match(w, /scopes: SCOPE_MENU/);
+    assert.match(w, /if \(SCOPE_MODES\.has\(r\.key\) && SCOPE_KINDS\.includes\(r\.scope\)\) setScope\(r\.scope\);/);
     const pane = w.slice(w.indexOf("function aiPane("), w.indexOf("async function openAiJobFromHash"));
     assert.match(pane, /data-ai-view="\$\{v\}"/);
     assert.match(pane, /chatView\(\$\("\[data-ai-chat\]", aside\), helpers\)/);
