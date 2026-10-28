@@ -1829,7 +1829,7 @@ function setScope(v) {
 }
 
 function aiMenu(anchor, ta) {
-  popupMenu(anchor, aiItems(ta), { left: true });
+  popupMenu(anchor, aiItems(ta), { left: true, className: "ai-menu" }); // 이름 한 줄 · 설명은 아래 줄 (2026-10-28 글씨 잘림)
 }
 
 // AI 도우미 메뉴 (2026-10-28 사용자 요청 "버튼 정리 — 합치고 안에서 옵션을 선택"): 묶음 7개만 두고, 묶음을 누르면 창에서
