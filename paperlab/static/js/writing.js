@@ -40,7 +40,8 @@ import { claimAt, markerIndex } from "./writesrc.js"; // 출처 확인 (2026-10-
 import { tableFromCells, tableFromTsv } from "./writepaste.js"; // 표 붙여넣기 (2026-10-27)
 import { redlineMarkdown } from "./writeredline.js"; // 수정 표시 워드 (2026-10-27)
 import { slidesHtml } from "./writeslides.js"; // 발표 자료 (2026-10-27)
-import { commentsDialog, openCommentCount, shareDialog } from "./writeshareui.js"; // 공유 링크 · 받은 의견 (2026-10-27)
+import { openCommentCount, shareDialog } from "./writeshareui.js"; // 공유 링크 · 받은 의견 (2026-10-27)
+import { reviewView } from "./writereviewui.js"; // 검토본 · 교수님 의견 빨간색 (2026-10-28)
 import { chapterCounts, dayKey, goalSummary, hasGoals, plainBody } from "./writegoals.js"; // 분량 · 일정 목표 (2026-10-27)
 import { JOURNAL_LABELS, JOURNAL_NUM_KEYS, cleanJournal, parseJournal } from "./writejournal.js"; // 투고 규정 (2026-10-27)
 import { matchDialog } from "./writematchui.js"; // 서재 대조: 인용 빠짐 · 표절 미리 점검 (2026-10-27)
@@ -407,7 +408,8 @@ export async function renderWriteList(main) {
   $("[data-compose]", view).onclick = () => composeDialog();
   $("[data-help]", view).onclick = helpDialog;
   const list = $(".ms-list", view);
-  const items = await api.get("/api/manuscripts").catch((e) => { errorToast(e); return []; });
+  const [items, reviews] = await Promise.all([api.get("/api/manuscripts").catch((e) => { errorToast(e); return []; }),
+    api.get("/api/reviews").catch(() => ({}))]); // 검토본 줄 (2026-10-28)
   if (!items.length) {
     list.innerHTML = `<div class="empty"><div class="big">✍</div><h3>아직 원고가 없어요</h3><p>템플릿을 골라 새 원고를 시작해 보세요.</p></div>`;
     return;
@@ -418,6 +420,17 @@ export async function renderWriteList(main) {
       <div class="paper-sub">${fmtDate(m.updated_at)} 수정 · ${(m.length || 0).toLocaleString("ko-KR")}자</div></div>
       <span class="menu-wrap"><button class="btn sm ghost" data-del>삭제</button></span></div>`);
     row.onclick = () => { location.hash = `#/write/${m.id}`; };
+    // 교수님이 링크를 열어 복사된 검토본: 원고 아래 한 줄 — 누르면 원고를 열고 AI 패널 '검토'로
+    const rv = reviews[String(m.id)];
+    if (rv) {
+      const sub = el(`<button type="button" class="ms-review">↳ 검토본${rv.copies > 1 ? ` ${rv.copies}개` : ""}${rv.open ? ` · 남은 의견 ${rv.open}개` : " · 의견 없음"}</button>`);
+      sub.onclick = (e) => {
+        e.stopPropagation();
+        try { sessionStorage.setItem(REVIEW_OPEN_KEY, String(m.id)); } catch { /* 저장소 없음 */ }
+        location.hash = `#/write/${m.id}`;
+      };
+      $(".grow", row).append(sub);
+    }
     $("[data-del]", row).onclick = async (e) => {
       e.stopPropagation();
       if (!(await confirmDialog(`‘${m.title || "제목 없는 원고"}’ 원고를 삭제할까요? 되돌릴 수 없어요.`, { ok: "삭제", danger: true }))) return;
@@ -480,7 +493,7 @@ export async function openManuscript(main, id) {
       <select class="input fmt-select ${formats ? "" : "hidden"}" data-format title="내보낼 때 쓸 논문 양식" aria-label="논문 양식">${formats ? formatOptions(formats, fmtId, { manage: true }) : ""}</select>
       <button type="button" class="btn sm cover-btn hidden" data-cover title="표지 · 속표지 · 인정서에 들어갈 정보" aria-label="표지 정보">표지 정보</button>
       <button type="button" class="btn sm" data-share title="지도교수님 등에게 원고 링크를 보내 의견을 받아요 (로그인 없이 읽기 · 문장에 의견)">공유</button>
-      <button type="button" class="btn sm" data-comments title="공유 링크로 받은 의견">의견<span class="ck-badge" data-comments-badge hidden></span></button>
+      <button type="button" class="btn sm" data-comments title="공유 링크로 받은 의견 · 고친 글 (검토본) — 편집기 옆에 빨간색으로">의견<span class="ck-badge" data-comments-badge hidden></span></button>
       <span class="menu-wrap"><button class="btn sm" data-export>내보내기 ▾</button></span>
     </div>
     <div class="writer-tools">
@@ -1082,6 +1095,8 @@ function drawStatus(view, ta) {
 }
 
 // ------------------------------------------------------------------ 공유 링크 · 받은 의견 (2026-10-27)
+// 검토본 (2026-10-28): [의견]은 편집기 옆 AI 패널의 '검토' 보기(writereviewui.js)를 연다. 원고 목록의 검토본 줄로 오면 바로 엶
+const REVIEW_OPEN_KEY = "paperlab.openReview";
 function shareTools(view, ta, m) {
   const badge = $("[data-comments-badge]", view);
   const setCount = (n) => {
@@ -1092,21 +1107,15 @@ function shareTools(view, ta, m) {
   const poll = async () => {
     if (W.m !== m || !view.isConnected) return;
     setCount(await openCommentCount(m.id));
-    setTimeout(poll, 120000);
+    setTimeout(poll, 30000);
   };
   poll();
+  W.reviewCount = setCount;
   $("[data-share]", view).onclick = () => shareDialog(m.id);
-  $("[data-comments]", view).onclick = () => commentsDialog(m.id, {
-    onCount: setCount,
-    find: (quote) => {
-      const q = quote.replace(/\s+/g, " ").trim();
-      let at = ta.value.indexOf(q);
-      if (at < 0) at = ta.value.indexOf(q.slice(0, 40)); // 미리보기 글(인용 · 서식이 풀린 글)이라 앞부분으로
-      if (at < 0) return false;
-      selectRange(view, ta, at, at + Math.min(q.length, ta.value.length - at));
-      return true;
-    },
-  });
+  $("[data-comments]", view).onclick = () => W.ai && W.ai.review();
+  let want = "";
+  try { want = sessionStorage.getItem(REVIEW_OPEN_KEY) || ""; sessionStorage.removeItem(REVIEW_OPEN_KEY); } catch { /* 저장소 없음 */ }
+  if (want === String(m.id)) setTimeout(() => W.ai && W.m === m && W.ai.review(), 0);
 }
 
 // ------------------------------------------------------------------ 철회 논문 확인 (2026-10-27)
@@ -2294,11 +2303,13 @@ function aiPane(view, ta, m) {
       <button type="button" class="btn sm ghost" data-ai-close title="AI 결과 패널 닫기 (Alt+A) — 만드는 중인 작업은 계속돼요">닫기</button>
     </div>
     <div class="seg ai-views" role="group" aria-label="AI 패널 보기">${[["result", "결과", "글쓰기 도우미 결과"], ["batch", "일괄", "장 · 절 일괄 처리 결과"],
-      ["chat", "대화", "AI와 대화하며 원고 고치기 (Alt+C)"], ["source", "출처", "[확인 필요] 문장의 근거를 서재 · 외부 논문에서 AI가 확인"]].map(([v, label, title]) => `<button type="button" data-ai-view="${v}" title="${title}">${label}</button>`).join("")}</div>
+      ["chat", "대화", "AI와 대화하며 원고 고치기 (Alt+C)"], ["source", "출처", "[확인 필요] 문장의 근거를 서재 · 외부 논문에서 AI가 확인"],
+      ["review", "검토", "공유 링크로 받은 교수님 의견 · 고친 글 (검토본)"]].map(([v, label, title]) => `<button type="button" data-ai-view="${v}" title="${title}">${label}</button>`).join("")}</div>
     <div class="panel-body ai-pane-body" data-ai-body></div>
     <div class="panel-body ai-pane-body hidden" data-ai-batch></div>
     <div class="ai-pane-chat hidden" data-ai-chat></div>
-    <div class="panel-body ai-pane-body hidden" data-ai-src></div>`;
+    <div class="panel-body ai-pane-body hidden" data-ai-src></div>
+    <div class="panel-body ai-pane-body hidden" data-ai-review></div>`;
   const pick = $("[data-ai-pick]", aside);
   const body = $("[data-ai-body]", aside);
   // 대화 · 일괄 보기 (writechatui.js) — 편집기 · 넣기 도우미를 넘겨줌
@@ -2315,6 +2326,16 @@ function aiPane(view, ta, m) {
     flashRange(view, ta, from, from + text.length);
     toast("고친 문장으로 바꿨어요 — Ctrl+Z로 되돌릴 수 있어요", "success");
   } });
+  // 검토본 (writereviewui.js): 교수님이 고친 글로 바꾸기 전 원고를 버전 기록에
+  const reviewV = reviewView($("[data-ai-review]", aside), { ...helpers, onCount: (n) => W.reviewCount && W.reviewCount(n),
+    replace: (from, to, text) => {
+      if (W.m) saveVersion(W.m.id, ta.value);
+      ta.focus();
+      ta.setSelectionRange(from, to);
+      insertText(ta, text);
+      flashRange(view, ta, from, from + text.length);
+      toast("교수님이 고친 글로 바꿨어요 — Ctrl+Z로 되돌릴 수 있어요", "success");
+    } });
 
   const merged = (j) => S.detail.get(j.id) || j;
   const list = () => {
@@ -2637,6 +2658,9 @@ function aiPane(view, ta, m) {
     $("[data-ai-batch]", aside).classList.toggle("hidden", v !== "batch");
     $("[data-ai-chat]", aside).classList.toggle("hidden", v !== "chat");
     $("[data-ai-src]", aside).classList.toggle("hidden", v !== "source");
+    $("[data-ai-review]", aside).classList.toggle("hidden", v !== "review");
+    $("#ai-pane-h", aside).textContent = v === "review" ? "검토본" : "AI 결과";
+    if (v === "review" && S.open) reviewV.show(); else reviewV.hide();
     if (v === "chat" && S.open) chatV.show(); else chatV.hide();
     if (v === "source" && S.open) srcV.show(); else srcV.hide();
     if (v === "batch" && S.open) batchV.show(bid); else batchV.hide();
@@ -2677,6 +2701,12 @@ function aiPane(view, ta, m) {
     S.view = "batch";
     if (!S.open) setOpen(true, { bid }); else setView("batch", bid);
     sayWriter(view, "AI 패널 '일괄'에서 문단마다 진행을 보여 드려요. 계속 쓰셔도 돼요");
+  };
+  // 검토 보기 ([의견] · 원고 목록의 검토본 줄)
+  const openReview = () => {
+    if (!alive()) return;
+    S.view = "review";
+    if (!S.open) setOpen(true); else setView("review");
   };
   // 출처 확인 보기: claim(문장)이면 새로 확인, job이면 그 결과
   const openSource = (claim, job = null) => {
@@ -2755,7 +2785,7 @@ function aiPane(view, ta, m) {
   return {
     refresh, show,
     toggle: () => setOpen(!S.open),
-    chat: openChat, batch: openBatch, source: (claim) => openSource(claim ?? null),
+    chat: openChat, batch: openBatch, source: (claim) => openSource(claim ?? null), review: openReview,
     target: (id, text) => { if (text) S.targets.set(id, text); }, // 보낸 범위 한 줄 (이 화면에서 만든 결과만)
     destroy: () => {
       S.dead = true;
@@ -2764,6 +2794,7 @@ function aiPane(view, ta, m) {
       chatV.destroy();
       batchV.destroy();
       srcV.hide();
+      reviewV.destroy();
       document.removeEventListener("keydown", onKey);
       window.removeEventListener("paperlab:open-job", onOpenJob);
     },

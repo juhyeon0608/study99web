@@ -8,8 +8,10 @@ const linkOf = (token) => `${location.origin}/s/${token}`;
 /** [공유]: 링크 만들기(이름 · 의견 허용 · 기간) · 목록(복사는 만들 때만 — 토큰은 서버에 해시만) · 끊기 */
 export async function shareDialog(mid) {
   const body = el(`<div class="share-dlg">
-    <p class="small muted" style="margin:0 0 8px">링크를 받은 사람은 로그인 없이 <b>지금 원고</b>를 읽고, 문장을 골라 의견을 남길 수 있어요.
-      원고를 고치면 링크에서도 바로 바뀐 글이 보여요. 링크 주소는 만들 때 한 번만 보여 드려요.</p>
+    <p class="small muted" style="margin:0 0 8px">링크를 받은 분이 <b>처음 열 때 그때 원고가 검토본으로 복사</b>돼요. 받은 분은 로그인 없이
+      검토본을 읽고, 글을 골라 의견을 남기거나 직접 고칠 수 있어요. 남긴 내용은 원고 화면 [의견]에서 빨간색으로 보여요.
+      의견마다 수정 완료 · 거부를 고르고, 모두 처리하면 검토본은 지워져요. (읽기 전용 링크는 복사하지 않고 지금 원고를 보여 줘요.)
+      링크 주소는 만들 때 한 번만 보여 드려요.</p>
     <form class="row share-new" style="gap:6px;flex-wrap:wrap;align-items:center">
       <input class="input" name="label" maxlength="60" placeholder="받는 분 (예: 김교수님)" style="flex:1;min-width:160px">
       <select class="input" name="days" style="width:auto" aria-label="기간">${DAYS.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
@@ -59,53 +61,7 @@ export async function shareDialog(mid) {
   load();
 }
 
-/** [의견]: 받은 의견 목록 — 문장 찾아가기 · 반영함 표시 · 지우기. onCount(안 본 수)로 단추 숫자 */
-export async function commentsDialog(mid, { find, onCount }) {
-  const body = el(`<div class="cm-box"><div class="row" style="gap:8px;align-items:center;margin-bottom:8px">
-    <label class="small"><input type="checkbox" data-hide checked> 반영한 의견 숨기기</label><span class="spacer"></span>
-    <button type="button" class="btn sm" data-reload>새로 보기</button></div><ol class="cm-list" data-list></ol></div>`);
-  modal({ title: "받은 의견", body, wide: true, floating: true });
-  let items = [];
-  const draw = () => {
-    const hide = $("[data-hide]", body).checked;
-    const list = $("[data-list]", body);
-    const shown = items.filter((c) => !hide || !c.resolved);
-    list.innerHTML = shown.length ? "" : `<li class="small muted">${items.length ? "모두 반영했어요" : "아직 받은 의견이 없어요. [공유]로 링크를 보내 보세요"}</li>`;
-    for (const c of shown) {
-      const li = el(`<li class="cm-item${c.resolved ? " is-done" : ""}"><div class="small"><b></b> <span class="muted"></span></div>
-        ${c.quote ? `<button type="button" class="link cm-quote" title="원고에서 이 문장 찾기"></button>` : ""}<p class="cm-body"></p>
-        <div class="row" style="gap:6px"><button type="button" class="btn sm" data-done>${c.resolved ? "다시 열기" : "반영함"}</button>
-        <button type="button" class="btn sm ghost" data-del>지우기</button></div></li>`);
-      $("b", li).textContent = c.author;
-      $(".muted", li).textContent = `${c.share_label ? `${c.share_label} 링크 · ` : ""}${new Date(c.created_at).toLocaleString("ko-KR")}`;
-      $(".cm-body", li).textContent = c.body;
-      const q = $(".cm-quote", li);
-      if (q) {
-        q.textContent = `“${c.quote}”`;
-        q.onclick = () => { if (!find(c.quote)) toast("원고에서 이 문장을 찾지 못했어요 — 그 사이 고쳤을 수 있어요", "error"); };
-      }
-      $("[data-done]", li).onclick = async () => {
-        try { await api.patch(`/api/comments/${c.id}`, { resolved: !c.resolved }); c.resolved = !c.resolved; draw(); count(); } catch (e) { errorToast(e); }
-      };
-      $("[data-del]", li).onclick = async () => {
-        if (!(await confirmDialog("이 의견을 지울까요?", { ok: "지우기" }))) return;
-        try { await api.del(`/api/comments/${c.id}`); items = items.filter((x) => x !== c); draw(); count(); } catch (e) { errorToast(e); }
-      };
-      list.append(li);
-    }
-  };
-  const count = () => onCount(items.filter((c) => !c.resolved).length);
-  const load = async () => {
-    try { items = (await api.get(`/api/manuscripts/${mid}/comments`)).items; } catch (e) { return errorToast(e); }
-    draw();
-    count();
-  };
-  $("[data-hide]", body).onchange = draw;
-  $("[data-reload]", body).onclick = load;
-  load();
-}
-
-/** 단추 숫자만 (원고를 열 때 · 2분마다) */
+/** 단추 숫자만 (원고를 열 때 · 30초마다) — 받은 의견 · 고친 글은 writereviewui.js(AI 패널 '검토') */
 export async function openCommentCount(mid) {
   try { return (await api.get(`/api/manuscripts/${mid}/comments`)).open; } catch { return 0; }
 }

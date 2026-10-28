@@ -15,7 +15,12 @@
 .share-quote { margin: 4px 0; padding: 4px 8px; border-left: 3px solid #f59e0b; background: #fff7e6; font-size: 12.5px; color: #6b4e16; }
 .share-form { display: flex; flex-direction: column; gap: 6px; }
 .share-form textarea { font-family: inherit; resize: vertical; }
-.share-pick { position: absolute; z-index: 10; box-shadow: 0 2px 8px rgba(0,0,0,.15); }
+.share-pick { position: absolute; z-index: 10; display: flex; gap: 4px; padding: 4px; background: var(--surface, #fff); border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+.share-pick[hidden] { display: none; }
+.share-edit { display: flex; flex-direction: column; gap: 4px; }
+.share-edit[hidden] { display: none; }
+.share-comments li { cursor: pointer; }
+.rv-note { color: #c62828; }
 @media (max-width: 900px) {
   .share-main { grid-template-columns: minmax(0, 1fr); padding: 10px; }
   .share-doc { padding: 20px 16px; }

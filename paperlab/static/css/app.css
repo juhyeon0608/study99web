@@ -2164,3 +2164,26 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .ai-choice input { margin-top: 3px; }
 .ai-choice span { display: grid; gap: 2px; }
 .ai-choice small { color: var(--text-2); font-size: 12px; }
+
+/* 공유 검토본 표시 (reviewmark.js — 2026-10-28): 교수님 의견 · 고친 글은 빨간색, 처리한 것(수정 완료 · 거부)은 흐리게 */
+.rv-mark { background: rgba(220, 38, 38, .10); color: #c62828; text-decoration: underline; text-decoration-color: #e53935; text-underline-offset: 3px; border-radius: 2px; padding: 0; }
+.rv-del { color: #c62828; text-decoration: line-through; text-decoration-color: #e53935; background: rgba(220, 38, 38, .06); }
+.rv-ins { color: #c62828; text-decoration: underline; text-decoration-color: #e53935; text-underline-offset: 3px; background: rgba(220, 38, 38, .10); font-weight: 600; }
+.rv-ins::before { content: " "; }
+.rv-closed, .rv-mark.rv-closed, .rv-del.rv-closed, .rv-ins.rv-closed { color: var(--text-3, #8a8f98); background: none; text-decoration-color: var(--text-3, #8a8f98); font-weight: inherit; opacity: .8; }
+.rv-flash { outline: 2px solid #e53935; outline-offset: 2px; border-radius: 3px; }
+/* 원고 목록의 검토본 줄 · AI 패널 '검토' 보기 (writereviewui.js) */
+.ms-review { display: inline-block; margin-top: 4px; padding: 2px 8px; border: 0; border-radius: 6px; background: rgba(220, 38, 38, .08); color: #c62828; font-size: 12px; cursor: pointer; }
+.ms-review:hover { background: rgba(220, 38, 38, .14); }
+.rv-head .rv-pick { flex: 1; min-width: 0; height: 30px; }
+.rv-info { margin: 6px 0; }
+.rv-tabs { margin-bottom: 8px; }
+.rv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.rv-item { border: 1px solid var(--border); border-left: 3px solid #e53935; border-radius: 8px; padding: 8px 10px; background: var(--surface); }
+.rv-item.rv-closed { border-left-color: var(--border-strong); }
+.rv-what { margin: 6px 0 2px; font-size: 13.5px; line-height: 1.7; word-break: keep-all; overflow-wrap: anywhere; }
+.rv-note { margin: 4px 0 6px; color: #c62828; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.rv-item.rv-closed .rv-note { color: var(--text-3); }
+.rv-doc { font-size: 13.5px; line-height: 1.75; }
+.rv-doc [data-cid] { cursor: pointer; }
+

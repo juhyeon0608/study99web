@@ -76,3 +76,48 @@ def test_share_link_full_flow(client):
     assert client.delete(f"/api/shares/{sid}").status_code == 200
     assert pub.get(f"/api/public/share/{token}", headers={"authorization": ""}).status_code == 404
     assert pub.post(f"/api/public/share/{token}/comments", json={"author": "a", "body": "b"}, headers=hdr).status_code == 404
+
+
+@pytest.mark.db
+def test_review_copy_marks_and_cleanup(client):
+    """검토본 (2026-10-28): 처음 열 때 복사 → 원고를 고쳐도 링크는 검토본 → 고친 글 · 의견 → 주인 수정 완료 · 거부 → 검토본 지움 → 다시 열면 새 검토본"""
+    mid = client.post("/api/manuscripts", json={}).json()["id"]
+    client.patch(f"/api/manuscripts/{mid}", json={"title": "검토 시험", "content": "첫 문장이다. 둘째 문장이다.\n"})
+    token = client.post(f"/api/manuscripts/{mid}/shares", json={"label": "김교수"}).json()["token"]
+    pub = {"authorization": ""}
+    hdr = {"authorization": "", "x-paperlab": "1"}
+    assert client.get(f"/api/manuscripts/{mid}/reviews").json()["items"] == []  # 아직 안 열어 봄 → 검토본 없음
+
+    v = client.get(f"/api/public/share/{token}", headers=pub).json()
+    assert "첫 문장이다" in v["content"] and v["copied_at"]
+    client.patch(f"/api/manuscripts/{mid}", json={"content": "완전히 새로 쓴 원고.\n"})
+    assert "첫 문장이다" in client.get(f"/api/public/share/{token}", headers=pub).json()["content"]  # 링크는 검토본 그대로
+
+    url = f"/api/public/share/{token}/comments"
+    assert client.post(url, json={"author": "김교수", "kind": "edit", "quote": "", "replacement": "x"}, headers=hdr).status_code == 400
+    assert client.post(url, json={"author": "김교수", "kind": "edit", "quote": "둘째", "replacement": "둘째"}, headers=hdr).status_code == 400
+    e = client.post(url, json={"author": "김교수", "kind": "edit", "quote": "둘째 문장이다", "replacement": "둘째 문장은 고친다"}, headers=hdr)
+    assert e.status_code == 201 and e.json()["kind"] == "edit" and e.json()["status"] == "open" and e.json()["body"] == ""
+    c = client.post(url, json={"author": "김교수", "quote": "첫 문장이다", "body": "근거를 쓰세요"}, headers=hdr).json()
+
+    rv = client.get(f"/api/manuscripts/{mid}/reviews").json()
+    assert rv["open"] == 2 and len(rv["items"]) == 1
+    it = rv["items"][0]
+    assert it["has_copy"] and "첫 문장이다" in it["content"] and it["label"] == "김교수"
+    assert [(x["kind"], x["replacement"]) for x in it["comments"]] == [("edit", "둘째 문장은 고친다"), ("comment", "")]
+    assert client.get("/api/reviews").json()[str(mid)] == {"copies": 1, "open": 2}
+
+    assert client.patch(f"/api/comments/{e.json()['id']}", json={"status": "bogus"}).status_code == 400
+    assert client.patch(f"/api/comments/{e.json()['id']}", json={"status": "done"}).json()["cleared"] is False
+    assert client.patch(f"/api/comments/{c['id']}", json={"status": "rejected"}).json()["cleared"] is True
+    assert client.get(f"/api/manuscripts/{mid}/reviews").json() == {"items": [], "open": 0}
+    assert str(mid) not in client.get("/api/reviews").json()
+    statuses = [x["status"] for x in client.get(f"/api/public/share/{token}", headers=pub).json()["comments"]]
+    assert statuses == ["done", "rejected"]  # 교수님 쪽에도 처리 결과
+
+    # 검토를 끝낸 뒤 다시 연 링크 = 지금 원고로 새 검토본
+    assert "완전히 새로 쓴 원고" in client.get(f"/api/public/share/{token}", headers=pub).json()["content"]
+    # 읽기 전용 링크는 복사하지 않고 지금 원고
+    ro = client.post(f"/api/manuscripts/{mid}/shares", json={"allow_comments": False}).json()["token"]
+    v2 = client.get(f"/api/public/share/{ro}", headers=pub).json()
+    assert v2["copied_at"] is None and "완전히 새로 쓴 원고" in v2["content"]
