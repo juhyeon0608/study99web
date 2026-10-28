@@ -76,7 +76,9 @@ a:hover { text-decoration: underline; }
 mark { background: var(--hl-yellow); color: inherit; border-radius: 2px; padding: 0 1px; }
 kbd { font-family: var(--mono); font-size: 11px; padding: 1px 5px; border: 1px solid var(--border-strong); border-radius: 4px; }
 
-#app { display: grid; grid-template-columns: 236px 1fr; height: 100vh; overflow: hidden; }
+/* position: relative — 긴 스크롤 칸 맨 아래의 화면 밖 요소(.sr-only 알림 줄 등 position: absolute)가 #app 밖 문서 높이를
+   늘려 프로그램 전체가 스크롤되고 아래에 빈 공간이 생기던 문제 (2026-10-28 사용자 화면). #app이 그 요소들의 기준이 되어 함께 잘림 */
+#app { position: relative; display: grid; grid-template-columns: 236px 1fr; height: 100vh; overflow: hidden; }
 #app.reading { grid-template-columns: 1fr; }
 #main { min-width: 0; min-height: 0; overflow: hidden; }
 #app.reading #sidebar { display: none; }
