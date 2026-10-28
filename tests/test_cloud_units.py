@@ -561,3 +561,19 @@ def test_allowlist_switch():
     ap = ServerConfig.from_env({**env, "PAPERLAB_ALLOWLIST": "approval", "PAPERLAB_ADMIN_EMAILS": " Me@X.com , b@y.com"})
     assert ap.access_approval and not ap.allowlist_enabled and ap.admin_emails == frozenset({"me@x.com", "b@y.com"})
     assert not ServerConfig.from_env({**env, "PAPERLAB_ALLOWLIST": "off"}).access_approval
+
+
+def test_server_wide_search_keys():
+    """서버 공용 OpenAlex · S2 키 (2026-10-29): 사용자 키가 있으면 그것, 없으면 서버 키, 다른 설정은 그대로"""
+    from paperlab.server import with_server_keys
+    env = {"SUPABASE_URL": "https://x.supabase.co", "SUPABASE_ANON_KEY": "a",
+           "SUPABASE_APP_DB_URL": "postgresql://paperlab_app.ref:pw@h/d", "PAPERLAB_PUBLIC_URL": "https://pl.example",
+           "APP_ENCRYPTION_KEY": base64.b64encode(os.urandom(32)).decode(), "R2_ACCOUNT_ID": "a", "R2_BUCKET": "b",
+           "R2_ACCESS_KEY_ID": "c", "R2_SECRET_ACCESS_KEY": "d", "OPENALEX_API_KEY": " srv-oa ", "SEMANTIC_SCHOLAR_API_KEY": ""}
+    cfg = ServerConfig.from_env(env)
+    assert cfg.openalex_api_key == "srv-oa" and "srv-oa" not in repr(cfg)
+    user = {"semantic_scholar_api_key": "", "summary_language": "한국어"}
+    get = with_server_keys(cfg, lambda k: user.get(k, ""))
+    assert get("openalex_api_key") == "srv-oa" and get("semantic_scholar_api_key") == "" and get("summary_language") == "한국어"
+    user["openalex_api_key"] = "mine"
+    assert get("openalex_api_key") == "mine"

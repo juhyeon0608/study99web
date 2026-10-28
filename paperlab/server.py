@@ -280,7 +280,7 @@ class RequestCtx:
     @property
     def sources(self):
         if self._sources is None:
-            self._sources = self.state.sources_factory(self.settings.get)
+            self._sources = self.state.sources_factory(with_server_keys(self.state.config, self.settings.get))
         return self._sources
 
     @property
@@ -300,6 +300,12 @@ def load_user_settings(lib: Library, box: SecretBox, uid: str) -> UserSettings:
             # 키를 잃었거나 다른 행에서 복사된 값 → 설정 안 된 것으로 보고 다시 입력 안내 (AC-45)
             broken.add(row["name"])
     return UserSettings(lib.get_settings(), secrets, broken, hints)
+
+
+def with_server_keys(config: ServerConfig, get: Callable[[str], str]) -> Callable[[str], str]:
+    """사용자 설정 읽기 + 서버 공용 OpenAlex · Semantic Scholar 키 (2026-10-29): 사용자 키가 있으면 그것, 없으면 서버 키"""
+    shared = {"openalex_api_key": config.openalex_api_key, "semantic_scholar_api_key": config.semantic_scholar_api_key}
+    return lambda k: get(k) or shared.get(k, "")
 
 
 def create_app(config: ServerConfig, *, database: Database | None = None, storage: Storage | None = None,
@@ -371,7 +377,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     st.rag = rg = rag.Rag(store, rag.load_embedder() if embedder is ... else embedder, rag_cache)
     st.runner = runner = ApiRunner(db, store, lambda lib, uid: load_user_settings(lib, st.box, uid),
                                    lambda get: st.ai_factory(get), guide, max_pdf_bytes=AI_MAX_PDF_BYTES,
-                                   rag=rg, sources_factory=lambda get: st.sources_factory(get), **(runner_opts or {}))
+                                   rag=rg, sources_factory=lambda get: st.sources_factory(with_server_keys(config, get)), **(runner_opts or {}))
 
     # ------------------------------------------------------------ security
     # 같은 출처 판단 (명세 6.5, 팀장 결정 S2): 운영은 설정 PAPERLAB_PUBLIC_URL의 출처 하나만 — Host에서 출처를 만들지 않는다
@@ -1551,8 +1557,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             no = parse_openalex_id(res.get("openalex_id")) if res.get("openalex_id") else None
         except BadSeed:
             no = None
-        keys = ctx.settings
-        src = st.graph_sources_factory(keys.get("openalex_api_key") or "", keys.get("semantic_scholar_api_key") or "")
+        keys = with_server_keys(config, ctx.settings.get)
+        src = st.graph_sources_factory(keys("openalex_api_key"), keys("semantic_scholar_api_key"))
         store, today = PgStore(db, ctx.claims), st.graph_today()
         edge = store.edges([no], ["references"]).get((no, "references")) if no else None
         try:
@@ -1770,8 +1776,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             raise ValueError("too deep") from None
 
     def user_keys(lib, uid: str) -> tuple[str, str]:
-        s = load_user_settings(lib, st.box, uid)
-        return s.get("openalex_api_key") or "", s.get("semantic_scholar_api_key") or ""
+        s = with_server_keys(config, load_user_settings(lib, st.box, uid).get)
+        return s("openalex_api_key"), s("semantic_scholar_api_key")
 
     @app.post("/api/graph")
     async def graph(request: Request):
