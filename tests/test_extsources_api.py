@@ -118,7 +118,8 @@ def test_search_errors_and_status(cloud, web):
     """AC-503 · 504 · 506 · 11장: 키 없음 503 · 미지원 400 · 동시 2개 넘으면 429 · DOI는 resolve 경로 · /api/sources"""
     u = cloud.user()
     c = cloud.client(u)
-    assert c.get("/api/sources").json() == {"kci": {"enabled": True}, "riss": {"enabled": True}, "europepmc": {"enabled": True}}
+    assert c.get("/api/sources").json() == {"kci": {"enabled": True}, "riss": {"enabled": True}, "europepmc": {"enabled": True},
+                                            "scienceon": {"enabled": False, "reason": "unconfigured"}}
     r = c.get("/api/search", params={"q": "x", "source": "kci", "sort": "cited"})
     assert (r.status_code, r.json()["code"]) == (400, "unsupported_option")
     web.works["10.1234/plt5"] = oa_work("10.1234/plt5")

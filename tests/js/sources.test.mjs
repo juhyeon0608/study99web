@@ -10,8 +10,8 @@ const read = (p) => readFileSync(new URL(`../../paperlab/static/js/${p}`, import
 
 describe("소스 표 (6.4절 · AC-581)", () => {
   test("새 소스 3개와 묶음", () => {
-    assert.deepEqual(Object.keys(S.SOURCE_LIMITS), ["kci", "riss", "europepmc"]);
-    assert.deepEqual(Object.keys(S.SOURCE_META).map((k) => S.SOURCE_META[k].group), ["전 분야", "전 분야", "전 분야", "전 분야", "국내", "국내", "생명과학 · 의학"]);
+    assert.deepEqual(Object.keys(S.SOURCE_LIMITS), ["kci", "scienceon", "riss", "europepmc"]);
+    assert.deepEqual(Object.keys(S.SOURCE_META).map((k) => S.SOURCE_META[k].group), ["전 분야", "전 분야", "전 분야", "전 분야", "국내", "국내", "국내", "생명과학 · 의학"]);
     for (const k of Object.keys(S.SOURCE_META)) assert.ok(S.GROUPS.includes(S.SOURCE_META[k].group), k);
     assert.equal(S.SOURCE_META.kci.desc, "국내 학술지 논문 · 제목으로 찾아요");
     assert.ok(S.isNewSource("riss") && !S.isNewSource("openalex") && !S.isNewSource("__proto__"));

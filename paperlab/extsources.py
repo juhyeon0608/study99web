@@ -1,8 +1,10 @@
 """5단계 국내 DB · 생명과학 검색 소스 (docs/specs/phase5-korean-db.md 6 · 8 · 14장, K-1).
 
-- KCI(한국연구재단) · RISS(KERIS) · Europe PMC(EMBL-EBI) 검색 → 지금 결과 카드 모양(`sources._empty`).
+- KCI(한국연구재단) · RISS(KERIS) · Europe PMC(EMBL-EBI) · ScienceON(KISTI) 검색 → 지금 결과 카드 모양(`sources._empty`).
 - 고정 호스트 상수에만 요청하고, 리디렉션을 따라가지 않으며, 응답은 10MB까지(`sources.strict_get` — 1B 규칙 공용).
 - KCI · RISS 키는 공용 키 하나씩(U-1, `KCI_API_KEY` · `RISS_API_KEY`). 키가 없으면 그 소스만 꺼짐(외부 호출 0회).
+- ScienceON(2026-10-29)은 인증키 · client id · 등록한 MAC 주소 셋(`SCIENCEON_API_KEY` · `SCIENCEON_CLIENT_ID` ·
+  `SCIENCEON_MAC_ADDRESS`)으로 액세스 토큰(약 2시간)을 받아 쓴다. 응답 XML에 토큰 · client id가 되돌아오므로 그대로 내보내지 않는다.
 - 오류 문구 · 로그에는 호스트 + 상태 + code만(요청 주소 · 검색어 · 키를 넣지 않음).
 - XML은 표준 파서 + `<!DOCTYPE` · `<!ENTITY`가 있으면 파싱 전에 거부(K-2). 새 의존 패키지 없음.
 - 검색 결과는 어디에도 저장하지 않는다(U-5). 무료 PDF 판정 순서(8.3절)는 `plan_pdf`.
@@ -10,12 +12,17 @@
 
 from __future__ import annotations
 
+import base64
 import html
 import json
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime
 from typing import Callable
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 import httpx
 
@@ -32,7 +39,11 @@ RISS_HOST = "www.riss.kr"
 RISS_URL = f"https://{RISS_HOST}/openApi"  # https 우선(14장) — http만 되면 팀장 보고
 EPMC_HOST = "www.ebi.ac.uk"
 EPMC_URL = f"https://{EPMC_HOST}/europepmc/webservices/rest/search"
-LIMITERS = {KCI_HOST: RateLimiter(2), RISS_HOST: RateLimiter(2), EPMC_HOST: RateLimiter(2)}
+SON_HOST = "apigateway.kisti.re.kr"
+SON_TOKEN_URL = f"https://{SON_HOST}/tokenrequest.do"
+SON_URL = f"https://{SON_HOST}/openapicall.do"
+SON_IV = b"jvHJ1EFA0IXBrxxz"  # ScienceON 공개 문서의 고정 IV (인증키가 AES 키)
+LIMITERS = {KCI_HOST: RateLimiter(2), RISS_HOST: RateLimiter(2), EPMC_HOST: RateLimiter(2), SON_HOST: RateLimiter(2)}
 PER_PAGE = 20
 MAX_PAGE = 500
 MAX_QUERY = 300
@@ -40,11 +51,12 @@ MAX_QUERY = 300
 # 소스별 지원 정렬 · '무료만' 필터 (6.4절 — static/js/sourcemeta.js의 SOURCE_LIMITS와 같아야 함, 테스트로 비교)
 SOURCE_LIMITS = {
     "kci": {"sort": ["relevance", "date"], "oa": False},
+    "scienceon": {"sort": ["relevance", "date"], "oa": False},
     "riss": {"sort": ["relevance", "date"], "oa": True},
     "europepmc": {"sort": ["relevance", "date", "cited"], "oa": True},
 }
 EXT_SOURCES = tuple(SOURCE_LIMITS)
-KEYED = {"kci": "KCI_API_KEY", "riss": "RISS_API_KEY"}
+KEYED = {"kci": "KCI_API_KEY", "riss": "RISS_API_KEY", "scienceon": "SCIENCEON_API_KEY"}
 
 # KCI 키 오류 문구(공식 오류 응답 — 키 발급 뒤 녹화로 다시 확인)
 KCI_KEY_ERRORS = ("등록되지 않은", "사용기간", "인증키", "인증 키")
@@ -230,6 +242,68 @@ def parse_kci(body: bytes) -> dict:
     return {"items": items, "total": max(total, len(items))}
 
 
+# ------------------------------------------------------------------ ScienceON (KISTI — 2026-10-29)
+def son_accounts(api_key: str, mac: str, now: datetime | None = None) -> str:
+    """tokenrequest.do의 accounts: {"datetime","mac_address"} JSON → AES-256-CBC(키 = 인증키) → URL-safe base64"""
+    plain = json.dumps({"datetime": (now or datetime.now()).strftime("%Y%m%d%H%M%S"), "mac_address": mac},
+                       separators=(",", ":")).encode()
+    pad = 16 - len(plain) % 16
+    enc = Cipher(algorithms.AES(api_key.encode()), modes.CBC(SON_IV)).encryptor()
+    return base64.urlsafe_b64encode(enc.update(plain + bytes([pad]) * pad) + enc.finalize()).decode()
+
+
+def _son_items(rec: ET.Element) -> dict:
+    out: dict = {}
+    for it in rec.findall("item"):
+        k = it.get("metaCode") or ""
+        if k and k not in out:
+            out[k] = "".join(it.itertext())
+    return out
+
+
+def _son_split(v: str, sep: str) -> list[str]:
+    return [x.strip() for x in (v or "").split(sep) if x.strip()]
+
+
+def norm_scienceon(rec: ET.Element) -> dict:
+    m = _son_items(rec)
+    p = _empty("scienceon")
+    p["title"] = _strip_html(m.get("Title") or m.get("Title2"), 1000)
+    p["authors"] = _authors(_t(a, 300) for a in _son_split(m.get("Author") or m.get("Author2"), ";"))
+    p["year"] = _year(m.get("Pubyear"))
+    d = _t(m.get("Pubdate"), 8)
+    p["issued"] = f"{d[:4]}-{d[4:6]}" if re.fullmatch(r"\d{4}(0[1-9]|1[0-2])\d{2}", d) else (str(p["year"]) if p["year"] else "")
+    p["venue"] = _t(re.split(r"\s+=\s+", m.get("JournalName") or "")[0], 300)  # '한글명 = English name' → 한글명
+    p["publisher"] = _t(m.get("Publisher"), 300)
+    p["volume"], p["issue"] = _t(m.get("VolNo1"), 50), _t(m.get("VolNo2"), 50)
+    p["pages"] = re.sub(r"^pp?\.\s*", "", _t(m.get("PageInfo"), 50))
+    p["doi"] = _doi(m.get("DOI"))
+    p["url"] = _https(m.get("ContentURL"))
+    p["abstract"] = _strip_html(m.get("Abstract") or m.get("Abstract2"), 5000)
+    p["keywords"] = [_t(k, 100) for k in _son_split(html.unescape(m.get("Keyword") or ""), " . ")][:20]
+    p["pdf_url"] = ""  # FulltextURL은 원문 보기 페이지(PDF 주소 아님)
+    if _t(m.get("Degree"), 50):
+        p["item_type"] = "thesis"
+    return p
+
+
+def parse_scienceon(body: bytes) -> dict:
+    """검색 응답. 토큰 만료 · 거부 → _SonTokenError(다시 받아 한 번 더), 그 밖 오류 → upstream_unavailable"""
+    root = parse_xml(body)
+    code = _ftext(root, "statusCode", 10)
+    if code and code != "200":
+        if code == "401":
+            raise _SonTokenError()
+        raise ExtError("upstream_unavailable")
+    total = _int(_ftext(root, "TotalCount", 12)) or 0
+    items = [p for p in (norm_scienceon(r) for r in root.iter("record")) if p["title"]]
+    return {"items": items, "total": max(total, len(items))}
+
+
+class _SonTokenError(Exception):
+    pass
+
+
 # ------------------------------------------------------------------ RISS (6.2절)
 def norm_riss(md: ET.Element) -> dict:
     p = _empty("riss")
@@ -315,15 +389,58 @@ def parse_epmc(body: bytes) -> dict:
 class ExtSources:
     """서버 하나에 하나(공용 키). transport · sleep은 테스트가 바꿔 넣는다."""
 
-    def __init__(self, kci_key: str = "", riss_key: str = "", *, transport: httpx.BaseTransport | None = None,
-                 sleep: Callable[[float], None] = time.sleep, limiters: dict | None = None):
+    def __init__(self, kci_key: str = "", riss_key: str = "", *, scienceon: tuple[str, str, str] = ("", "", ""),
+                 transport: httpx.BaseTransport | None = None, sleep: Callable[[float], None] = time.sleep,
+                 limiters: dict | None = None, clock: Callable[[], float] = time.time):
         self._keys = {"kci": (kci_key or "").strip(), "riss": (riss_key or "").strip()}
+        self._son = tuple((v or "").strip() for v in scienceon)  # (인증키, client id, MAC 주소)
+        self._keys["scienceon"] = self._son[0] if all(self._son) else ""
+        self._son_token, self._son_exp = "", 0.0
+        self._son_lock = threading.Lock()
         self._transport = transport
         self._sleep = sleep
+        self._clock = clock
         self._limiters = limiters if limiters is not None else LIMITERS
 
     def enabled(self, source: str) -> bool:
         return source not in KEYED or bool(self._keys.get(source))
+
+    def _son_token_get(self, fresh: bool = False) -> str:
+        """ScienceON 액세스 토큰 — 만료 5분 전까지 다시 씀. 발급 실패(키 · client id · MAC 불일치) → source_key_invalid"""
+        with self._son_lock:
+            if self._son_token and not fresh and self._clock() < self._son_exp:
+                return self._son_token
+            key, cid, mac = self._son
+            body = self._get(SON_HOST, SON_TOKEN_URL, {"client_id": cid, "accounts": son_accounts(key, mac)})
+            try:
+                data = json.loads(body)
+            except (ValueError, RecursionError):
+                raise ExtError("upstream_unavailable") from None
+            tok = data.get("access_token") if isinstance(data, dict) else None
+            if not isinstance(tok, str) or not re.fullmatch(r"[0-9A-Za-z]{16,200}", tok):
+                raise ExtError("source_key_invalid")
+            try:
+                exp = datetime.strptime(str(data.get("access_token_expire"))[:19], "%Y-%m-%d %H:%M:%S").timestamp()
+            except ValueError:
+                exp = self._clock() + 3600
+            self._son_token, self._son_exp = tok, min(exp, self._clock() + 7200) - 300
+            return tok
+
+    def _search_scienceon(self, q: str, page: int, year_from, year_to, sort: str) -> dict:
+        sq = {"BI": q}
+        if year_from or year_to:
+            sq["PY"] = f"{int(year_from or 1900)}~{int(year_to or datetime.now().year)}"
+        params = {"client_id": self._son[1], "version": "1.0", "action": "search", "target": "ARTI",
+                  "searchQuery": json.dumps(sq, ensure_ascii=False), "curPage": page, "rowCount": PER_PAGE}
+        if sort == "date":
+            params["sortField"], params["sortBy"] = "pubyear", "desc"
+        for fresh in (False, True):
+            params["token"] = self._son_token_get(fresh)
+            try:
+                return parse_scienceon(self._get(SON_HOST, SON_URL, params))
+            except _SonTokenError:
+                continue
+        raise ExtError("source_key_invalid")
 
     def status(self) -> dict:
         """GET /api/sources — 쓸 수 있는지만(키 값은 돌려주지 않음)"""
@@ -358,6 +475,8 @@ class ExtSources:
             if sort == "date":
                 params["sortNm"] = "pubiYr"
             return parse_kci(self._get(KCI_HOST, KCI_URL, params))
+        if source == "scienceon":
+            return self._search_scienceon(q, page, year_from, year_to, sort)
         if source == "riss":
             params = {"key": self._keys["riss"], "version": "1.0", "type": "A", "keyword": q,
                       "rsnum": (page - 1) * PER_PAGE + 1, "rowcount": PER_PAGE}

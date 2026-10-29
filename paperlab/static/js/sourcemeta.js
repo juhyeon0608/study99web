@@ -4,7 +4,7 @@
 import { esc, josa } from "./ui.js";
 
 // 소스별 지원 정렬 · '무료만' 필터 (명세 6.4절). 서버 paperlab/extsources.py SOURCE_LIMITS와 같아야 함(테스트로 비교 — JSON 그대로 둠)
-export const SOURCE_LIMITS = {"kci": {"sort": ["relevance", "date"], "oa": false}, "riss": {"sort": ["relevance", "date"], "oa": true}, "europepmc": {"sort": ["relevance", "date", "cited"], "oa": true}};
+export const SOURCE_LIMITS = {"kci": {"sort": ["relevance", "date"], "oa": false}, "scienceon": {"sort": ["relevance", "date"], "oa": false}, "riss": {"sort": ["relevance", "date"], "oa": true}, "europepmc": {"sort": ["relevance", "date", "cited"], "oa": true}};
 
 export const SORT_LABEL = { relevance: "관련도순", cited: "피인용순", date: "최신순" };
 const OA_LABEL = "무료 PDF 있는 논문만";
@@ -21,6 +21,12 @@ export const SOURCE_META = {
     src: "검색 결과 출처: KCI(한국연구재단)",
     empty: "KCI는 논문 제목으로 찾아요. 제목에 들어갈 낱말로 바꿔 보세요.",
     off: "KCI는 관리자가 키를 등록하면 쓸 수 있어요.",
+  },
+  scienceon: {
+    name: "ScienceON", group: "국내", desc: "국내 과학기술 논문 · KISTI", keyed: true,
+    chip: "ScienceON", noAbs: "초록이 없어요. 제목을 누르면 ScienceON에서 볼 수 있어요.",
+    src: "검색 결과 출처: ScienceON(KISTI)",
+    off: "ScienceON은 관리자가 키를 등록하면 쓸 수 있어요.",
   },
   riss: {
     name: "RISS", group: "국내", desc: "국내 학술논문 · 초록은 RISS에서 봐요", keyed: true,

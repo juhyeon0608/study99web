@@ -264,6 +264,10 @@ class ServerConfig:
     # 5단계 공용 검색 키(U-1 · K-13). 없으면 그 소스만 꺼짐 — 서버 시작은 막지 않음. repr에 값을 넣지 않음
     kci_api_key: str = field(default="", repr=False)
     riss_api_key: str = field(default="", repr=False)
+    # ScienceON(KISTI) — 인증키 · client id · 신청할 때 등록한 MAC 주소 (2026-10-29, 셋 다 있어야 켜짐)
+    scienceon_api_key: str = field(default="", repr=False)
+    scienceon_client_id: str = field(default="", repr=False)
+    scienceon_mac: str = field(default="", repr=False)
     # 서버 공용 OpenAlex · Semantic Scholar 키 (2026-10-29): 사용자 설정에 키가 없으면 이것 (검색 · AI로 찾기 · 인용 그래프)
     openalex_api_key: str = field(default="", repr=False)
     semantic_scholar_api_key: str = field(default="", repr=False)
@@ -319,6 +323,9 @@ class ServerConfig:
             db_limit_bytes=_mb(env, "PAPERLAB_DB_LIMIT_MB", DB_LIMIT_DEFAULT),
             kci_api_key=(env.get("KCI_API_KEY") or "").strip(),
             riss_api_key=(env.get("RISS_API_KEY") or "").strip(),
+            scienceon_api_key=(env.get("SCIENCEON_API_KEY") or "").strip(),
+            scienceon_client_id=(env.get("SCIENCEON_CLIENT_ID") or "").strip(),
+            scienceon_mac=(env.get("SCIENCEON_MAC_ADDRESS") or "").strip(),
             openalex_api_key=(env.get("OPENALEX_API_KEY") or "").strip(),
             semantic_scholar_api_key=(env.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip(),
         )

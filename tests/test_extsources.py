@@ -27,7 +27,7 @@ FX = Path(__file__).parent / "fixtures" / "extsources"
 KCI_KEY = "kci-secret-KEY-1234567890"
 RISS_KEY = "riss-secret-KEY-0987654321"
 EXTERNAL = {"open.kci.go.kr", "www.riss.kr", "riss.kr", "www.ebi.ac.uk", "api.opencitations.net", "api.openalex.org",
-            "api.unpaywall.org", "api.crossref.org", "api.semanticscholar.org"}
+            "api.unpaywall.org", "api.crossref.org", "api.semanticscholar.org", "apigateway.kisti.re.kr"}
 NO_LIMIT = {h: RateLimiter(0) for h in ex.LIMITERS}
 
 
@@ -146,7 +146,7 @@ def test_unconfigured_and_status():
     s, rec, _ = ext(fixture_answer, kci=KCI_KEY, riss="")
     st = s.status()
     assert st == {"kci": {"enabled": True}, "riss": {"enabled": False, "reason": "unconfigured"},
-                  "europepmc": {"enabled": True}}
+                  "scienceon": {"enabled": False, "reason": "unconfigured"}, "europepmc": {"enabled": True}}
     assert KCI_KEY not in json.dumps(st) and "unpaywall" not in st
     with pytest.raises(ex.ExtError) as e:
         s.search("riss", "x")
@@ -618,7 +618,7 @@ def test_code_checks():
     src = (ROOT / "paperlab" / "extsources.py").read_text(encoding="utf-8")
     body = src.split('"""', 2)[-1]
     hosts = set(re.findall(r"https?://([A-Za-z0-9.\-{}_]+)", body))
-    assert hosts <= {"{KCI_HOST}", "{RISS_HOST}", "{EPMC_HOST}", "www.kci.go.kr", "europepmc.org", "arxiv.org"}, hosts
+    assert hosts <= {"{KCI_HOST}", "{RISS_HOST}", "{EPMC_HOST}", "{SON_HOST}", "www.kci.go.kr", "europepmc.org", "arxiv.org"}, hosts
     assert "follow_redirects" not in src and "riss.kr/link" not in body.split("def norm_riss")[0]
     disc = (ROOT / "paperlab" / "static" / "js" / "discover.js").read_text(encoding="utf-8")
     for field in ("it.title", "it.venue", "it.abstract", "it.tldr", "b", "it.badges"):
@@ -679,3 +679,92 @@ def test_request_rules_without_db(local_client):
     assert r.status_code == 400 and r.json()["code"] == "bad_doi"
     st = local_client.get("/api/sources")
     assert st.status_code == 200 and st.json()["kci"]["enabled"] is False and "unpaywall" not in st.json()
+
+
+# ====================================================================== ScienceON (KISTI — 2026-10-29)
+SON = ("0123456789abcdef0123456789abcdef", "son-client-id-123", "9C-6B-00-0E-B4-71")
+
+
+class SonWorld:
+    """가짜 ScienceON: tokenrequest.do → 토큰(발급마다 새 값), openapicall.do → 픽스처. expired에 든 토큰은 401"""
+
+    def __init__(self, mac=SON[2]):
+        self.mac, self.issued, self.expired = mac, [], set()
+
+    def __call__(self, request):
+        q = request.url.params
+        if request.url.path == "/tokenrequest.do":
+            from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+            import base64
+            raw = base64.urlsafe_b64decode(q["accounts"])
+            dec = Cipher(algorithms.AES(SON[0].encode()), modes.CBC(ex.SON_IV)).decryptor()
+            plain = dec.update(raw) + dec.finalize()
+            data = json.loads(plain[:-plain[-1]])
+            if q["client_id"] != SON[1] or data["mac_address"] != self.mac or not re.fullmatch(r"\d{14}", data["datetime"]):
+                return httpx.Response(200, json={"errorCode": "E4107", "statusCode": "401"})
+            tok = f"{len(self.issued) + 1:064d}"
+            self.issued.append(tok)
+            return httpx.Response(200, json={"access_token": tok, "access_token_expire": "2099-01-01 00:00:00.000"})
+        assert request.url.path == "/openapicall.do"
+        if q["token"] in self.expired:
+            return httpx.Response(200, content=b'<?xml version="1.0"?><MetaData><resultSummary><statusCode>401</statusCode>'
+                                               b'<errorMessage>Access Token expired</errorMessage></resultSummary></MetaData>')
+        return httpx.Response(200, content=fx("scienceon_search.handmade.xml"))
+
+
+def son_ext(world, keys=SON):
+    rec = Rec(world)
+    return ex.ExtSources(scienceon=keys, transport=rec.transport(), sleep=lambda s: None, limiters=NO_LIMIT), rec
+
+
+def test_scienceon_search_and_normalize():
+    """토큰 한 번 받아 다시 씀 · 검색어는 BI · 결과 카드 모양 · 제목 없는 레코드는 버림 · 응답에 되돌아온 토큰은 내보내지 않음"""
+    w = SonWorld()
+    s, rec = son_ext(w)
+    assert s.status()["scienceon"] == {"enabled": True}
+    res = s.search("scienceon", "딥러닝 교육")
+    assert res["total"] == 372 and len(res["items"]) == 2
+    a, b = res["items"]
+    assert a["source"] == "scienceon" and a["title"] == "딥러닝 개념 학습을 위한 인공지능 교육 프로그램"
+    assert [x["family"] + x["given"] for x in a["authors"]] == ["류미영", "한선관"]
+    assert (a["year"], a["issued"], a["venue"], a["volume"], a["issue"], a["pages"]) == (2019, "2019-12", "정보교육학회논문지", "23", "6", "583-590")
+    assert a["doi"] == "10.14352/jkaie.2019.23.6.583" and a["url"].startswith("http://click.ndsl.kr/servlet/OpenAPIDetailView")
+    assert a["abstract"].startswith("본 연구는") and "초등학생" in a["abstract"] and "<b>" not in a["abstract"]
+    assert a["keywords"] == ["인공지능", "기계학습", "딥러닝 개념"] and a["pdf_url"] == "" and a["item_type"] == "article"
+    assert (b["title"], b["issued"], b["item_type"]) == ("Deep Learning for Teachers", "2021", "thesis")
+    assert "handmade-token" not in json.dumps(res)
+    s.search("scienceon", "x", page=2, year_from=2018, year_to=2020, sort="date")
+    calls = [r for r in rec.requests if r.url.path == "/openapicall.do"]
+    assert len(w.issued) == 1 and len(calls) == 2  # 토큰은 한 번만
+    q1, q2 = calls[0].url.params, calls[1].url.params
+    assert json.loads(q1["searchQuery"]) == {"BI": "딥러닝 교육"} and q1["target"] == "ARTI" and "sortField" not in q1
+    assert json.loads(q2["searchQuery"]) == {"BI": "x", "PY": "2018~2020"} and q2["curPage"] == "2"
+    assert (q2["sortField"], q2["sortBy"]) == ("pubyear", "desc") and q2["token"] == w.issued[0]
+
+
+def test_scienceon_token_refresh_and_bad_keys():
+    """토큰이 만료되면 새로 받아 한 번 더 · MAC · client id가 틀리면 source_key_invalid · 셋 중 하나라도 없으면 꺼짐(외부 0회)"""
+    w = SonWorld()
+    s, rec = son_ext(w)
+    s.search("scienceon", "x")
+    w.expired.add(w.issued[0])
+    assert s.search("scienceon", "x")["items"] and len(w.issued) == 2
+    w.expired.add(w.issued[1])
+    w.mac = "00-00-00-00-00-00"  # 다시 받기도 실패
+    with pytest.raises(ex.ExtError) as e:
+        s.search("scienceon", "x")
+    assert e.value.code == "source_key_invalid"
+    s2, rec2 = son_ext(SonWorld(mac="AA-BB-CC-DD-EE-FF"))
+    with pytest.raises(ex.ExtError) as e:
+        s2.search("scienceon", "x")
+    assert e.value.code == "source_key_invalid" and len(rec2.requests) == 1
+    for keys in ((SON[0], SON[1], ""), ("", SON[1], SON[2]), (SON[0], "", SON[2])):
+        s3, rec3 = son_ext(SonWorld(), keys)
+        assert s3.status()["scienceon"] == {"enabled": False, "reason": "unconfigured"}
+        with pytest.raises(ex.ExtError) as e:
+            s3.search("scienceon", "x")
+        assert e.value.code == "source_unconfigured" and rec3.requests == []
+    with pytest.raises(ex.ExtError) as e:
+        s.search("scienceon", "x", oa=True)
+    assert e.value.code == "unsupported_option"
+

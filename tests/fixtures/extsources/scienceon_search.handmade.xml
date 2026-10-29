@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<MetaData>
+	<resultSummary>
+		<TotalCount>372</TotalCount>
+		<serviceDatatype>논문</serviceDatatype>
+		<statusCode>200</statusCode>
+	</resultSummary>
+	<parameterData>
+		<client_id>handmade-client-id</client_id>
+		<token>handmade-token-in-echo</token>
+		<searchQuery><![CDATA[{"BI": "딥러닝 교육"}]]></searchQuery>
+		<curPage>1</curPage>
+		<rowCount>20</rowCount>
+	</parameterData>
+	<recordList>
+		<record rownum="1">
+			<item metaCode="CN" metaName="CN"><![CDATA[JAKO201900000000001]]></item>
+			<item metaCode="DBCode" metaName="DB코드"><![CDATA[JAKO]]></item>
+			<item metaCode="Publisher" metaName="출판사"><![CDATA[한국정보교육학회]]></item>
+			<item metaCode="JournalName" metaName="저널명"><![CDATA[정보교육학회논문지 = Journal of the Korean Association of Information Education]]></item>
+			<item metaCode="VolNo1" metaName="권번호"><![CDATA[23]]></item>
+			<item metaCode="VolNo2" metaName="호번호"><![CDATA[6]]></item>
+			<item metaCode="Pubyear" metaName="발행년"><![CDATA[2019]]></item>
+			<item metaCode="Pubdate" metaName="발행일"><![CDATA[20191231]]></item>
+			<item metaCode="Title" metaName="논문명"><![CDATA[딥러닝 개념 학습을 위한 인공지능 교육 프로그램]]></item>
+			<item metaCode="Title2" metaName="논문명2"><![CDATA[AI Education Programs for Deep-Learning Concepts]]></item>
+			<item metaCode="Abstract" metaName="초록"><![CDATA[본 연구는 &lt;b&gt;초등학생&lt;/b&gt;의 딥러닝 개념 학습을 위한 교육 프로그램을 개발하는 것이다.]]></item>
+			<item metaCode="Author" metaName="저자"><![CDATA[류미영;한선관;]]></item>
+			<item metaCode="PageInfo" metaName="페이지정보"><![CDATA[pp.583-590]]></item>
+			<item metaCode="DOI" metaName="DOI"><![CDATA[https://doi.org/10.14352/jkaie.2019.23.6.583]]></item>
+			<item metaCode="FulltextURL" metaName="원문URL"><![CDATA[http://click.ndsl.kr/servlet/OpenAPIFullTextView?cn=JAKO201900000000001&dbt=JAKO&keyValue=1]]></item>
+			<item metaCode="ContentURL" metaName="ScienceON상세링크"><![CDATA[http://click.ndsl.kr/servlet/OpenAPIDetailView?keyValue=1&target=NART&cn=JAKO201900000000001]]></item>
+			<item metaCode="Keyword" metaName="키워드"><![CDATA[인공지능 . 기계학습 . 딥러닝 개념]]></item>
+			<item metaCode="Degree" metaName="학위구분"><![CDATA[]]></item>
+		</record>
+		<record rownum="2">
+			<item metaCode="CN" metaName="CN"><![CDATA[DIKO000000000002]]></item>
+			<item metaCode="Pubyear" metaName="발행년"><![CDATA[2021]]></item>
+			<item metaCode="Pubdate" metaName="발행일"><![CDATA[2021]]></item>
+			<item metaCode="Title" metaName="논문명"><![CDATA[]]></item>
+			<item metaCode="Title2" metaName="논문명2"><![CDATA[Deep Learning for Teachers]]></item>
+			<item metaCode="Author" metaName="저자"><![CDATA[홍길동]]></item>
+			<item metaCode="Degree" metaName="학위구분"><![CDATA[석사]]></item>
+		</record>
+		<record rownum="3">
+			<item metaCode="Title" metaName="논문명"><![CDATA[]]></item>
+		</record>
+	</recordList>
+</MetaData>

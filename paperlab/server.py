@@ -358,7 +358,8 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
     st.backup_sizes = BackupSizeCache(store)
     st.figure_sizes = FigureSizeCache(store)  # 원고 그림 합계 (사용량 · 95% 규칙에 더함)
     # 5단계 KCI · RISS · Europe PMC 검색(공용 키 — U-1). 테스트는 transport를 넣은 것으로 바꿈
-    st.ext = extsources.ExtSources(config.kci_api_key, config.riss_api_key)
+    st.ext = extsources.ExtSources(config.kci_api_key, config.riss_api_key,
+                                   scienceon=(config.scienceon_api_key, config.scienceon_client_id, config.scienceon_mac))
     st.ext_busy = {}  # 사용자당 외부 검색 동시 수(메모리만 — 11장)
     st.ext_lock = threading.Lock()
     st.compose_store = {}
@@ -2174,7 +2175,7 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
         return res
 
     def ext_search(ctx: RequestCtx, q, source, page, year_from, year_to, sort, oa, cursor):
-        """5단계 KCI · RISS · Europe PMC (6장). 결과 · 검색어는 저장하지 않음(U-5). 오류는 code로(문구에 주소 · 키 없음)"""
+        """5단계 KCI · RISS · Europe PMC · ScienceON (6장). 결과 · 검색어는 저장하지 않음(U-5). 오류는 code로(문구에 주소 · 키 없음)"""
         uid = ctx.uid
         with st.ext_lock:
             if st.ext_busy.get(uid, 0) >= 2:  # 사용자당 동시 2개(11장 — 가정)

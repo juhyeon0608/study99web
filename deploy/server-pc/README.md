@@ -380,6 +380,7 @@ powershell -ExecutionPolicy Bypass -File deploy\server-pc\funnel.ps1 status   # 
 |---|---|---|
 | `KCI_API_KEY` | KCI(한국연구재단 학술지 인용색인) Open API 공용 인증키 하나 — 모든 사용자가 같이 씀 | **KCI만 비활성**(논문 찾기 소스 목록에 "KCI (키 등록 전)") |
 | `RISS_API_KEY` | RISS(KERIS) 검색 API 공용 키 하나 | **RISS만 비활성** — 1A의 `[RISS]` 검색 바로가기는 그대로 동작 |
+| `SCIENCEON_API_KEY` · `SCIENCEON_CLIENT_ID` · `SCIENCEON_MAC_ADDRESS` | ScienceON(KISTI) 인증키 · client id · 신청할 때 등록한 서버 PC MAC 주소(`9C-6B-…` 처럼 대문자 · 하이픈). 액세스 토큰(약 2시간)은 서버가 알아서 받음 | **ScienceON만 비활성**. MAC이 다르면(랜카드 교체 등) 검색이 "키가 맞지 않아요"로 실패 → ScienceON에서 MAC 다시 등록 |
 
 - **둘 다 선택 항목**입니다. 없어도 서버는 정상으로 시작하고, Europe PMC(키 없음)와 기존 소스는 그대로 씁니다. 한쪽만 넣어도 됩니다.
 - **값은 채팅에 적지 않습니다.** **[사용자]** 가 서버 PC에서 메모장으로 `C:\Users\USER\.paperlab\cloud.env`를 열어 `KCI_API_KEY=…` · `RISS_API_KEY=…` 줄을 직접 넣고 저장합니다(5절과 같은 방식). 관리자 PC의 `cloud.env`에도 같은 줄이 있어야 녹화 도구(14.3절)가 키를 읽습니다. Claude Code는 파일을 열지 않고, 확인은 서버를 다시 시작한 뒤 화면에서 합니다.
