@@ -186,7 +186,7 @@ test('AC-59 도구 끔: claude --tools "" · --permission-prompts none, codex --
   for (const name of ['shell_tool', 'unified_exec', 'code_mode_host', 'browser_use', 'computer_use', 'apps', 'plugins']) {
     assert.equal(a[a.indexOf(`features.${name}=false`) - 1], '-c', name);
   }
-  assert.ok(a.includes('mcp_servers={}'));
+  assert.ok(a.includes('mcp_servers={}') && !a.includes('--search'));
   const g = await run(task({ engine: 'gemini', json_schema: null, kind: 'chat' }));
   assert.equal(g.outcome, 'succeeded');
   assert.equal(g.text, '가짜 답 [p.1]');
@@ -235,3 +235,22 @@ test('F5 중간 글: 여러 바이트 글자가 출력 조각 경계에 걸려�
   assert.equal(r.outcome, 'succeeded');
   assert.ok(partial.length > 0 && !partial.includes('�') && /^가+$/.test(partial));
 });
+
+test('웹 검색(0.4.5): web_search 작업만 검색 도구 하나 — claude WebSearch, codex --search + node_repl 끔, gemini 는 그대로', () => {
+  const files = { system: 'S', schema: 'C', out: 'O' };
+  let a = buildCommand(task({ web_search: true }), { files, model: null }).args;
+  assert.equal(a[a.indexOf('--tools') + 1], 'WebSearch');
+  assert.equal(a[a.indexOf('--allowedTools') + 1], 'WebSearch');
+  assert.equal(a[a.indexOf('--permission-prompts') + 1], 'none');
+  assert.ok(!a.join(' ').includes('WebFetch') && !a.includes('--dangerously-skip-permissions'));
+  a = buildCommand(task({ engine: 'codex', web_search: true }), { files, model: null }).args;
+  assert.deepEqual(a.slice(0, 2), ['--search', 'exec']);
+  assert.equal(a[a.indexOf('--sandbox') + 1], 'read-only');
+  assert.ok(!a.includes('features.code_mode_host=false') && a.includes('features.shell_tool=false') && a.includes('features.unified_exec=false'));
+  assert.ok(a.includes('mcp_servers={node_repl={enabled=false}}') && !a.includes('mcp_servers={}'));
+  a = buildCommand(task({ engine: 'gemini', web_search: true, json_schema: null }), { files, model: null }).args;
+  assert.ok(!a.includes('--search') && !a.join(' ').includes('WebSearch'));
+  a = buildCommand(task({ web_search: 'yes' }), { files, model: null }).args;
+  assert.equal(a[a.indexOf('--tools') + 1], '');
+});
+

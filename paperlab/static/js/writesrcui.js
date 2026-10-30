@@ -7,9 +7,9 @@ import { FIND_FAIL, FIND_WARN } from "./ask.js";
 import { cancelJob, fmtClock, handledJob, isActive, jobLine, watchJob } from "./jobs.js";
 import { $, $$, copyText, debounce, el, errorToast, esc, toast } from "./ui.js";
 import { CHECK_RE } from "./writemd.js";
-import { checkList, claimAt, claimKey, claimRange, parseClaim, refsHtml } from "./writesrc.js";
+import { checkList, claimAt, claimKey, claimRange, parseClaim, refsHtml, WEB_TONE, webPaper } from "./writesrc.js";
 
-const STEPS = [["queries", "검색어 만들기"], ["search", "서재 · 외부 논문 검색"], ["summary", "근거 판정"]];
+const STEPS = [["queries", "검색어 · 웹 검색"], ["search", "서재 · 논문 검색, 웹 페이지 확인"], ["summary", "근거 판정"]];
 const STATE_TEXT = { queued: "기다리는 중", running: "확인하는 중", succeeded: "끝남", failed: "실패", cancelled: "취소됨" };
 const LIB_WARN = { library_busy: "서재 색인을 불러오는 데 오래 걸려 이번에는 서재 논문을 빼고 확인했어요." };
 const BATCH = 10; // [모두 확인] 한 번에 넣는 문장 수
@@ -30,8 +30,8 @@ function claimHtml(text) {
 export function sourceView(box, h) {
   const S = { jobs: [], sel: null, claims: new Map(), stop: null, visible: false, loaded: false, poll: null };
   box.innerHTML = `<div class="src-head">
-      <p class="small muted" style="margin:0">문장의 주장 · 수치를 <b>내 서재 논문 본문</b>과 <b>OpenAlex · Semantic Scholar</b>에서 찾아
-        AI가 근거가 있는지 판정해요. 미리보기의 노란 <b>[확인 필요]</b> 표시를 누르거나, 문장에 커서를 두고(또는 글을 골라) 아래 단추를 눌러요.</p>
+      <p class="small muted" style="margin:0">문장의 주장 · 수치를 <b>내 서재 논문 본문</b>, <b>OpenAlex · Semantic Scholar</b>,
+        <b>웹(통계 · 정부 · 뉴스 — 서버가 페이지를 열어 인용을 확인한 것만)</b>에서 찾아 AI가 근거가 있는지 판정해요. 미리보기의 노란 <b>[확인 필요]</b> 표시를 누르거나, 문장에 커서를 두고(또는 글을 골라) 아래 단추를 눌러요.</p>
       <div class="row src-actions"><button type="button" class="btn sm primary" data-src-run>커서 문장 출처 확인</button>
         <select class="input src-pick" data-src-pick aria-label="지난 출처 확인 (새것이 위)"></select></div>
       <details class="src-list" data-src-list><summary data-src-count>원고의 [확인 필요]</summary>
@@ -105,6 +105,7 @@ export function sourceView(box, h) {
   const drawResult = (res, claim) => {
     const lib = res.library || [];
     const ext = res.sources || [];
+    const web = res.web || [];
     for (const w of res.warnings || []) {
       const t = FIND_WARN[w] || LIB_WARN[w];
       if (t) out.append(el(`<div class="notice" data-tone="warn"><div>${esc(t)}</div></div>`));
@@ -112,18 +113,20 @@ export function sourceView(box, h) {
     if (!res.answer) {
       out.append(el(`<div class="notice" data-tone="warn"><div><b>근거가 될 자료를 찾지 못했어요.</b> 서재에 관련 논문을 넣거나(본문 색인이 끝나야 해요)
         문장을 더 구체적으로 써서 다시 확인해 보세요.</div></div>`));
+      if ((res.web_unverified || []).length) out.append(unverBox(res.web_unverified));
       return;
     }
     const a = parseClaim(res.answer);
     const sec = el(`<div class="src-result">
       <div class="src-verdict"><span class="chip src-v" data-tone="${esc(a.tone)}">${esc(a.verdict || "판정")}</span>
-        <span class="small muted">서재 조각 ${lib.length} · 외부 논문 ${ext.length}편으로 판정</span></div>
-      ${a.basis ? `<div class="src-sec"><div class="src-h">근거</div><p>${refsHtml(a.basis, esc, { lib: lib.length, ext: ext.length })}</p></div>` : ""}
+        <span class="small muted">서재 조각 ${lib.length} · 외부 논문 ${ext.length}편 · 웹 자료 ${web.length}곳으로 판정</span></div>
+      ${a.basis ? `<div class="src-sec"><div class="src-h">근거</div><p>${refsHtml(a.basis, esc, { lib: lib.length, ext: ext.length, web: web.length })}</p></div>` : ""}
       ${a.revised ? `<div class="src-sec"><div class="src-h">고친 문장</div><p class="src-revised"></p>
         <div class="row" style="gap:6px"><button type="button" class="btn sm primary" data-src-apply>원고에 넣기</button>
         <button type="button" class="btn sm" data-src-copy>복사</button></div></div>` : ""}
       ${a.where ? `<div class="src-sec"><div class="src-h">직접 확인할 곳</div><p>${esc(a.where)}</p></div>` : ""}
-      <p class="small muted" style="margin:0">AI가 초록 · 본문 조각만 보고 판정한 결과예요. 넣기 전에 원문을 꼭 확인하세요.</p>
+      <p class="small muted" style="margin:0">AI가 초록 · 본문 조각 · 웹 페이지 발췌만 보고 판정한 결과예요. 넣기 전에 원문을 꼭 확인하세요.
+        뉴스 · 웹 자료는 학술 근거로 약해요 — 가능하면 통계 · 기관 원자료나 논문으로 바꿔 인용하세요.</p>
     </div>`);
     if (a.revised) {
       $(".src-revised", sec).textContent = a.revised;
@@ -152,6 +155,39 @@ export function sourceView(box, h) {
       }
       out.append(list);
     }
+    const unver = res.web_unverified || [];
+    if (web.length || unver.length) {
+      const list = el(`<div class="src-sec"><div class="src-h">웹 자료 (서버가 페이지를 열어 인용을 확인함)</div><ol class="src-web"></ol></div>`);
+      for (const w of web) {
+        const n = Number(String(w.n).replace(/\D/g, ""));
+        const li = el(`<li id="src-W${n}"><div class="src-lib-t"><span class="cite-ref">W${n}</span>
+          <span class="chip src-kind" data-tone="${esc(WEB_TONE[w.kind] || "warn")}"></span> <a target="_blank" rel="noopener noreferrer"></a>
+          <span class="small muted src-web-by"></span></div>
+          <blockquote class="small src-web-q"></blockquote>
+          <div class="row" style="gap:10px"><button type="button" class="link small" data-src-webadd>서재에 넣기(웹페이지)</button></div></li>`);
+        $(".src-kind", li).textContent = w.kind || "웹";
+        const a = $("a", li);
+        a.textContent = w.title || w.site || w.url;
+        if (/^https?:\/\//i.test(w.url || "")) a.href = w.url;
+        $(".src-web-by", li).textContent = [w.publisher, w.date, w.site].filter(Boolean).join(" · ");
+        $(".src-web-q", li).textContent = w.quote || "";
+        const add = $("[data-src-webadd]", li);
+        add.onclick = async () => {
+          add.disabled = true;
+          try {
+            const r = await api.post("/api/papers", webPaper(w), { allowConflict: true });
+            const key = r.paper && r.paper.citekey;
+            add.textContent = `${r.conflict ? "이미 서재에 있어요" : "서재에 넣음"}${key ? ` — [@${key}] 복사` : ""}`;
+            add.disabled = !key;
+            if (key) add.onclick = () => copyText(`[@${key}]`).then(() => toast("인용 표시를 복사했어요 — 문장 끝에 붙여 넣으세요"));
+          } catch (e) { add.disabled = false; errorToast(e); }
+        };
+        $("ol", list).append(li);
+      }
+      if (!web.length) $("ol", list).replaceWith(el(`<p class="small muted" style="margin:4px 0 0">인용을 확인한 웹 자료는 없어요.</p>`));
+      if (unver.length) list.append(unverBox(unver));
+      out.append(list);
+    }
     if (ext.length) {
       const list = el(`<div class="src-sec"><div class="src-h">외부 논문 (OpenAlex · Semantic Scholar)</div><ol class="ask-sources src-ext"></ol></div>`);
       out.append(list);
@@ -167,13 +203,28 @@ export function sourceView(box, h) {
     for (const b of $$("[data-src-ref]", sec)) {
       b.onclick = () => {
         const ref = b.dataset.srcRef;
-        const target = $(ref.startsWith("L") ? `#src-${ref}` : `#src-E${ref}`, out);
+        const target = $(/^[LW]/.test(ref) ? `#src-${ref}` : `#src-E${ref}`, out);
         if (!target) return;
         target.scrollIntoView({ block: "nearest", behavior: "smooth" });
         target.classList.add("is-flash");
         setTimeout(() => target.classList.remove("is-flash"), 1500);
       };
     }
+  };
+
+  // AI가 찾았지만 서버가 확인하지 못한 웹 링크 — 판정 근거로는 쓰지 않았고, 사용자가 직접 열어 볼 수 있게만 (2026-10-31)
+  const unverBox = (unver) => {
+    const d = el(`<details class="src-unver"><summary class="small">직접 확인할 링크 ${unver.length}곳 — 판정에는 쓰지 않음</summary>
+      <p class="small muted" style="margin:4px 0">서버 요청을 막는 사이트이거나, AI가 옮긴 글이 페이지에서 보이지 않았어요.</p><ul></ul></details>`);
+    for (const u of unver) {
+      const li = el(`<li class="small"><a target="_blank" rel="noopener noreferrer"></a> <span class="muted"></span></li>`);
+      const a = $("a", li);
+      a.textContent = u.title || u.url;
+      if (/^https?:\/\//i.test(u.url || "")) a.href = u.url;
+      $("span", li).textContent = `${[u.publisher, u.kind].filter(Boolean).join(" · ")} · ${u.reason === "quote" ? "인용 글이 페이지에 없음" : "페이지를 열 수 없음"}`;
+      $("ul", d).append(li);
+    }
+    return d;
   };
 
   // ---- 원고의 [확인 필요] 목록 (2026-10-27): 표시마다 원고 자리 · 확인 상태 · [확인] / [결과]

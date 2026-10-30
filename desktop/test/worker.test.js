@@ -70,7 +70,7 @@ test('왕복: hello(엔진 광고) → claim → 실행 → result(원문) · �
   assert.deepEqual(hello.body.engines.map((e) => [e.name, e.logged_in, e.slots]), [['claude', true, 2], ['codex', true, 1], ['gemini', false, 1]]);
   assert.equal(hello.body.protocol, 1);
   const claim = srv.calls.find((c) => c.path === '/api/worker/claim');
-  assert.deepEqual(claim.body, { free: { claude: 2, codex: 1 }, paused: false, caps: ['local_text'] }); // 선택 동기화 7.4 — 로컬 본문을 채울 수 있는 워커
+  assert.deepEqual(claim.body, { free: { claude: 2, codex: 1 }, paused: false, caps: ['local_text', 'web_search'] }); // 선택 동기화 7.4 · 출처 확인 웹 검색(0.4.5)
   assert.equal(results[0].outcome, 'succeeded');
   assert.equal(results[0].lease_token, j.lease_token);
   assert.equal(results[0].text, '가짜 답 [p.1]');

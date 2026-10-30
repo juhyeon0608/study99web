@@ -133,10 +133,26 @@ export function claimRange(value, claim) {
 }
 
 /** 근거 글의 [L1] · [3] → 누를 수 있는 번호 (글은 esc 한 뒤 번호만 바꿈) */
-export function refsHtml(text, esc, { lib = 0, ext = 0 } = {}) {
-  return esc(String(text ?? "")).replace(/\[(L?)(\d{1,3})\]/g, (all, l, d) => {
+const REF_NAME = { L: "내 서재 조각", W: "웹 자료", "": "외부 논문" };
+export function refsHtml(text, esc, { lib = 0, ext = 0, web = 0 } = {}) {
+  return esc(String(text ?? "")).replace(/\[([LW]?)(\d{1,3})\]/g, (all, l, d) => {
     const n = Number(d);
-    if (n < 1 || n > (l ? lib : ext)) return "";
-    return `<button type="button" class="cite-ref src-ref" data-src-ref="${l}${n}" title="${l ? "내 서재 조각" : "외부 논문"} ${l}${n} 보기">${l}${n}</button>`;
+    if (n < 1 || n > (l === "L" ? lib : l === "W" ? web : ext)) return "";
+    return `<button type="button" class="cite-ref src-ref" data-src-ref="${l}${n}" title="${REF_NAME[l]} ${l}${n} 보기">${l}${n}</button>`;
   });
+}
+
+// 웹 자료 종류 → 칩 색 (통계 · 정부·기관은 1차 출처, 뉴스 · 웹은 학술 근거 아님)
+export const WEB_TONE = { "통계": "ok", "정부·기관": "ok", "뉴스": "warn", "웹": "warn" };
+
+/** 확인한 웹 자료 → 서재 항목(웹페이지): 제목 · 발행처(저자 자리 literal) · 날짜 · 주소 */
+export function webPaper(w) {
+  const m = /^(\d{4})(?:[-./](\d{1,2}))?(?:[-./](\d{1,2}))?/.exec(String(w.date || "").trim());
+  const year = m ? Number(m[1]) : null;
+  const issued = m ? [m[1], m[2] && m[2].padStart(2, "0"), m[3] && m[3].padStart(2, "0")].filter(Boolean).join("-") : "";
+  return {
+    title: String(w.title || w.site || "").slice(0, 300), item_type: "webpage", url: String(w.url || ""),
+    authors: w.publisher ? [{ literal: String(w.publisher).slice(0, 120) }] : [],
+    venue: String(w.publisher || w.site || "").slice(0, 120), year, issued, abstract: String(w.quote || ""),
+  };
 }

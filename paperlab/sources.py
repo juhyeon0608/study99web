@@ -584,20 +584,38 @@ class Sources:
             raise SourceError("PDF 주소가 없어요")
         if re.match(r"https?://arxiv\.org/abs/", url):
             url = url.replace("/abs/", "/pdf/")
+        data, _ = self._safe_get(url, "application/pdf", max_bytes, "PDF가 너무 커요 (100MB 초과)")
+        if not data.startswith(b"%PDF"):
+            raise SourceError("받은 파일이 PDF가 아니에요 (출판사 로그인 페이지일 수 있어요)")
+        return data
+
+    def fetch_page(self, url: str, max_bytes: int = 3 * 1024 * 1024) -> tuple[bytes, str]:
+        """출처 확인의 웹 자료 확인(2026-10-31): AI가 준 주소를 PDF 받기와 같은 SSRF 규칙으로 → (본문, Content-Type).
+        실패는 SourceError 하나(이유는 내지 않음)"""
+        return self._safe_get(url, "text/html,application/xhtml+xml,text/plain;q=0.9,application/pdf;q=0.8,*/*;q=0.5",
+                              max_bytes, PDF_FETCH_FAILED, timeout=12.0)
+
+    def _safe_get(self, url: str, accept: str, max_bytes: int, too_large: str,
+                  timeout: float | None = None) -> tuple[bytes, str]:
+        """SSRF 방지 GET (download_pdf · fetch_page 공용): http/https만, 계정 정보 든 주소 거부, DNS를 해석해 공인 주소만,
+        검사한 IP로 직접 연결(https는 SNI · 인증서는 원래 이름), 리디렉션은 직접 따라가며 단계마다 같은 검사"""
         try:
             current = httpx.URL(url)
         except (httpx.InvalidURL, TypeError, ValueError):
             raise SourceError(PDF_FETCH_FAILED) from None
         chunks: list[bytes] = []
+        ctype = ""
         try:
             with self._client() as c:
+                if timeout:
+                    c.timeout = httpx.Timeout(timeout, connect=min(timeout, 10.0))
                 for _ in range(MAX_REDIRECTS + 1):
                     if current.scheme not in ("http", "https") or not current.host or current.userinfo:
                         raise SourceError(PDF_FETCH_FAILED)
                     port = current.port or (443 if current.scheme == "https" else 80)
                     ip = self._public_ip(current.host, port)
                     target = current.copy_with(host=ip)
-                    headers = {"Accept": "application/pdf", "Host": current.netloc.decode("ascii")}
+                    headers = {"Accept": accept, "Host": current.netloc.decode("ascii")}
                     ext = {"sni_hostname": current.host} if current.scheme == "https" else {}
                     with c.stream("GET", target, headers=headers, extensions=ext, follow_redirects=False) as r:
                         if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
@@ -605,21 +623,19 @@ class Sources:
                             continue
                         if r.status_code >= 400:
                             raise SourceError(PDF_FETCH_FAILED)
+                        ctype = r.headers.get("content-type") or ""
                         size = 0
                         for chunk in r.iter_bytes():
                             size += len(chunk)
                             if size > max_bytes:
-                                raise SourceError("PDF가 너무 커요 (100MB 초과)")
+                                raise SourceError(too_large)
                             chunks.append(chunk)
                         break
                 else:
                     raise SourceError(PDF_FETCH_FAILED)  # 리디렉션이 너무 많음
         except (httpx.HTTPError, httpx.InvalidURL, ValueError, UnicodeError):
             raise SourceError(PDF_FETCH_FAILED) from None
-        data = b"".join(chunks)
-        if not data.startswith(b"%PDF"):
-            raise SourceError("받은 파일이 PDF가 아니에요 (출판사 로그인 페이지일 수 있어요)")
-        return data
+        return b"".join(chunks), ctype
 
 
 PDF_FETCH_FAILED = "PDF를 받지 못했어요. 주소를 확인하거나 직접 파일을 첨부해 주세요."

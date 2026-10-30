@@ -54,3 +54,65 @@ def test_jobs_paths_use_claim_mode():
     assert jobs.parse_result(job, "판정: 찾지 못함\n근거: 자료에 해당 수치가 없다 [L1].")["answer"].startswith("판정: 찾지 못함")
     q = {"kind": "find", "params": {"question": CLAIM, "mode": "claim"}}
     assert jobs.parse_result(q, '{"queries": ["출생아 수", "Korea births"]}')["queries"] == ["출생아 수", "Korea births"]
+
+
+# ---------------------------------------------------------------- 웹 자료 (2026-10-31)
+PAGE = ("<html><head><title>2023년 출생 통계</title><script>var s='합계출산율은 9.99명';</script></head><body>"
+        "<h1>보도자료</h1><p>2023년 출생아 수는 23만 명으로 전년보다 7.7% 감소했습니다.</p>"
+        "<p>합계출산율은 0.72명으로&nbsp;전년의 0.78명에 비해 0.06명 감소했습니다.</p></body></html>").encode()
+WEB_JSON = {"queries": ["출생아 수 2023", "Korea births 2023"], "web": [
+    {"url": "https://kostat.go.kr/a", "title": "", "publisher": "통계청", "date": "2024-02-28", "kind": "뉴스",
+     "quote": "2023년 출생아 수는 23만 명으로 전년보다 7.7% 감소했습니다."},
+    {"url": "https://news.example.com/b", "title": "기사", "publisher": "○○일보", "date": "", "kind": "뉴스",
+     "quote": "합계출산율은 0.81명으로 전년의 0.78명에 비해 감소했습니다."},  # 수치가 페이지와 다름 → 버림
+    {"url": "https://news.example.com/404", "title": "없는 기사", "publisher": "", "date": "", "kind": "뉴스",
+     "quote": "출생아 수는 23만 명으로 역대 최저였다."},  # 페이지를 못 받음 → 버림
+    {"url": "https://blog.naver.com/x/1", "title": "블로그", "publisher": "", "date": "", "kind": "웹",
+     "quote": "출생아 수는 23만 명으로 역대 최저였다."},  # 블로그 → 받지 않음
+    {"url": "file:///C:/Windows/win.ini", "title": "", "publisher": "", "date": "", "kind": "웹", "quote": "for 16-bit app"},
+]}
+
+
+class FakePages:
+    def __init__(self):
+        self.urls = []
+
+    def fetch_page(self, url):
+        self.urls.append(url)
+        if url.endswith("/404"):
+            raise find.SourceError("x")
+        return PAGE, "text/html; charset=utf-8"
+
+
+def test_web_candidates_parse_and_server_verification():
+    raw = find.parse_web("", WEB_JSON)
+    assert [w["url"] for w in raw] == ["https://kostat.go.kr/a", "https://news.example.com/b", "https://news.example.com/404"]
+    pages = FakePages()
+    web, unver = find.verify_web(pages, raw)
+    assert [(u["url"], u["reason"]) for u in unver] == [("https://news.example.com/b", "quote"), ("https://news.example.com/404", "open")]
+    assert "quote" not in unver[0] and len(web) == 1 and sorted(pages.urls) == sorted(w["url"] for w in raw)
+    w = web[0]
+    assert (w["n"], w["kind"], w["title"], w["site"]) == ("W1", "통계", "2023년 출생 통계", "kostat.go.kr")
+    assert "23만 명" in w["excerpt"] and "9.99" not in w["excerpt"] and "<p>" not in w["excerpt"]
+    # 조금 바꿔 옮긴 인용(수치는 모두 있음)은 받고, 수치가 하나라도 없으면 버림
+    text, title = find.page_text(PAGE, "text/html")
+    assert title == "2023년 출생 통계" and "var s" not in text
+    assert find.quote_found("합계출산율은 0.72명으로 전년의 0.78명보다 0.06명 줄었습니다", text) >= 0
+    assert find.quote_found("합계출산율은 0.70명으로 전년의 0.78명보다 0.06명 줄었습니다", text) == -1
+    assert find.page_text(b"\x89PNG....", "image/png") == ("", "")
+
+
+def test_web_stage_prompt_judgement_and_jobs():
+    s, p = find.query_for({"question": CLAIM, "mode": "claim"}, web=True)
+    assert s == find.WEB_SYSTEM and "<claim>" in p and "블로그" in p and "그대로 옮기세요" in p
+    assert find.query_for({"question": "질문"}, web=True) == find.query_request("질문")  # 찾기에는 웹 없음
+    q = {"kind": "find", "params": {"question": CLAIM, "mode": "claim"}}
+    parsed = jobs.parse_result(q, "", WEB_JSON)
+    assert parsed["queries"] == WEB_JSON["queries"] and len(parsed["web_raw"]) == 3
+    web, _ = find.verify_web(FakePages(), parsed["web_raw"])
+    params = dict(PARAMS, web=web)
+    _, p = find.summary_for(params)
+    assert '<web n="W1" kind="통계" publisher="통계청"' in p and "23만 명으로 전년보다" in p and "학술 근거가 아니라고" in p
+    text = "판정: 근거 있음\n근거: 통계청 자료에 따르면 23만 명이다 [W1][W2][L1].\n고친 문장: 없음\n확인할 곳: 없음"
+    assert "[W1][L1]" in find.check_for(params, text) and "[W2]" not in find.check_for(params, text)
+    assert find.needs_summary(dict(PARAMS, candidates=[], library=[], web=web))

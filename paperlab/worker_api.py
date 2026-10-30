@@ -193,15 +193,16 @@ def register(app: FastAPI, db: Database, allowlist, ws: WorkerState, guide, runn
             if paused:
                 return {"job": None, "next_poll_s": jobs.POLL_IDLE_S}
             ready = [e for e, n in free.items() if n > 0 and (jobs._engine(d, e) or {}).get("logged_in")]
-            # 워커가 할 수 있는 일 (0.4.0: ["local_text"] — 로컬 항목 본문을 채움, selective-sync.md 7.4절). 모르는 값은 버림
+            # 워커가 할 수 있는 일 (0.4.0: ["local_text"] — 로컬 항목 본문을 채움, selective-sync.md 7.4절 ·
+            # 0.4.5: "web_search" — 출처 확인에 웹 검색). 모르는 값은 버림
             caps = body.get("caps")
-            caps = [c for c in caps if c == jobs.LOCAL_CAP] if isinstance(caps, list) and len(caps) <= 16 else []
+            caps = [c for c in caps if c in jobs.CAPS] if isinstance(caps, list) and len(caps) <= 16 else []
             job = jobs.claim_cli(lib, d["id"], ready, caps)
             if not job:
                 active = jobs.has_active_cli(lib) or ws.recently_active(lib.uid)
                 return {"job": None, "next_poll_s": jobs.POLL_ACTIVE_S if active else jobs.POLL_IDLE_S}
             log.info(f"job claimed job={job['id']} kind={job['kind']} engine={job['engine']} device_id={d['id']}")
-            task = jobs.cli_task(lib, job)
+            task = jobs.cli_task(lib, job, caps)
             # 하나 잡은 직후는 0초 — 빈 자리가 남았으면 곧바로 다시 (10.2절)
             return {"job": task, "next_poll_s": 0}
         return handle(request, work)

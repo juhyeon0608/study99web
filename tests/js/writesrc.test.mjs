@@ -87,3 +87,15 @@ test("화면 연결: AI 패널 '출처' 보기 · 미리보기 표시 누르기 
   const jobs = readFileSync(join(JS, "jobs.js"), "utf8");
   assert.match(jobs, /if \(j\.kind === "find" && j\.find_mode === "claim"\) return "출처 확인";/);
 });
+
+test("웹 자료 번호 [W1] 단추 · 웹페이지 서재 항목 (2026-10-31)", () => {
+  const h = W.refsHtml("통계 [W1][W3][1]", esc, { ext: 1, web: 2 });
+  assert.match(h, /data-src-ref="W1"/);
+  assert.match(h, /title="웹 자료 W1 보기"/);
+  assert.doesNotMatch(h, /W3/);
+  const p = W.webPaper({ url: "https://kostat.go.kr/a", title: "2023년 출생 통계", publisher: "통계청", date: "2024.2.28", quote: "23만 명" });
+  assert.deepEqual(p, { title: "2023년 출생 통계", item_type: "webpage", url: "https://kostat.go.kr/a", authors: [{ literal: "통계청" }],
+    venue: "통계청", year: 2024, issued: "2024-02-28", abstract: "23만 명" });
+  assert.deepEqual([W.webPaper({ url: "u", site: "a.kr", date: "" }).year, W.webPaper({ site: "a.kr" }).title], [null, "a.kr"]);
+  assert.equal(W.WEB_TONE["통계"], "ok");
+});

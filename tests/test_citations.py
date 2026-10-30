@@ -114,3 +114,14 @@ def test_parse_any_csl(sample):
 
 def test_bibtex_key_without_library_id(sample):
     assert citations.to_bibtex([sample]).startswith("@inproceedings{vaswani2017attention,")
+
+
+def test_webpage_item_csl():
+    """출처 확인의 웹 자료를 서재에 넣은 웹페이지 (2026-10-31): CSL webpage · 사이트 이름 · 접속일 = 넣은 날"""
+    from datetime import datetime, timezone
+    from paperlab.citations import to_csl_item
+    it = to_csl_item({"id": 1, "item_type": "webpage", "title": "2023년 출생 통계", "venue": "통계청",
+                      "authors": [{"literal": "통계청"}], "url": "https://kostat.go.kr/a", "issued": "2024-02-28",
+                      "added_at": datetime(2026, 10, 31, 9, 0, tzinfo=timezone.utc)})
+    assert it["type"] == "webpage" and it["container-title"] == "통계청" and it["URL"] == "https://kostat.go.kr/a"
+    assert it["accessed"] == {"date-parts": [[2026, 10, 31]]} and it["issued"] == {"date-parts": [[2024, 2, 28]]}

@@ -89,7 +89,7 @@ test('AC-S58(PC 쪽) 로컬 항목 요약: main 에 (paper_id, sha256)로 청하
   assert.equal(cli.length, 1);
   assert.equal(cli[0].stdinSha, crypto.createHash('sha256').update(expected).digest('hex'), 'CLI stdin = 표지를 바꾼 프롬프트');
   const claim = calls.find((c) => c.path === '/api/worker/claim');
-  assert.deepEqual(claim.body.caps, ['local_text']);
+  assert.deepEqual(claim.body.caps, ['local_text', 'web_search']);
   for (const c of calls) assert.ok(!JSON.stringify(c.body).includes('가나다'), `${c.path} 에 본문이 없음`);
 });
 

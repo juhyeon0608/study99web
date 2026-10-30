@@ -332,3 +332,26 @@ def test_s2_search_retries_429_then_explains_shared_limit(monkeypatch):
     with pytest.raises(sources.SourceError) as e:
         s2.search("q", "semanticscholar")
     assert e.value.code == "upstream_limited" and len(calls) == 3
+
+
+def test_fetch_page_ssrf_rules():
+    """출처 확인 웹 자료 받기(2026-10-31)는 PDF 받기와 같은 규칙: 사설 주소 · 계정 정보 · http(s) 밖 거부, 리디렉션도 매 단계 검사"""
+    import httpx
+    from paperlab.sources import Sources, SourceError
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if request.url.path == "/go":
+            return httpx.Response(302, headers={"location": "http://inner.example/secret"})
+        return httpx.Response(200, headers={"content-type": "text/html; charset=utf-8"}, content="<p>안녕</p>".encode())
+
+    ips = {"pub.example": ["93.184.216.34"], "inner.example": ["10.0.0.5"], "local.example": ["127.0.0.1"]}
+    s = Sources(lambda k: "", transport=httpx.MockTransport(handler), resolver=lambda h, p: ips.get(h, []))
+    body, ctype = s.fetch_page("https://pub.example/page")
+    assert "안녕".encode() in body and ctype.startswith("text/html")
+    for bad in ("http://local.example/", "https://pub.example/go", "file:///C:/Windows/win.ini", "https://u:p@pub.example/",
+                "ftp://pub.example/x", "http://localhost/"):
+        with pytest.raises(SourceError):
+            s.fetch_page(bad)
+    assert not any("10.0.0.5" in u for u in seen)

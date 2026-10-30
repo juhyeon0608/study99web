@@ -492,12 +492,21 @@ class ApiRunner:
             settings = self.settings_loader(lib, uid)
         params = dict(j["params"])
         error = ""
+        sources = self.sources_factory(settings.get)
+        raw_web = params.pop("web_raw", None) or []
         try:  # 검색하는 동안 DB 연결을 잡지 않는다
             params["candidates"], params["warnings"], params["counts"] = find.prepare(
-                self.sources_factory(settings.get), self.rag.embedder if self.rag else None, params.get("question") or "",
-                params["queries"])
+                sources, self.rag.embedder if self.rag else None, params.get("question") or "", params["queries"])
         except find.FindError as e:
             error = str(e)
+        if raw_web:  # 출처 확인 웹 후보: 서버가 직접 열어 인용문이 있는 것만 (2026-10-31)
+            params["web"], params["web_unverified"] = find.verify_web(sources, raw_web)
+            if error and params["web"]:  # 논문 검색이 모두 실패해도 확인된 웹 자료로 판정
+                error = ""
+                params.setdefault("candidates", [])
+                params.setdefault("warnings", [])
+                params.setdefault("counts", {})
+            params.setdefault("counts", {})["web"] = len(params["web"])
         with self._tx(uid) as lib:
             cur = lib._one(sql + " for update", (job_id, uid))
             if not cur:

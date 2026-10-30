@@ -74,7 +74,7 @@ for _ext, _type in ((".js", "text/javascript"), (".mjs", "text/javascript"), (".
     mimetypes.add_type(_type, _ext)
 ITEM_TYPES = {"article": "학술지 논문", "conference": "학회 발표", "preprint": "프리프린트", "book": "단행본",
               "chapter": "책의 장", "thesis": "학위논문", "report": "보고서", "dataset": "데이터셋",
-              "document": "문서"}
+              "webpage": "웹페이지", "document": "문서"}
 DOC_ONLY = "문서 (논문 정보 없음)"
 STATUSES = {"unread": "읽을 예정", "reading": "읽는 중", "done": "다 읽음"}
 PUBLIC_API = {("GET", "/api/health"), ("HEAD", "/api/health"), ("GET", "/api/public-config")}

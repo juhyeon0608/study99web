@@ -116,6 +116,9 @@ LOCAL_UNSUPPORTED_IMAGE = "사진(이미지)은 글자를 읽지 않아요. AI �
 LOCAL_AI_KINDS = ("summary", "chat")  # 로컬 항목은 요약 · 논문 대화만 보관 PC CLI로 (D-13)
 LOCAL_ONLY_AI = ("이 PC에만 있는 파일은 선택 설명 · 번역을 쓸 수 없어요. [동기화 켜기]로 서버에 올리면 쓸 수 있어요")
 LOCAL_CAP = "local_text"  # 잡기 요청 caps — 로컬 본문을 채울 수 있는 워커(0.4.0)
+WEB_CAP = "web_search"  # 출처 확인 ①단계에서 웹 검색 도구 하나만 켜는 워커(0.4.5 — 2026-10-31)
+WEB_ENGINES = ("claude", "codex")  # 웹 검색을 켜는 엔진(gemini · agy는 검색어만)
+CAPS = (LOCAL_CAP, WEB_CAP)
 
 
 def local_unsupported_message(file_name: str) -> str:
@@ -885,8 +888,9 @@ def _apply(lib: Library, job: dict, parsed: dict, model: str):
         sources = [dict(c, in_library=x) for c, x in zip(cands, lib.match_library(cands))]
         out = {"answer": parsed.get("answer") or "", "sources": sources, "queries": params.get("queries") or [],
                "warnings": params.get("warnings") or []}
-        if find.is_claim(params):  # 출처 확인: 확인한 문장 · 서재 조각(L번호)도 결과에
+        if find.is_claim(params):  # 출처 확인: 확인한 문장 · 서재 조각(L번호) · 확인한 웹 자료(W번호)도 결과에
             out.update(mode="claim", claim=params.get("question") or "", library=params.get("library") or [],
+                       web=params.get("web") or [], web_unverified=params.get("web_unverified") or [],
                        warnings=out["warnings"] + (params.get("lib_warnings") or []))
         return out
     if kind == "verify":
@@ -1062,14 +1066,17 @@ def text_request(lib: Library, job: dict, lang: str) -> tuple[str, str]:
     return ai.chat_request(ctx, history, params.get("question") or "", lang)
 
 
-def cli_task(lib: Library, job: dict) -> dict | None:
-    """잡은 작업의 실행 내용(8.4절). 만들 수 없으면 작업을 실패로 바꾸고 None"""
+def cli_task(lib: Library, job: dict, caps=()) -> dict | None:
+    """잡은 작업의 실행 내용(8.4절). 만들 수 없으면 작업을 실패로 바꾸고 None.
+    caps에 web_search가 있고 엔진이 claude · codex면 출처 확인 ①단계에 웹 검색을 켠다(task.web_search)"""
     if paper_trashed(lib, job):
         return None
     settings = UserSettings(lib.get_settings())
     lang = settings.get("summary_language") or "한국어"
     params = job["params"] or {}
     schema = ai.SUMMARY_SCHEMA if job["kind"] == "summary" else None
+    web = (job["kind"] == "find" and find.is_claim(params) and not params.get("queries") and WEB_CAP in (caps or ())
+           and job["engine"] in WEB_ENGINES)
     local = None
     loc = lib.local_info(job["paper_id"]) if job["paper_id"] is not None else None
     if loc and loc["storage"] == "local":
@@ -1094,6 +1101,9 @@ def cli_task(lib: Library, job: dict) -> dict | None:
                 return None
             _, system, prompt = prep
             schema = translate.TRANSLATE_SCHEMA
+        elif web:
+            system, prompt = find.query_for(params, web=True)
+            schema = find.CLAIM_WEB_SCHEMA
         else:
             system, prompt = text_request(lib, job, lang)
             if job["kind"] == "find" and not params.get("queries"):
@@ -1115,6 +1125,9 @@ def cli_task(lib: Library, job: dict) -> dict | None:
             "stream_partial": not schema, "system": system, "prompt": prompt, "timeout_s": TIMEOUT_S[job["kind"]]}
     if job["engine"] == "agy":  # --effort (워커 0.4.1+, 옛 워커는 이 칸을 모름 — 0.4.0 워커는 agy를 광고하지 않음)
         task["effort"] = effort
+    if web:  # 웹 검색 도구 하나만(워커 0.4.5+ — caps로 알린 워커에만)
+        task["web_search"] = True
+        task["timeout_s"] = max(task["timeout_s"], 900)
     if local is not None:  # 프롬프트에 ai.LOCAL_TEXT_MARKER가 정확히 한 번 — 워커가 로컬 본문으로 바꿈 (C-4)
         task["local"] = local
     return task
@@ -1147,7 +1160,10 @@ def parse_result(job: dict, text: str, structured=None) -> dict:
     params = job["params"] or {}
     if job["kind"] == "find":
         if not params.get("queries"):
-            return {"queries": find.parse_queries(text, structured, params.get("question") or "")}
+            out = {"queries": find.parse_queries(text, structured, params.get("question") or "")}
+            if find.is_claim(params):  # 웹 검색을 켠 ①단계면 웹 후보도 — 서버가 열어 확인한 뒤 씀(api_runner._prepare_find)
+                out["web_raw"] = find.parse_web(text, structured)
+            return out
         return {"answer": find.check_for(params, text)}
     if job["kind"] == "verify":
         return {"results": verify.parse_results(text, structured)}
@@ -1182,7 +1198,7 @@ def worker_result(lib: Library, device_id: int, job_id: int, body: dict, guide: 
         _end(lib, job, "failed", "bad_output", str(e), _history_entry(job, "bad_output", device_id))
         return "failed"
     if "queries" in parsed:
-        return find_hold(lib, job, {**(job["params"] or {}), "queries": parsed["queries"]})
+        return find_hold(lib, job, {**(job["params"] or {}), **parsed})
     return finish_success(lib, job, parsed, f"cli:{job['engine']}")[0]
 
 

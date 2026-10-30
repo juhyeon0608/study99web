@@ -25,6 +25,13 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const CODEX_TOOLS_OFF = ['shell_tool', 'unified_exec', 'code_mode_host', 'browser_use', 'browser_use_external', 'computer_use', 'in_app_browser',
   'apps', 'plugins', 'remote_plugin', 'multi_agent', 'image_generation', 'view_image', 'tool_suggest', 'skill_search', 'hooks',
   'workspace_dependencies', 'goals', 'in_app_local_automation'];
+// 웹 검색(출처 확인 ①단계 — 서버가 task.web_search=true 로 줌, 0.4.5 · 2026-10-31): 검색 도구 하나만 연다.
+// claude: --tools WebSearch + --allowedTools WebSearch (WebFetch · 셸 · 파일 도구는 그대로 없음 — 페이지 확인은 서버가 직접).
+// codex 0.157: 웹 검색이 code-mode 호스트를 거쳐서 code_mode_host 는 켜되, 그 안의 node_repl(MCP — Node fs · process)은 끈다
+//   (2026-10-31 이 PC 실측: node_repl 이 켜져 있으면 win.ini 를 읽음, 끄면 process · require · import('node:fs') 모두 없고
+//   웹 검색만 됨). --search 는 exec 앞(최상위 플래그).
+const WEB_ENGINES = new Set(['claude', 'codex']);
+const CODEX_WEB_MCP = 'mcp_servers={node_repl={enabled=false}}';
 const GEMINI_INSTRUCTION = '표준 입력으로 받은 지시와 자료를 따라 답만 출력하세요.';
 // agy: 'agy models' 한 줄 = "<id><공백><표시 이름>". id 는 소문자 · 숫자 · . _ - (하이픈 하나 이상 — 머리글 줄 · "error:" 줄을 거름)
 const AGY_MODEL_RE = /^[a-z0-9][a-z0-9._]*-[a-z0-9._-]*[a-z0-9]$/;
@@ -74,11 +81,14 @@ function buildCommand(task, { files, model, schemaArg = true, effort = null, tim
   const system = String(task.system || '');
   const prompt = String(task.prompt || '');
   const withSystem = system ? `<instructions>\n${system}\n</instructions>\n\n${prompt}` : prompt;
+  const web = task.web_search === true && WEB_ENGINES.has(engine);
   if (engine === 'claude') {
     const stream = !!task.stream_partial;
     const args = ['-p', '--output-format', stream ? 'stream-json' : 'json'];
     if (stream) args.push('--verbose', '--include-partial-messages');
-    args.push('--no-session-persistence', '--tools', '', '--setting-sources', '', '--strict-mcp-config',
+    args.push('--no-session-persistence', '--tools', web ? 'WebSearch' : '');
+    if (web) args.push('--allowedTools', 'WebSearch');
+    args.push('--setting-sources', '', '--strict-mcp-config',
       '--permission-prompts', 'none', '--system-prompt-file', files.system);
     if (model) args.push('--model', model);
     // 스키마 JSON 은 셸(cmd.exe)을 거치지 않을 때만 인자로 (AC-50) — 셸 경로에서는 프롬프트 안 스키마 글로 충분
@@ -86,9 +96,9 @@ function buildCommand(task, { files, model, schemaArg = true, effort = null, tim
     return { args, stdin: prompt, writeSystem: true, writeSchema: false, stream };
   }
   if (engine === 'codex') {
-    const args = ['exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--color', 'never', '-o', files.out];
-    for (const name of CODEX_TOOLS_OFF) args.push('-c', `features.${name}=false`);
-    args.push('-c', 'mcp_servers={}');
+    const args = [...(web ? ['--search'] : []), 'exec', '--skip-git-repo-check', '--ephemeral', '--sandbox', 'read-only', '--color', 'never', '-o', files.out];
+    for (const name of CODEX_TOOLS_OFF) if (!(web && name === 'code_mode_host')) args.push('-c', `features.${name}=false`);
+    args.push('-c', web ? CODEX_WEB_MCP : 'mcp_servers={}');
     if (schema) args.push('--output-schema', files.schema);
     if (model) args.push('-m', model);
     args.push('-');
@@ -237,7 +247,7 @@ function geminiLoggedIn(env) {
 }
 
 module.exports = {
-  CODEX_TOOLS_OFF,
+  CODEX_TOOLS_OFF, CODEX_WEB_MCP,
   ENGINES, LABELS, DEFAULT_SLOTS, DEFAULT_TOTAL, MIN_VERSION, CLAUDE_MODELS, GEMINI_INSTRUCTION, AGY_EFFORTS,
   USAGE_RE, MODEL_ERR_RE, AUTH_RE,
   versionTuple, versionBelow, modelArg, effortArg, buildCommand, partialDelta, parseOutput, loginCommand, geminiLoggedIn,

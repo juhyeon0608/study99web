@@ -2194,4 +2194,11 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .acc-item[data-st="rejected"] { opacity: .7; }
 .acc-item[data-st="pending"] .acc-st { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
 .acc-item[data-st="approved"] .acc-st { background: var(--success-soft); color: var(--success); border-color: transparent; }
-
+/* 출처 확인 — 웹 자료 (writesrcui.js — 2026-10-31) */
+.src-web { margin: 6px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.src-web > li { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.src-web .src-lib-t { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.src-web a { font-weight: 600; overflow-wrap: anywhere; }
+.src-web-q { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--border); color: var(--text-2); }
+.chip.src-kind[data-tone="ok"] { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.chip.src-kind[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); border-color: transparent; }

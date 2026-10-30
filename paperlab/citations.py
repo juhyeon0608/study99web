@@ -52,7 +52,7 @@ def format_issued(parts: list) -> str:
 # ---------------------------------------------------------- CSL-JSON
 CSL_TYPES = {"article": "article-journal", "conference": "paper-conference", "book": "book",
              "chapter": "chapter", "thesis": "thesis", "report": "report", "preprint": "article",
-             "dataset": "dataset", "document": "document"}
+             "dataset": "dataset", "document": "document", "webpage": "webpage"}
 CSL_TYPES_REV = {"article-journal": "article", "article": "article", "article-magazine": "article",
                  "article-newspaper": "article", "paper-conference": "conference", "book": "book",
                  "chapter": "chapter", "thesis": "thesis", "report": "report", "dataset": "dataset",
@@ -108,6 +108,12 @@ def to_csl_item(p: dict) -> dict:
     if t == "thesis" and p.get("venue"):
         it.pop("container-title", None)
         it["publisher"] = p["venue"]
+    if t == "webpage":  # 웹페이지(출처 확인의 웹 근거 — 2026-10-31): 사이트 이름 + 접속일(서재에 넣은 날)
+        added = p.get("added_at")
+        day = added.date() if hasattr(added, "date") else str(added or "")[:10]
+        parts = [int(x) for x in str(day).split("-") if x.isdigit()]
+        if len(parts) == 3:
+            it["accessed"] = {"date-parts": [parts]}
     for src, dst in (("volume", "volume"), ("issue", "issue"), ("pages", "page")):
         if p.get(src):
             it[dst] = str(p[src]).replace("--", "-").replace("–", "-")

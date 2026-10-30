@@ -14,7 +14,8 @@ const { nullLogger } = require('../lib/log');
 const LT = require('./local-text');
 
 const PROTOCOL = 1;
-const CAPS = ['local_text']; // 이 워커가 할 수 있는 일(0.4.0) — 서버가 로컬 항목 작업(보관 PC 고정)을 이 워커에만 줌
+// 이 워커가 할 수 있는 일 — local_text(0.4.0): 로컬 항목 작업(보관 PC 고정), web_search(0.4.5): 출처 확인에 웹 검색 도구(engines.js)
+const CAPS = ['local_text', 'web_search'];
 const HELLO_EVERY_MS = 30 * 60 * 1000; // 8.3
 const PROBE_EVERY_MS = 30 * 60 * 1000; // 11.7
 const IDLE_S = 60;
