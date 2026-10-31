@@ -5,6 +5,7 @@
 import { api, qs } from "./api.js";
 import { FIND_FAIL, FIND_WARN } from "./ask.js";
 import { cancelJob, fmtClock, handledJob, isActive, jobLine, watchJob } from "./jobs.js";
+import { state } from "./state.js";
 import { $, $$, copyText, debounce, el, errorToast, esc, toast } from "./ui.js";
 import { CHECK_RE } from "./writemd.js";
 import { checkList, claimAt, claimKey, claimRange, parseClaim, refsHtml, WEB_TONE, webPaper } from "./writesrc.js";
@@ -34,6 +35,14 @@ export function sourceView(box, h) {
         <b>웹(통계 · 정부 · 뉴스 — 서버가 페이지를 열어 인용을 확인한 것만)</b>에서 찾아 AI가 근거가 있는지 판정해요. 미리보기의 노란 <b>[확인 필요]</b> 표시를 누르거나, 문장에 커서를 두고(또는 글을 골라) 아래 단추를 눌러요.</p>
       <div class="row src-actions"><button type="button" class="btn sm primary" data-src-run>커서 문장 출처 확인</button>
         <select class="input src-pick" data-src-pick aria-label="지난 출처 확인 (새것이 위)"></select></div>
+      <details class="src-list src-excl" data-src-excl><summary data-src-excl-n></summary>
+        <p class="small muted" style="margin:4px 0">직접 써서 서재에 올린 글은 근거가 될 수 없어서 서재 검색에서 빼요.
+          폴더를 빼면 그 안(하위 폴더 포함)의 글이 모두 빠져요. 다음 확인부터 적용돼요.</p>
+        <ul class="src-excl-items" data-src-excl-items></ul>
+        <div class="row src-excl-add"><select class="input" data-src-excl-folder aria-label="출처 확인에서 뺄 폴더"></select>
+          <button type="button" class="btn sm" data-src-excl-fadd>폴더 빼기</button></div>
+        <div class="src-excl-add"><input class="input" type="search" data-src-excl-q placeholder="글 하나만 빼기 — 서재에서 제목으로 찾기" aria-label="출처 확인에서 뺄 서재 항목 찾기">
+          <ul class="src-excl-found" data-src-excl-found></ul></div></details>
       <details class="src-list" data-src-list><summary data-src-count>원고의 [확인 필요]</summary>
         <ol class="src-items" data-src-items></ol>
         <div class="row" style="gap:6px;align-items:center"><button type="button" class="btn sm" data-src-all>확인 안 한 문장 모두 확인</button>
@@ -42,6 +51,78 @@ export function sourceView(box, h) {
     <div class="src-out" data-src-out aria-live="polite"></div>`;
   const pick = $("[data-src-pick]", box);
   const out = $("[data-src-out]", box);
+
+  // ---- 출처 확인에서 빼는 서재 항목 (설정 source_exclude — 2026-10-31 사용자 요청: 직접 써서 올린 글)
+  const excluded = () => (state.settings && state.settings.source_exclude) || [];
+  const isExcluded = (id) => excluded().some((e) => !e.folder && e.id === Number(id));
+  const sameEntry = (a, b) => a.id === b.id && !!a.folder === !!b.folder;
+  const saveExclude = async (list) => {
+    state.settings = await api.put("/api/settings", { source_exclude: list });
+    drawExcl();
+  };
+  const exclude = async (id, title) => {
+    if (isExcluded(id)) return;
+    await saveExclude([...excluded(), { id: Number(id), title: title || "" }]);
+    toast("출처 확인에서 뺐어요 — 다음 확인부터 이 글은 근거로 찾지 않아요");
+  };
+  const drawExcl = () => {
+    const list = excluded();
+    const nf = list.filter((e) => e.folder).length;
+    $("[data-src-excl-n]", box).textContent = list.length
+      ? `출처 확인에서 빼는 내 글 — ${[nf && `폴더 ${nf}개`, list.length - nf && `글 ${list.length - nf}개`].filter(Boolean).join(" · ")}`
+      : "출처 확인에서 뺄 내 글 · 폴더 정하기";
+    const ul = $("[data-src-excl-items]", box);
+    ul.innerHTML = list.length ? "" : `<li class="small muted">아직 없어요</li>`;
+    for (const e of list) {
+      const li = el(`<li class="small"><span></span> <button type="button" class="link small">다시 넣기</button></li>`);
+      const live = e.folder && (state.folders || []).find((f) => f.id === e.id);
+      $("span", li).textContent = e.folder ? `📁 ${(live && live.name) || e.title || `폴더 ${e.id}`} (하위 폴더 포함)` : e.title || `항목 ${e.id}`;
+      $("button", li).onclick = () => saveExclude(excluded().filter((x) => !sameEntry(x, e))).catch(errorToast);
+      ul.append(li);
+    }
+    // 폴더 고르기: 아직 안 뺀 폴더만 (이름은 상위 › 하위)
+    const byId = new Map((state.folders || []).map((f) => [f.id, f]));
+    const path = (f) => { const p = []; for (let x = f, i = 0; x && i < 20; x = byId.get(x.parent_id), i++) p.unshift(x.name); return p.join(" › "); };
+    const left = (state.folders || []).filter((f) => !list.some((e) => e.folder && e.id === f.id))
+      .map((f) => [f.id, path(f)]).sort((a, b) => a[1].localeCompare(b[1], "ko"));
+    const fsel = $("[data-src-excl-folder]", box);
+    fsel.innerHTML = left.length ? left.map(([id, name]) => `<option value="${Number(id)}">${esc(name)}</option>`).join("")
+      : `<option value="">${(state.folders || []).length ? "모든 폴더를 뺐어요" : "폴더가 없어요"}</option>`;
+    fsel.disabled = !left.length;
+    $("[data-src-excl-fadd]", box).disabled = !left.length;
+    for (const b of $$("[data-src-own]", out)) {
+      const off = isExcluded(b.dataset.srcOwn);
+      b.disabled = off;
+      b.textContent = off ? "출처 확인에서 뺀 글" : "내가 쓴 글 — 출처 확인에서 빼기";
+    }
+  };
+  $("[data-src-excl-fadd]", box).onclick = () => {
+    const id = Number($("[data-src-excl-folder]", box).value);
+    const f = (state.folders || []).find((x) => x.id === id);
+    if (!f) return;
+    saveExclude([...excluded(), { id, title: f.name, folder: true }])
+      .then(() => toast(`'${f.name}' 폴더를 출처 확인에서 뺐어요 — 다음 확인부터 적용돼요`)).catch(errorToast);
+  };
+  const found = $("[data-src-excl-found]", box);
+  $("[data-src-excl-q]", box).oninput = debounce(async (ev) => {
+    const q = ev.target.value.trim();
+    found.innerHTML = "";
+    if (q.length < 2) return;
+    try {
+      const r = await api.get(`/api/papers?${qs({ q, limit: 8 })}`);
+      for (const p of r.items || []) {
+        const li = el(`<li class="small"><span></span> <button type="button" class="link small">빼기</button></li>`);
+        $("span", li).textContent = `${p.title || "제목 없음"}${p.year ? ` (${p.year})` : ""}`;
+        const b = $("button", li);
+        if (isExcluded(p.id)) { b.disabled = true; b.textContent = "뺐음"; }
+        b.onclick = () => exclude(p.id, p.title).then(() => { b.disabled = true; b.textContent = "뺐음"; }).catch(errorToast);
+        found.append(li);
+      }
+      if (!found.children.length) found.append(el(`<li class="small muted">찾은 항목이 없어요</li>`));
+    } catch (e) { errorToast(e); }
+  }, 300);
+  $("[data-src-excl]", box).ontoggle = drawExcl; // 폴더 목록이 그 사이 바뀌었을 수 있음
+  drawExcl();
 
   const claimOf = (j) => S.claims.get(j.id) || { text: j.question || "" };
   const label = (j) => {
@@ -140,20 +221,33 @@ export function sourceView(box, h) {
       };
     }
     out.append(sec);
+    if (lib.length) queueMicrotask(drawExcl); // 카드의 [빼기] 단추 글자
     if (lib.length) {
       const list = el(`<div class="src-sec"><div class="src-h">내 서재 논문 조각</div><ol class="src-lib"></ol></div>`);
       for (const it of lib) {
         const li = el(`<li id="src-L${Number(it.n)}"><div class="src-lib-t"><span class="cite-ref">L${Number(it.n)}</span>
-          <b></b> <span class="small muted"></span></div><p class="small src-lib-x"></p>
-          ${it.citekey ? `<button type="button" class="link small" data-src-key>[@${esc(it.citekey)}] 복사</button>` : ""}</li>`);
+          <b></b> <span class="small muted"></span></div>
+          ${it.own ? `<p class="small src-own">확인하는 문장이 이 글에 거의 그대로 있어요 — 직접 쓴 글이면 근거가 아니니 빼 주세요.</p>` : ""}
+          <p class="small src-lib-x"></p>
+          <div class="row" style="gap:10px">${it.citekey ? `<button type="button" class="link small" data-src-key>[@${esc(it.citekey)}] 복사</button>` : ""}
+          <button type="button" class="link small" data-src-own="${Number(it.paper_id)}"></button></div></li>`);
         $("b", li).textContent = it.title || "제목 없음";
         $(".small.muted", li).textContent = `${it.year || "n.d."} · p.${Number(it.page) || 1}`;
         $(".src-lib-x", li).textContent = it.text || "";
         const k = $("[data-src-key]", li);
         if (k) k.onclick = () => copyText(`[@${it.citekey}]`).then(() => toast("인용 표시를 복사했어요 — 문장 끝에 붙여 넣으세요"));
+        $("[data-src-own]", li).onclick = () => exclude(it.paper_id, it.title).then(() => offerRerun()).catch(errorToast);
         $("ol", list).append(li);
       }
       out.append(list);
+      // 뺀 글이 이번 판정에 쓰였으면 다시 확인을 권함
+      const offerRerun = () => {
+        if ($("[data-src-rerun]", list)) return;
+        const n = el(`<div class="notice" data-tone="warn" style="margin-top:6px"><div>이번 판정에는 뺀 글이 쓰였어요.
+          <button type="button" class="btn sm" data-src-rerun>빼고 다시 확인</button></div></div>`);
+        $("[data-src-rerun]", n).onclick = () => start(claim);
+        list.append(n);
+      };
     }
     const unver = res.web_unverified || [];
     if (web.length || unver.length) {

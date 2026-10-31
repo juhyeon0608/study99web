@@ -2897,7 +2897,22 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
                 raise HTTPException(400, "원고 번호가 올바르지 않아요")
             need_manuscript(ctx, mid)
         route_for(ctx, "find")  # 경로가 없으면 검색 전에 400
-        rows = rag.searchable(rag.scope_rows(ctx.lib, "library", None))
+        # 설정 source_exclude(직접 쓴 글 · 그런 글을 둔 폴더와 하위 폴더 — 2026-10-31 사용자 요청)는 검색 범위에서 뺀다
+        ex = ctx.settings.get("source_exclude") or []
+        skip = {e["id"] for e in ex if not e.get("folder")}
+        fskip = {e["id"] for e in ex if e.get("folder")}
+        if fskip:
+            kids = {}
+            for f in ctx.lib._all("select id, parent_id from paperlab.folders where user_id = %s", (ctx.uid,)):
+                kids.setdefault(f["parent_id"], []).append(f["id"])
+            todo = list(fskip)
+            while todo:
+                for k in kids.get(todo.pop(), []):
+                    if k not in fskip:
+                        fskip.add(k)
+                        todo.append(k)
+        rows = [r for r in rag.searchable(rag.scope_rows(ctx.lib, "library", None))
+                if r["id"] not in skip and r["folder_id"] not in fskip]
         library, lib_warn = [], []
         if rows:
             ctx.release()  # R2 로드 · 임베딩 동안 DB 연결을 잡지 않는다 (서재 질문과 같음)
@@ -2909,9 +2924,12 @@ def create_app(config: ServerConfig, *, database: Database | None = None, storag
             pids = sorted({h["paper_id"] for h in hits})
             keys = {r["id"]: r["citekey"] or "" for r in ctx.lib._all(
                 "select id, citekey from paperlab.papers where user_id = %s and id = any(%s)", (ctx.uid, pids))} if pids else {}
+            # own: 확인하는 문장이 조각에 거의 그대로 있음 → 직접 쓴 글일 수 있어 화면이 [출처 확인에서 빼기]를 권함
+            plain = find.CHECK_MARK.sub(" ", claim)
             library = [{"n": i + 1, "paper_id": h["paper_id"], "citekey": keys.get(h["paper_id"], ""),
                         "title": info[h["paper_id"]]["title"], "year": info[h["paper_id"]]["year"], "page": h["page"],
-                        "text": (h.get("text") or "").strip()[:find.LIB_TEXT_MAX]}
+                        "text": (h.get("text") or "").strip()[:find.LIB_TEXT_MAX],
+                        "own": rag.overlap(plain, h.get("text") or "") >= find.OWN_OVERLAP}
                        for i, h in enumerate(hits) if h["paper_id"] in keys]
         params = {"question": claim, "mode": "claim", "library": library, "lib_warnings": lib_warn}
         if mid is not None:

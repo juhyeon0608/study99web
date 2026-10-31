@@ -523,3 +523,38 @@ def test_ask_logs_hold_no_content(env, caplog):
     for planted in ("SECRETQUESTION", "PLANTEDTITLE", "/rag/"):
         assert planted not in text
     assert all("SECRETQUESTION" not in r.getMessage() for r in caplog.records if r.name == "paperlab.access")
+
+
+def test_source_check_skips_excluded_library_items(env, project):
+    """출처 확인 (2026-10-31 사용자 요청): 설정 source_exclude의 서재 항목(직접 쓴 글)은 서재 조각에서 빠진다.
+    빼기 전에는 문장이 거의 그대로 든 조각에 own 표시"""
+    ca = env.client(env.a)
+    ca.put("/api/settings", json={"anthropic_api_key": KEY})
+    mine = env.upload(ca, pdf_with([KOREAN], "내 초안"), "mine.pdf")["id"]
+    env.upload(ca, pdf_with([STRESS], "Stress and sleep"), "s.pdf")
+    wait_indexed(ca)
+    claim = "스트레스가 높을수록 수면 시간이 짧아지는 경향이 나타났다 [확인 필요: 출처]."
+
+    def lib_of(job_id: int) -> list[dict]:
+        return sql(project, "select params from paperlab.jobs where id = %s", (job_id,))[0][0]["library"]
+
+    r = ca.post("/api/source-check", json={"claim": claim})
+    assert r.status_code == 202, r.text
+    got = lib_of(r.json()["job"]["id"])
+    assert any(x["paper_id"] == mine and x["own"] for x in got)
+    assert ca.put("/api/settings", json={"source_exclude": [{"id": mine, "title": "내 초안"}]}).json()["source_exclude"] == \
+        [{"id": mine, "title": "내 초안"}]
+    r = ca.post("/api/source-check", json={"claim": claim + " 다시"})
+    assert r.status_code == 202, r.text
+    assert all(x["paper_id"] != mine for x in lib_of(r.json()["job"]["id"]))
+    # 폴더째 빼기: 하위 폴더에 둔 글도 빠짐
+    ca.put("/api/settings", json={"source_exclude": []})
+    top = ca.post("/api/folders", json={"name": "내 원고"}).json()["id"]
+    sub = ca.post("/api/folders", json={"name": "수정본", "parent_id": top}).json()["id"]
+    sql(project, "update paperlab.papers set folder_id = %s where id = %s", (sub, mine))
+    r = ca.post("/api/source-check", json={"claim": claim + " 폴더"})
+    assert any(x["paper_id"] == mine for x in lib_of(r.json()["job"]["id"]))
+    ca.put("/api/settings", json={"source_exclude": [{"id": top, "title": "내 원고", "folder": True}]})
+    r = ca.post("/api/source-check", json={"claim": claim + " 폴더 뺌"})
+    assert r.status_code == 202, r.text
+    assert all(x["paper_id"] != mine for x in lib_of(r.json()["job"]["id"]))

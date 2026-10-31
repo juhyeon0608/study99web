@@ -228,8 +228,9 @@ def _pdf_sources(handler):
 
 def test_download_pdf_rejects_html():
     s = _pdf_sources(lambda r: httpx.Response(200, content=b"<html>login</html>"))
-    with pytest.raises(sources.SourceError, match="PDF가 아니에요"):
+    with pytest.raises(sources.SourceError) as e:
         s.download_pdf("https://example.org/paper.pdf")
+    assert str(e.value) == sources.PDF_NOT_PDF and "[파일 첨부]" in str(e.value)
 
 
 def test_download_pdf_pins_checked_ip_and_keeps_host():
@@ -289,6 +290,11 @@ def test_download_pdf_hides_upstream_errors():
     with pytest.raises(sources.SourceError) as e:
         s.download_pdf("https://example.org/a.pdf")
     assert str(e.value) == sources.PDF_FETCH_FAILED
+    # 사이트의 거절(403 · Cloudflare 봇 확인)은 직접 받아 첨부하라고 (2026-10-31)
+    for resp in (httpx.Response(403), httpx.Response(503, headers={"cf-mitigated": "challenge"})):
+        with pytest.raises(sources.SourceError) as e:
+            _pdf_sources(lambda r, resp=resp: resp).download_pdf("https://example.org/a.pdf")
+        assert str(e.value) == sources.PDF_REFUSED
 
     def boom(r):
         raise httpx.ConnectError("connection refused to 10.0.0.1:22")

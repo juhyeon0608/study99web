@@ -232,6 +232,8 @@ def prepare(sources, embedder, question: str, queries: list[str]) -> tuple[list[
 CLAIM_MAX = 1500
 LIB_N = 6            # 서재 조각 수 (논문당 2조각까지)
 LIB_TEXT_MAX = 1200
+CHECK_MARK = re.compile(r"\[확인\s*필요[^\]]*\]")  # 원고의 [확인 필요: …] 표시 (writemd.js CHECK_RE와 같은 뜻)
+OWN_OVERLAP = 0.6    # 확인하는 문장의 글자 5-gram이 서재 조각에 이만큼 있으면 '직접 쓴 글일 수 있음'(rag.overlap)
 VERDICTS = ("근거 있음", "일부 있음", "반대 근거 있음", "찾지 못함")
 
 CLAIM_QUERY_PROMPT = """아래 원고 문장의 주장 · 수치를 뒷받침하거나 반박할 논문을 OpenAlex · Semantic Scholar에서 찾을 검색어를 3개(2~4개) 만드세요.

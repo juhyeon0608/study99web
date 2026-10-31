@@ -60,6 +60,9 @@ DEFAULT_SETTINGS: dict = {
     "doc_format_default": "default",
     # 새 논문 알림 (2026-10-27): 관심 검색어 · 저자 [{q, kind: "topic"|"author"}] 10개까지, 마지막 확인 날짜(YYYY-MM-DD)
     "paper_alerts": {"queries": [], "checked": ""},
+    # 출처 확인에서 뺄 서재 항목 · 폴더 (2026-10-31 사용자 요청 — 직접 써서 올린 글이 근거로 잡히지 않게)
+    # [{id, title}] 항목, [{id, title, folder: true}] 폴더(하위 폴더 포함) — 합쳐 200개까지
+    "source_exclude": [],
 }
 
 SECRET_KEYS = AI_KEY_NAMES + ("openalex_api_key", "semantic_scholar_api_key")
@@ -346,7 +349,8 @@ class UserSettings:
                 self._values[k] = v
         # 저장 형식이 틀린 값(옛 버전 · 손으로 고친 값)은 기본값으로 읽는다
         for k, check in (("ai_routing", normalize_routing), ("cli_models", normalize_cli_models),
-                         ("cli_efforts", normalize_cli_efforts), ("api_models", normalize_api_models)):
+                         ("cli_efforts", normalize_cli_efforts), ("api_models", normalize_api_models),
+                         ("source_exclude", normalize_exclude)):
             try:
                 self._values[k] = check(self._values[k])
             except ValueError:
@@ -458,6 +462,28 @@ def normalize_alerts(value) -> dict:
     return {"queries": out, "checked": checked}
 
 
+EXCLUDE_MAX = 200
+
+
+def normalize_exclude(value) -> list:
+    """출처 확인에서 뺄 서재 항목 · 폴더 [{id: 양의 정수, title: 표시용 이름, folder: true(폴더일 때만)}]
+    — 같은 (종류, id)는 하나만, EXCLUDE_MAX개까지"""
+    if not isinstance(value, list):
+        raise ValueError("출처 확인에서 뺄 항목 목록이 올바르지 않아요")
+    out, seen = [], set()
+    for it in value:
+        pid = it.get("id") if isinstance(it, dict) else None
+        folder = isinstance(it, dict) and it.get("folder") is True
+        if not isinstance(pid, int) or isinstance(pid, bool) or not 0 < pid < 2 ** 63 or (folder, pid) in seen:
+            continue
+        seen.add((folder, pid))
+        e = {"id": pid, "title": re.sub(r"\s+", " ", str(it.get("title") or "")).strip()[:200]}
+        out.append({**e, "folder": True} if folder else e)
+    if len(out) > EXCLUDE_MAX:
+        raise ValueError(f"출처 확인에서 뺄 항목은 {EXCLUDE_MAX}개까지예요")
+    return out
+
+
 def split_settings_changes(changes: dict) -> tuple[dict, dict]:
     """PUT /api/settings 본문 → (평문 설정 변경, 비밀 변경 {이름: 값 | None(지우기)}).
 
@@ -486,6 +512,8 @@ def split_settings_changes(changes: dict) -> tuple[dict, dict]:
                 value = normalize_api_models(value)
             elif key == "paper_alerts":
                 value = normalize_alerts(value)
+            elif key == "source_exclude":
+                value = normalize_exclude(value)
             elif key == "translate_language" and value not in TRANSLATE_LANGS:
                 raise ValueError("번역 언어는 ko · en · ja · zh 중에서 골라 주세요")
             plain[key] = value

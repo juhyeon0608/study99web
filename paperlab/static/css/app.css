@@ -2202,3 +2202,10 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .src-web-q { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--border); color: var(--text-2); }
 .chip.src-kind[data-tone="ok"] { background: var(--success-soft); color: var(--success); border-color: transparent; }
 .chip.src-kind[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); border-color: transparent; }
+/* 출처 확인 — 빼는 내 글 (writesrcui.js — 2026-10-31) */
+.src-excl-items, .src-excl-found { margin: 4px 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.src-excl-add { margin-top: 4px; gap: 6px; align-items: center; }
+.src-excl-add .input { width: 100%; }
+.row.src-excl-add .input { flex: 1; min-width: 0; width: auto; }
+.src-own { margin: 4px 0; padding: 4px 8px; border-radius: 6px; background: var(--warn-soft); }
+

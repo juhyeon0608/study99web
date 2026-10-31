@@ -116,3 +116,14 @@ def test_web_stage_prompt_judgement_and_jobs():
     text = "판정: 근거 있음\n근거: 통계청 자료에 따르면 23만 명이다 [W1][W2][L1].\n고친 문장: 없음\n확인할 곳: 없음"
     assert "[W1][L1]" in find.check_for(params, text) and "[W2]" not in find.check_for(params, text)
     assert find.needs_summary(dict(PARAMS, candidates=[], library=[], web=web))
+
+
+def test_own_text_marker():
+    """확인하는 문장이 서재 조각에 거의 그대로 있으면 own(직접 쓴 글일 수 있음) — [확인 필요] 표시는 빼고 잼"""
+    from paperlab import rag
+    claim = "대학생의 학업 스트레스가 높을수록 수면 시간이 짧아지는 경향이 나타났다 [확인 필요: 출처]."
+    plain = find.CHECK_MARK.sub(" ", claim)
+    assert "확인" not in plain
+    mine = "서론. 대학생의 학업 스트레스가 높을수록 수면 시간이 짧아지는 경향이 나타났다. 본 연구는 …"
+    other = "Perceived stress was associated with shorter sleep duration among undergraduates (n=412)."
+    assert rag.overlap(plain, mine) >= find.OWN_OVERLAP > rag.overlap(plain, other)

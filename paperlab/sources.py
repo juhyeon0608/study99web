@@ -586,7 +586,7 @@ class Sources:
             url = url.replace("/abs/", "/pdf/")
         data, _ = self._safe_get(url, "application/pdf", max_bytes, "PDF가 너무 커요 (100MB 초과)")
         if not data.startswith(b"%PDF"):
-            raise SourceError("받은 파일이 PDF가 아니에요 (출판사 로그인 페이지일 수 있어요)")
+            raise SourceError(PDF_NOT_PDF)
         return data
 
     def fetch_page(self, url: str, max_bytes: int = 3 * 1024 * 1024) -> tuple[bytes, str]:
@@ -621,6 +621,8 @@ class Sources:
                         if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
                             current = current.join(r.headers["location"])
                             continue
+                        if r.status_code in (401, 403) or r.headers.get("cf-mitigated"):
+                            raise SourceError(PDF_REFUSED)  # 공인 주소의 거절만 (사설 주소는 위에서 연결 전에 막음)
                         if r.status_code >= 400:
                             raise SourceError(PDF_FETCH_FAILED)
                         ctype = r.headers.get("content-type") or ""
@@ -639,6 +641,12 @@ class Sources:
 
 
 PDF_FETCH_FAILED = "PDF를 받지 못했어요. 주소를 확인하거나 직접 파일을 첨부해 주세요."
+# PDF 주소가 PDF 대신 웹페이지 등을 줌 — 로그인 · 안내 페이지, 또는 사이트 고장(2026-10-31 masinstvo.unze.ba: PHP 소스가 그대로 나옴)
+PDF_NOT_PDF = ("PDF 주소에서 PDF가 아닌 내용이 왔어요 — 로그인 · 안내 페이지이거나 사이트에 문제가 있을 수 있어요. "
+               "브라우저로 열어 PDF를 저장한 뒤 [파일 첨부]로 올려 주세요.")
+# 사이트가 서버 요청을 거절(401 · 403 · Cloudflare 봇 확인 — 2026-10-31 iris.polito.it). 우회하지 않고 직접 받도록 안내
+PDF_REFUSED = ("이 사이트는 PaperLab 서버의 자동 다운로드를 막아요(봇 확인 · 접근 제한). "
+               "브라우저에서 PDF를 저장한 뒤 논문 상세의 [파일 첨부]로 올려 주세요.")
 MAX_REDIRECTS = 5
 # openlink.inha.ac.kr: 학교 프록시로 서버가 자동으로 받지 않는다 (5단계 8.2절 — 리디렉션 단계마다 같은 검사)
 BLOCKED_HOSTS = {"localhost", "metadata", "metadata.google.internal", "instance-data", "openlink.inha.ac.kr"}

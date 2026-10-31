@@ -577,7 +577,8 @@ def scope_rows(lib, stype: str, sid: int | None) -> list[dict]:
             "collection": " and p.id in (select pc.paper_id from paperlab.paper_collections pc "
                           "where pc.user_id = %(uid)s and pc.collection_id = %(sid)s)",
             "folder": " and p.folder_id = %(sid)s"}[stype]
-    return lib._all("select p.id, p.title, p.year, p.pdf_key <> '' as has_pdf, p.rag_key, p.rag_version, p.pdf_sha256 "
+    return lib._all("select p.id, p.title, p.year, p.pdf_key <> '' as has_pdf, p.rag_key, p.rag_version, p.pdf_sha256, "
+                    "p.folder_id "
                     "from paperlab.papers p where p.user_id = %(uid)s" + cond + " order by p.id",
                     {"uid": lib.uid, "sid": sid})
 

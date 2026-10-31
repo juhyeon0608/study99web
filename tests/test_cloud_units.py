@@ -577,3 +577,21 @@ def test_server_wide_search_keys():
     assert get("openalex_api_key") == "srv-oa" and get("semantic_scholar_api_key") == "" and get("summary_language") == "한국어"
     user["openalex_api_key"] = "mine"
     assert get("openalex_api_key") == "mine"
+
+
+def test_source_exclude_setting():
+    """출처 확인에서 뺄 서재 항목 (2026-10-31): id는 양의 정수만 · 같은 id 하나 · 제목은 표시용으로 자름"""
+    plain, _ = split_settings_changes({"source_exclude": [{"id": 3, "title": " 내  초안 "}, {"id": 3}, {"id": "4"},
+                                                          {"id": True}, {"id": -1}, "x", {"id": 7, "title": "t" * 300}]})
+    assert plain == {"source_exclude": [{"id": 3, "title": "내 초안"}, {"id": 7, "title": "t" * 200}]}
+    with pytest.raises(ValueError):
+        split_settings_changes({"source_exclude": {"id": 1}})
+    with pytest.raises(ValueError):
+        split_settings_changes({"source_exclude": [{"id": i} for i in range(1, 202)]})
+    plain, _ = split_settings_changes({"source_exclude": [{"id": 3, "folder": True, "title": "segos PLM 논문"}, {"id": 3},
+                                                          {"id": 3, "folder": True}, {"id": 4, "folder": "yes"}]})
+    assert plain["source_exclude"] == [{"id": 3, "title": "segos PLM 논문", "folder": True}, {"id": 3, "title": ""},
+                                       {"id": 4, "title": ""}]
+    from paperlab.config import UserSettings
+    assert UserSettings({"source_exclude": "bad"}).get("source_exclude") == []
+    assert UserSettings({}).get("source_exclude") == []
