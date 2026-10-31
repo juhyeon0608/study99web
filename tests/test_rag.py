@@ -616,3 +616,35 @@ def test_prompt_fence_is_shared_and_blunts_our_tags():
         assert prompt.count("</paper>") == 1 and prompt.count("</page>") == 1 and '<paper title="T\' ' in prompt
     _, prompt = ai.write_request("polish", "글", sources=[{"key": "k", "title": evil, "abstract": evil}])
     assert prompt.count("</source>") == 1
+
+
+ARXIV_FEED = """<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"
+ xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/"><opensearch:totalResults>1</opensearch:totalResults>
+<entry><id>http://arxiv.org/abs/2506.23253v1</id><published>2025-06-29T00:00:00Z</published>
+<title>Vibe coding: programming through conversation</title><summary>An empirical study of vibe coding.</summary>
+<author><name>Advait Sarkar</name></author></entry></feed>"""
+
+
+def test_find_claim_extra_arxiv():
+    """출처 확인(2026-10-31): arXiv 사전 공개 논문도 — 영어 검색어 하나로 한 번, 실패해도 경고 없음"""
+    calls = []
+    base = _transport(calls)
+
+    def handler(request):
+        if request.url.host == "export.arxiv.org":
+            calls.append((request.url.host, request.url.params.get("search_query")))
+            return httpx.Response(200, text=ARXIV_FEED)
+        return base.handle_request(request)
+    src = Sources(lambda k: "", transport=httpx.MockTransport(handler))
+    items, _, warnings = find.search_all(src, ["바이브 코딩", "vibe coding study"], extra=find.CLAIM_EXTRA)
+    assert [q for h, q in calls if h == "export.arxiv.org"] and sum(h == "export.arxiv.org" for h, _ in calls) == 1
+    pre = [it for it in items if it.get("arxiv_id", "").startswith("2506.23253")]
+    assert warnings == [] and len(pre) == 1 and pre[0]["item_type"] == "preprint"
+    _, prompt = find.summary_request("q", [dict(pre[0], n=1)])
+    assert "동료 심사 전" in prompt
+    calls.clear()
+    bad = Sources(lambda k: "", transport=httpx.MockTransport(
+        lambda r: httpx.Response(503) if r.url.host == "export.arxiv.org" else base.handle_request(r)))
+    assert find.search_all(bad, ["vibe coding"], extra=find.CLAIM_EXTRA)[2] == []
+    find.search_all(src, ["바이브 코딩"], extra=find.CLAIM_EXTRA)  # 영어 검색어가 없으면 arXiv는 건너뜀
+

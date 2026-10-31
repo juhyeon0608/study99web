@@ -404,7 +404,8 @@ class ApiRunner:
             counts = {"queries": len(params["queries"])}
             progress("논문을 검색하는 중", 0.2, step="search", counts=counts)
             params["candidates"], params["warnings"], params["counts"] = find.prepare(
-                self.sources_factory(settings.get), self.rag.embedder if self.rag else None, question, params["queries"])
+                self.sources_factory(settings.get), self.rag.embedder if self.rag else None, question, params["queries"],
+                extra=find.CLAIM_EXTRA if find.is_claim(params) else ())
             with self._tx(uid) as lib:
                 jobs.set_params(lib, job, params)
         counts = params.get("counts") or {}
@@ -496,7 +497,8 @@ class ApiRunner:
         raw_web = params.pop("web_raw", None) or []
         try:  # 검색하는 동안 DB 연결을 잡지 않는다
             params["candidates"], params["warnings"], params["counts"] = find.prepare(
-                sources, self.rag.embedder if self.rag else None, params.get("question") or "", params["queries"])
+                sources, self.rag.embedder if self.rag else None, params.get("question") or "", params["queries"],
+                extra=find.CLAIM_EXTRA if find.is_claim(params) else ())
         except find.FindError as e:
             error = str(e)
         if raw_web:  # 출처 확인 웹 후보: 서버가 직접 열어 인용문이 있는 것만 (2026-10-31)

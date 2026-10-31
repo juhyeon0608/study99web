@@ -2208,4 +2208,5 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .src-excl-add .input { width: 100%; }
 .row.src-excl-add .input { flex: 1; min-width: 0; width: auto; }
 .src-own { margin: 4px 0; padding: 4px 8px; border-radius: 6px; background: var(--warn-soft); }
+.src-unver-items { display: flex; flex-direction: column; gap: 8px; padding-left: 18px; }
 

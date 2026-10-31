@@ -142,8 +142,8 @@ export function refsHtml(text, esc, { lib = 0, ext = 0, web = 0 } = {}) {
   });
 }
 
-// 웹 자료 종류 → 칩 색 (통계 · 정부·기관은 1차 출처, 뉴스 · 웹은 학술 근거 아님)
-export const WEB_TONE = { "통계": "ok", "정부·기관": "ok", "뉴스": "warn", "웹": "warn" };
+// 웹 자료 종류 → 칩 색 (통계 · 정부·기관 · 업계·시장은 1차 출처 — 시장 수치는 업계 자료가 알맞음, 뉴스는 보통, 일반 웹은 주의)
+export const WEB_TONE = { "통계": "ok", "정부·기관": "ok", "업계·시장": "ok", "뉴스": "", "웹": "warn" };
 
 /** 확인한 웹 자료 → 서재 항목(웹페이지): 제목 · 발행처(저자 자리 literal) · 날짜 · 주소 */
 export function webPaper(w) {

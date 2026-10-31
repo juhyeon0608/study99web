@@ -207,7 +207,8 @@ export function sourceView(box, h) {
         <button type="button" class="btn sm" data-src-copy>복사</button></div></div>` : ""}
       ${a.where ? `<div class="src-sec"><div class="src-h">직접 확인할 곳</div><p>${esc(a.where)}</p></div>` : ""}
       <p class="small muted" style="margin:0">AI가 초록 · 본문 조각 · 웹 페이지 발췌만 보고 판정한 결과예요. 넣기 전에 원문을 꼭 확인하세요.
-        뉴스 · 웹 자료는 학술 근거로 약해요 — 가능하면 통계 · 기관 원자료나 논문으로 바꿔 인용하세요.</p>
+        시장 규모 · 매출 같은 시점 수치는 업계 · 시장 자료와 기사가 알맞아요 — 자료의 날짜를 꼭 함께 적으세요.
+        효과 · 원인 같은 연구 주장은 논문 근거가 더 좋아요.</p>
     </div>`);
     if (a.revised) {
       $(".src-revised", sec).textContent = a.revised;
@@ -255,7 +256,7 @@ export function sourceView(box, h) {
       for (const w of web) {
         const n = Number(String(w.n).replace(/\D/g, ""));
         const li = el(`<li id="src-W${n}"><div class="src-lib-t"><span class="cite-ref">W${n}</span>
-          <span class="chip src-kind" data-tone="${esc(WEB_TONE[w.kind] || "warn")}"></span> <a target="_blank" rel="noopener noreferrer"></a>
+          <span class="chip src-kind" data-tone="${esc(WEB_TONE[w.kind] ?? "warn")}"></span> <a target="_blank" rel="noopener noreferrer"></a>
           <span class="small muted src-web-by"></span></div>
           <blockquote class="small src-web-q"></blockquote>
           <div class="row" style="gap:10px"><button type="button" class="link small" data-src-webadd>서재에 넣기(웹페이지)</button></div></li>`);
@@ -265,17 +266,7 @@ export function sourceView(box, h) {
         if (/^https?:\/\//i.test(w.url || "")) a.href = w.url;
         $(".src-web-by", li).textContent = [w.publisher, w.date, w.site].filter(Boolean).join(" · ");
         $(".src-web-q", li).textContent = w.quote || "";
-        const add = $("[data-src-webadd]", li);
-        add.onclick = async () => {
-          add.disabled = true;
-          try {
-            const r = await api.post("/api/papers", webPaper(w), { allowConflict: true });
-            const key = r.paper && r.paper.citekey;
-            add.textContent = `${r.conflict ? "이미 서재에 있어요" : "서재에 넣음"}${key ? ` — [@${key}] 복사` : ""}`;
-            add.disabled = !key;
-            if (key) add.onclick = () => copyText(`[@${key}]`).then(() => toast("인용 표시를 복사했어요 — 문장 끝에 붙여 넣으세요"));
-          } catch (e) { add.disabled = false; errorToast(e); }
-        };
+        addWebButton($("[data-src-webadd]", li), w);
         $("ol", list).append(li);
       }
       if (!web.length) $("ol", list).replaceWith(el(`<p class="small muted" style="margin:4px 0 0">인용을 확인한 웹 자료는 없어요.</p>`));
@@ -306,16 +297,40 @@ export function sourceView(box, h) {
     }
   };
 
-  // AI가 찾았지만 서버가 확인하지 못한 웹 링크 — 판정 근거로는 쓰지 않았고, 사용자가 직접 열어 볼 수 있게만 (2026-10-31)
+  // 웹 자료 → 서재(웹페이지 항목) · 넣은 뒤 [@키] 복사
+  const addWebButton = (add, w) => {
+    add.onclick = async () => {
+      add.disabled = true;
+      try {
+        const r = await api.post("/api/papers", webPaper(w), { allowConflict: true });
+        const key = r.paper && r.paper.citekey;
+        add.textContent = `${r.conflict ? "이미 서재에 있어요" : "서재에 넣음"}${key ? ` — [@${key}] 복사` : ""}`;
+        add.disabled = !key;
+        if (key) add.onclick = () => copyText(`[@${key}]`).then(() => toast("인용 표시를 복사했어요 — 문장 끝에 붙여 넣으세요"));
+      } catch (e) { add.disabled = false; errorToast(e); }
+    };
+  };
+
+  // AI가 찾았지만 서버가 확인하지 못한 웹 링크 — 판정 근거로는 쓰지 않음. 사용자가 열어 직접 대조한 뒤 서재에 넣을 수 있게 (2026-10-31)
   const unverBox = (unver) => {
-    const d = el(`<details class="src-unver"><summary class="small">직접 확인할 링크 ${unver.length}곳 — 판정에는 쓰지 않음</summary>
-      <p class="small muted" style="margin:4px 0">서버 요청을 막는 사이트이거나, AI가 옮긴 글이 페이지에서 보이지 않았어요.</p><ul></ul></details>`);
+    const d = el(`<details class="src-unver" open><summary class="small">직접 확인할 링크 ${unver.length}곳 — 서버가 확인하지 못해 판정에는 쓰지 않음</summary>
+      <p class="small muted" style="margin:4px 0">서버 요청을 막는 사이트(예: Cloudflare를 쓰는 업계 매체)이거나, AI가 옮긴 글이 페이지에서 보이지 않았어요.
+        링크를 열어 아래 글이 실제로 있는지 확인했으면 서재에 넣어 인용할 수 있어요.</p><ul class="src-unver-items"></ul></details>`);
     for (const u of unver) {
-      const li = el(`<li class="small"><a target="_blank" rel="noopener noreferrer"></a> <span class="muted"></span></li>`);
+      const li = el(`<li class="small"><a target="_blank" rel="noopener noreferrer"></a> <span class="muted"></span>
+        <blockquote class="small src-web-q" hidden></blockquote>
+        <button type="button" class="link small" data-src-webadd>직접 확인했어요 — 서재에 넣기(웹페이지)</button></li>`);
       const a = $("a", li);
       a.textContent = u.title || u.url;
       if (/^https?:\/\//i.test(u.url || "")) a.href = u.url;
-      $("span", li).textContent = `${[u.publisher, u.kind].filter(Boolean).join(" · ")} · ${u.reason === "quote" ? "인용 글이 페이지에 없음" : "페이지를 열 수 없음"}`;
+      $("span", li).textContent = `${[u.publisher, u.kind, u.date].filter(Boolean).join(" · ")} · ${u.reason === "quote" ? "인용 글이 페이지에 없음" : "서버가 페이지를 열 수 없음"}`;
+      if (u.quote) {
+        const q = $("blockquote", li);
+        q.textContent = `AI가 옮긴 글(확인 전): ${u.quote}`;
+        q.hidden = false;
+      }
+      const add = $("[data-src-webadd]", li);
+      if (/^https?:\/\//i.test(u.url || "")) addWebButton(add, { ...u, quote: "" }); else add.remove();
       $("ul", d).append(li);
     }
     return d;

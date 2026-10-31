@@ -67,8 +67,8 @@ WEB_JSON = {"queries": ["출생아 수 2023", "Korea births 2023"], "web": [
      "quote": "합계출산율은 0.81명으로 전년의 0.78명에 비해 감소했습니다."},  # 수치가 페이지와 다름 → 버림
     {"url": "https://news.example.com/404", "title": "없는 기사", "publisher": "", "date": "", "kind": "뉴스",
      "quote": "출생아 수는 23만 명으로 역대 최저였다."},  # 페이지를 못 받음 → 버림
-    {"url": "https://blog.naver.com/x/1", "title": "블로그", "publisher": "", "date": "", "kind": "웹",
-     "quote": "출생아 수는 23만 명으로 역대 최저였다."},  # 블로그 → 받지 않음
+    {"url": "https://cafe.naver.com/x/1", "title": "카페", "publisher": "", "date": "", "kind": "웹",
+     "quote": "출생아 수는 23만 명으로 역대 최저였다."},  # 카페 → 받지 않음 (블로그 · SNS는 원 출처면 받음 — 2026-10-31)
     {"url": "file:///C:/Windows/win.ini", "title": "", "publisher": "", "date": "", "kind": "웹", "quote": "for 16-bit app"},
 ]}
 
@@ -90,7 +90,7 @@ def test_web_candidates_parse_and_server_verification():
     pages = FakePages()
     web, unver = find.verify_web(pages, raw)
     assert [(u["url"], u["reason"]) for u in unver] == [("https://news.example.com/b", "quote"), ("https://news.example.com/404", "open")]
-    assert "quote" not in unver[0] and len(web) == 1 and sorted(pages.urls) == sorted(w["url"] for w in raw)
+    assert unver[0]["quote"].startswith("합계출산율은 0.81명") and len(web) == 1  # 직접 대조하도록 AI가 옮긴 글도 and sorted(pages.urls) == sorted(w["url"] for w in raw)
     w = web[0]
     assert (w["n"], w["kind"], w["title"], w["site"]) == ("W1", "통계", "2023년 출생 통계", "kostat.go.kr")
     assert "23만 명" in w["excerpt"] and "9.99" not in w["excerpt"] and "<p>" not in w["excerpt"]
@@ -127,3 +127,13 @@ def test_own_text_marker():
     mine = "서론. 대학생의 학업 스트레스가 높을수록 수면 시간이 짧아지는 경향이 나타났다. 본 연구는 …"
     other = "Perceived stress was associated with shorter sleep duration among undergraduates (n=412)."
     assert rag.overlap(plain, mine) >= find.OWN_OVERLAP > rag.overlap(plain, other)
+
+
+def test_blog_sns_allowed_cafe_wiki_blocked():
+    """원 출처일 수 있는 블로그 · SNS는 후보로 받고(서버가 못 열면 '직접 확인할 링크'), 카페 · 위키 · 커뮤니티는 막음"""
+    assert not find.web_blocked("https://x.com/karpathy/status/1") and not find.web_blocked("https://beyondplm.com/a")
+    assert find.web_blocked("https://cafe.naver.com/a") and find.web_blocked("https://ko.wikipedia.org/wiki/a")
+    s, p = find.query_for({"question": CLAIM, "mode": "claim"}, web=True)
+    assert "업계·시장" in p and "원 출처일 때만" in p
+    assert "업계·시장" in find.WEB_KINDS and "동료 심사 전" in find.CLAIM_PROMPT
+
