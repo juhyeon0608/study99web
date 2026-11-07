@@ -515,6 +515,25 @@ def _hwpx_picture(doc, paragraph, image: dict, max_w_mm: float, max_h_mm: float,
     paragraph.add_picture(item_id, width=df.mm_to_hwp(w), height=df.mm_to_hwp(h), **kw)
 
 
+def _hwpx_sync_media_manifest(doc) -> None:
+    """python-hwpx 6.8 버그 우회 (2026-11-07): add_image는 그림을 패키지의 매니페스트에 적고, add_section은 문서가 처음
+    읽어 둔 매니페스트 사본에 구역을 적는다. 저장 때는 그 사본이 이겨서, 구역을 나눈 양식(학위논문 — 장마다 구역)에서는
+    그림 항목이 빠져 검증이 실패한다. 저장 전에 빠진 BinData 항목을 사본에 옮겨 적는다."""
+    root = doc.oxml
+    if not getattr(root, "_manifest_dirty", False):
+        return
+    ns = f"{{{root._OPF_NS}}}"
+    mine = root.manifest.find(f"{ns}manifest")
+    if mine is None:
+        return
+    have = {item.get("href") for item in mine.findall(f"{ns}item")}
+    for item in doc.package.manifest_tree().iter(f"{ns}item"):
+        href = item.get("href") or ""
+        if "BinData/" in href and href not in have:
+            mine.append(mine.makeelement(f"{ns}item", dict(item.attrib)))
+            have.add(href)
+
+
 def to_hwpx(blocks: list[Block], meta: dict | None = None, doc_format: dict | None = None,
             cover: dict | None = None, warnings: list[str] | None = None) -> bytes:
     """doc_format(검증된 양식 데이터)이 없으면 지금 서식 그대로(한글 기본 서식) 만든다."""
@@ -581,6 +600,7 @@ def to_hwpx(blocks: list[Block], meta: dict | None = None, doc_format: dict | No
         else:
             p = w.paragraph()
             w.runs(p, runs)
+    _hwpx_sync_media_manifest(w.doc)
     report = w.doc.validate()
     if getattr(report, "issues", ()):
         raise ValueError(f"한글 문서 검증 실패: {report.issues[:3]}")
@@ -1555,6 +1575,7 @@ class _HwpxBuilder(_FormattedBuilder):
                 for run in hf.iter(f"{_HP}run"):
                     run.set("charPrIDRef", str(body_char))
             section.mark_dirty()
+        _hwpx_sync_media_manifest(self.doc)
         report = self.doc.validate()
         if getattr(report, "issues", ()):
             raise ValueError(f"한글 문서 검증 실패: {report.issues[:3]}")

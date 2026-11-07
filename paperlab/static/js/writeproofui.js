@@ -15,6 +15,8 @@ import {
   planRun, proofCheckText, proofRuns, runItems, runStatus, saveMarks, scopeRange,
 } from "./writeproof.js";
 import { applyEdit } from "./writetools.js";
+import { paneResizer } from "./paneresize.js";
+import { CHECK_PANE_W_KEY } from "./writecheckui.js";
 
 const SCOPE_NAME = Object.fromEntries(PROOF_SCOPES);
 const SCOPE_PREF = "paperlab.proofScope";
@@ -32,6 +34,7 @@ export function proofPanel(view, hooks) {
     <div class="check-sum small muted" data-pf-sum aria-live="polite"></div>
     <div class="check-body" data-pf-body></div></aside>`);
   view.appendChild(pane);
+  paneResizer([pane], { host: pane, cssVar: "--ck-w", key: CHECK_PANE_W_KEY, label: "맞춤법 창 폭 조절" });
   const body = $("[data-pf-body]", pane);
   const scopeSel = $("[data-pf-scope]", pane);
   const S = { open: false, jobs: [], run: null, marks: { hidden: new Set(), fixed: new Set() }, timer: null, busy: false,

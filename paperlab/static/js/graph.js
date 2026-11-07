@@ -13,6 +13,7 @@ import {
   scholarQuery, seedFromResult, seedRelationText, shortTitle, sortCaption, sortRows, stepStates, toModel,
   yearRamp, zoomAt,
 } from "./graphmath.js";
+import { paneResizer } from "./paneresize.js";
 import { state } from "./state.js";
 import {
   $, $$, ICON_INFO, ICON_WARN, authorsShort, el, errorToast, esc, josa, liveSay, modalOpen, safeUrl, store,
@@ -161,6 +162,9 @@ export function renderGraph(main) {
     <div class="sr-only" role="status" data-graph-live></div>
   </section>`);
   main.appendChild(view);
+  // 오른쪽 논문 정보 창 폭 (2026-11-07 사용자 요청)
+  paneResizer([$(".graph-panel", view)], { host: $(".graph-body", view), cssVar: "--side-w", key: "paperlab.graphPanelWidth",
+    label: "논문 정보 창 폭 조절", room: "360px" });
   g = {
     view, main, seed, from, size, mode: "graph", model: null, pos: null, t: null, base: null, sel: null, rov: null,
     tab: "info", panelItem: null, sort: { key: "score", dir: "desc" }, hidden: new Set(), ctl: null, built: false,

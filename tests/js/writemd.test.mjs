@@ -78,9 +78,34 @@ test("AI 패널 폭: 범위 · 저장 · 깨진 값 · CSS (2026-10-26 끌어서
   ai.savePaneWidth(broken, 500); // 오류 없이
   assert.equal(ai.paneWidthCss(600), "clamp(280px, 600px, max(280px, 100vw - 560px))");
   const w = readFileSync(join(JS, "writing.js"), "utf8");
-  assert.match(w, /paneResizer\(view\);/);
-  assert.match(w, /\$\$\("#ai-pane, #fig-pane", view\)/);
+  assert.match(w, /paneResizers\(view\);/);
+  assert.match(w, /paneResizer\(\$\$\("#ai-pane, #fig-pane", view\), \{ host: view, cssVar: "--ai-w", key: AI_PANE_W_KEY/);
   assert.match(readFileSync(join(ROOT, "paperlab", "static", "css", "app.css"), "utf8"), /\.pane-resize \{[^}]*cursor: col-resize/);
+});
+
+test("오른쪽 창 폭 조절 (2026-11-07): 창마다 기억 · CSS 변수 · 남길 자리", async () => {
+  const pr = await import("../../paperlab/static/js/paneresize.js");
+  const mem = new Map();
+  const st = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: (k) => mem.delete(k) };
+  pr.saveWidth(st, "a", 500);
+  pr.saveWidth(st, "b", 99999);
+  assert.equal(pr.loadWidth(st, "a"), 500);
+  assert.equal(pr.loadWidth(st, "b"), ai.PANE_MAX_W);
+  pr.saveWidth(st, "a", null);
+  assert.equal(pr.loadWidth(st, "a"), null);
+  assert.equal(pr.widthCss(600), ai.paneWidthCss(600));
+  assert.equal(pr.widthCss(600, "360px"), "clamp(280px, 600px, max(280px, 100vw - 360px))");
+  const css = readFileSync(join(ROOT, "paperlab", "static", "css", "app.css"), "utf8");
+  for (const re of [/\.writer\[data-ref="open"\] \.writer-body \{ grid-template-columns: 220px minmax\(0, 1fr\) var\(--ref-w, minmax\(0, 1fr\)\); \}/,
+    /\.lib-body \{[^}]*var\(--side-w, 400px\)/, /\.reader \{[^}]*var\(--side-w, 440px\)/, /\.graph-body \{[^}]*var\(--side-w, 380px\)/,
+    /\.check-pane \{[^}]*width: var\(--ck-w, 380px\)/]) assert.match(css, re);
+  const src = (f) => readFileSync(join(JS, f), "utf8");
+  assert.match(src("writing.js"), /cssVar: "--ref-w"/);
+  assert.match(src("library.js"), /paneResizer\(\[\$\("\.detail-pane", root\)\]/);
+  assert.match(src("reader.js"), /paneResizer\(\[\$\(":scope > \.panel", view\)\]/);
+  assert.match(src("graph.js"), /paneResizer\(\[\$\("\.graph-panel", view\)\]/);
+  assert.match(src("writecheckui.js"), /cssVar: "--ck-w"/);
+  assert.match(src("writeproofui.js"), /cssVar: "--ck-w"/);
 });
 
 test("[확인 필요: …] 색 표시: 편집기 강조 층 HTML · 미리보기 · 편집기 연결", () => {

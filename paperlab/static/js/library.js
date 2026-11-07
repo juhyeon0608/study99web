@@ -12,6 +12,7 @@ import {
 import { LIB_ACCEPT, extOf, formatBadge } from "./filetypes.js";
 import { openGraph } from "./graph.js";
 import { OA_OPEN_TITLE, OC_FAILED_TEXT, licenseLabel, oaOpenLabel, substituteText, viaHtml } from "./sourcemeta.js";
+import { paneResizer } from "./paneresize.js";
 import { refreshAll, refreshUsage, state } from "./state.js";
 import {
   ICON_PC, SEARCH_LOCAL_HINT, badgeFor, bulkMenu, canOpenHere, elsewhereLine, folderSwitch, holderGone, isHere, isLocal,
@@ -86,9 +87,12 @@ export function renderLibrary(main) {
     </div>
     <div class="lib-body no-detail">
       <div class="lib-list" tabindex="0"></div>
-      <aside class="detail"></aside>
+      <div class="detail-pane"><aside class="detail"></aside></div>
     </div></section>`);
   main.appendChild(root);
+  // 상세 패널 폭 (2026-11-07 사용자 요청): 손잡이는 내용을 다시 그려도 남도록 .detail 밖(.detail-pane)에
+  paneResizer([$(".detail-pane", root)], { host: $(".lib-body", root), cssVar: "--side-w", key: "paperlab.libDetailWidth",
+    label: "상세 패널 폭 조절" });
   const search = $(".searchbox input", root);
   const doSearch = debounce(() => { state.q = search.value.trim(); loadPapers(); }, 250);
   search.oninput = doSearch;

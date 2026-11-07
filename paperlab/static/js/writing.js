@@ -9,9 +9,9 @@ import {
 } from "./jobs.js";
 // AI 글쓰기 결과를 나중에 안전하게 넣기 (2026-10-16 백그라운드 AI) · 결과 패널 (2026-10-17 — 결과를 보면서 글쓰기)
 import {
-  RESULT_STATE_TEXT, applyPreview, browserStorage, clampPaneWidth, diffHtml, docHash, insertionText, loadPaneOpen, loadPaneWidth,
-  origSnippet, paneActions, paneKeyAction, paneList, paneWidthCss, pickResult, planApply, rerunPlan, resultState,
-  resultsButtonText, savePaneOpen, savePaneWidth, trimRange, wordDiff, writeAnchor,
+  AI_PANE_W_KEY, RESULT_STATE_TEXT, applyPreview, browserStorage, diffHtml, docHash, insertionText, loadPaneOpen,
+  origSnippet, paneActions, paneKeyAction, paneList, pickResult, planApply, rerunPlan, resultState,
+  resultsButtonText, savePaneOpen, trimRange, wordDiff, writeAnchor,
 } from "./writeai.js";
 // 원고 AI 대화 · 장 · 절 일괄 처리 · AI 범위 (docs/specs/manuscript-ai-chat.md)
 import { BATCH_MAX, BATCH_MODES, batchItems, isChatKey } from "./writechat.js";
@@ -22,6 +22,7 @@ import {
   missingCoverFields, usesHancomFonts, warningText,
 } from "./formats.js";
 import { ICON_REF, refPane } from "./refpane.js";
+import { paneResizer } from "./paneresize.js";
 import { CITE_RE, parseCitation } from "./refquote.js";
 import { state } from "./state.js";
 // 그림 · 표 · 캡션 · 목록 편집 · 단축키 도움말 (docs/specs/writing-figures-tables.md)
@@ -787,7 +788,7 @@ export async function openManuscript(main, id) {
   // AI 글쓰기 결과 (2026-10-16 백그라운드 AI · 2026-10-17 패널): 오른쪽 AI 결과 패널 + 알림 [열기]로 온 주소(#/write/원고/j작업)
   W.ai = aiPane(view, ta, m);
   W.fig = figPane(view, { ta, m, saveVersion: (c) => saveVersion(m.id, c), say: (t) => sayWriter(view, t), closeAi: () => view.dataset.aiPane === "open" && W.ai && W.ai.toggle() });
-  paneResizer(view); // AI 결과 · 그림 패널 폭 끌어서 바꾸기
+  paneResizers(view); // AI 결과 · 그림 · 참고 패널 폭 끌어서 바꾸기
   openAiJobFromHash(m, ta);
   historyTools(view, { mid: m.id, ta, flush: flushWriter, // [기록] · Alt+H (docs/specs/manuscript-history.md)
     redline: (old, name) => exportAs("docx", view, ta, { redline: old, versionName: name }) }); // 수정 표시 워드 (2026-10-27)
@@ -2242,44 +2243,13 @@ async function runBatch(mode, ta, sc) {
   if (W.ai && W.ta === ta) W.ai.batch(r.batch.id);
 }
 
-// AI 결과 · 그림 패널 폭 (2026-10-26 사용자 요청): 패널 왼쪽 가장자리를 끌면 넓어지고 좁아진다. ← → 키로 20px씩,
-// 두 번 누르면 기본 폭. 두 패널이 같은 칸(--ai-w)이라 폭도 같이 쓰고 이 브라우저에 기억한다(writeai.js)
-function paneResizer(view) {
-  const st = browserStorage();
-  const apply = (w) => (w == null ? view.style.removeProperty("--ai-w") : view.style.setProperty("--ai-w", paneWidthCss(w)));
-  apply(st && loadPaneWidth(st));
-  const cur = (aside) => Math.round(aside.getBoundingClientRect().width);
-  const commit = (w) => { const c = w == null ? null : clampPaneWidth(w); apply(c); if (st) savePaneWidth(st, c); };
-  for (const aside of $$("#ai-pane, #fig-pane", view)) {
-    const h = el(`<div class="pane-resize" role="separator" aria-orientation="vertical" tabindex="0"
-      aria-label="패널 폭 조절" title="끌어서 패널 폭 바꾸기 · 두 번 누르면 기본 폭 (← → 키도 됨)"></div>`);
-    aside.prepend(h);
-    h.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      const right = aside.getBoundingClientRect().right;
-      h.setPointerCapture(e.pointerId);
-      view.classList.add("pane-resizing");
-      const move = (ev) => apply(clampPaneWidth(right - ev.clientX));
-      const up = () => {
-        h.removeEventListener("pointermove", move);
-        h.removeEventListener("pointerup", up);
-        h.removeEventListener("pointercancel", up);
-        view.classList.remove("pane-resizing");
-        commit(cur(aside)); // 창 폭 때문에 줄어든 만큼이 아니라 실제로 보이는 폭을 기억
-      };
-      h.addEventListener("pointermove", move);
-      h.addEventListener("pointerup", up);
-      h.addEventListener("pointercancel", up);
-    });
-    h.addEventListener("dblclick", () => commit(null));
-    h.addEventListener("keydown", (e) => {
-      const d = { ArrowLeft: 20, ArrowRight: -20 }[e.key];
-      if (!d) return;
-      e.preventDefault();
-      commit(cur(aside) + d);
-    });
-  }
+// 오른쪽 패널 폭 (2026-10-26 · 2026-11-07 사용자 요청 — paneresize.js): AI 결과 · 그림 패널은 같은 칸(--ai-w)이라
+// 폭도 같이, 참고 패널은 따로(--ref-w)
+function paneResizers(view) {
+  paneResizer($$("#ai-pane, #fig-pane", view), { host: view, cssVar: "--ai-w", key: AI_PANE_W_KEY, label: "패널 폭 조절" });
+  // 참고 칸은 AI · 그림 칸이 함께 열려 있으면 그 폭만큼 더 남긴다(--ai-room — app.css)
+  paneResizer([$("#ref-pane", view)], { host: view, cssVar: "--ref-w", key: "paperlab.writeRefWidth", label: "참고 패널 폭 조절",
+    room: "560px - var(--ai-room, 0px)" });
 }
 
 // ------------------------------------------------------------------ AI 결과 패널 (2026-10-17 사용자 요청)

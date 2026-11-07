@@ -12,6 +12,7 @@ import {
 import { BUSY_TIP, explainBusy, explainTab, followPage, resetExplain, startExplain } from "./explain.js";
 import { IMAGE_EXTS, LIB_ACCEPT, formatBadge } from "./filetypes.js";
 import { downloadSource, exportAnnotations, openLocalFile } from "./library.js";
+import { paneResizer } from "./paneresize.js";
 import { quoteRuleText } from "./refquote.js";
 import { onRefresh, state } from "./state.js";
 import {
@@ -132,6 +133,9 @@ export async function openReader(main, pid, startPage = null) {
       <div class="panel-body"></div>
     </aside></section>`);
   main.appendChild(view);
+  // 오른쪽 패널 폭 (2026-11-07 사용자 요청 — PDF는 칸 크기가 바뀌면 다시 맞춤(ResizeObserver))
+  paneResizer([$(":scope > .panel", view)], { host: view, cssVar: "--side-w", key: "paperlab.readerPanelWidth",
+    label: "패널 폭 조절", room: "360px" });
   R.view = view;
   R.scroller = $(".pdf-scroll", view);
   R.pagesEl = $(".pdf-pages", view);

@@ -308,6 +308,21 @@ def test_repeated_figure_is_stored_once_in_exports():
             assert len([n for n in z.namelist() if n.startswith(prefix)]) == 1
 
 
+def test_thesis_hwpx_with_many_figures_across_chapters_validates():
+    # 2026-11-07 사용자 보고: 학위논문 양식(장마다 구역)에서 그림이 2개 이상이면 'BinData … has no manifest item'으로 실패
+    blocks = []
+    for ch in range(3):
+        blocks.append({"type": "heading", "level": 1, "runs": [{"text": f"제{ch + 1}장"}]})
+        for k in range(2):
+            image = {"data": png(40 + ch, 20 + k), "format": "png", "width": 40 + ch, "height": 20 + k}
+            blocks.append({"type": "figure", "src": NAME, "caption": [{"text": f"그림 {ch}-{k}"}], "image": image})
+    for fmt in (THESIS, None):
+        doc = HwpxDocument.open(io.BytesIO(writer.to_hwpx(blocks, {"title": "t"}, fmt, COVER if fmt else None)))
+        assert doc.validate().issues == ()
+        hrefs = [i.get("href") for i in doc.package.manifest_tree().iter("{http://www.idpf.org/2007/opf/}item")]
+        assert len([h for h in hrefs if "BinData/" in h]) == 6
+
+
 def test_markdown_nested_lists_follow_parent_marker_width():
     """하위 항목은 부모 기호 폭만큼 들여써야 CommonMark · marked에서 하위 목록 ("10. x" 아래는 4칸)"""
     def li(depth, n, ordered=True, t="x"):

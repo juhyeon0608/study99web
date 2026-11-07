@@ -213,8 +213,12 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 .menu .danger { color: var(--danger); }
 
 /* ---------------- library ---------------- */
-.lib-body { flex: 1; display: grid; grid-template-columns: 1fr 400px; min-height: 0; }
+.lib-body { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w, 400px); min-height: 0; }
 .lib-body.no-detail { grid-template-columns: 1fr 0; }
+/* 상세 칸: 손잡이(.pane-resize)를 두는 틀 — 내용(.detail)은 다시 그려도 손잡이는 남음 (2026-11-07) */
+.detail-pane { position: relative; display: flex; min-width: 0; min-height: 0; }
+.detail-pane > .detail { flex: 1; }
+.lib-body.no-detail .pane-resize, .reader.panel-closed .pane-resize { display: none; }
 .lib-list { overflow-y: auto; min-width: 0; position: relative; }
 .list-head {
   position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; padding: 7px 16px;
@@ -306,7 +310,8 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 .pager { display: flex; gap: 6px; justify-content: center; padding: 20px 0; }
 
 /* ---------------- reader ---------------- */
-.reader { display: grid; grid-template-columns: 1fr 440px; height: 100vh; overflow: hidden; }
+.reader { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w, 440px); height: 100vh; overflow: hidden; }
+.reader > .panel, .graph-panel { position: relative; }
 .reader.panel-closed { grid-template-columns: 1fr 0; }
 .reader-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface-3); }
 .reader-bar {
@@ -490,14 +495,15 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; line-height:
 .status-line.bad { background: var(--warn-soft); color: var(--warn); }
 
 @media (max-width: 1180px) {
-  .lib-body { grid-template-columns: 1fr 340px; }
-  .reader { grid-template-columns: 1fr 380px; }
+  .lib-body { grid-template-columns: minmax(0, 1fr) var(--side-w, 340px); }
+  .reader { grid-template-columns: minmax(0, 1fr) var(--side-w, 380px); }
 }
 @media (max-width: 900px) {
   #app { grid-template-columns: 1fr; }
   #sidebar { display: none; }
   .lib-body { grid-template-columns: 1fr; }
-  .lib-body .detail { display: none; }
+  .lib-body .detail-pane { display: none; }
+  .reader .pane-resize, .graph-panel .pane-resize { display: none; } /* 아래 시트 · 세로 배치 — 폭 조절 없음 */
   .reader { grid-template-columns: 1fr; }
   .reader .panel { display: none; }
 }
@@ -1214,7 +1220,7 @@ a.btn:hover { text-decoration: none; }
 .graph-ctls { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; }
 .graph-ctl { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-2); }
 .graph-ctl .seg { font-variant-numeric: tabular-nums; }
-.graph-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 380px; }
+.graph-body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w, 380px); }
 .graph-main { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface); }
 .graph-notices { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px 0; }
 .graph-notices:empty { display: none; }
@@ -1380,7 +1386,7 @@ a.btn:hover { text-decoration: none; }
 .graph-jump { display: none; }
 
 @media (max-width: 1180px) {
-  .graph-body { grid-template-columns: minmax(0, 1fr) 340px; }
+  .graph-body { grid-template-columns: minmax(0, 1fr) var(--side-w, 340px); }
 }
 @media (max-width: 900px) {
   .graph-view { overflow-y: auto; }
@@ -1411,17 +1417,18 @@ a.btn:hover { text-decoration: none; }
 /* ---------------- 논문 쓰기 참고 패널 (docs/design/writing-reference-pane-ui.md) ---------------- */
 /* 격자: 패널은 .writer-body의 네 번째 칸. 열림 = section.writer[data-ref="open"]
    (보기 전환이 .writer의 className을 통째로 바꾸므로 클래스 대신 속성). 칸이 모자라면 미리보기를 먼저 숨김(명세 6장 · K-9) */
-.ref-pane { display: none; border-left: 0; }
+/* 참고 칸 폭: 기본은 편집기와 반반(1fr), 왼쪽 가장자리를 끌면 고른 폭(--ref-w — paneresize.js, 2026-11-07) */
+.ref-pane { display: none; border-left: 0; position: relative; }
 .writer[data-ref="open"] .ref-pane { display: flex; }
-.writer[data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr); }
-.writer[data-ref="open"].view-split .writer-body { grid-template-columns: 220px repeat(3, minmax(0, 1fr)); }
+.writer[data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)); }
+.writer[data-ref="open"].view-split .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)); }
 @media (max-width: 1500px) {
-  .writer[data-ref="open"].view-split .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr); }
+  .writer[data-ref="open"].view-split .writer-body { grid-template-columns: 220px minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)); }
   .writer[data-ref="open"].view-split .writer-preview { display: none; }
 }
 @media (max-width: 1100px) {
   .writer[data-ref="open"] .writer-body,
-  .writer[data-ref="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .writer[data-ref="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)); }
 }
 @media (max-width: 760px) {
   .writer[data-ref="open"] .writer-body,
@@ -1468,23 +1475,24 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 /* 모달이 아니라 .writer-body 오른쪽 끝(참고 패널 다음) 칸. 열림 = section.writer[data-ai-pane="open"]
    (보기 전환이 className을 통째로 바꾸므로 속성). 폭은 범위 고정(--ai-w), 칸이 모자라면 개요 → 미리보기 순으로 숨겨 편집기를 남김 */
 .writer { --ai-w: clamp(300px, 26vw, 380px); }
+.writer[data-ai-pane="open"], .writer[data-fig-pane="open"] { --ai-room: var(--ai-w); } /* 참고 칸 폭 상한에서 뺄 자리 */
 .ai-pane { display: none; border-left: 0; box-shadow: -1px 0 0 var(--border); }
 .writer[data-ai-pane="open"] .ai-pane { display: flex; }
 .writer[data-ai-pane="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) var(--ai-w); }
 .writer[data-ai-pane="open"].view-split .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
-.writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+.writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)) var(--ai-w); }
 .writer[data-ai-pane="open"][data-ref="open"].view-split .writer-preview { display: none; }
 @media (max-width: 1500px) {
   .writer[data-ai-pane="open"].view-split .writer-side,
   .writer[data-ai-pane="open"][data-ref="open"] .writer-side { display: none; }
-  .writer[data-ai-pane="open"].view-split .writer-body,
-  .writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+  .writer[data-ai-pane="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+  .writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)) var(--ai-w); }
 }
 @media (max-width: 1100px) {
   .writer[data-ai-pane="open"] .writer-body,
   .writer[data-ai-pane="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) var(--ai-w); }
   .writer[data-ai-pane="open"].view-split .writer-preview { display: none; }
-  .writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+  .writer[data-ai-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)) var(--ai-w); }
 }
 @media (max-width: 760px) {
   .writer[data-ai-pane="open"] .writer-body,
@@ -1895,7 +1903,7 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .ck-badge[data-tone="must"] { background: var(--danger-soft); color: var(--danger); }
 .ck-badge[data-tone="warn"] { background: var(--warn-soft); color: var(--warn); }
 .check-pane {
-  position: fixed; z-index: 90; right: 16px; top: var(--ck-top, 120px); width: 380px; max-width: calc(100vw - 32px);
+  position: fixed; z-index: 90; right: 16px; top: var(--ck-top, 120px); width: var(--ck-w, 380px); max-width: calc(100vw - 32px);
   max-height: calc(100vh - var(--ck-top, 120px) - 48px); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow-lg);
 }
 .check-pane[hidden] { display: none; }
@@ -1965,19 +1973,19 @@ button.cite-row:focus-visible { outline: 2px solid var(--accent); outline-offset
 .writer[data-fig-pane="open"] .ai-pane:not(.fig-pane) { display: none; }
 .writer[data-fig-pane="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) var(--ai-w); }
 .writer[data-fig-pane="open"].view-split .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
-.writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+.writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: 220px minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)) var(--ai-w); }
 .writer[data-fig-pane="open"][data-ref="open"].view-split .writer-preview { display: none; }
 @media (max-width: 1500px) {
   .writer[data-fig-pane="open"].view-split .writer-side,
   .writer[data-fig-pane="open"][data-ref="open"] .writer-side { display: none; }
-  .writer[data-fig-pane="open"].view-split .writer-body,
-  .writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+  .writer[data-fig-pane="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+  .writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)) var(--ai-w); }
 }
 @media (max-width: 1100px) {
   .writer[data-fig-pane="open"] .writer-body,
   .writer[data-fig-pane="open"].view-split .writer-body { grid-template-columns: minmax(0, 1fr) var(--ai-w); }
   .writer[data-fig-pane="open"].view-split .writer-preview { display: none; }
-  .writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--ai-w); }
+  .writer[data-fig-pane="open"][data-ref="open"] .writer-body { grid-template-columns: minmax(0, 1fr) var(--ref-w, minmax(0, 1fr)) var(--ai-w); }
 }
 @media (max-width: 760px) {
   .writer[data-fig-pane="open"] .writer-body,

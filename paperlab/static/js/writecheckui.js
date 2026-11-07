@@ -7,6 +7,10 @@ import { applyGlossary } from "./writeterms.js";
 import { diffEdit } from "./writeedit.js";
 import { applyEdit } from "./writetools.js";
 import { $, el, esc, modalOpen } from "./ui.js";
+import { paneResizer } from "./paneresize.js";
+
+// 점검 · 맞춤법 창 폭 (2026-11-07 사용자 요청 — 왼쪽 가장자리를 끌어 조절, 두 창이 같은 폭)
+export const CHECK_PANE_W_KEY = "paperlab.checkPaneWidth";
 
 // hooks: { ta, ctx() → { format: W.fmt, coverKind, cover, built, verify }, select(a, b), openCover(), verify(), rerun(), say(text),
 //          extra() → { text, label, run } | null (AI 맞춤법 점검 한 줄 — 선택) }
@@ -23,6 +27,7 @@ export function checkPanel(view, hooks) {
     <div class="check-sum small muted" data-ck-sum aria-live="polite"></div>
     <div class="check-body" data-ck-body></div></aside>`);
   view.appendChild(pane);
+  paneResizer([pane], { host: pane, cssVar: "--ck-w", key: CHECK_PANE_W_KEY, label: "점검 창 폭 조절" });
   const body = $("[data-ck-body]", pane);
   const S = { open: false, ran: false, result: null };
 
